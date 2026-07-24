@@ -277,7 +277,7 @@ pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
 
     let result = bt_action_native(name, action)?;
 
-    crate::process::append_log_detailed(&format!("[bt] result: {}", result));
+    crate::process::append_log(&format!("[bt] result: {}", result));
 
     Ok(result)
 }
@@ -327,7 +327,7 @@ pub fn find_paired_bluetooth_devices() -> Result<Vec<(String, bool, Option<u8>, 
         }
     }
 
-    crate::process::append_log_detailed(&format!("[bt] find_paired_bluetooth_devices: found {} devices", result.len()));
+    crate::process::append_log(&format!("[bt] find_paired_bluetooth_devices: found {} devices", result.len()));
     Ok(result)
 }
 

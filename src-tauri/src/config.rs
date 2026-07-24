@@ -139,7 +139,7 @@ pub fn init_config() {
                 }
             },
             Err(e) => {
-                crate::process::append_log_detailed(&format!("[config] load failed (using defaults): {}", e));
+                crate::process::append_log(&format!("[config] load failed (using defaults): {}", e));
                 Config::default()
             }
         }

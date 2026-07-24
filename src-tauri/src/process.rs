@@ -20,11 +20,6 @@ pub fn new_hidden_cmd(program: &str) -> Command {
     cmd
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn new_hidden_cmd(program: &str) -> Command {
-    Command::new(program)
-}
-
 /// 获取日志文件路径
 fn log_path() -> std::path::PathBuf {
     if crate::config::log_once() {
@@ -40,11 +35,6 @@ pub fn append_log(msg: &str) {
         return;
     }
     write_log(msg);
-}
-
-/// 追加详细日志到文件（与 append_log 相同，保留接口兼容）
-pub fn append_log_detailed(msg: &str) {
-    append_log(msg);
 }
 
 fn write_log(msg: &str) {

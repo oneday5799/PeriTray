@@ -82,7 +82,7 @@ pub fn query_devices() -> Vec<Device> {
         }
     }
 
-    crate::process::append_log_detailed(&format!("[wmi] query_devices: {} devices found", all.len()));
+    crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
     all
 }
 

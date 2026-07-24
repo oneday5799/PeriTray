@@ -29,7 +29,7 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
 }
 
 pub fn set_default_device(device_id: &str) -> Result<()> {
-    crate::process::append_log_detailed(&format!("[audio] set_default_device: {}", device_id));
+    crate::process::append_log(&format!("[audio] set_default_device: {}", device_id));
     unsafe {
         ensure_com_initialized();
         let wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();

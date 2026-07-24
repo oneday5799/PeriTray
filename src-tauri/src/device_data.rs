@@ -66,7 +66,7 @@ fn load_all_data() -> HashMap<String, HashMap<String, DeviceInfo>> {
             entry.insert(pid, info);
         }
     }
-    crate::process::append_log_detailed(&format!(
+    crate::process::append_log(&format!(
         "[device_data] loaded {} VIDs ({} user)", result.len(), user_count
     ));
     result

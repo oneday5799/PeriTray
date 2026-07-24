@@ -113,7 +113,7 @@ pub fn try_insert(
     cn_index.entry(cn).or_default().push(idx);
 }
 
-pub fn rebuild_cn_index(cn_index: &mut HashMap<String, Vec<usize>>, devices: &[Device]) {
+fn rebuild_cn_index(cn_index: &mut HashMap<String, Vec<usize>>, devices: &[Device]) {
     cn_index.clear();
     for (i, d) in devices.iter().enumerate() {
         let cn = core_name(&d.name);

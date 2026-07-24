@@ -185,7 +185,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 id if id.starts_with("audio_dev_") => {
                     let device_id = id[10..].to_owned();
                     if !device_id.is_empty() {
-                        crate::process::append_log_detailed(&format!("[tray] set_default_device: {}", device_id));
+                        crate::process::append_log(&format!("[tray] set_default_device: {}", device_id));
                         std::thread::spawn(move || {
                             let _ = audio::set_default_device(&device_id);
                             update_audio_devices_menu();
