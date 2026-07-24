@@ -58,7 +58,7 @@ pub fn try_insert(
         if let Some(indices) = cn_index.get(&cn) {
             if indices.iter().any(|&i| {
                 let d = &devices[i];
-                (d.name == cn) && (d.is_bluetooth || d.is_wireless_24g)
+                (core_name(&d.name) == cn) && (d.is_bluetooth || d.is_wireless_24g)
             }) {
                 return;
             }
@@ -69,7 +69,7 @@ pub fn try_insert(
         if let Some(indices) = cn_index.get(&cn) {
             if let Some(&pos) = indices.iter().find(|&&i| {
                 let d = &devices[i];
-                (d.name == cn) && !d.is_bluetooth && !d.is_wireless_24g
+                (core_name(&d.name) == cn) && !d.is_bluetooth && !d.is_wireless_24g
             }) {
                 devices.remove(pos);
                 rebuild_cn_index(cn_index, devices);
@@ -84,18 +84,15 @@ pub fn try_insert(
             if let Some(&pos) = indices.iter().find(|&&i| {
                 let d = &devices[i];
                 let econn = if d.is_bluetooth { "bt" } else if d.is_wireless_24g { "24g" } else { "usb" };
-                (d.name == cn) && econn == conn_tag
+                (core_name(&d.name) == cn) && econn == conn_tag
             }) {
                 let existing = &mut devices[pos];
-                if name.len() < existing.name.len() {
-                    existing.name = effective_name.to_string();
-                    existing.status = status.to_string();
-                    if existing.device_id.is_none() {
-                        existing.device_id = device_id;
-                    }
-                    existing.is_bluetooth = existing.is_bluetooth || is_bluetooth;
-                    existing.is_wireless_24g = existing.is_wireless_24g || is_wireless_24g;
+                existing.status = status.to_string();
+                if existing.device_id.is_none() {
+                    existing.device_id = device_id;
                 }
+                existing.is_bluetooth = existing.is_bluetooth || is_bluetooth;
+                existing.is_wireless_24g = existing.is_wireless_24g || is_wireless_24g;
             }
         }
         return;

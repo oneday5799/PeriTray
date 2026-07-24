@@ -181,7 +181,6 @@ fn query_bt_devices(
         let cn = core_name(&name);
         bt_names.insert(cn.clone());
         if let Some(existing) = all.iter_mut().find(|d| core_name(&d.name) == cn && d.is_bluetooth) {
-            existing.name = name.clone();
             existing.status = s.to_string();
             if battery.is_some() {
                 existing.battery = battery.map(|b| b as i32);
@@ -208,19 +207,21 @@ fn query_battery_devices(
                 d.name.unwrap_or_default(),
                 d.status.unwrap_or_default(),
             );
-            if !n.is_empty() && (!dedup || seen.insert(format!("{}:usb", core_name(&n)))) {
-                let idx = all.len();
-                all.push(Device {
-                    name: n,
-                    dt: DevType::Battery,
-                    status: s,
-                    battery: d.estimated_charge_remaining,
-                    device_id: None,
-                    is_bluetooth: false,
-                    is_wireless_24g: false,
-                });
-                cn_index.entry(core_name(&all[idx].name)).or_default().push(idx);
-            }
+            if n.is_empty() { continue; }
+            let cn = core_name(&n);
+            if dedup && seen.contains(&format!("{}:usb", cn)) { continue; }
+            seen.insert(format!("{}:usb", cn));
+            let idx = all.len();
+            all.push(Device {
+                name: cn.clone(),
+                dt: DevType::Battery,
+                status: s,
+                battery: d.estimated_charge_remaining,
+                device_id: None,
+                is_bluetooth: false,
+                is_wireless_24g: false,
+            });
+            cn_index.entry(cn).or_default().push(idx);
         }
     }
 }

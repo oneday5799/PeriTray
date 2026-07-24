@@ -361,9 +361,10 @@ fn read_ble_battery(ble_device: &BluetoothLEDevice) -> Option<u8> {
 
 /// Check connection status of a single Bluetooth device by name
 pub fn check_device_connection(name: &str) -> Option<bool> {
+    let cn = crate::dedup::core_name(name);
     find_paired_bluetooth_devices().ok()?
         .into_iter()
-        .find(|(n, _, _, _)| n == name)
+        .find(|(n, _, _, _)| crate::dedup::core_name(n) == cn)
         .map(|(_, connected, _, _)| connected)
 }
 
