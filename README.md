@@ -122,9 +122,6 @@ PeriphMonitor/
 ├── src-tauri/
 │   ├── data/
 │   │   └── wireless_24g_devices.json # 2.4G 设备数据库（VID/PID → 名称/类型）
-│   ├── scripts/
-│   │   ├── bt_action.ps1             # 蓝牙连接/断开 PowerShell 脚本
-│   │   └── BtNative.cs               # BluetoothSetServiceState P/Invoke
 │   ├── icons/                        # 应用图标
 │   ├── src/
 │   │   ├── main.rs                   # 应用入口，COM 初始化，Tauri 构建
@@ -135,7 +132,7 @@ PeriphMonitor/
 │   │   ├── device_data.rs            # 2.4G 设备数据加载与查询
 │   │   ├── dedup.rs                 # 设备去重逻辑（核心名称提取、去重插入）
 │   │   ├── wmi_query.rs              # WMI 查询编排与过滤
-│   │   ├── bluetooth.rs              # WinRT 蓝牙 API（配对设备、GATT/PnP 电量）
+│   │   ├── bluetooth.rs              # WinRT 蓝牙 API（配对设备、GATT/PnP 电量）+ Win32 蓝牙连接/断开
 │   │   ├── audio.rs                  # 音量控制（Core Audio API）
 │   │   ├── audio_notify.rs           # 音频事件监控（IAudioEndpointVolumeCallback + IMMNotificationClient）
 │   │   ├── app_icon.rs               # 进程图标提取（64×64，base64 PNG）
@@ -144,7 +141,7 @@ PeriphMonitor/
 │   │   ├── tray.rs                   # 系统托盘菜单与事件处理
 │   │   ├── update.rs                 # GitHub 更新检测（WinHTTP + semver）
 │   │   ├── windows.rs                # 窗口创建与 DWM 圆角
-│   │   └── process.rs               # 进程工具（日志、ShellExecuteW、PowerShell 调用）
+│   │   └── process.rs               # 进程工具（日志、ShellExecuteW）
 │   ├── dist/
 │   │   ├── popup.html                # 主窗口
 │   │   ├── settings.html             # 设置页
@@ -260,4 +257,4 @@ git push origin v1.1.0
 
 - [EarTrumpet](https://github.com/File-New-Project/EarTrumpet) — 托盘右键菜单 Windows 声音设置快捷入口的实现参考
 - [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量读取方案参考，windows_pnp 库来源
-- [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接/断开 PowerShell 脚本参考
+- [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接/断开方案参考

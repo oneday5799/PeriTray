@@ -22,6 +22,7 @@ windows_pnp_uuid = { path = "../libs/windows_pnp/libs/windows_pnp_uuid" }
 windows-core = "0.62"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Devices_Bluetooth",
     "Win32_Graphics_Dwm",
     "Win32_Networking_WinHttp",
     "Win32_System_Com",

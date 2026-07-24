@@ -27,9 +27,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "data/wireless_24g_devices.json": "data/wireless_24g_devices.json",
-      "scripts/bt_action.ps1": "scripts/bt_action.ps1",
-      "scripts/BtNative.cs": "scripts/BtNative.cs"
+      "data/wireless_24g_devices.json": "data/wireless_24g_devices.json"
     },
     "windows": {
       "nsis": {

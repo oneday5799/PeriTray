@@ -1,88 +1,293 @@
+use std::mem;
 use std::sync::Mutex;
 use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
+use windows_sys::core::GUID;
+use windows_sys::Win32::Devices::Bluetooth::*;
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 
 use crate::device;
-use crate::process;
 
 /// 蓝牙操作全局锁，防止并发操作干扰适配器状态
 static BT_LOCK: Mutex<()> = Mutex::new(());
 
-/// 执行蓝牙连接/断开操作
-pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
-    // 串行化蓝牙操作，防止并发竞争
-    let _guard = BT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let device_id = device::get_device_id_by_name(name)
-        .ok_or_else(|| {
-            let msg = format!("[bt] Device '{}' not found in device_id map", name);
-            crate::process::append_log(&msg);
-            format!("Device '{}' not found", name)
-        })?;
+// ---------------------------------------------------------------------------
+// RAII 安全包装
+// ---------------------------------------------------------------------------
 
-    let mac = device_id.rsplit('-').next().unwrap_or("").to_string();
-    let header = format!("[bt] {} device='{}' mac='{}' device_id='{}'", action.to_uppercase(), name, mac, device_id);
-    crate::process::append_log(&header);
+struct RadioFindHandle(HBLUETOOTH_RADIO_FIND);
+impl Drop for RadioFindHandle {
+    fn drop(&mut self) {
+        unsafe { BluetoothFindRadioClose(self.0); }
+    }
+}
 
-    let script_path = find_bt_script()?;
-    crate::process::append_log_detailed(&format!("[bt] script: {}", script_path));
+struct DeviceFindHandle(HBLUETOOTH_DEVICE_FIND);
+impl Drop for DeviceFindHandle {
+    fn drop(&mut self) {
+        unsafe { BluetoothFindDeviceClose(self.0); }
+    }
+}
 
-    // 使用设备 MAC 作为文件名后缀，避免并发时输出文件冲突
-    let out_file = std::env::temp_dir().join(format!("bt_action_out_{}.txt", mac.replace(':', "")));
-    let out_arg = out_file.to_string_lossy().to_string();
+struct RadioHandle(HANDLE);
+impl Drop for RadioHandle {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.0); }
+    }
+}
 
-    let result = process::run_powershell_script(
-        &script_path,
-        &["-Mac", &mac, "-Action", action, "-OutFile", &out_arg],
-    )?;
+// ---------------------------------------------------------------------------
+// 辅助函数
+// ---------------------------------------------------------------------------
 
-    let script_output = std::fs::read_to_string(&out_file)
-        .unwrap_or_else(|e| {
-            crate::process::append_log(&format!("[bt] READ_OUTFILE_FAILED: {}", e));
-            String::new()
-        });
-    let _ = std::fs::remove_file(&out_file);
+/// BLUETOOTH_ADDRESS → "XXXXXXXXXXXX" 字符串（大写，无冒号，12 位十六进制）
+fn bt_address_to_string(addr: &BLUETOOTH_ADDRESS) -> String {
+    let bytes = unsafe { addr.Anonymous.rgBytes };
+    format!(
+        "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+        bytes[5], bytes[4], bytes[3], bytes[2], bytes[1], bytes[0]
+    )
+}
 
-    let combined = if script_output.is_empty() {
-        result
-    } else {
-        format!("{}\n{}", result, script_output.trim())
+/// 将 [u16; 248] UTF-16 数组转换为 Rust String
+fn utf16_array_to_string(arr: &[u16; 248]) -> String {
+    let len = arr.iter().position(|&c| c == 0).unwrap_or(248);
+    String::from_utf16_lossy(&arr[..len])
+}
+
+/// 格式化 GUID 为字符串
+fn guid_to_string(guid: &GUID) -> String {
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        guid.data1, guid.data2, guid.data3,
+        guid.data4[0], guid.data4[1], guid.data4[2], guid.data4[3],
+        guid.data4[4], guid.data4[5], guid.data4[6], guid.data4[7]
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 原生蓝牙连接/断开（替代 C#/PowerShell 实现）
+// ---------------------------------------------------------------------------
+
+/// 在指定 radio 上搜索目标 MAC 设备
+fn find_device_on_radio(
+    radio: HANDLE,
+    target_mac: &str,
+    log: &mut Vec<String>,
+) -> Option<BLUETOOTH_DEVICE_INFO> {
+    let mut search_params: BLUETOOTH_DEVICE_SEARCH_PARAMS = unsafe { mem::zeroed() };
+    search_params.dwSize = mem::size_of::<BLUETOOTH_DEVICE_SEARCH_PARAMS>() as u32;
+    search_params.fReturnAuthenticated = 1;
+    search_params.fReturnRemembered = 1;
+    search_params.fReturnConnected = 1;
+    search_params.hRadio = radio;
+
+    let mut device_info: BLUETOOTH_DEVICE_INFO = unsafe { mem::zeroed() };
+    device_info.dwSize = mem::size_of::<BLUETOOTH_DEVICE_INFO>() as u32;
+
+    let h_find = unsafe { BluetoothFindFirstDevice(&search_params, &mut device_info) };
+    if h_find.is_null() {
+        return None;
+    }
+    let _find_guard = DeviceFindHandle(h_find);
+
+    loop {
+        let addr_str = bt_address_to_string(&device_info.Address);
+        let name = utf16_array_to_string(&device_info.szName);
+        log.push(format!("SEARCH addr={} name={}", addr_str, name));
+        if addr_str == target_mac {
+            return Some(device_info);
+        }
+        if unsafe { BluetoothFindNextDevice(h_find, &mut device_info) } == 0 {
+            break;
+        }
+    }
+    None
+}
+
+/// 枚举设备已安装的蓝牙服务
+fn enumerate_device_services(
+    radio: HANDLE,
+    device: &BLUETOOTH_DEVICE_INFO,
+    log: &mut Vec<String>,
+) -> Vec<GUID> {
+    let mut svc_count: u32 = 32;
+    let buffer_size = (svc_count as usize) * mem::size_of::<GUID>();
+    let mut buffer: Vec<u8> = vec![0u8; buffer_size];
+    let p_guids = buffer.as_mut_ptr() as *mut GUID;
+
+    let r = unsafe { BluetoothEnumerateInstalledServices(radio, device, &mut svc_count, p_guids) };
+    log.push(format!("ENUM_RESULT:{} SVC_COUNT:{}", r, svc_count));
+
+    let mut guids = Vec::new();
+    if r == 0 && svc_count > 0 {
+        for i in 0..svc_count as usize {
+            let guid = unsafe { *p_guids.add(i) };
+            log.push(format!("SVC[{}]:{}", i, guid_to_string(&guid)));
+            guids.push(guid);
+        }
+    }
+    guids
+}
+
+/// 在单个 radio 上尝试执行蓝牙操作
+fn try_bt_action(
+    radio: HANDLE,
+    target_mac: &str,
+    action: &str,
+    log: &mut Vec<String>,
+) -> bool {
+    let device = match find_device_on_radio(radio, target_mac, log) {
+        Some(d) => d,
+        None => {
+            log.push("NOT_ON_RADIO".into());
+            return false;
+        }
     };
 
-    crate::process::append_log_detailed(&format!("[bt] result: {}", combined));
+    let name = utf16_array_to_string(&device.szName);
+    log.push(format!("FOUND:{} connected={}", name, device.fConnected));
 
-    // 检测设备未找到或蓝牙适配器异常
-    if combined.contains("NOT_FOUND") {
-        crate::process::append_log("[bt] 设备未找到 (NOT_FOUND)");
-        return Err("设备未找到".to_string());
-    }
-    if combined.contains("NO_RADIO") {
-        crate::process::append_log("[bt] 未检测到蓝牙适配器 (NO_RADIO)");
-        return Err("未检测到蓝牙适配器".to_string());
+    let mut guids = enumerate_device_services(radio, &device, log);
+
+    if guids.is_empty() {
+        guids = vec![
+            GUID { data1: 0x0000110b, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+            GUID { data1: 0x0000110c, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+            GUID { data1: 0x0000110e, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+            GUID { data1: 0x0000111e, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+            GUID { data1: 0x0000111f, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+            GUID { data1: 0x00001108, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+        ];
+        log.push("USING_DEFAULT_SVCS".into());
     }
 
-    Ok(combined)
+    const MAX_RETRY: u32 = 3;
+
+    if action == "disconnect" {
+        let mut disabled = 0u32;
+        for svc in &guids {
+            let mut ok = false;
+            for retry in 0..MAX_RETRY {
+                let r = unsafe { BluetoothSetServiceState(radio, &device, svc, BLUETOOTH_SERVICE_DISABLE) };
+                log.push(format!("DIS:{} -> {} (attempt {})", guid_to_string(svc), r, retry + 1));
+                if r == 0 {
+                    ok = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            if ok {
+                disabled += 1;
+            } else {
+                log.push(format!("DIS_FAILED:{} after {} attempts", guid_to_string(svc), MAX_RETRY));
+            }
+        }
+        log.push(format!("DISABLED:{}/{}", disabled, guids.len()));
+    } else if action == "connect" {
+        let mut disabled = 0u32;
+        for svc in &guids {
+            let r = unsafe { BluetoothSetServiceState(radio, &device, svc, BLUETOOTH_SERVICE_DISABLE) };
+            if r == 0 {
+                disabled += 1;
+            }
+        }
+        log.push(format!("PRE_DISABLE:{}/{}", disabled, guids.len()));
+
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+
+        let mut enabled = 0u32;
+        for svc in &guids {
+            let r = unsafe { BluetoothSetServiceState(radio, &device, svc, BLUETOOTH_SERVICE_ENABLE) };
+            log.push(format!("EN:{} -> {}", guid_to_string(svc), r));
+            if r == 0 {
+                enabled += 1;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        log.push(format!("ENABLED:{}/{}", enabled, guids.len()));
+    }
+
+    true
 }
 
-fn find_bt_script() -> Result<String, String> {
-    let exe_dir = crate::process::exe_dir();
-    let candidates = [
-        exe_dir.join("scripts/bt_action.ps1"),
-        exe_dir.parent().map(|p| p.join("src-tauri/scripts/bt_action.ps1")).unwrap_or_default(),
-        exe_dir.parent().and_then(|p| p.parent()).map(|p| p.join("src-tauri/scripts/bt_action.ps1")).unwrap_or_default(),
-    ];
-    candidates.iter()
-        .find(|p| p.exists())
-        .map(|p| p.to_string_lossy().to_string())
-        .ok_or_else(|| {
-            crate::process::append_log("[bt] bt_action.ps1 not found");
-            "bt_action.ps1 not found".to_string()
-        })
+/// 原生蓝牙连接/断开操作（直接调用 Win32 BluetoothApis.dll）
+fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
+    let mut log: Vec<String> = Vec::new();
+    log.push(format!("START action={} name={}", action, name));
+
+    let device_id = match device::get_device_id_by_name(name) {
+        Some(id) => id,
+        None => {
+            log.push("DEVICE_NOT_FOUND".into());
+            return Err(log.join("\n"));
+        }
+    };
+    let mac = device_id.rsplit('-').next().unwrap_or("").to_uppercase().replace(':', "");
+    log.push(format!("MAC:{} device_id={}", mac, device_id));
+
+    let mut r_params: BLUETOOTH_FIND_RADIO_PARAMS = unsafe { mem::zeroed() };
+    r_params.dwSize = mem::size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32;
+    let mut h_radio: HANDLE = std::ptr::null_mut();
+
+    let h_radio_find = unsafe { BluetoothFindFirstRadio(&r_params, &mut h_radio) };
+    if h_radio_find.is_null() {
+        let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        log.push(format!("NO_RADIO:win32_error={}", err));
+        return Err(log.join("\n"));
+    }
+    let _radio_find_guard = RadioFindHandle(h_radio_find);
+    log.push(format!("RADIO_OK handle={:?}", h_radio));
+
+    let mut device_found;
+
+    {
+        let _guard = RadioHandle(h_radio);
+        device_found = try_bt_action(h_radio, &mac, action, &mut log);
+    }
+
+    if !device_found {
+        log.push("TRY_NEXT_RADIOS".into());
+        let mut next_radio: HANDLE = std::ptr::null_mut();
+        while unsafe { BluetoothFindNextRadio(h_radio_find, &mut next_radio) } != 0 {
+            log.push(format!("RADIO_NEXT handle={:?}", next_radio));
+            let _guard = RadioHandle(next_radio);
+            device_found = try_bt_action(next_radio, &mac, action, &mut log);
+            if device_found {
+                break;
+            }
+        }
+    }
+
+    if !device_found {
+        log.push("NOT_FOUND".into());
+        return Err(log.join("\n"));
+    }
+
+    log.push("DONE".into());
+    Ok(log.join("\n"))
 }
 
-/// 蓝牙设备信息: (名称, 已连接, 设备ID)
+/// 执行蓝牙连接/断开操作
+pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
+    let _guard = BT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let header = format!("[bt] {} device='{}'", action.to_uppercase(), name);
+    crate::process::append_log(&header);
+
+    let result = bt_action_native(name, action)?;
+
+    crate::process::append_log_detailed(&format!("[bt] result: {}", result));
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// WinRT 蓝牙设备枚举（原有代码，保持不变）
+// ---------------------------------------------------------------------------
+
 type BtDeviceInfo = (String, bool, String);
 
-/// 从 DeviceInformation 提取 Classic BT 设备信息
 fn classic_device_from_info(device_info: &DeviceInformation) -> Option<BtDeviceInfo> {
     use windows::Devices::Bluetooth::BluetoothConnectionStatus;
     let device_id = device_info.Id().ok()?;
@@ -92,7 +297,6 @@ fn classic_device_from_info(device_info: &DeviceInformation) -> Option<BtDeviceI
     Some((name, connected, device_id.to_string()))
 }
 
-/// 从 DeviceInformation 提取 BLE 设备信息
 fn ble_device_from_info(device_info: &DeviceInformation) -> Option<BtDeviceInfo> {
     use windows::Devices::Bluetooth::BluetoothConnectionStatus;
     let device_id = device_info.Id().ok()?;
@@ -105,7 +309,6 @@ fn ble_device_from_info(device_info: &DeviceInformation) -> Option<BtDeviceInfo>
 pub fn find_paired_bluetooth_devices() -> Result<Vec<(String, bool, Option<u8>, String)>, Box<dyn std::error::Error>> {
     let mut result = Vec::new();
 
-    // Classic Bluetooth devices
     let btc_selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
     let btc_devices_info = DeviceInformation::FindAllAsyncAqsFilter(&btc_selector)?.join()?;
     for device_info in btc_devices_info.into_iter() {
@@ -115,7 +318,6 @@ pub fn find_paired_bluetooth_devices() -> Result<Vec<(String, bool, Option<u8>, 
         }
     }
 
-    // BLE devices
     let ble_selector = BluetoothLEDevice::GetDeviceSelectorFromPairingState(true)?;
     let ble_devices_info = DeviceInformation::FindAllAsyncAqsFilter(&ble_selector)?.join()?;
     for device_info in ble_devices_info.into_iter() {
