@@ -3,36 +3,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Standard,
-    Verbose,
-}
-
-impl Serialize for LogLevel {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Standard => serializer.serialize_str("standard"),
-            Self::Verbose => serializer.serialize_str("verbose"),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for LogLevel {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        match s.to_lowercase().as_str() {
-            "standard" => Ok(Self::Standard),
-            "verbose" => Ok(Self::Verbose),
-            _ => Err(serde::de::Error::custom(format!("unknown log_level: {}", s))),
-        }
-    }
-}
-
-impl Default for LogLevel {
-    fn default() -> Self { Self::Standard }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogRetention {
     Once,
     OneDay,
@@ -90,8 +60,6 @@ pub struct Config {
     #[serde(default)]
     pub log_enabled: bool,
     #[serde(default)]
-    pub log_level: LogLevel,
-    #[serde(default)]
     pub log_retention: LogRetention,
     #[serde(default)]
     pub shutdown_volume_enabled: bool,
@@ -121,7 +89,6 @@ impl Default for Config {
             tray_devices: vec![],
             hidden_audio_devices: vec![],
             log_enabled: false,
-            log_level: LogLevel::default(),
             log_retention: LogRetention::default(),
             shutdown_volume_enabled: false,
             shutdown_volume_devices: std::collections::HashMap::new(),
@@ -140,15 +107,10 @@ impl Config {
 
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 static LOG_ENABLED: AtomicBool = AtomicBool::new(false);
-static LOG_LEVEL_STANDARD: AtomicBool = AtomicBool::new(true);
 static LOG_ONCE: AtomicBool = AtomicBool::new(false);
 
 pub fn log_enabled() -> bool {
     LOG_ENABLED.load(Ordering::Relaxed)
-}
-
-pub fn log_level_is_standard() -> bool {
-    LOG_LEVEL_STANDARD.load(Ordering::Relaxed)
 }
 
 pub fn log_once() -> bool {
@@ -157,7 +119,6 @@ pub fn log_once() -> bool {
 
 fn sync_log_cache(config: &Config) {
     LOG_ENABLED.store(config.log_enabled, Ordering::Relaxed);
-    LOG_LEVEL_STANDARD.store(config.log_level == LogLevel::Standard, Ordering::Relaxed);
     LOG_ONCE.store(config.log_retention == LogRetention::Once, Ordering::Relaxed);
 }
 

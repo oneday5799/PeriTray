@@ -171,6 +171,11 @@ pub fn check_for_update(
     current_version: &str,
     include_prerelease: bool,
 ) -> Result<UpdateInfo, String> {
+    crate::process::append_log(&format!(
+        "[update] checking for update: current={} include_prerelease={}",
+        current_version, include_prerelease
+    ));
+
     let body = winhttp_get("api.github.com", "/repos/oneday5799/PeriphMonitor/releases")?;
 
     let releases: Vec<GitHubRelease> =
@@ -190,6 +195,10 @@ pub fn check_for_update(
         Some(release) => {
             let latest_ver = release.tag_name.trim_start_matches('v');
             let has_update = compare_versions(current_version, latest_ver);
+            crate::process::append_log(&format!(
+                "[update] result: has_update={} latest={}",
+                has_update, latest_ver
+            ));
             Ok(UpdateInfo {
                 has_update,
                 current_version: current_version.to_string(),
@@ -197,11 +206,14 @@ pub fn check_for_update(
                 release_url: release.html_url.clone(),
             })
         }
-        None => Ok(UpdateInfo {
-            has_update: false,
-            current_version: current_version.to_string(),
-            latest_version: current_version.to_string(),
-            release_url: String::new(),
-        }),
+        None => {
+            crate::process::append_log("[update] result: no releases found");
+            Ok(UpdateInfo {
+                has_update: false,
+                current_version: current_version.to_string(),
+                latest_version: current_version.to_string(),
+                release_url: String::new(),
+            })
+        }
     }
 }

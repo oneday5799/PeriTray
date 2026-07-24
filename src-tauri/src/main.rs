@@ -74,7 +74,7 @@ fn main() {
             0x2, // COINIT_APARTMENTTHREADED
         );
         if hr < 0 {
-            eprintln!("CoInitializeEx failed: 0x{:08X}", hr);
+            process::append_log(&format!("[main] CoInitializeEx failed: 0x{:08X}", hr));
         }
     }
 
@@ -136,6 +136,7 @@ fn main() {
             }
             // 初始化音频通知回调（替代轮询）
             crate::audio_notify::init_audio_notify(app.handle().clone());
+            process::append_log("[main] audio_notify initialized");
             if !is_autostart {
                 popup::open_popup(app.handle(), "devices");
             }

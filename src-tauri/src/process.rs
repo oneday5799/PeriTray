@@ -34,20 +34,17 @@ fn log_path() -> std::path::PathBuf {
     }
 }
 
-/// 追加日志到文件（标准级别）
+/// 追加日志到文件
 pub fn append_log(msg: &str) {
-    if !crate::config::log_enabled() || !crate::config::log_level_is_standard() {
+    if !crate::config::log_enabled() {
         return;
     }
     write_log(msg);
 }
 
-/// 追加日志到文件（详细级别）
+/// 追加详细日志到文件（与 append_log 相同，保留接口兼容）
 pub fn append_log_detailed(msg: &str) {
-    if !crate::config::log_enabled() || crate::config::log_level_is_standard() {
-        return;
-    }
-    write_log(msg);
+    append_log(msg);
 }
 
 fn write_log(msg: &str) {
@@ -119,13 +116,23 @@ pub fn clean_old_logs() {
 fn chrono_str() -> String {
     use std::time::SystemTime;
     let Ok(dur) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
-        return "??:??".into();
+        return "????.??.?? ??:??:??".into();
     };
     let secs = dur.as_secs();
     let h = (secs / 3600) % 24;
-    let m = (secs / 60) % 60;
+    let min = (secs / 60) % 60;
     let s = secs % 60;
-    format!("{:02}:{:02}:{:02}", h, m, s)
+    let days = secs / 86400 + 719468;
+    let era = days / 146097;
+    let doe = days - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mon = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mon <= 2 { y + 1 } else { y };
+    format!("{:04}.{:02}.{:02} {:02}:{:02}:{:02}", y, mon, d, h, min, s)
 }
 
 /// 使用系统默认程序打开文件/URL
