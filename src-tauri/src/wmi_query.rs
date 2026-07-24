@@ -181,6 +181,7 @@ fn query_bt_devices(
         let cn = core_name(&name);
         bt_names.insert(cn.clone());
         if let Some(existing) = all.iter_mut().find(|d| core_name(&d.name) == cn && d.is_bluetooth) {
+            existing.name = name.clone();
             existing.status = s.to_string();
             if battery.is_some() {
                 existing.battery = battery.map(|b| b as i32);

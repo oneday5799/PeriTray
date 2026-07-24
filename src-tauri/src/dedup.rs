@@ -102,7 +102,7 @@ pub fn try_insert(
     }
     let idx = devices.len();
     devices.push(Device {
-        name: effective_name.to_string(),
+        name: cn.clone(),
         dt,
         status: status.to_string(),
         battery,
