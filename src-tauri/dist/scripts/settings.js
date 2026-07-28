@@ -522,7 +522,7 @@ function initShortcutSettings() {
     const keyField = action.id === "devices" ? "shortcut_devices" : "shortcut_volume";
     const savedKey = config[keyField];
     if (savedKey) {
-      input.value = savedKey;
+      input.value = savedKey.replace("Super", "Win");
       clearBtn.style.display = "";
     } else {
       input.value = "";
@@ -565,18 +565,18 @@ function initShortcutSettings() {
         return;
       }
 
-      const keyName = e.key === " " ? "Space" : e.key;
+      keys.clear();
+      if (e.ctrlKey) keys.add("Ctrl");
+      if (e.shiftKey) keys.add("Shift");
+      if (e.altKey) keys.add("Alt");
+      if (e.metaKey) keys.add("Win");
+
+      let keyName = e.key === " " ? "Space" : e.key;
       if (keyName === "Control" || keyName === "Shift" || keyName === "Alt" || keyName === "Meta") {
-        keys.add(keyName);
         const preview = [...keys].join("+");
         input.value = preview;
         return;
       }
-
-      if (e.ctrlKey) keys.add("Ctrl");
-      if (e.shiftKey) keys.add("Shift");
-      if (e.altKey) keys.add("Alt");
-      if (e.metaKey) keys.add("Meta");
 
       if (keyName.length === 1 || keyName.startsWith("F") || [
         "Escape", "Tab", "CapsLock", "Space", "Backspace", "Delete",
@@ -613,11 +613,12 @@ function initShortcutSettings() {
 
     async function registerShortcut(actionId, shortcut, inputEl, clearEl) {
       try {
+        const configKey = shortcut.replace("Win", "Super");
         await invoke("set_hotkey_config", {
           action: actionId,
-          key: shortcut,
+          key: configKey,
         });
-        config[keyField] = shortcut;
+        config[keyField] = configKey;
         clearEl.style.display = "";
         await invoke("update_config", { newConfig: config });
       } catch (err) {
