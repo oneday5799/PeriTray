@@ -524,15 +524,71 @@ function initShortcutSettings() {
   }
 
   const actions = [
-    { id: "devices", inputId: "shortcut-devices", clearId: "clear-shortcut-devices" },
-    { id: "volume", inputId: "shortcut-volume", clearId: "clear-shortcut-volume" },
+    { id: "devices", inputId: "shortcut-devices", clearId: "clear-shortcut-devices", configKey: "shortcut_devices" },
+    { id: "volume", inputId: "shortcut-volume", clearId: "clear-shortcut-volume", configKey: "shortcut_volume" },
   ];
+
+  const codeMap = {
+    "Space": { display: "Space", key: "Space" },
+    "Backspace": { display: "Backspace", key: "Backspace" },
+    "Delete": { display: "Delete", key: "Delete" },
+    "Tab": { display: "Tab", key: "Tab" },
+    "CapsLock": { display: "CapsLock", key: "CapsLock" },
+    "Escape": { display: "Escape", key: "Escape" },
+    "Insert": { display: "Insert", key: "Insert" },
+    "Home": { display: "Home", key: "Home" },
+    "End": { display: "End", key: "End" },
+    "PageUp": { display: "PageUp", key: "PageUp" },
+    "PageDown": { display: "PageDown", key: "PageDown" },
+    "ArrowUp": { display: "&#x2191;", key: "ArrowUp" },
+    "ArrowDown": { display: "&#x2193;", key: "ArrowDown" },
+    "ArrowLeft": { display: "&#x2190;", key: "ArrowLeft" },
+    "ArrowRight": { display: "&#x2192;", key: "ArrowRight" },
+    "PrintScreen": { display: "PrtSc", key: "PrintScreen" },
+    "ScrollLock": { display: "ScrLk", key: "ScrollLock" },
+    "Pause": { display: "Pause", key: "Pause" },
+    "NumLock": { display: "NumLock", key: "NumLock" },
+    "NumpadAdd": { display: "Num+", key: "NumpadAdd" },
+    "NumpadSubtract": { display: "Num-", key: "NumpadSubtract" },
+    "NumpadMultiply": { display: "Num*", key: "NumpadMultiply" },
+    "NumpadDivide": { display: "Num/", key: "NumpadDivide" },
+    "NumpadDecimal": { display: "Num.", key: "NumpadDecimal" },
+    "NumpadEnter": { display: "NumEnter", key: "NumpadEnter" },
+    "MediaPlayPause": { display: "MediaPlayPause", key: "MediaPlayPause" },
+    "MediaStop": { display: "MediaStop", key: "MediaStop" },
+    "MediaNextTrack": { display: "MediaNextTrack", key: "MediaNextTrack" },
+    "MediaPrevTrack": { display: "MediaPrevTrack", key: "MediaPrevTrack" },
+    "VolumeUp": { display: "VolumeUp", key: "VolumeUp" },
+    "VolumeDown": { display: "VolumeDown", key: "VolumeDown" },
+    "VolumeMute": { display: "VolumeMute", key: "VolumeMute" },
+    "Semicolon": { display: ";", key: "Semicolon" },
+    "Equal": { display: "=", key: "Equal" },
+    "Comma": { display: ",", key: "Comma" },
+    "Period": { display: ".", key: "Period" },
+    "Slash": { display: "/", key: "Slash" },
+    "Backquote": { display: "`", key: "Backquote" },
+    "Backslash": { display: "\\", key: "Backslash" },
+    "BracketLeft": { display: "[", key: "BracketLeft" },
+    "BracketRight": { display: "]", key: "BracketRight" },
+    "Minus": { display: "-", key: "Minus" },
+    "Quote": { display: "'", key: "Quote" },
+    "Enter": { display: "Enter", key: "Enter" },
+  };
+  const reverseCodeMap = {};
+  for (const v of Object.values(codeMap)) {
+    reverseCodeMap[v.key] = v.display;
+  }
+
+  function joinSaved(saved) {
+    if (!saved) return "";
+    return saved.split("+").map(p => reverseCodeMap[p] || p).join("+");
+  }
 
   for (const action of actions) {
     const input = document.getElementById(action.inputId);
     const clearBtn = document.getElementById(action.clearId);
 
-    const keyField = action.id === "devices" ? "shortcut_devices" : "shortcut_volume";
+    const keyField = action.configKey;
     const savedKey = config[keyField];
     if (savedKey) {
       const display = joinSaved(savedKey);
@@ -601,59 +657,6 @@ function initShortcutSettings() {
         return;
       }
 
-      const codeMap = {
-        "Space": { display: "Space", key: "Space" },
-        "Backspace": { display: "Backspace", key: "Backspace" },
-        "Delete": { display: "Delete", key: "Delete" },
-        "Tab": { display: "Tab", key: "Tab" },
-        "CapsLock": { display: "CapsLock", key: "CapsLock" },
-        "Escape": { display: "Escape", key: "Escape" },
-        "Insert": { display: "Insert", key: "Insert" },
-        "Home": { display: "Home", key: "Home" },
-        "End": { display: "End", key: "End" },
-        "PageUp": { display: "PageUp", key: "PageUp" },
-        "PageDown": { display: "PageDown", key: "PageDown" },
-        "ArrowUp": { display: "↑", key: "ArrowUp" },
-        "ArrowDown": { display: "↓", key: "ArrowDown" },
-        "ArrowLeft": { display: "←", key: "ArrowLeft" },
-        "ArrowRight": { display: "→", key: "ArrowRight" },
-        "PrintScreen": { display: "PrtSc", key: "PrintScreen" },
-        "ScrollLock": { display: "ScrLk", key: "ScrollLock" },
-        "Pause": { display: "Pause", key: "Pause" },
-        "NumLock": { display: "NumLock", key: "NumLock" },
-        "NumpadAdd": { display: "Num+", key: "NumpadAdd" },
-        "NumpadSubtract": { display: "Num-", key: "NumpadSubtract" },
-        "NumpadMultiply": { display: "Num*", key: "NumpadMultiply" },
-        "NumpadDivide": { display: "Num/", key: "NumpadDivide" },
-        "NumpadDecimal": { display: "Num.", key: "NumpadDecimal" },
-        "NumpadEnter": { display: "NumEnter", key: "NumpadEnter" },
-        "MediaPlayPause": { display: "MediaPlayPause", key: "MediaPlayPause" },
-        "MediaStop": { display: "MediaStop", key: "MediaStop" },
-        "MediaNextTrack": { display: "MediaNextTrack", key: "MediaNextTrack" },
-        "MediaPrevTrack": { display: "MediaPrevTrack", key: "MediaPrevTrack" },
-        "VolumeUp": { display: "VolumeUp", key: "VolumeUp" },
-        "VolumeDown": { display: "VolumeDown", key: "VolumeDown" },
-        "VolumeMute": { display: "VolumeMute", key: "VolumeMute" },
-        "Semicolon": { display: ";", key: "Semicolon" },
-        "Equal": { display: "=", key: "Equal" },
-        "Comma": { display: ",", key: "Comma" },
-        "Period": { display: ".", key: "Period" },
-        "Slash": { display: "/", key: "Slash" },
-        "Backquote": { display: "`", key: "Backquote" },
-        "Backslash": { display: "\\", key: "Backslash" },
-        "BracketLeft": { display: "[", key: "BracketLeft" },
-        "BracketRight": { display: "]", key: "BracketRight" },
-        "Minus": { display: "-", key: "Minus" },
-        "Quote": { display: "'", key: "Quote" },
-        "Enter": { display: "Enter", key: "Enter" },
-      };
-
-      const reverseCodeMap = {};
-      for (const [_, v] of Object.entries(codeMap)) {
-        reverseCodeMap[v.key] = v.display;
-      }
-
-      let keyName;
       if (code.startsWith("Numpad") && /\d/.test(code[6]) && code.length === 7) {
         restoreSaved();
         showHint("暂不支持该快捷键。", true);
@@ -685,11 +688,6 @@ if (codeMap[code]) {
         registerShortcut(action.id, display, shortcut, input, clearBtn);
       }
     });
-
-    function joinSaved(saved) {
-      if (!saved) return "";
-      return saved.split("+").map(p => reverseCodeMap[p] || p).join("+");
-    }
 
     clearBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
