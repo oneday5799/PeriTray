@@ -446,3 +446,65 @@ html, body {
   color: #888;
   margin-bottom: 8px;
 }
+
+.shortcut-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-key-input {
+  width: 180px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  background: #fff;
+  color: #1a1a1a;
+  outline: none;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.shortcut-key-input:focus {
+  border-color: #0078d7;
+  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.15);
+}
+
+.shortcut-key-input.recording {
+  border-color: #0078d7;
+  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25);
+  animation: recording-pulse 1s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25); }
+  50% { box-shadow: 0 0 0 4px rgba(0, 120, 215, 0.15); }
+}
+
+.shortcut-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: #999;
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: color 0.15s, background 0.15s;
+}
+
+.shortcut-clear-btn:hover {
+  color: #e81123;
+  background: rgba(232, 17, 35, 0.08);
+}
+
+.shortcut-hint {
+  font-size: 12px;
+  color: #999;
+  padding: 4px 0 0 0;
+}

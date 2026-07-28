@@ -3,6 +3,7 @@ use crate::device;
 use crate::process;
 use crate::wmi_query::query_devices;
 use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 /// 在 tokio blocking 线程中执行阻塞操作
 async fn run_blocking<F, T>(f: F) -> Result<T, String>
@@ -244,6 +245,51 @@ pub async fn check_for_update(
     })
     .await
     .map_err(|e| format!("task error: {}", e))?
+}
+
+fn parse_shortcut(s: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, String> {
+    tauri_plugin_global_shortcut::Shortcut::try_from(s).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_hotkey_config(app: tauri::AppHandle, action: String, key: Option<String>) -> Result<(), String> {
+    let prev_key = config::with_config(|c| {
+        if action == "devices" { c.shortcut_devices.clone() }
+        else { c.shortcut_volume.clone() }
+    });
+    if let Some(ref pk) = prev_key {
+        if let Ok(sc) = parse_shortcut(pk) {
+            let _ = app.global_shortcut().unregister(sc);
+            crate::process::append_log(&format!("[hotkey] unregistered old key {} for {}", pk, action));
+        }
+    }
+    if let Some(ref new_key_str) = key {
+        let sc = parse_shortcut(new_key_str)?;
+        if app.global_shortcut().is_registered(sc.clone()) {
+            config::with_config_mut(|c| {
+                if action == "devices" { c.shortcut_devices = None; }
+                else { c.shortcut_volume = None; }
+            });
+            return Err("快捷键已被占用".to_string());
+        }
+        let action_clone = action.clone();
+        let key_clone = new_key_str.clone();
+        app.global_shortcut()
+            .on_shortcut(sc, move |_app, _shortcut, _event| {
+                if action_clone == "devices" {
+                    crate::popup::open_popup(&_app, "devices");
+                } else {
+                    crate::popup::open_popup(&_app, "volume");
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        crate::process::append_log(&format!("[hotkey] registered {} {}", key_clone, action));
+    }
+    config::with_config_mut(|c| {
+        if action == "devices" { c.shortcut_devices = key.clone(); }
+        else { c.shortcut_volume = key.clone(); }
+    });
+    Ok(())
 }
 
 

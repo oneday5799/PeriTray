@@ -162,6 +162,7 @@ async function init() {
     loadDevicesAsync();
     loadAudioDevicesAsync();
     initShutdownVolumeSettings();
+    initShortcutSettings();
 
     // Open 2.4G device list button
     document.getElementById("btn-add-24g").addEventListener("click", async () => {
@@ -505,6 +506,132 @@ async function initShutdownVolumeSettings() {
     }
   } catch (e) {
     console.error("Failed to load audio devices for shutdown volume:", e);
+  }
+}
+
+function initShortcutSettings() {
+  const actions = [
+    { id: "devices", inputId: "shortcut-devices", clearId: "clear-shortcut-devices" },
+    { id: "volume", inputId: "shortcut-volume", clearId: "clear-shortcut-volume" },
+  ];
+
+  for (const action of actions) {
+    const input = document.getElementById(action.inputId);
+    const clearBtn = document.getElementById(action.clearId);
+
+    const keyField = action.id === "devices" ? "shortcut_devices" : "shortcut_volume";
+    const savedKey = config[keyField];
+    if (savedKey) {
+      input.value = savedKey;
+      clearBtn.style.display = "";
+    } else {
+      input.value = "";
+      clearBtn.style.display = "none";
+    }
+
+    let recording = false;
+    let keys = new Set();
+
+    function resetRecording() {
+      recording = false;
+      keys.clear();
+      input.classList.remove("recording");
+      input.placeholder = "点击录制快捷键";
+    }
+
+    input.addEventListener("click", () => {
+      if (recording) return;
+      recording = true;
+      keys.clear();
+      input.value = "";
+      input.classList.add("recording");
+      input.placeholder = "请按下组合键...";
+    });
+
+    input.addEventListener("blur", () => {
+      resetRecording();
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (!recording) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === "Escape") {
+        resetRecording();
+        input.value = savedKey || "";
+        input.placeholder = "点击录制快捷键";
+        clearBtn.style.display = savedKey ? "" : "none";
+        return;
+      }
+
+      const keyName = e.key === " " ? "Space" : e.key;
+      if (keyName === "Control" || keyName === "Shift" || keyName === "Alt" || keyName === "Meta") {
+        keys.add(keyName);
+        const preview = [...keys].join("+");
+        input.value = preview;
+        return;
+      }
+
+      if (e.ctrlKey) keys.add("Ctrl");
+      if (e.shiftKey) keys.add("Shift");
+      if (e.altKey) keys.add("Alt");
+      if (e.metaKey) keys.add("Meta");
+
+      if (keyName.length === 1 || keyName.startsWith("F") || [
+        "Escape", "Tab", "CapsLock", "Space", "Backspace", "Delete",
+        "Insert", "Home", "End", "PageUp", "PageDown",
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+        "PrintScreen", "ScrollLock", "Pause", "NumLock",
+        "MediaPlayPause", "MediaStop", "MediaNextTrack", "MediaPrevTrack",
+        "VolumeUp", "VolumeDown", "VolumeMute",
+      ].includes(keyName)) {
+        keys.add(keyName);
+      }
+
+      const shortcut = [...keys].join("+");
+      if (shortcut) {
+        recording = false;
+        input.value = shortcut;
+        input.classList.remove("recording");
+        input.placeholder = "点击录制快捷键";
+
+        registerShortcut(action.id, shortcut, input, clearBtn);
+      }
+    });
+
+    clearBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await invoke("set_hotkey_config", { action: action.id, key: null });
+        config[keyField] = null;
+        input.value = "";
+        clearBtn.style.display = "none";
+        input.placeholder = "点击录制快捷键";
+      } catch (_) {}
+    });
+
+    async function registerShortcut(actionId, shortcut, inputEl, clearEl) {
+      try {
+        await invoke("set_hotkey_config", {
+          action: actionId,
+          key: shortcut,
+        });
+        config[keyField] = shortcut;
+        clearEl.style.display = "";
+        await invoke("update_config", { newConfig: config });
+      } catch (err) {
+        const msg = String(err);
+        if (msg.includes("已被占用")) {
+          alert(`快捷键 "${shortcut}" 已被其他功能占用，请选择其他组合键。`);
+        } else {
+          alert(`注册快捷键失败: ${msg}`);
+        }
+        config[keyField] = null;
+        inputEl.value = "";
+        clearEl.style.display = "none";
+      }
+    }
   }
 }
 

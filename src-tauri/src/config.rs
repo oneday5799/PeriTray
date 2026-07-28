@@ -69,6 +69,10 @@ pub struct Config {
     pub check_updates: bool,
     #[serde(default)]
     pub include_prerelease: bool,
+    #[serde(default)]
+    pub shortcut_devices: Option<String>,
+    #[serde(default)]
+    pub shortcut_volume: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -94,6 +98,8 @@ impl Default for Config {
             shutdown_volume_devices: std::collections::HashMap::new(),
             check_updates: true,
             include_prerelease: false,
+            shortcut_devices: None,
+            shortcut_volume: None,
         }
     }
 }

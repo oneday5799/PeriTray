@@ -1,7 +1,7 @@
 use tauri::Manager;
 
 pub fn open_settings(app: &tauri::AppHandle) {
-    open_or_create_window(app, "settings", "设置 - 外设监控", "settings.html", 600.0, 500.0, true, false);
+    open_or_create_window(app, "settings", "设置 - 外设监控", "settings.html", 600.0, 580.0, true, false);
 }
 
 pub fn open_about(app: &tauri::AppHandle) {

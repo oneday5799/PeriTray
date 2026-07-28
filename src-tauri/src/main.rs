@@ -13,6 +13,7 @@ mod device;
 mod device_data;
 mod popup;
 mod process;
+mod shortcut;
 mod state;
 mod tray;
 mod update;
@@ -100,6 +101,7 @@ fn main() {
             }
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::get_devices,
             commands::get_config,
@@ -129,6 +131,7 @@ fn main() {
             commands::set_default_device,
             commands::open_log_dir,
             commands::check_for_update,
+            commands::set_hotkey_config,
         ])
         .setup(move |app| {
             if let Err(e) = tray::setup_tray(app) {
@@ -137,6 +140,7 @@ fn main() {
             // 初始化音频通知回调（替代轮询）
             crate::audio_notify::init_audio_notify(app.handle().clone());
             process::append_log("[main] audio_notify initialized");
+            crate::shortcut::register_shortcuts(app.handle());
             if !is_autostart {
                 popup::open_popup(app.handle(), "devices");
             }
