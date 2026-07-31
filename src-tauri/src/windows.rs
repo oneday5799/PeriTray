@@ -3,9 +3,9 @@ use crate::config;
 
 #[cfg(target_os = "windows")]
 pub(crate) fn browser_args() -> String {
-    let mut args = String::from("--renderer-process-limit=1 --disable-features=AudioServiceOutOfProcess,TranslateUI,msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+    let mut args = String::from("--renderer-process-limit=1 --disable-breakpad --disable-features=AudioServiceOutOfProcess,TranslateUI,msWebOOUI,msPdfOOUI,msSmartScreenProtection");
     if !config::with_config(|c| c.hardware_acceleration) {
-        args.push_str(" --disable-gpu");
+        args.push_str(" --disable-gpu --disable-gpu-compositing --disable-features=GpuProcessPerClient");
     }
     args
 }
