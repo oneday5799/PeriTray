@@ -4,22 +4,22 @@ use image::ImageEncoder;
 use lru::LruCache;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-static ICON_CACHE: OnceLock<Mutex<LruCache<u32, String>>> = OnceLock::new();
+static ICON_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new();
 
 /// 从进程PID获取应用图标（返回base64编码的PNG）
-pub fn get_app_icon_by_pid(pid: u32) -> Option<String> {
+pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
     let cache = ICON_CACHE.get_or_init(|| {
         Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))
     });
     {
         let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(icon) = guard.get(&pid) {
-            return Some(icon.clone());
+            return Some(Arc::clone(icon));
         }
     }
-    let icon: Option<String> = (|| -> Option<String> {
+    let icon: Option<Arc<str>> = (|| -> Option<Arc<str>> {
         unsafe {
             let process_handle = windows::Win32::System::Threading::OpenProcess(
                 windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION | windows::Win32::System::Threading::PROCESS_VM_READ,
@@ -42,12 +42,12 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<String> {
     })();
     icon.as_ref()?;
     let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
-    guard.put(pid, icon.clone().unwrap());
+    guard.put(pid, Arc::clone(icon.as_ref().unwrap()));
     icon
 }
 
 /// 从文件路径提取图标（返回base64编码的PNG）
-fn get_icon_from_path(path: &str) -> Option<String> {
+fn get_icon_from_path(path: &str) -> Option<Arc<str>> {
     unsafe {
         let mut path_buf = [0u16; 260];
         let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -176,8 +176,8 @@ unsafe fn get_icon_bitmap(hicon: windows::Win32::UI::WindowsAndMessaging::HICON)
 }
 
 /// 将RGBA图像转换为base64编码的PNG
-fn bitmap_to_base64(img: &RgbaImage) -> Option<String> {
-    let mut buffer = Cursor::new(Vec::new());
+fn bitmap_to_base64(img: &RgbaImage) -> Option<Arc<str>> {
+    let mut buffer = Cursor::new(Vec::with_capacity(16384));
     let encoder = PngEncoder::new(&mut buffer);
     encoder.write_image(
         img.as_raw(),
@@ -187,5 +187,5 @@ fn bitmap_to_base64(img: &RgbaImage) -> Option<String> {
     ).ok()?;
 
     use base64::Engine;
-    Some(base64::engine::general_purpose::STANDARD.encode(buffer.into_inner()))
+    Some(base64::engine::general_purpose::STANDARD.encode(buffer.into_inner()).into())
 }

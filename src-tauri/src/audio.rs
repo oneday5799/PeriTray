@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::Arc;
 use windows::core::*;
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::Endpoints::*;
@@ -14,7 +15,7 @@ pub struct AudioDevice { pub id: String, pub name: String, pub volume: f32, pub 
 pub struct VolumeChangeEvent { pub device_id: String, pub volume: f32, pub is_muted: bool }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AudioSession { pub id: String, pub name: String, pub icon: String, pub pid: u32, pub volume: f32, pub is_muted: bool, pub device_id: String, #[serde(default)] pub is_active: bool }
+pub struct AudioSession { pub id: String, pub name: String, pub icon: Arc<str>, pub pid: u32, pub volume: f32, pub is_muted: bool, pub device_id: String, #[serde(default)] pub is_active: bool }
 
 /// 确保当前线程已初始化 COM（幂等调用）
 unsafe fn ensure_com_initialized() {

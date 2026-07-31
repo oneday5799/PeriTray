@@ -32,15 +32,15 @@ pub(crate) fn classify_device(name: &str, pnp_class: &str, pnp_id: &str, caption
         || pnp_id.starts_with("SWD\\")
     {
         if is_audio(&lower_combined) { return DevType::Audio; }
-        if is_usb(&lower_combined, caption) { return DevType::Usb; }
+        if match_usb_keyword(&lower_combined) { return DevType::Usb; }
         return DevType::Other;
     }
     if pnp_class.eq_ignore_ascii_case("HIDClass") {
         if is_audio(&lower_combined) { return DevType::Audio; }
-        if is_usb(&lower_combined, caption) { return DevType::Usb; }
+        if match_usb_keyword(&lower_combined) { return DevType::Usb; }
         return DevType::Other;
     }
-    if pnp_id.starts_with("USB\\") && is_usb(&lower_combined, caption) {
+    if pnp_id.starts_with("USB\\") && match_usb_keyword(&lower_combined) {
         return DevType::Usb;
     }
     DevType::Other
@@ -56,7 +56,7 @@ pub(crate) fn classify_bluetooth(name: &str) -> Option<DevType> {
     }
     let lower = name.to_lowercase();
     if is_audio(&lower) { return Some(DevType::Audio); }
-    if is_usb(&lower, "") { return Some(DevType::Usb); }
+    if match_usb_keyword(&lower) { return Some(DevType::Usb); }
     Some(DevType::Other)
 }
 
@@ -76,16 +76,7 @@ fn is_audio(lower: &str) -> bool {
     .any(|k| lower.contains(k))
 }
 
-fn is_usb(lower_name: &str, caption: &str) -> bool {
-    let combined = if caption.is_empty() {
-        lower_name.to_string()
-    } else {
-        let mut s = String::with_capacity(lower_name.len() + 1 + caption.len());
-        s.push_str(lower_name);
-        s.push(' ');
-        s.push_str(&caption.to_lowercase());
-        s
-    };
+fn match_usb_keyword(lower: &str) -> bool {
     [
         "mouse", "keyboard", "controller", "gamepad", "鼠标", "键盘", "手柄", "xbox", "webcam",
         "logitech", "razer", "corsair", "keychron", "orochi", "deathadder", "viper",
@@ -93,7 +84,7 @@ fn is_usb(lower_name: &str, caption: &str) -> bool {
         "steelseries", "hyperx", "coolermaster", "roccat", "zte", "雷蛇", "罗技",
     ]
     .iter()
-    .any(|k| combined.contains(k))
+    .any(|k| lower.contains(k))
 }
 
 pub(crate) fn is_bt_service(pnp_id_upper: &str) -> bool {

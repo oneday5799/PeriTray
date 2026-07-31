@@ -58,7 +58,8 @@ pub fn try_insert(
         if let Some(indices) = cn_index.get(&cn) {
             if indices.iter().any(|&i| {
                 let d = &devices[i];
-                (core_name(&d.name) == cn) && (d.is_bluetooth || d.is_wireless_24g)
+                let d_cn = core_name(&d.name);
+                d_cn == cn && (d.is_bluetooth || d.is_wireless_24g)
             }) {
                 return;
             }
@@ -69,7 +70,8 @@ pub fn try_insert(
         if let Some(indices) = cn_index.get(&cn) {
             if let Some(&pos) = indices.iter().find(|&&i| {
                 let d = &devices[i];
-                (core_name(&d.name) == cn) && !d.is_bluetooth && !d.is_wireless_24g
+                let d_cn = core_name(&d.name);
+                d_cn == cn && !d.is_bluetooth && !d.is_wireless_24g
             }) {
                 devices.remove(pos);
                 rebuild_cn_index(cn_index, devices);
@@ -83,8 +85,9 @@ pub fn try_insert(
         if let Some(indices) = cn_index.get(&cn) {
             if let Some(&pos) = indices.iter().find(|&&i| {
                 let d = &devices[i];
+                let d_cn = core_name(&d.name);
                 let econn = if d.is_bluetooth { "bt" } else if d.is_wireless_24g { "24g" } else { "usb" };
-                (core_name(&d.name) == cn) && econn == conn_tag
+                d_cn == cn && econn == conn_tag
             }) {
                 let existing = &mut devices[pos];
                 existing.status = status.to_string();

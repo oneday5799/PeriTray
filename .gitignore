@@ -22,7 +22,4 @@ Thumbs.db
 *.bak
 *.user
 
-# Dev scripts
-check_device.ps1
-check_name.ps1
-list_devices.ps1
+

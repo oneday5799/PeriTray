@@ -137,6 +137,15 @@ fn try_bt_action(
     action: &str,
     log: &mut Vec<String>,
 ) -> bool {
+    const DEFAULT_BT_GUIDS: &[GUID] = &[
+        GUID { data1: 0x0000110b, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+        GUID { data1: 0x0000110c, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+        GUID { data1: 0x0000110e, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+        GUID { data1: 0x0000111e, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+        GUID { data1: 0x0000111f, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+        GUID { data1: 0x00001108, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
+    ];
+
     let device = match find_device_on_radio(radio, target_mac, log) {
         Some(d) => d,
         None => {
@@ -148,25 +157,22 @@ fn try_bt_action(
     let name = utf16_array_to_string(&device.szName);
     log.push(format!("FOUND:{} connected={}", name, device.fConnected));
 
-    let mut guids = enumerate_device_services(radio, &device, log);
+    let real_guids = enumerate_device_services(radio, &device, log);
 
-    if guids.is_empty() {
-        guids = vec![
-            GUID { data1: 0x0000110b, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
-            GUID { data1: 0x0000110c, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
-            GUID { data1: 0x0000110e, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
-            GUID { data1: 0x0000111e, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
-            GUID { data1: 0x0000111f, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
-            GUID { data1: 0x00001108, data2: 0x0000, data3: 0x1000, data4: [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb] },
-        ];
+    if real_guids.is_empty() {
         log.push("USING_DEFAULT_SVCS".into());
     }
+    let guids: &[GUID] = if real_guids.is_empty() {
+        DEFAULT_BT_GUIDS
+    } else {
+        &real_guids
+    };
 
     const MAX_RETRY: u32 = 3;
 
     if action == "disconnect" {
         let mut disabled = 0u32;
-        for svc in &guids {
+        for svc in guids {
             let mut ok = false;
             for retry in 0..MAX_RETRY {
                 let r = unsafe { BluetoothSetServiceState(radio, &device, svc, BLUETOOTH_SERVICE_DISABLE) };
@@ -186,7 +192,7 @@ fn try_bt_action(
         log.push(format!("DISABLED:{}/{}", disabled, guids.len()));
     } else if action == "connect" {
         let mut disabled = 0u32;
-        for svc in &guids {
+        for svc in guids {
             let r = unsafe { BluetoothSetServiceState(radio, &device, svc, BLUETOOTH_SERVICE_DISABLE) };
             if r == 0 {
                 disabled += 1;
@@ -197,7 +203,7 @@ fn try_bt_action(
         std::thread::sleep(std::time::Duration::from_millis(1000));
 
         let mut enabled = 0u32;
-        for svc in &guids {
+        for svc in guids {
             let r = unsafe { BluetoothSetServiceState(radio, &device, svc, BLUETOOTH_SERVICE_ENABLE) };
             log.push(format!("EN:{} -> {}", guid_to_string(svc), r));
             if r == 0 {
