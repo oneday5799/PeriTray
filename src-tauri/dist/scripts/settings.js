@@ -20,6 +20,14 @@ async function init() {
       await invoke("update_config", { newConfig: config });
     });
 
+    // Hardware acceleration toggle
+    const hwAccel = document.getElementById("toggle-hardware-acceleration");
+    hwAccel.checked = config.hardware_acceleration || false;
+    hwAccel.addEventListener("change", async () => {
+      config.hardware_acceleration = hwAccel.checked;
+      await invoke("update_config", { newConfig: config });
+    });
+
     // Filter toggle
     const filterToggle = document.getElementById("toggle-filter");
     const filterWrap = document.getElementById("filter-regex-wrap");

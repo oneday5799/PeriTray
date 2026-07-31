@@ -1,4 +1,14 @@
 use tauri::Manager;
+use crate::config;
+
+#[cfg(target_os = "windows")]
+pub(crate) fn browser_args() -> String {
+    let mut args = String::from("--renderer-process-limit=1 --disable-features=AudioServiceOutOfProcess,TranslateUI,msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+    if !config::with_config(|c| c.hardware_acceleration) {
+        args.push_str(" --disable-gpu");
+    }
+    args
+}
 
 pub fn open_settings(app: &tauri::AppHandle) {
     open_or_create_window(app, "settings", "设置 - 外设监控", "settings.html", 600.0, 580.0, true, false);
@@ -38,6 +48,11 @@ fn open_or_create_window(
         .inner_size(width, height)
         .resizable(resizable)
         .visible(false);
+
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder.additional_browser_args(&browser_args());
+        }
 
         if center {
             builder = builder.center();

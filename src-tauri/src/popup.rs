@@ -140,7 +140,22 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
     } else {
         "popup.html".to_string()
     };
-    match tauri::WebviewWindowBuilder::new(
+
+    #[cfg(target_os = "windows")]
+    let builder = tauri::WebviewWindowBuilder::new(
+        app, "popup", tauri::WebviewUrl::App(url.into()),
+    )
+    .additional_browser_args(&crate::windows::browser_args())
+    .title("外设信息")
+    .inner_size(POPUP_W, POPUP_H)
+    .decorations(false)
+    .resizable(false)
+    .skip_taskbar(true)
+    .always_on_top(true)
+    .position(target_x, target_y);
+
+    #[cfg(not(target_os = "windows"))]
+    let builder = tauri::WebviewWindowBuilder::new(
         app, "popup", tauri::WebviewUrl::App(url.into()),
     )
     .title("外设信息")
@@ -149,8 +164,9 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
     .resizable(false)
     .skip_taskbar(true)
     .always_on_top(true)
-    .position(target_x, target_y)
-    .build() {
+    .position(target_x, target_y);
+
+    match builder.build() {
         Ok(win) => {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {

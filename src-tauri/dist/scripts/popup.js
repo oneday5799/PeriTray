@@ -449,7 +449,11 @@ document.getElementById("btn-settings").addEventListener("click", async () => {
   }
 });
 
+let lastFocusRefresh = 0;
+
 window.addEventListener("focus", async () => {
+  const now = Date.now();
+  if (now - lastFocusRefresh < 2000) return;
   const invoke = getInvoke();
   if (!invoke) return;
   try {
@@ -473,6 +477,7 @@ window.addEventListener("focus", async () => {
       }
     }
     (volumeTab.style.display !== 'none' ? volumeTab : deviceTab).scrollTop = scrollTop;
+    lastFocusRefresh = Date.now();
   } catch (e) {
     console.error("Failed to refresh on focus:", e);
   }

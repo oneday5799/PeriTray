@@ -73,6 +73,8 @@ pub struct Config {
     pub shortcut_devices: Option<String>,
     #[serde(default)]
     pub shortcut_volume: Option<String>,
+    #[serde(default)]
+    pub hardware_acceleration: bool,
 }
 
 fn default_true() -> bool { true }
@@ -100,6 +102,7 @@ impl Default for Config {
             include_prerelease: false,
             shortcut_devices: None,
             shortcut_volume: None,
+            hardware_acceleration: false,
         }
     }
 }
