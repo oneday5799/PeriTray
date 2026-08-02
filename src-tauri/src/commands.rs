@@ -3,7 +3,7 @@ use crate::device;
 use crate::process;
 use crate::wmi_query::query_devices;
 use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// 在 tokio blocking 线程中执行阻塞操作
 async fn run_blocking<F, T>(f: F) -> Result<T, String>
@@ -219,6 +219,21 @@ pub async fn toggle_session_mute(session_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn adjust_volume_up() {
+    crate::audio::adjust_default_volume_up();
+}
+
+#[tauri::command]
+pub fn adjust_volume_down() {
+    crate::audio::adjust_default_volume_down();
+}
+
+#[tauri::command]
+pub fn toggle_mute() {
+    crate::audio::toggle_default_mute();
+}
+
+#[tauri::command]
 pub fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<(), String> {
     crate::process::append_log(&format!("[cmd] set_default_device: {}", device_id));
     crate::audio::set_default_device(&device_id).map_err(|e| e.to_string())?;
@@ -254,8 +269,14 @@ fn parse_shortcut(s: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, Str
 #[tauri::command]
 pub fn set_hotkey_config(app: tauri::AppHandle, action: String, key: Option<String>) -> Result<(), String> {
     let prev_key = config::with_config(|c| {
-        if action == "devices" { c.shortcut_devices.clone() }
-        else { c.shortcut_volume.clone() }
+        match action.as_str() {
+            "devices" => c.shortcut_devices.clone(),
+            "volume" => c.shortcut_volume.clone(),
+            "volume_up" => c.shortcut_volume_up.clone(),
+            "volume_down" => c.shortcut_volume_down.clone(),
+            "volume_mute" => c.shortcut_volume_mute.clone(),
+            _ => None,
+        }
     });
     if let Some(ref pk) = prev_key {
         if let Ok(sc) = parse_shortcut(pk) {
@@ -266,30 +287,47 @@ pub fn set_hotkey_config(app: tauri::AppHandle, action: String, key: Option<Stri
     if let Some(ref new_key_str) = key {
         let sc = parse_shortcut(new_key_str)?;
         if app.global_shortcut().is_registered(sc.clone()) {
-            config::with_config_mut(|c| {
-                if action == "devices" { c.shortcut_devices = None; }
-                else { c.shortcut_volume = None; }
-            });
+            set_config_key(&action, None);
             return Err("快捷键已被占用".to_string());
         }
         let action_clone = action.clone();
         let key_clone = new_key_str.clone();
         app.global_shortcut()
-            .on_shortcut(sc, move |_app, _shortcut, _event| {
-                if action_clone == "devices" {
-                    crate::popup::open_popup(&_app, "devices");
-                } else {
-                    crate::popup::open_popup(&_app, "volume");
+            .on_shortcut(sc, move |_app, _shortcut, event| {
+                if event.state != ShortcutState::Pressed {
+                    return;
                 }
+                dispatch_shortcut_action(_app, &action_clone);
             })
             .map_err(|e| e.to_string())?;
         crate::process::append_log(&format!("[hotkey] registered {} {}", key_clone, action));
     }
-    config::with_config_mut(|c| {
-        if action == "devices" { c.shortcut_devices = key.clone(); }
-        else { c.shortcut_volume = key.clone(); }
-    });
+    set_config_key(&action, key);
     Ok(())
+}
+
+fn set_config_key(action: &str, key: Option<String>) {
+    config::with_config_mut(|c| {
+        match action {
+            "devices" => c.shortcut_devices = key,
+            "volume" => c.shortcut_volume = key,
+            "volume_up" => c.shortcut_volume_up = key,
+            "volume_down" => c.shortcut_volume_down = key,
+            "volume_mute" => c.shortcut_volume_mute = key,
+            _ => {}
+        }
+    });
+}
+
+fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str) {
+    match action {
+        "devices" => crate::popup::open_popup(app, "devices"),
+        "volume" => crate::popup::open_popup(app, "volume"),
+        "volume_up" => crate::audio::adjust_default_volume_up(),
+        "volume_down" => crate::audio::adjust_default_volume_down(),
+        "volume_mute" => crate::audio::toggle_default_mute(),
+        _ => {}
+    }
 }
 
 

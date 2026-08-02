@@ -7,6 +7,7 @@ use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::Endpoints::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::*;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioDevice { pub id: String, pub name: String, pub volume: f32, pub is_muted: bool, pub is_default: bool }
@@ -287,4 +288,23 @@ unsafe fn get_session_display_name(session: &IAudioSessionControl) -> Result<Str
 unsafe fn get_session_id(session: &IAudioSessionControl2) -> Result<String> {
     let id = session.GetSessionInstanceIdentifier()?;
     Ok(id.to_string()?)
+}
+
+fn simulate_media_key(vk: u16) {
+    unsafe {
+        keybd_event(vk as u8, 0, KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(vk as u8, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
+    }
+}
+
+pub fn adjust_default_volume_up() {
+    simulate_media_key(VK_VOLUME_UP);
+}
+
+pub fn adjust_default_volume_down() {
+    simulate_media_key(VK_VOLUME_DOWN);
+}
+
+pub fn toggle_default_mute() {
+    simulate_media_key(VK_VOLUME_MUTE);
 }

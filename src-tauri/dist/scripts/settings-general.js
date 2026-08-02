@@ -15,6 +15,9 @@ function initShortcutSettings() {
   const actions = [
     { id: "devices", inputId: "shortcut-devices", clearId: "clear-shortcut-devices", configKey: "shortcut_devices" },
     { id: "volume", inputId: "shortcut-volume", clearId: "clear-shortcut-volume", configKey: "shortcut_volume" },
+    { id: "volume_up", inputId: "shortcut-volume-up", clearId: "clear-shortcut-volume-up", configKey: "shortcut_volume_up" },
+    { id: "volume_down", inputId: "shortcut-volume-down", clearId: "clear-shortcut-volume-down", configKey: "shortcut_volume_down" },
+    { id: "volume_mute", inputId: "shortcut-volume-mute", clearId: "clear-shortcut-volume-mute", configKey: "shortcut_volume_mute" },
   ];
 
   const codeMap = {

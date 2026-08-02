@@ -74,6 +74,12 @@ pub struct Config {
     #[serde(default)]
     pub shortcut_volume: Option<String>,
     #[serde(default)]
+    pub shortcut_volume_up: Option<String>,
+    #[serde(default)]
+    pub shortcut_volume_down: Option<String>,
+    #[serde(default)]
+    pub shortcut_volume_mute: Option<String>,
+    #[serde(default)]
     pub hardware_acceleration: bool,
 }
 
@@ -102,6 +108,9 @@ impl Default for Config {
             include_prerelease: false,
             shortcut_devices: None,
             shortcut_volume: None,
+            shortcut_volume_up: None,
+            shortcut_volume_down: None,
+            shortcut_volume_mute: None,
             hardware_acceleration: false,
         }
     }
