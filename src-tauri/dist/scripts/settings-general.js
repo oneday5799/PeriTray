@@ -201,7 +201,7 @@ function initShortcutSettings() {
         });
         config[keyField] = configKey;
         clearEl.style.display = "";
-        await invoke("update_config", { newConfig: config });
+        await saveConfig();
         showHint(`快捷键 "${display}" 已保存`, false);
       } catch (err) {
         const msg = String(err);

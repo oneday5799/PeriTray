@@ -54,10 +54,10 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
 
     if let Some(window) = app.get_webview_window("popup") {
         if window.is_visible().unwrap_or(false) {
-            close(app, &window, target_x, target_y, start_y);
+            close(&window, target_x, target_y, start_y);
         } else {
             let _ = app.emit("switch-tab", tab);
-            show(app, &window, target_x, start_y, target_y);
+            show(&window, target_x, start_y, target_y);
         }
     } else {
         create(app, target_x, target_y, tab);
@@ -72,11 +72,9 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
     let (target_x, target_y, start_y) = compute_position(app);
 
     if let Some(window) = app.get_webview_window("popup") {
-        if window.is_visible().unwrap_or(false) {
-            let _ = app.emit("switch-tab", tab);
-        } else {
-            let _ = app.emit("switch-tab", tab);
-            show(app, &window, target_x, start_y, target_y);
+        let _ = app.emit("switch-tab", tab);
+        if !window.is_visible().unwrap_or(false) {
+            show(&window, target_x, start_y, target_y);
         }
     } else {
         create(app, target_x, target_y, tab);
@@ -84,7 +82,6 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
 }
 
 fn close(
-    _app: &tauri::AppHandle,
     window: &tauri::WebviewWindow,
     target_x: f64,
     target_y: f64,
@@ -109,13 +106,12 @@ pub fn close_popup(app: &tauri::AppHandle) {
     let (target_x, target_y, start_y) = compute_position(app);
     if let Some(window) = app.get_webview_window("popup") {
         if window.is_visible().unwrap_or(false) {
-            close(app, &window, target_x, target_y, start_y);
+            close(&window, target_x, target_y, start_y);
         }
     }
 }
 
 fn show(
-    _app: &tauri::AppHandle,
     window: &tauri::WebviewWindow,
     target_x: f64,
     start_y: f64,

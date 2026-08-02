@@ -118,7 +118,7 @@ impl Default for Config {
 
 impl Config {
     /// Combined regex for all device exclusion filters (case-insensitive)
-    pub fn default_filter_regex() -> String {
+    fn default_filter_regex() -> String {
         "Virtual|虚拟|^HID|Audio Device|Audio 设备|Hands-Free|A2DP|gvinput Device|英特尔\\(R\\)".to_string()
     }
 }
@@ -162,8 +162,8 @@ pub fn init_config() {
             }
         }
     };
-    *CONFIG.get().unwrap().lock().unwrap_or_else(|e| e.into_inner()) = config;
-    let guard = CONFIG.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = CONFIG.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    *guard = config;
     sync_log_cache(&guard);
 }
 

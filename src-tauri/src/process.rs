@@ -12,7 +12,7 @@ pub fn exe_dir() -> PathBuf {
 
 /// 创建 Windows 隐藏窗口命令
 #[cfg(target_os = "windows")]
-pub fn new_hidden_cmd(program: &str) -> Command {
+fn new_hidden_cmd(program: &str) -> Command {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut cmd = Command::new(program);

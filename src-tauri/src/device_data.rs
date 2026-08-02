@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
-pub struct DeviceInfo {
+struct DeviceInfo {
     pub name: String,
     pub device_type: String,
 }
@@ -109,7 +109,7 @@ pub fn is_wireless_24g(vid: &str, pid: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn get_device_name(vid: &str, pid: &str) -> Option<String> {
+pub(crate) fn get_device_name(vid: &str, pid: &str) -> Option<String> {
     let data = DEVICE_DATA.get().and_then(|rw_lock| rw_lock.read().ok());
     data.as_ref()
         .and_then(|d| d.get(vid))
@@ -117,7 +117,7 @@ pub fn get_device_name(vid: &str, pid: &str) -> Option<String> {
         .map(|info| info.name.clone())
 }
 
-pub fn get_device_type(vid: &str, pid: &str) -> String {
+pub(crate) fn get_device_type(vid: &str, pid: &str) -> String {
     let data = DEVICE_DATA.get().and_then(|rw_lock| rw_lock.read().ok());
     data.as_ref()
         .and_then(|d| d.get(vid))

@@ -6,24 +6,6 @@ let deviceGroups = {};
 let useSystemBt = false;
 let trayDevices = [];
 
-function throttle(fn, delay) {
-  let lastCall = 0;
-  let timer = null;
-  return function(...args) {
-    const now = Date.now();
-    if (now - lastCall >= delay) {
-      lastCall = now;
-      fn.apply(this, args);
-    } else {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        lastCall = Date.now();
-        fn.apply(this, args);
-      }, delay - (now - lastCall));
-    }
-  };
-}
-
 async function loadDevices() {
   const list = document.getElementById("device-list");
   list.innerHTML = '<div class="loading">加载中...</div>';
@@ -252,7 +234,6 @@ function renderDevices() {
           }
 
           if (!statusChanged) {
-            const invoke = getInvoke();
             showToast(
               `${isConnect ? "连接失败" : "断开失败"}，点击这里跳转到系统设置进行修改`,
               invoke ? () => invoke("open_bt_settings") : null

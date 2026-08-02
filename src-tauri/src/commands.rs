@@ -153,12 +153,11 @@ const TRAY_DEVICE_LIMIT: usize = 4;
 
 #[tauri::command(async)]
 pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(), String> {
-    let already_added = config::with_config(|c| c.tray_devices.contains(&name));
-    if !already_added {
-        let count = config::with_config(|c| c.tray_devices.len());
-        if count >= TRAY_DEVICE_LIMIT {
-            return Err(format!("托盘最多添加 {} 个设备", TRAY_DEVICE_LIMIT));
-        }
+    let (already_added, count) = config::with_config(|c| {
+        (c.tray_devices.contains(&name), c.tray_devices.len())
+    });
+    if !already_added && count >= TRAY_DEVICE_LIMIT {
+        return Err(format!("托盘最多添加 {} 个设备", TRAY_DEVICE_LIMIT));
     }
     run_blocking(move || {
         config::with_config_mut(|c| toggle_vec_item(&mut c.tray_devices, &name));
@@ -319,7 +318,7 @@ fn set_config_key(action: &str, key: Option<String>) {
     });
 }
 
-fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str) {
+pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str) {
     match action {
         "devices" => crate::popup::open_popup(app, "devices"),
         "volume" => crate::popup::open_popup(app, "volume"),

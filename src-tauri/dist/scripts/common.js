@@ -1,4 +1,23 @@
 // Shared constants and utilities for popup and settings pages
+const { invoke } = window.__TAURI__.core;
+
+function throttle(fn, delay) {
+  let lastCall = 0;
+  let timer = null;
+  return function(...args) {
+    const now = Date.now();
+    if (now - lastCall >= delay) {
+      lastCall = now;
+      fn.apply(this, args);
+    } else {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        lastCall = Date.now();
+        fn.apply(this, args);
+      }, delay - (now - lastCall));
+    }
+  };
+}
 
 window.CATEGORIES = [
   { key: "Audio", label: "音频设备", subtitle: "扬声器、耳机等音频设备", icon: "🔊" },

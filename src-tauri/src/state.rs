@@ -20,7 +20,7 @@ pub static AUTO_START: AtomicBool = AtomicBool::new(false);
 pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceLock::new();
 
 /// 设备缓存，用于托盘 tooltip 显示，避免重复 WMI 查询
-pub static DEVICES_CACHE: OnceLock<Mutex<Vec<Device>>> = OnceLock::new();
+static DEVICES_CACHE: OnceLock<Mutex<Vec<Device>>> = OnceLock::new();
 
 /// 获取设备缓存的引用
 pub fn get_devices_cache() -> &'static Mutex<Vec<Device>> {

@@ -1,7 +1,6 @@
-listen("config-changed", async () => {
-  config = await invoke("get_config");
-  loadDevicesAsync();
-  loadAudioDevicesAsync();
+window.__TAURI__.event.listen("config-changed", async () => {
+  loadDevicesAsync().catch(console.error);
+  loadAudioDevicesAsync().catch(console.error);
 });
 
 async function loadAudioDevicesAsync() {
@@ -90,7 +89,7 @@ async function initShutdownVolumeSettings() {
   toggle.addEventListener("change", async () => {
     config.shutdown_volume_enabled = toggle.checked;
     settingsWrap.style.display = toggle.checked ? "block" : "none";
-    await invoke("update_config", { newConfig: config });
+    await saveConfig();
   });
 
   try {
@@ -137,7 +136,7 @@ async function initShutdownVolumeSettings() {
           nameEl.classList.remove("inactive");
           valueEl.classList.remove("inactive");
         }
-        await invoke("update_config", { newConfig: config });
+        await saveConfig();
       });
 
       slider.addEventListener("input", () => {
@@ -151,7 +150,7 @@ async function initShutdownVolumeSettings() {
         debounceTimer = setTimeout(async () => {
           if (config.shutdown_volume_devices[dev.name] !== undefined) {
             config.shutdown_volume_devices[dev.name] = parseInt(slider.value) / 100;
-            await invoke("update_config", { newConfig: config });
+            await saveConfig();
           }
         }, 300);
       });

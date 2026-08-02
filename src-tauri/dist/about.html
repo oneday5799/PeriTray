@@ -23,7 +23,6 @@
   <button class="close-btn" id="close">确定</button>
 
   <script>
-    document.addEventListener("contextmenu", e => e.preventDefault());
     const { invoke } = window.__TAURI__.core;
     document.getElementById("homepage").addEventListener("click", async (e) => {
       e.preventDefault();

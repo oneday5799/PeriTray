@@ -29,6 +29,7 @@
 .audio-device-card:hover {
   background: #f0f0f0;
 }
+}
 
 .audio-device-header {
   display: flex;

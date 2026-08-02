@@ -37,14 +37,7 @@ fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {
         if event.state != ShortcutState::Pressed {
             return;
         }
-        match action_str.as_str() {
-            "devices" => crate::popup::open_popup(_app, "devices"),
-            "volume" => crate::popup::open_popup(_app, "volume"),
-            "volume_up" => crate::audio::adjust_default_volume_up(),
-            "volume_down" => crate::audio::adjust_default_volume_down(),
-            "volume_mute" => crate::audio::toggle_default_mute(),
-            _ => {}
-        }
+        crate::commands::dispatch_shortcut_action(_app, &action_str);
     });
     crate::process::append_log(&format!("[shortcut] registered {} -> {}", key, action));
 }

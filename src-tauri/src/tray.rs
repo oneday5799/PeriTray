@@ -17,7 +17,7 @@ static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new(
 static AUDIO_DEVICES_SUBMENU: OnceLock<Mutex<Option<Submenu<tauri::Wry>>>> = OnceLock::new();
 
 /// 刷新设备缓存，返回是否发生变化
-pub fn refresh_devices_cache() -> bool {
+fn refresh_devices_cache() -> bool {
     let new_devices = crate::wmi_query::query_devices();
     let cache = get_devices_cache();
 
@@ -60,7 +60,7 @@ pub fn build_tooltip_text() -> String {
 }
 
 /// 更新托盘 tooltip
-pub fn update_tooltip(_app: &tauri::AppHandle) {
+fn update_tooltip() {
     let tooltip = build_tooltip_text();
 
     if let Ok(guard) = TRAY_ICON.get_or_init(|| Mutex::new(None)).lock() {
@@ -71,7 +71,7 @@ pub fn update_tooltip(_app: &tauri::AppHandle) {
 }
 
 /// 后台刷新线程：定期查询设备并更新缓存，状态变化时自动更新 tooltip
-pub fn start_device_watcher(app_handle: tauri::AppHandle) {
+fn start_device_watcher() {
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(10));
@@ -82,16 +82,15 @@ pub fn start_device_watcher(app_handle: tauri::AppHandle) {
 
             let changed = refresh_devices_cache();
             if changed {
-                let h = app_handle.clone();
-                std::thread::spawn(move || update_tooltip(&h));
+                std::thread::spawn(move || update_tooltip());
             }
         }
     });
 }
 
-pub fn refresh_tray_tooltip(app_handle: &tauri::AppHandle) {
+pub fn refresh_tray_tooltip(_app_handle: &tauri::AppHandle) {
     refresh_devices_cache();
-    update_tooltip(app_handle);
+    update_tooltip();
 }
 
 pub fn init_auto_start() {
@@ -263,10 +262,8 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         update_auto_text();
     });
 
-    let handle = app.handle().clone();
     app.listen("tray-devices-changed", move |_| {
-        let h = handle.clone();
-        std::thread::spawn(move || update_tooltip(&h));
+        std::thread::spawn(move || update_tooltip());
     });
 
     app.listen("audio-devices-changed", |_| {
@@ -274,12 +271,12 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // 启动后台设备监控线程
-    start_device_watcher(app.handle().clone());
+    start_device_watcher();
 
     Ok(())
 }
 
-pub fn update_auto_text() {
+fn update_auto_text() {
     if let Some(item) = AUTO_MENU_ITEM.get() {
         if let Ok(guard) = item.lock() {
             if let Some(ref mi) = *guard {

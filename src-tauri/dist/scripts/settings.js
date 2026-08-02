@@ -1,3 +1,11 @@
+async function saveConfig() {
+  try {
+    await invoke("update_config", { newConfig: config });
+  } catch (e) {
+    console.error("Failed to save config:", e);
+  }
+}
+
 async function init() {
   // Tab switching
   document.querySelectorAll(".tab-item").forEach(tab => {
@@ -17,7 +25,7 @@ async function init() {
     toggle.checked = config.auto_start;
     toggle.addEventListener("change", async () => {
       config.auto_start = toggle.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
     });
 
     // Hardware acceleration toggle
@@ -25,7 +33,7 @@ async function init() {
     hwAccel.checked = config.hardware_acceleration || false;
     hwAccel.addEventListener("change", async () => {
       config.hardware_acceleration = hwAccel.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
     });
 
     // Filter toggle
@@ -36,7 +44,7 @@ async function init() {
     filterToggle.addEventListener("change", async () => {
       config.filter_enabled = filterToggle.checked;
       filterWrap.style.display = filterToggle.checked ? "block" : "none";
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
       await loadDevicesAsync();
     });
 
@@ -48,8 +56,8 @@ async function init() {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         config.filter_regex = regexInput.value;
-        await invoke("update_config", { newConfig: config });
-        loadDevicesAsync();
+        await saveConfig();
+        await loadDevicesAsync();
       }, 500);
     });
 
@@ -58,7 +66,7 @@ async function init() {
     dedupToggle.checked = config.dedup_devices;
     dedupToggle.addEventListener("change", async () => {
       config.dedup_devices = dedupToggle.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
       await loadDevicesAsync();
     });
 
@@ -67,7 +75,7 @@ async function init() {
     unnamedBtToggle.checked = config.show_unnamed_bt;
     unnamedBtToggle.addEventListener("change", async () => {
       config.show_unnamed_bt = unnamedBtToggle.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
       await loadDevicesAsync();
     });
 
@@ -76,7 +84,7 @@ async function init() {
     useSystemBtToggle.checked = config.use_system_bt;
     useSystemBtToggle.addEventListener("change", async () => {
       config.use_system_bt = useSystemBtToggle.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
     });
 
     // Logging settings
@@ -84,14 +92,14 @@ async function init() {
     logToggle.checked = config.log_enabled;
     logToggle.addEventListener("change", async () => {
       config.log_enabled = logToggle.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
     });
 
     const logRetentionSelect = document.getElementById("log-retention");
     logRetentionSelect.value = config.log_retention || "one_day";
     logRetentionSelect.addEventListener("change", async () => {
       config.log_retention = logRetentionSelect.value;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
     });
 
     document.getElementById("btn-log-dir").addEventListener("click", async () => {
@@ -106,14 +114,14 @@ async function init() {
     checkUpdatesToggle.checked = config.check_updates !== false;
     checkUpdatesToggle.addEventListener("change", async () => {
       config.check_updates = checkUpdatesToggle.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
     });
 
     const includePrereleaseToggle = document.getElementById("toggle-include-prerelease");
     includePrereleaseToggle.checked = config.include_prerelease || false;
     includePrereleaseToggle.addEventListener("change", async () => {
       config.include_prerelease = includePrereleaseToggle.checked;
-      await invoke("update_config", { newConfig: config });
+      await saveConfig();
     });
 
     document.getElementById("btn-check-update").addEventListener("click", async () => {

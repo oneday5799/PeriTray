@@ -6,20 +6,16 @@ let audioDeviceNames = {};
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
+document.addEventListener("mouseup", () => {
+  document.querySelectorAll('input[type="range"]').forEach(s => { s._isDragging = false; });
+});
+
 function updateSessionCard(session) {
   const cards = document.querySelectorAll('.audio-session-card');
   for (const card of cards) {
     if (card.dataset.sessionId === session.id) {
-      const slider = card.querySelector('.volume-slider');
-      if (slider && document.activeElement !== slider) {
-        slider.value = Math.round(session.volume * 100);
-        updateSliderGradient(slider);
-      }
-      const muteBtn = card.querySelector('.mute-btn');
-      if (muteBtn) {
-        muteBtn.className = "mute-btn" + (session.is_muted ? " muted" : "");
-        muteBtn.innerHTML = session.is_muted ? getMuteIcon() : getVolumeIcon();
-      }
+      updateSliderValue(card.querySelector('.volume-slider'), session.volume);
+      updateMuteButton(card.querySelector('.mute-btn'), session.is_muted);
       break;
     }
   }
@@ -64,15 +60,21 @@ function updateDeviceCard(device) {
   }
   if (!targetCard) return;
 
-  const slider = targetCard.querySelector('.volume-slider');
+  updateSliderValue(targetCard.querySelector('.volume-slider'), device.volume);
+  updateMuteButton(targetCard.querySelector('.mute-btn'), device.is_muted);
+}
+
+function updateSliderValue(slider, volume) {
   if (slider && document.activeElement !== slider) {
-    slider.value = Math.round(device.volume * 100);
+    slider.value = Math.round(volume * 100);
     updateSliderGradient(slider);
   }
-  const muteBtn = targetCard.querySelector('.mute-btn');
+}
+
+function updateMuteButton(muteBtn, isMuted) {
   if (muteBtn) {
-    muteBtn.className = "mute-btn" + (device.is_muted ? " muted" : "");
-    muteBtn.innerHTML = device.is_muted ? getMuteIcon() : getVolumeIcon();
+    muteBtn.className = "mute-btn" + (isMuted ? " muted" : "");
+    muteBtn.innerHTML = isMuted ? getMuteIcon() : getVolumeIcon();
   }
 }
 
@@ -85,7 +87,6 @@ function createSliderTooltip(slider) {
   slider.parentElement.appendChild(tooltip);
 
   let hideTimer = null;
-  let isDragging = false;
 
   function positionTooltip() {
     const min = parseFloat(slider.min);
@@ -125,7 +126,7 @@ function createSliderTooltip(slider) {
   }
 
   slider.addEventListener("mousemove", (e) => {
-    if (isDragging || isOverThumb(e)) {
+    if (slider._isDragging || isOverThumb(e)) {
       showTooltip();
     } else {
       hideTooltip();
@@ -133,25 +134,21 @@ function createSliderTooltip(slider) {
   });
 
   slider.addEventListener("mouseenter", () => {
-    if (isDragging) showTooltip();
+    if (slider._isDragging) showTooltip();
   });
 
   slider.addEventListener("mouseleave", () => {
-    if (!isDragging) hideTooltip();
+    if (!slider._isDragging) hideTooltip();
   });
 
   slider.addEventListener("mousedown", () => {
-    isDragging = true;
+    slider._isDragging = true;
     showTooltip();
   });
 
   slider.addEventListener("blur", () => {
-    isDragging = false;
+    slider._isDragging = false;
     hideTooltip();
-  });
-
-  document.addEventListener("mouseup", () => {
-    isDragging = false;
   });
 
   slider.addEventListener("input", showTooltip);
@@ -274,9 +271,6 @@ function createAudioDeviceCard(device) {
   card.className = "audio-device-card";
   card.dataset.deviceId = device.id;
   card.dataset.deviceName = device.name;
-  if (device.id === selectedDeviceId) {
-    card.classList.add("selected");
-  }
 
   const header = document.createElement("div");
   header.className = "audio-device-header";
@@ -327,9 +321,7 @@ function createAudioDeviceCard(device) {
   slider.max = "100";
   slider.value = Math.round(device.volume * 100);
 
-  const throttledSetDeviceVolume = throttle(async (id, vol) => {
-    await setDeviceVolume(id, vol);
-  }, 150);
+  const throttledSetDeviceVolume = throttle(setDeviceVolume, 150);
 
   slider.addEventListener("input", (e) => {
     const value = parseInt(e.target.value) / 100;
@@ -368,11 +360,6 @@ function createAudioDeviceCard(device) {
 }
 
 function updateAudioDeviceCard(card, device) {
-  if (device.id === selectedDeviceId) {
-    card.classList.add("selected");
-  } else {
-    card.classList.remove("selected");
-  }
 
   const nameEl = card.querySelector('.audio-device-name');
   if (nameEl) {
@@ -398,17 +385,8 @@ function updateAudioDeviceCard(card, device) {
     }
   }
 
-  const slider = card.querySelector('.volume-slider');
-  if (slider && document.activeElement !== slider) {
-    slider.value = Math.round(device.volume * 100);
-    updateSliderGradient(slider);
-  }
-
-  const muteBtn = card.querySelector('.mute-btn');
-  if (muteBtn) {
-    muteBtn.className = "mute-btn" + (device.is_muted ? " muted" : "");
-    muteBtn.innerHTML = device.is_muted ? getMuteIcon() : getVolumeIcon();
-  }
+  updateSliderValue(card.querySelector('.volume-slider'), device.volume);
+  updateMuteButton(card.querySelector('.mute-btn'), device.is_muted);
 }
 
 function selectDevice(deviceId) {
@@ -501,9 +479,7 @@ function createAudioSessionCard(session) {
   slider.max = "100";
   slider.value = Math.round(session.volume * 100);
 
-  const throttledSetSessionVolume = throttle(async (sessionId, vol) => {
-    await setSessionVolume(sessionId, vol);
-  }, 100);
+  const throttledSetSessionVolume = throttle(setSessionVolume, 100);
 
   slider.addEventListener("input", async (e) => {
     const value = parseInt(e.target.value) / 100;
@@ -540,17 +516,8 @@ function createAudioSessionCard(session) {
 }
 
 function updateAudioSessionCard(card, session) {
-  const slider = card.querySelector('.volume-slider');
-  if (slider && document.activeElement !== slider) {
-    slider.value = Math.round(session.volume * 100);
-    updateSliderGradient(slider);
-  }
-
-  const muteBtn = card.querySelector('.mute-btn');
-  if (muteBtn) {
-    muteBtn.className = "mute-btn" + (session.is_muted ? " muted" : "");
-    muteBtn.innerHTML = session.is_muted ? getMuteIcon() : getVolumeIcon();
-  }
+  updateSliderValue(card.querySelector('.volume-slider'), session.volume);
+  updateMuteButton(card.querySelector('.mute-btn'), session.is_muted);
 }
 
 async function setDeviceVolume(deviceId, volume) {
