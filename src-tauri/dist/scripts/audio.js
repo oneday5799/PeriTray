@@ -156,6 +156,16 @@ function createSliderTooltip(slider) {
 
   slider.addEventListener("input", showTooltip);
 
+  slider.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const min = parseFloat(slider.min);
+    const max = parseFloat(slider.max);
+    let val = parseFloat(slider.value);
+    val = e.deltaY < 0 ? Math.min(val + 1, max) : Math.max(val - 1, min);
+    slider.value = val;
+    slider.dispatchEvent(new Event("input"));
+  }, { passive: false });
+
   return tooltip;
 }
 
