@@ -28,6 +28,14 @@ async function init() {
       await saveConfig();
     });
 
+    // Default popup tab
+    const defaultPopupTab = document.getElementById("default-popup-tab");
+    defaultPopupTab.value = config.default_popup_tab || "devices";
+    defaultPopupTab.addEventListener("change", async () => {
+      config.default_popup_tab = defaultPopupTab.value;
+      await saveConfig();
+    });
+
     // Hardware acceleration toggle
     const hwAccel = document.getElementById("toggle-hardware-acceleration");
     hwAccel.checked = config.hardware_acceleration || false;

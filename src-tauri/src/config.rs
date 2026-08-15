@@ -81,9 +81,12 @@ pub struct Config {
     pub shortcut_volume_mute: Option<String>,
     #[serde(default)]
     pub hardware_acceleration: bool,
+    #[serde(default = "default_popup_tab")]
+    pub default_popup_tab: String,
 }
 
 fn default_true() -> bool { true }
+fn default_popup_tab() -> String { "devices".to_string() }
 
 impl Default for Config {
     fn default() -> Self {
@@ -112,6 +115,7 @@ impl Default for Config {
             shortcut_volume_down: None,
             shortcut_volume_mute: None,
             hardware_acceleration: false,
+            default_popup_tab: default_popup_tab(),
         }
     }
 }

@@ -157,9 +157,16 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let menu = build_full_menu(app.handle(), &audio_devices_menu)?;
 
+    let tray_icon = if config::with_config(|c| c.default_popup_tab == "volume") {
+        Image::from_bytes(include_bytes!("../icons/tray-volume-icon.png"))
+            .expect("Failed to load tray volume icon")
+    } else {
+        Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+            .expect("Failed to load tray icon")
+    };
+
     let _tray = TrayIconBuilder::with_id("main-tray")
-        .icon(Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
-            .expect("Failed to load tray icon"))
+        .icon(tray_icon)
         .tooltip("外设监控")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -230,7 +237,8 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
                 if button == tauri::tray::MouseButton::Left {
-                    popup::toggle(app, "devices");
+                    let tab = config::with_config(|c| c.default_popup_tab.clone());
+                    popup::toggle(app, &tab);
                 }
             }
         })
@@ -260,6 +268,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let new_auto = config::with_config(|c| c.auto_start);
         AUTO_START.store(new_auto, Ordering::Relaxed);
         update_auto_text();
+        update_tray_icon();
     });
 
     app.listen("tray-devices-changed", move |_| {
@@ -286,6 +295,23 @@ fn update_auto_text() {
                     "开机自启"
                 };
                 let _ = mi.set_text(text);
+            }
+        }
+    }
+}
+
+/// 根据默认打开页面更新托盘图标
+fn update_tray_icon() {
+    let is_volume = config::with_config(|c| c.default_popup_tab == "volume");
+    let icon = if is_volume {
+        Image::from_bytes(include_bytes!("../icons/tray-volume-icon.png")).ok()
+    } else {
+        Image::from_bytes(include_bytes!("../icons/tray-icon.png")).ok()
+    };
+    if let Some(icon) = icon {
+        if let Ok(guard) = TRAY_ICON.get().unwrap().lock() {
+            if let Some(ref tray) = *guard {
+                let _ = tray.set_icon(Some(icon));
             }
         }
     }
