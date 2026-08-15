@@ -18,7 +18,7 @@ html, body {
   padding: 10px 0 12px;
 }
 
-/* Tab bar */
+/* Tab bar (old - keep for compatibility) */
 .tab-bar {
   display: flex;
   gap: 0;
@@ -46,20 +46,221 @@ html, body {
   font-weight: 500;
 }
 
+/* ── NavigationView Top Bar (WinUIonWeb 风格) ──────── */
+.win-nav-top-bar {
+  position: relative;
+  box-sizing: border-box;
+  width: calc(100% + 40px);
+  margin: 0 -20px;
+  height: 48px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.win-nav-indicator-track {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.win-nav-indicator {
+  position: absolute;
+  bottom: 4px;
+  left: 0;
+  height: 3px;
+  width: 16px;
+  background: #0078d7;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 10;
+  will-change: transform, width;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+.win-nav-menu {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  height: 100%;
+  padding: 0 4px;
+  gap: 0;
+}
+
+.win-nav-item {
+  position: relative;
+  box-sizing: border-box;
+  width: max-content;
+  height: 40px;
+  min-height: 40px;
+  margin: 2px 4px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.62);
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1),
+    color 0.167s cubic-bezier(0, 0, 0, 1);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.win-nav-item .label {
+  font-size: 14px;
+  line-height: 20px;
+  color: inherit;
+}
+
+.win-nav-item:hover {
+  background: rgba(0, 0, 0, 0.0373);
+  color: rgba(0, 0, 0, 0.89);
+}
+
+.win-nav-item:active {
+  background: rgba(0, 0, 0, 0.0241);
+  color: rgba(0, 0, 0, 0.62);
+}
+
+.win-nav-item.is-selected {
+  background: transparent;
+  color: rgba(0, 0, 0, 0.89);
+}
+
+.win-nav-item.is-selected:hover {
+  background: transparent;
+  color: rgba(0, 0, 0, 0.89);
+}
+
+.win-nav-item.is-selected:active {
+  background: transparent;
+  color: rgba(0, 0, 0, 0.62);
+}
+
+@media (prefers-color-scheme: dark) {
+  .win-nav-top-bar {
+    border-bottom-color: #1d1d1d;
+  }
+
+  .win-nav-indicator {
+    background: #4cc2ff;
+  }
+
+  .win-nav-item {
+    color: rgba(255, 255, 255, 0.77);
+  }
+
+  .win-nav-item:hover {
+    background: rgba(255, 255, 255, 0.0605);
+    color: #ffffff;
+  }
+
+  .win-nav-item:active {
+    background: rgba(255, 255, 255, 0.0419);
+    color: rgba(255, 255, 255, 0.77);
+  }
+
+  .win-nav-item.is-selected {
+    color: #ffffff;
+  }
+
+  .win-nav-item.is-selected:hover {
+    color: #ffffff;
+  }
+
+  .win-nav-item.is-selected:active {
+    color: rgba(255, 255, 255, 0.77);
+  }
+}
+
 .tab-content {
   display: none;
+  margin-top: 20px;
 }
 
 .tab-content.active {
   display: block;
 }
 
-/* Setting row */
+/* ── Slide Navigation Transition (WinUIonWeb 风格) ─── */
+.tab-content.slide-active {
+  display: block;
+  will-change: opacity, transform;
+}
+
+/* Enter from right */
+.tab-content.slide-enter-right {
+  animation: SlideFromRight_Enter 0.45s cubic-bezier(0.1, 0.9, 0.2, 1) both;
+}
+
+/* Leave to left */
+.tab-content.slide-leave-left {
+  animation: SlideFromRight_Leave 0.15s cubic-bezier(0.7, 0, 1, 0.5) both;
+}
+
+/* Enter from left */
+.tab-content.slide-enter-left {
+  animation: SlideFromLeft_Enter 0.45s cubic-bezier(0.1, 0.9, 0.2, 1) both;
+}
+
+/* Leave to right */
+.tab-content.slide-leave-right {
+  animation: SlideFromLeft_Leave 0.15s cubic-bezier(0.7, 0, 1, 0.5) both;
+}
+
+@keyframes SlideFromRight_Enter {
+  0%   { opacity: 0; transform: translateX(200px); }
+  33.333% { opacity: 0; transform: translateX(200px); }
+  33.334% { opacity: 1; transform: translateX(200px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes SlideFromRight_Leave {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(-150px); }
+}
+
+@keyframes SlideFromLeft_Enter {
+  0%   { opacity: 0; transform: translateX(-200px); }
+  33.333% { opacity: 0; transform: translateX(-200px); }
+  33.334% { opacity: 1; transform: translateX(-200px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes SlideFromLeft_Leave {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(150px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-content.slide-enter-right,
+  .tab-content.slide-leave-left,
+  .tab-content.slide-enter-left,
+  .tab-content.slide-leave-right {
+    animation: none !important;
+  }
+}
+
+/* Setting row — 匹配 group-card 卡片风格 */
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 0;
+  padding: 14px 16px;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+  margin-bottom: 3px;
+  transition: background 0.12s ease;
+}
+
+.setting-row:hover {
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .setting-row-col {
@@ -74,11 +275,33 @@ html, body {
   justify-content: space-between;
 }
 
+/* 无展开项时隐藏 separator */
+.separator {
+  display: none;
+}
+
 .setting-label {
   font-size: 15px;
   color: #1a1a1a;
   display: inline-flex;
   align-items: center;
+}
+
+/* 展开箭头（仅展开项显示） */
+.setting-arrow {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.setting-arrow.expanded {
+  transform: rotate(90deg);
 }
 
 .setting-hint {
@@ -380,19 +603,327 @@ html, body {
 }
 
 .setting-select {
-  padding: 6px 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
-  font-size: 13px;
+  appearance: none;
+  -webkit-appearance: none;
+  height: 32px;
+  min-height: 32px;
+  padding: 5px 36px 6px 11px;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.16);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.70);
+  color: rgba(0, 0, 0, 0.89);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.15s;
+  background-image: url("data:image/svg+xml,%3Csvg width='8' height='4' viewBox='0 0 8 4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0.64 0.64L4 4L7.36 0.64' stroke='%23000000' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  transition: background-color 0.167s cubic-bezier(0, 0, 0, 1);
+}
+
+.setting-select:hover {
+  background-color: rgba(249, 249, 249, 0.50);
+}
+
+.setting-select:active {
+  background-color: rgba(249, 249, 249, 0.30);
 }
 
 .setting-select:focus {
-  border-color: #0078d7;
+  border-bottom-color: #0067c0;
+}
+
+.setting-select option {
+  padding: 5px 11px 7px;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.89);
+}
+
+@media (prefers-color-scheme: dark) {
+  .setting-select {
+    border-left: 1px solid rgba(255, 255, 255, 0.0706);
+    border-top: 1px solid rgba(255, 255, 255, 0.0941);
+    border-right: 1px solid rgba(255, 255, 255, 0.0706);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.0941);
+    background: rgba(255, 255, 255, 0.0605);
+    color: #ffffff;
+    background-image: url("data:image/svg+xml,%3Csvg width='8' height='4' viewBox='0 0 8 4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0.64 0.64L4 4L7.36 0.64' stroke='%23ffffff' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+
+  .setting-select:hover {
+    background-color: rgba(255, 255, 255, 0.0837);
+  }
+
+  .setting-select:active {
+    background-color: rgba(255, 255, 255, 0.0326);
+  }
+
+  .setting-select:focus {
+    border-bottom-color: #4cc2ff;
+  }
+
+  .setting-select option {
+    background: #2c2c2c;
+    color: #ffffff;
+  }
+}
+
+/* ── WinUIonWeb ComboBox ─── */
+.win-combo-box {
+  position: relative;
+  display: inline-block;
+  min-width: 64px;
+  vertical-align: top;
+  color: rgba(0, 0, 0, 0.89);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.win-combo-btn {
+  width: 100%;
+  min-width: 120px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 0;
+  align-items: stretch;
+  text-align: left;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.70);
+  color: rgba(0, 0, 0, 0.89);
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.16);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 14px;
+  min-height: 32px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.167s cubic-bezier(0, 0, 0, 1);
+}
+
+.win-combo-btn:hover {
+  background: rgba(249, 249, 249, 0.50);
+}
+
+.win-combo-btn:active {
+  background: rgba(249, 249, 249, 0.30);
+}
+
+.win-combo-content {
+  min-width: 0;
+  padding: 5px 0 7px 12px;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.win-combo-chevron {
+  grid-row: 1;
+  grid-column: 2;
+  width: 12px;
+  height: 12px;
+  margin: 0 14px 0 0;
+  place-self: center end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: rgba(0, 0, 0, 0.62);
+  transition: transform 0.2s cubic-bezier(0, 0, 0, 1);
+}
+
+.win-combo-box.is-open .win-combo-chevron {
+  transform: rotate(180deg);
+}
+
+/* Overlay */
+.win-combo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+}
+
+/* Flyout */
+.win-combo-flyout {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  min-width: 80px;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: rgba(0, 0, 0, 0.89);
+  background: rgba(252, 252, 252, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 8px;
+  box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
+  -webkit-backdrop-filter: blur(30px) saturate(160%) brightness(1.02);
+  backdrop-filter: blur(30px) saturate(160%) brightness(1.02);
+  visibility: hidden;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.win-combo-flyout::-webkit-scrollbar {
+  display: none;
+}
+
+.win-combo-items-presenter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 0;
+}
+
+.win-combo-item {
+  appearance: none;
+  position: relative;
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  box-sizing: border-box;
+  color: rgba(0, 0, 0, 0.89);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 20px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.win-combo-item-layout {
+  position: relative;
+  width: calc(100% - 10px);
+  min-height: 32px;
+  margin: 2px 5px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  border-radius: 3px;
+}
+
+.win-combo-item-content {
+  min-width: 0;
+  padding: 5px 11px 7px;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.win-combo-item:hover .win-combo-item-layout {
+  background: rgba(0, 0, 0, 0.0373);
+}
+
+.win-combo-item:active .win-combo-item-layout {
+  color: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.0241);
+}
+
+.win-combo-item.selected .win-combo-item-layout {
+  background: rgba(0, 0, 0, 0.0373);
+}
+
+.win-combo-item.selected:hover .win-combo-item-layout {
+  background: rgba(0, 0, 0, 0.0241);
+}
+
+.win-combo-item-pill {
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 1.5px;
+  background: #0067c0;
+  transform: translateY(-50%);
+  transition: height 167ms cubic-bezier(0, 0, 0, 1);
+  display: none;
+}
+
+.win-combo-item.selected .win-combo-item-pill {
+  display: block;
+}
+
+.win-combo-item.selected:active .win-combo-item-pill {
+  height: 10px;
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .win-combo-box {
+    color: #ffffff;
+  }
+
+  .win-combo-btn {
+    background: rgba(255, 255, 255, 0.0605);
+    color: #ffffff;
+    border-left: 1px solid rgba(255, 255, 255, 0.0706);
+    border-top: 1px solid rgba(255, 255, 255, 0.0941);
+    border-right: 1px solid rgba(255, 255, 255, 0.0706);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.0941);
+  }
+
+  .win-combo-btn:hover {
+    background: rgba(255, 255, 255, 0.0837);
+  }
+
+  .win-combo-btn:active {
+    background: rgba(255, 255, 255, 0.0326);
+  }
+
+  .win-combo-chevron {
+    color: rgba(255, 255, 255, 0.77);
+  }
+
+  .win-combo-flyout {
+    background: rgba(44, 44, 44, 0.86);
+    border: 1px solid rgba(0, 0, 0, 0.20);
+    box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
+    -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
+    backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
+  }
+
+  .win-combo-item {
+    color: #ffffff;
+  }
+
+  .win-combo-item:hover .win-combo-item-layout {
+    background: rgba(255, 255, 255, 0.0605);
+  }
+
+  .win-combo-item:active .win-combo-item-layout {
+    color: rgba(255, 255, 255, 0.77);
+    background: rgba(255, 255, 255, 0.0419);
+  }
+
+  .win-combo-item.selected .win-combo-item-layout {
+    background: rgba(255, 255, 255, 0.0605);
+  }
+
+  .win-combo-item.selected:hover .win-combo-item-layout {
+    background: rgba(255, 255, 255, 0.0419);
+  }
+
+  .win-combo-item-pill {
+    background: #4cc2ff;
+  }
 }
 
 .shutdown-device-list {

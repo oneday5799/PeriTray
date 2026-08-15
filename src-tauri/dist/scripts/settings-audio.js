@@ -82,13 +82,16 @@ async function initShutdownVolumeSettings() {
   const toggle = document.getElementById("toggle-shutdown-volume");
   const settingsWrap = document.getElementById("shutdown-volume-settings");
   const deviceList = document.getElementById("shutdown-device-list");
+  const shutdownArrow = document.getElementById("arrow-shutdown");
 
   toggle.checked = config.shutdown_volume_enabled || false;
   settingsWrap.style.display = toggle.checked ? "block" : "none";
+  if (shutdownArrow) shutdownArrow.classList.toggle("expanded", toggle.checked);
 
   toggle.addEventListener("change", async () => {
     config.shutdown_volume_enabled = toggle.checked;
     settingsWrap.style.display = toggle.checked ? "block" : "none";
+    if (shutdownArrow) shutdownArrow.classList.toggle("expanded", toggle.checked);
     await saveConfig();
   });
 
