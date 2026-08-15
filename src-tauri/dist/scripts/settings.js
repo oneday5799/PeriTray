@@ -348,16 +348,50 @@ async function init() {
     const filterToggle = document.getElementById("toggle-filter");
     const filterWrap = document.getElementById("filter-regex-wrap");
     const filterArrow = document.getElementById("arrow-filter");
+    const filterCardHeader = document.getElementById("filter-card-header");
     filterToggle.checked = config.filter_enabled;
-    filterWrap.style.display = config.filter_enabled ? "block" : "none";
+
+    function setFilterExpanded(expanded) {
+      if (expanded) {
+        filterWrap.classList.add("show");
+        filterWrap.style.maxHeight = filterWrap.scrollHeight + "px";
+      } else {
+        const h = filterWrap.scrollHeight;
+        filterWrap.style.transition = "none";
+        filterWrap.style.maxHeight = h + "px";
+        filterWrap.offsetHeight;
+        filterWrap.style.transition = "";
+        filterWrap.classList.remove("show");
+        filterWrap.style.maxHeight = "0px";
+      }
+      if (filterArrow) filterArrow.classList.toggle("expanded", expanded);
+    }
+
+    if (config.filter_enabled) {
+      filterWrap.classList.add("show");
+      filterWrap.style.transition = "none";
+      filterWrap.style.maxHeight = "999px";
+      requestAnimationFrame(() => {
+        filterWrap.style.transition = "";
+      });
+    } else {
+      filterWrap.style.maxHeight = "0px";
+    }
     if (filterArrow) filterArrow.classList.toggle("expanded", config.filter_enabled);
+
     filterToggle.addEventListener("change", async () => {
       config.filter_enabled = filterToggle.checked;
-      filterWrap.style.display = filterToggle.checked ? "block" : "none";
-      if (filterArrow) filterArrow.classList.toggle("expanded", filterToggle.checked);
+      setFilterExpanded(filterToggle.checked);
       await saveConfig();
       await loadDevicesAsync();
     });
+    if (filterCardHeader) {
+      filterCardHeader.addEventListener("click", (e) => {
+        if (e.target.closest('.toggle')) return;
+        const isOpen = filterWrap.classList.contains("show");
+        setFilterExpanded(!isOpen);
+      });
+    }
 
     // Filter regex input
     const regexInput = document.getElementById("filter-regex");

@@ -475,33 +475,82 @@ html, body {
 }
 
 /* Filter regex */
+#filter-card {
+  margin-bottom: 3px;
+}
+
+#filter-card .group-header {
+  padding: 10px 14px;
+}
+
+#filter-card .group-header:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+#filter-card .setting-row-left {
+  margin-right: 12px;
+}
+
 .filter-regex-wrap {
-  padding: 8px 0 12px;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.2s ease;
+  padding: 0 14px;
+}
+
+.filter-regex-wrap.show {
+  max-height: 300px;
+  padding: 0 14px 10px;
 }
 
 .filter-textarea {
   width: 100%;
-  min-height: 60px;
-  padding: 8px 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  font-family: "Consolas", "Courier New", monospace;
-  font-size: 13px;
-  color: #1a1a1a;
-  background: #fff;
-  resize: vertical;
+  min-height: 76px;
+  height: auto;
+  padding: 5px 6px 6px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom-color: rgba(0, 0, 0, 0.45);
+  border-radius: 4px;
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  color: rgba(0, 0, 0, 0.89);
+  background: rgba(255, 255, 255, 0.70);
+  resize: none;
+  overflow: hidden;
   outline: none;
-  transition: border-color 0.15s;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1);
+}
+
+.filter-textarea:hover {
+  background: rgba(249, 249, 249, 0.50);
 }
 
 .filter-textarea:focus {
-  border-color: #0078d7;
+  background: #fff;
+  border-bottom-color: #0067c0;
 }
 
-.filter-hint {
-  font-size: 12px;
-  color: #888;
-  margin-top: 4px;
+@media (prefers-color-scheme: dark) {
+  #filter-card .group-header:hover {
+    background: rgba(255, 255, 255, 0.0605);
+  }
+
+  .filter-textarea {
+    border: 1px solid rgba(0, 0, 0, 0.07);
+    border-bottom-color: rgba(255, 255, 255, 0.54);
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.0605);
+  }
+
+  .filter-textarea:hover {
+    background: rgba(255, 255, 255, 0.0837);
+  }
+
+  .filter-textarea:focus {
+    background: rgba(30, 30, 30, 0.70);
+    border-bottom-color: #4cc2ff;
+  }
 }
 
 /* Device groups */
