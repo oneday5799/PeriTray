@@ -292,6 +292,21 @@ html, body {
   align-items: center;
 }
 
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-top: 20px;
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .section-title {
+    color: #ffffff;
+  }
+}
+
 .setting-desc {
   font-size: 12px;
   color: #666;
@@ -555,7 +570,6 @@ html, body {
 
 /* Device groups */
 .device-groups {
-  margin-top: 10px;
 }
 
 .group {
