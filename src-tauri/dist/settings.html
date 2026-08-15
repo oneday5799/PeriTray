@@ -256,7 +256,10 @@
           </div>
         </div>
         <div class="filter-regex-wrap" id="filter-regex-wrap">
-          <textarea id="filter-regex" class="filter-textarea" rows="4" spellcheck="false"></textarea>
+          <div class="filter-textarea-border">
+            <div class="filter-textarea-focus-border"></div>
+            <textarea id="filter-regex" class="filter-textarea" rows="4" spellcheck="false"></textarea>
+          </div>
         </div>
       </div>
 
@@ -304,34 +307,41 @@
 
     <!-- Tab: Audio -->
     <div class="tab-content" id="tab-audio">
-      <div class="setting-row">
-        <span class="setting-label">音量控制页设备列表</span>
-      </div>
-      <div class="audio-device-groups" id="audio-device-groups"></div>
-
-      <div class="setting-row">
-        <span class="setting-label">关机/重启时自动调整音量
-          <span class="tooltip-trigger">?
-            <span class="tooltip-content">关机或重启时自动将指定音频设备的音量调整到设定值，适用于需要固定关机音量及重置开机音量的场景。</span>
-          </span>
-        </span>
-        <div style="display:flex;align-items:center;">
-          <label class="toggle">
-            <input type="checkbox" id="toggle-shutdown-volume">
-            <span class="slider"></span>
-          </label>
-          <span class="setting-arrow" id="arrow-shutdown">
+      <div class="group-card" id="audio-card">
+        <div class="group-header" id="audio-card-header">
+          <div class="group-text">
+            <div class="group-title">音量控制页设备列表</div>
+          </div>
+          <div class="group-arrow" id="arrow-audio">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </span>
+          </div>
+        </div>
+        <div class="group-items" id="audio-device-items">
         </div>
       </div>
 
-      <div id="shutdown-volume-settings" style="display:none;">
-        <div class="setting-row">
-          <span class="setting-label">目标设备</span>
+      <div class="group-card" id="shutdown-card">
+        <div class="group-header" id="shutdown-card-header">
+          <div class="group-text" style="flex:1">
+            <div class="group-title">关机/重启时自动调整音量
+              <span class="tooltip-trigger">?
+                <span class="tooltip-content">关机或重启时自动将指定音频设备的音量调整到设定值，适用于需要固定关机音量及重置开机音量的场景。</span>
+              </span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;">
+            <label class="toggle" onclick="event.stopPropagation()">
+              <input type="checkbox" id="toggle-shutdown-volume">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="group-arrow" id="arrow-shutdown">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
         </div>
-        <div class="shutdown-hint">点击设备名启用/禁用，已启用的设备会在关机时自动调整音量</div>
-        <div id="shutdown-device-list" class="shutdown-device-list"></div>
+        <div class="group-items" id="shutdown-device-items">
+          <div id="shutdown-device-list" class="shutdown-device-list"></div>
+        </div>
       </div>
     </div>
   </div>

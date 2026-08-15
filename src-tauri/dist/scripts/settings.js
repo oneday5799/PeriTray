@@ -351,18 +351,23 @@ async function init() {
     const filterCardHeader = document.getElementById("filter-card-header");
     filterToggle.checked = config.filter_enabled;
 
+    // Filter regex input - MUST be declared before use
+    const regexInput = document.getElementById("filter-regex");
+    regexInput.value = config.filter_regex || "";
+    regexInput.style.height = "auto";
+    regexInput.style.minHeight = "80px";
+
     function setFilterExpanded(expanded) {
       if (expanded) {
         filterWrap.classList.add("show");
-        filterWrap.style.maxHeight = filterWrap.scrollHeight + "px";
+        filterWrap.style.maxHeight = "999px";
+        regexInput.style.height = "auto";
+        regexInput.style.minHeight = "80px";
       } else {
-        const h = filterWrap.scrollHeight;
-        filterWrap.style.transition = "none";
-        filterWrap.style.maxHeight = h + "px";
-        filterWrap.offsetHeight;
-        filterWrap.style.transition = "";
         filterWrap.classList.remove("show");
         filterWrap.style.maxHeight = "0px";
+        regexInput.style.height = "auto";
+        regexInput.style.minHeight = "80px";
       }
       if (filterArrow) filterArrow.classList.toggle("expanded", expanded);
     }
@@ -371,6 +376,8 @@ async function init() {
       filterWrap.classList.add("show");
       filterWrap.style.transition = "none";
       filterWrap.style.maxHeight = "999px";
+      regexInput.style.height = "auto";
+      regexInput.style.minHeight = "80px";
       requestAnimationFrame(() => {
         filterWrap.style.transition = "";
       });
@@ -393,11 +400,16 @@ async function init() {
       });
     }
 
-    // Filter regex input
-    const regexInput = document.getElementById("filter-regex");
-    regexInput.value = config.filter_regex || "";
     let debounceTimer = null;
     regexInput.addEventListener("input", () => {
+      regexInput.style.height = "auto";
+      regexInput.style.minHeight = "80px";
+      if (filterWrap.classList.contains("show")) {
+        filterWrap.style.maxHeight = "999px";
+        requestAnimationFrame(() => {
+          filterWrap.style.maxHeight = filterWrap.scrollHeight + "px";
+        });
+      }
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         config.filter_regex = regexInput.value;
@@ -511,6 +523,7 @@ async function init() {
 
     loadDevicesAsync();
     loadAudioDevicesAsync();
+    initAudioCardToggle();
     initShutdownVolumeSettings();
     initShortcutSettings();
     initDeviceShortcutSettings();

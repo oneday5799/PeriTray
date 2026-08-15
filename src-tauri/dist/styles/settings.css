@@ -265,6 +265,8 @@ html, body {
   background: #fff;
   border: 1px solid #e0e0e0;
   margin-bottom: 3px;
+  min-height: 60px;
+  box-sizing: border-box;
 }
 
 .setting-row-left {
@@ -346,12 +348,15 @@ html, body {
   align-items: center;
   justify-content: center;
   color: #888;
-  transition: transform 0.2s ease;
   flex-shrink: 0;
   margin-left: 8px;
 }
 
-.setting-arrow.expanded {
+.setting-arrow svg {
+  transition: transform 0.15s ease;
+}
+
+.setting-arrow.expanded svg {
   transform: rotate(90deg);
 }
 
@@ -494,8 +499,20 @@ html, body {
   margin-bottom: 3px;
 }
 
+#audio-card {
+  margin-bottom: 3px;
+}
+
+#audio-card .group-header {
+  padding: 10px 14px;
+  height: 60px;
+  box-sizing: border-box;
+}
+
 #filter-card .group-header {
   padding: 10px 14px;
+  height: 60px;
+  box-sizing: border-box;
 }
 
 #filter-card .group-header:hover {
@@ -514,36 +531,71 @@ html, body {
 }
 
 .filter-regex-wrap.show {
-  max-height: 300px;
-  padding: 0 14px 10px;
+  max-height: 400px;
+  padding: 10px 14px;
+}
+
+.filter-textarea-border {
+  position: relative;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom-color: rgba(0, 0, 0, 0.45);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.70);
+  overflow: hidden;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), border-color 0.167s ease;
+}
+
+.filter-textarea-border:hover {
+  background: rgba(249, 249, 249, 0.50);
+}
+
+.filter-textarea-border:focus-within {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.06);
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+.filter-textarea-focus-border {
+  position: absolute;
+  inset: -1px;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.filter-textarea-focus-border::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.filter-textarea-border:focus-within .filter-textarea-focus-border::after {
+  background: #0078d7;
 }
 
 .filter-textarea {
   width: 100%;
-  min-height: 76px;
+  min-height: 80px;
   height: auto;
-  padding: 5px 6px 6px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-  border-bottom-color: rgba(0, 0, 0, 0.45);
-  border-radius: 4px;
+  padding: 5px 6px 10px 10px;
+  border: 0;
+  border-radius: 0;
   font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 14px;
   line-height: 20px;
   color: rgba(0, 0, 0, 0.89);
-  background: rgba(255, 255, 255, 0.70);
+  background: transparent;
   resize: none;
   overflow: hidden;
+  box-sizing: border-box;
   outline: none;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1);
 }
-
-.filter-textarea:hover {
-  background: rgba(249, 249, 249, 0.50);
-}
-
-.filter-textarea:focus {
-  background: #fff;
-  border-bottom-color: #0067c0;
+  outline: none;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -551,20 +603,28 @@ html, body {
     background: rgba(255, 255, 255, 0.0605);
   }
 
-  .filter-textarea {
+  .filter-textarea-border {
     border: 1px solid rgba(0, 0, 0, 0.07);
     border-bottom-color: rgba(255, 255, 255, 0.54);
-    color: #ffffff;
     background: rgba(255, 255, 255, 0.0605);
   }
 
-  .filter-textarea:hover {
+  .filter-textarea-border:hover {
     background: rgba(255, 255, 255, 0.0837);
   }
 
-  .filter-textarea:focus {
+  .filter-textarea-border:focus-within {
     background: rgba(30, 30, 30, 0.70);
-    border-bottom-color: #4cc2ff;
+    border-color: rgba(0, 0, 0, 0.07);
+    border-bottom-color: rgba(0, 0, 0, 0.07);
+  }
+
+  .filter-textarea-border:focus-within .filter-textarea-focus-border::after {
+    background: #4cc2ff;
+  }
+
+  .filter-textarea {
+    color: #ffffff;
   }
 }
 
@@ -590,6 +650,8 @@ html, body {
   padding: 14px 16px;
   cursor: pointer;
   transition: background 0.12s ease;
+  height: 60px;
+  box-sizing: border-box;
 }
 
 .group-header:hover {
@@ -606,23 +668,17 @@ html, body {
 }
 
 .group-icon {
-  font-size: 20px;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+  display: none;
 }
 
 .group-text {
   flex: 1;
-  margin-left: 12px;
+  margin-left: 0;
 }
 
 .group-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 400;
   color: #1a1a1a;
 }
 
@@ -1060,30 +1116,39 @@ html, body {
   }
 }
 
+#shutdown-card {
+  margin-bottom: 3px;
+  overflow: visible;
+}
+
+#shutdown-card .group-header {
+  padding: 10px 14px;
+  height: 60px;
+  box-sizing: border-box;
+}
+
 .shutdown-device-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   margin-bottom: 14px;
 }
 
 .shutdown-device-item {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  padding: 10px 14px;
-  transition: background 0.12s;
-}
-
-.shutdown-device-item:hover {
-  background: #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 .shutdown-device-item .device-name {
   font-size: 14px;
   color: #1a1a1a;
-  cursor: pointer;
-  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  margin-right: 12px;
 }
 
 .shutdown-device-item .device-name.inactive {
@@ -1093,29 +1158,121 @@ html, body {
 .shutdown-device-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  margin-left: auto;
 }
 
-.shutdown-device-controls .volume-slider {
+/* NumberBox */
+.win-numberbox {
+  display: flex;
+  align-items: stretch;
+  min-height: 30px;
+  width: 120px;
+  position: relative;
+}
+
+.win-numberbox-border {
+  display: flex;
+  align-items: stretch;
   flex: 1;
+  min-height: 30px;
+  border: 1px solid #e0e0e0;
+  border-bottom-color: #888;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.7);
+  overflow: hidden;
+  position: relative;
 }
 
-.shutdown-device-controls .volume-value {
-  font-size: 13px;
-  color: #333;
+.win-numberbox-focus-border {
+  position: absolute;
+  inset: -1px;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.win-numberbox-focus-border::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.win-numberbox:focus-within .win-numberbox-border {
+  border-color: #e0e0e0;
+  border-bottom-color: #e0e0e0;
+}
+
+.win-numberbox:focus-within .win-numberbox-focus-border::after {
+  background: #0078d7;
+}
+
+.win-numberbox-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px 5px 10px;
+  font-size: 14px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 20px;
+  color: #1a1a1a;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.win-numberbox-input::-webkit-outer-spin-button,
+.win-numberbox-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.win-numberbox-spin {
+  display: flex;
+  flex-direction: row;
+  align-self: stretch;
+}
+
+.win-numberbox-spin-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 28px;
-  text-align: right;
-  flex-shrink: 0;
+  min-width: 28px;
+  border: 0;
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
 }
 
-.shutdown-device-controls .volume-value.inactive {
-  color: #aaa;
+.win-numberbox-spin-btn:hover {
+  background: rgba(0,0,0,0.04);
+  color: #1a1a1a;
 }
 
-.shutdown-hint {
-  font-size: 12px;
-  color: #888;
-  margin-bottom: 8px;
+.win-numberbox-spin-btn:active {
+  background: rgba(0,0,0,0.08);
+}
+
+.win-numberbox-spin-btn:disabled {
+  color: #ccc;
+  cursor: default;
+}
+
+.win-numberbox-spin-btn:disabled:hover {
+  background: transparent;
+}
+
+.win-numberbox-spin-btn svg {
+  width: 10px;
+  height: 10px;
 }
 
 .shortcut-input-wrap {
