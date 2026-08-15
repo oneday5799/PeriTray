@@ -80,7 +80,7 @@ function initDeviceShortcutSettings() {
     if (ids.length === 0) {
       const empty = document.createElement("div");
       empty.className = "shortcut-hint";
-      empty.textContent = "暂无输出设备快捷键。可在「音量控制」页右键设备选择「快捷键」进行设置。";
+      empty.textContent = "暂无设备切换快捷键。可在「音量控制」页右键设备选择「快捷键」进行设置。";
       listEl.appendChild(empty);
       return;
     }

@@ -104,7 +104,7 @@
     <!-- Tab: Shortcut -->
     <div class="tab-content" id="tab-shortcut">
       <div class="setting-row">
-        <span class="setting-label">快捷键</span>
+        <span class="setting-label">基础快捷键</span>
       </div>
       <div class="setting-row">
         <span class="setting-label">打开设备信息</span>
@@ -145,17 +145,21 @@
 
       <div class="separator"></div>
       <div class="setting-row">
-        <span class="setting-label">输出设备</span>
+        <span class="setting-label">设备快捷键</span>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">设备快捷键共享循环切换</span>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-device-shortcut-cycle">
-          <span class="slider"></span>
-        </label>
+      <div class="setting-row setting-row-col">
+        <div class="setting-row-top">
+          <span class="setting-label">设备快捷键共享
+            <span class="tooltip-trigger">?
+              <span class="tooltip-content">开启后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换默认输出设备；关闭时每个快捷键仅能分配给一个设备。</span>
+            </span>
+          </span>
+          <label class="toggle">
+            <input type="checkbox" id="toggle-device-shortcut-cycle">
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
-      <div class="shortcut-hint">开启后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换默认输出设备；关闭时每个快捷键仅能分配给一个设备。</div>
-      <div class="shortcut-hint">在「音量控制」页右键设备设置的快捷键，用于快速切换默认输出设备。即使设备已断开连接，快捷键仍会保留。</div>
       <div id="device-shortcut-list"></div>
     </div>
 
