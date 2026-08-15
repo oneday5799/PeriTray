@@ -59,11 +59,40 @@ pub fn get_config() -> Config {
 }
 
 #[tauri::command]
-pub fn update_config(app: tauri::AppHandle, new_config: Config) {
+pub fn update_config(app: tauri::AppHandle, mut new_config: Config) {
+    let cycle_was_enabled = config::with_config(|c| c.enable_device_shortcut_cycle);
+    if cycle_was_enabled && !new_config.enable_device_shortcut_cycle {
+        // 关闭共享开关：清除被多个设备共用的快捷键
+        clear_shared_device_shortcuts(&mut new_config);
+        crate::shortcut::sync_device_shortcuts(&app);
+    }
     config::with_config_mut(|c| {
         *c = new_config;
     });
     let _ = app.emit("config-changed", ());
+}
+
+/// 清除被多个设备共用的快捷键（保留各设备的名称，仅清空 shortcut）
+fn clear_shared_device_shortcuts(c: &mut Config) {
+    use std::collections::HashMap;
+    let mut key_count: HashMap<String, usize> = HashMap::new();
+    for d in c.device_shortcuts.values() {
+        if let Some(ref k) = d.shortcut {
+            *key_count.entry(k.clone()).or_insert(0) += 1;
+        }
+    }
+    let mut cleared = false;
+    for d in c.device_shortcuts.values_mut() {
+        if let Some(ref k) = d.shortcut {
+            if key_count.get(k).copied().unwrap_or(0) > 1 {
+                d.shortcut = None;
+                cleared = true;
+            }
+        }
+    }
+    if cleared {
+        process::append_log("[config] shared device shortcuts cleared (cycle toggle disabled)");
+    }
 }
 
 #[tauri::command]
@@ -339,10 +368,16 @@ pub fn set_device_shortcut(
         let sc = parse_shortcut(new_key_str)?;
         // 若键已被注册且不是另一设备快捷键（不在当前设备快捷键集合中）→ 与非设备功能冲突
         if app.global_shortcut().is_registered(sc.clone()) {
-            let used_by_device = crate::config::with_config(|c| {
-                c.device_shortcuts.values().any(|d| d.shortcut.as_deref() == Some(new_key_str))
+            let share_enabled = crate::config::with_config(|c| c.enable_device_shortcut_cycle);
+            let (used_by_any_device, used_by_other_device) = crate::config::with_config(|c| {
+                let any = c.device_shortcuts.values().any(|d| d.shortcut.as_deref() == Some(new_key_str));
+                let other = c.device_shortcuts.iter().any(|(id, d)| id != &device_id && d.shortcut.as_deref() == Some(new_key_str));
+                (any, other)
             });
-            if !used_by_device {
+            // 关闭共享：被其他设备或非设备功能占用都拒绝（本设备自身占用允许）
+            // 开启共享：仅拒绝非设备功能占用
+            let conflict = if share_enabled { !used_by_any_device } else { used_by_other_device || !used_by_any_device };
+            if conflict {
                 return Err("快捷键已被占用".to_string());
             }
         }
@@ -396,13 +431,19 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
     }
 
     let current_default = devices.iter().find(|d| d.is_default);
-    let next = if let Some(current) = current_default {
-        if let Some(pos) = connected.iter().position(|d| d.id == current.id) {
-            connected[(pos + 1) % connected.len()]
+    let share_enabled = crate::config::with_config(|c| c.enable_device_shortcut_cycle);
+    let next = if share_enabled {
+        if let Some(current) = current_default {
+            if let Some(pos) = connected.iter().position(|d| d.id == current.id) {
+                connected[(pos + 1) % connected.len()]
+            } else {
+                connected[0]
+            }
         } else {
             connected[0]
         }
     } else {
+        // 未开启共享：切换到该键关联的第一个已连接设备
         connected[0]
     };
 

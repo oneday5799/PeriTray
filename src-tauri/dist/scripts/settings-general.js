@@ -2,6 +2,15 @@ function initShortcutSettings() {
   const hintEl = document.getElementById("shortcut-hint");
   let hintTimer = null;
 
+  const cycleToggle = document.getElementById("toggle-device-shortcut-cycle");
+  if (cycleToggle) {
+    cycleToggle.checked = !!config.enable_device_shortcut_cycle;
+    cycleToggle.addEventListener("change", async () => {
+      config.enable_device_shortcut_cycle = cycleToggle.checked;
+      await saveConfig();
+    });
+  }
+
   function showHint(msg, isError) {
     clearTimeout(hintTimer);
     hintEl.textContent = msg;

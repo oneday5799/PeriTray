@@ -91,6 +91,8 @@ pub struct Config {
     pub default_popup_tab: String,
     #[serde(default)]
     pub device_shortcuts: std::collections::HashMap<String, DeviceShortcut>,
+    #[serde(default)]
+    pub enable_device_shortcut_cycle: bool,
 }
 
 fn default_true() -> bool { true }
@@ -125,6 +127,7 @@ impl Default for Config {
             hardware_acceleration: false,
             default_popup_tab: default_popup_tab(),
             device_shortcuts: std::collections::HashMap::new(),
+            enable_device_shortcut_cycle: false,
         }
     }
 }

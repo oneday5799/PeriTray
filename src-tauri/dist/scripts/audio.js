@@ -245,7 +245,7 @@ function showDeviceShortcutDialog(device) {
 
   const hint = document.createElement("div");
   hint.className = "shortcut-dialog-hint";
-  hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备。多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
+  hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备。在设置中开启共享开关后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
 
   row.appendChild(input);
   row.appendChild(clearBtn);
@@ -290,7 +290,7 @@ function showDeviceShortcutDialog(device) {
           hint.textContent = `快捷键 "${display}" 已保存`;
           hint.style.color = "#4caf50";
           setTimeout(() => {
-            hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备。多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
+            hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备。在设置中开启共享开关后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
             hint.style.color = "#999";
           }, 2500);
         })
