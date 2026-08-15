@@ -2,8 +2,18 @@ use crate::config::{self, Config};
 use crate::device;
 use crate::process;
 use crate::wmi_query::query_devices;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+/// 快捷键录制期间置位，抑制全局快捷键触发，避免录制时误触发动作
+static SHORTCUT_RECORDING: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+pub fn set_shortcut_recording(recording: bool) {
+    SHORTCUT_RECORDING.store(recording, Ordering::Relaxed);
+    process::append_log(&format!("[hotkey] shortcut recording = {}", recording));
+}
 
 /// 在 tokio blocking 线程中执行阻塞操作
 async fn run_blocking<F, T>(f: F) -> Result<T, String>
@@ -291,15 +301,15 @@ pub fn set_hotkey_config(app: tauri::AppHandle, action: String, key: Option<Stri
         }
         let action_clone = action.clone();
         let key_clone = new_key_str.clone();
+        crate::process::append_log(&format!("[hotkey] registered {} {}", new_key_str, action));
         app.global_shortcut()
             .on_shortcut(sc, move |_app, _shortcut, event| {
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
-                dispatch_shortcut_action(_app, &action_clone);
+                dispatch_shortcut_action(_app, &action_clone, &key_clone);
             })
             .map_err(|e| e.to_string())?;
-        crate::process::append_log(&format!("[hotkey] registered {} {}", key_clone, action));
     }
     set_config_key(&action, key);
     Ok(())
@@ -325,35 +335,20 @@ pub fn set_device_shortcut(
     name: String,
     key: Option<String>,
 ) -> Result<(), String> {
-    let prev_key = config::with_config(|c| {
-        c.device_shortcuts.get(&device_id).and_then(|d| d.shortcut.clone())
-    });
-    if let Some(ref pk) = prev_key {
-        if let Ok(sc) = parse_shortcut(pk) {
-            let _ = app.global_shortcut().unregister(sc);
-            crate::process::append_log(&format!("[hotkey] unregistered old key {} for device {}", pk, device_id));
-        }
-    }
     if let Some(ref new_key_str) = key {
         let sc = parse_shortcut(new_key_str)?;
+        // 若键已被注册且不是另一设备快捷键（不在当前设备快捷键集合中）→ 与非设备功能冲突
         if app.global_shortcut().is_registered(sc.clone()) {
-            set_device_shortcut_key(&device_id, &name, None);
-            return Err("快捷键已被占用".to_string());
+            let used_by_device = crate::config::with_config(|c| {
+                c.device_shortcuts.values().any(|d| d.shortcut.as_deref() == Some(new_key_str))
+            });
+            if !used_by_device {
+                return Err("快捷键已被占用".to_string());
+            }
         }
-        let action = format!("device_shortcut:{}", device_id);
-        let action_clone = action.clone();
-        let key_clone = new_key_str.clone();
-        app.global_shortcut()
-            .on_shortcut(sc, move |_app, _shortcut, event| {
-                if event.state != ShortcutState::Pressed {
-                    return;
-                }
-                dispatch_shortcut_action(_app, &action_clone);
-            })
-            .map_err(|e| e.to_string())?;
-        crate::process::append_log(&format!("[hotkey] registered {} {}", key_clone, action));
     }
     set_device_shortcut_key(&device_id, &name, key);
+    crate::shortcut::sync_device_shortcuts(&app);
     Ok(())
 }
 
@@ -373,27 +368,64 @@ fn set_device_shortcut_key(device_id: &str, name: &str, key: Option<String>) {
 
 #[tauri::command]
 pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
-    let prev_key = config::with_config(|c| {
-        c.device_shortcuts.get(&device_id).and_then(|d| d.shortcut.clone())
-    });
-    if let Some(ref pk) = prev_key {
-        if let Ok(sc) = parse_shortcut(pk) {
-            let _ = app.global_shortcut().unregister(sc);
-            crate::process::append_log(&format!("[hotkey] unregistered {} for device {}", pk, device_id));
-        }
-    }
     config::with_config_mut(|c| {
         c.device_shortcuts.remove(&device_id);
     });
+    crate::shortcut::sync_device_shortcuts(&app);
 }
 
-pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str) {
-    if let Some(device_id) = action.strip_prefix("device_shortcut:") {
-        crate::process::append_log(&format!("[hotkey] device shortcut triggered: {}", device_id));
-        if let Err(e) = crate::audio::set_default_device(device_id) {
-            crate::process::append_log(&format!("[hotkey] set default device failed: {}", e));
+/// 在共用同一快捷键的设备间循环切换默认输出设备（按设备列表自然顺序）
+fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
+    let group: Vec<String> = crate::config::with_config(|c| {
+        c.device_shortcuts
+            .iter()
+            .filter(|(_, d)| d.shortcut.as_deref() == Some(key))
+            .map(|(id, _)| id.clone())
+            .collect()
+    });
+    if group.is_empty() {
+        return;
+    }
+
+    let devices = crate::audio::enumerate_output_devices().unwrap_or_default();
+    let connected: Vec<&crate::audio::AudioDevice> =
+        devices.iter().filter(|d| group.iter().any(|id| id == &d.id)).collect();
+    if connected.is_empty() {
+        crate::process::append_log(&format!("[hotkey] no connected devices for shared key {}", key));
+        return;
+    }
+
+    let current_default = devices.iter().find(|d| d.is_default);
+    let next = if let Some(current) = current_default {
+        if let Some(pos) = connected.iter().position(|d| d.id == current.id) {
+            connected[(pos + 1) % connected.len()]
+        } else {
+            connected[0]
         }
-        let _ = app.emit("audio-devices-changed", ());
+    } else {
+        connected[0]
+    };
+
+    crate::process::append_log(&format!(
+        "[hotkey] device shortcut '{}' -> switch default to {}",
+        key, next.name
+    ));
+    if let Err(e) = crate::audio::set_default_device(&next.id) {
+        crate::process::append_log(&format!("[hotkey] set default device failed: {}", e));
+    }
+    let _ = app.emit("audio-devices-changed", ());
+}
+
+pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str, key: &str) {
+    if SHORTCUT_RECORDING.load(Ordering::Relaxed) {
+        // 录制期间：不执行动作，把按下的键上报给前端用于录制
+        crate::process::append_log(&format!("[hotkey] captured while recording: {}", key));
+        let _ = app.emit("shortcut-recorded", key);
+        return;
+    }
+    if let Some(key) = action.strip_prefix("device_shortcut_key:") {
+        crate::process::append_log(&format!("[hotkey] device shortcut key triggered: {}", key));
+        cycle_device_shortcut(app, key);
         return;
     }
     match action {

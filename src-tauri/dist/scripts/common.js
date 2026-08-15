@@ -202,15 +202,36 @@ window.shortcutJoinSaved = function (saved) {
 
 // 绑定快捷键输入框录制行为。input/clearBtn 为 DOM 元素，getSavedKey() 返回当前保存的原始快捷键（含 Super）
 // onSaved(display, shortcut) 在录制成功或点击清除时回调（清除时 shortcut 为空串）；onError(msg) 在失败时回调
+const shortcutRecorders = new Set();
+let shortcutRecordListenerReady = false;
+function ensureShortcutRecordListener() {
+  if (shortcutRecordListenerReady) return;
+  shortcutRecordListenerReady = true;
+  // 已注册为全局快捷键的组合键，其按键事件可能被系统吞掉而收不到 keydown，
+  // 由后端在录制期间直接上报按下的组合键。
+  window.__TAURI__.event.listen("shortcut-recorded", (event) => {
+    const key = event.payload;
+    if (!key) return;
+    for (const rec of shortcutRecorders) rec.recordFromBackend(key);
+  });
+}
+
 window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, onError) {
   let recording = false;
   let keys = new Set();
+
+  function setRecordingFlag(on) {
+    try {
+      window.__TAURI__.core.invoke("set_shortcut_recording", { recording: on }).catch(() => {});
+    } catch (_) {}
+  }
 
   function resetRecording() {
     recording = false;
     keys.clear();
     input.classList.remove("recording");
     input.placeholder = "点击录制快捷键";
+    setRecordingFlag(false);
   }
 
   function restoreSaved() {
@@ -227,6 +248,7 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
     input.value = "";
     input.classList.add("recording");
     input.placeholder = "请按下组合键...";
+    setRecordingFlag(true);
   });
 
   input.addEventListener("blur", () => {
@@ -286,6 +308,8 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
       input.value = display;
       input.classList.remove("recording");
       input.placeholder = "点击录制快捷键";
+      // 延迟释放录制标志，确保本次按键的全局快捷键分发已被抑制
+      setTimeout(() => setRecordingFlag(false), 300);
       if (onSaved) onSaved(display, shortcut.replace("Win", "Super"));
     }
   });
@@ -296,6 +320,25 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
       if (onSaved) onSaved("", "");
     });
   }
+
+  function recordFromBackend(canonicalKey) {
+    if (!recording) return;
+    if (!canonicalKey) return;
+    const display = window.shortcutJoinSaved(canonicalKey);
+    if (!display) return;
+    recording = false;
+    keys.clear();
+    input.value = display;
+    input.classList.remove("recording");
+    input.placeholder = "点击录制快捷键";
+    // 延迟释放录制标志，确保本次按键的全局快捷键分发已被抑制
+    setTimeout(() => setRecordingFlag(false), 300);
+    if (onSaved) onSaved(display, canonicalKey);
+  }
+
+  const self = { recordFromBackend };
+  shortcutRecorders.add(self);
+  ensureShortcutRecordListener();
 
   restoreSaved();
   return { restore: restoreSaved };

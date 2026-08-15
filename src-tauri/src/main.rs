@@ -137,6 +137,7 @@ fn main() {
             commands::set_hotkey_config,
             commands::set_device_shortcut,
             commands::remove_device_shortcut,
+            commands::set_shortcut_recording,
         ])
         .setup(move |app| {
             if let Err(e) = tray::setup_tray(app) {
