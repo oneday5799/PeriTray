@@ -51,11 +51,12 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 - 音频设备音量滑块支持鼠标滚轮 1% 精准调节
 - 音频事件完全事件驱动：IAudioEndpointVolumeCallback 实时回调音量变化，IMMNotificationClient 实时检测设备插拔
 - 应用图标显示（从进程可执行文件提取，base64 PNG，按 PID 缓存）
-- 音频设备右键菜单支持重命名和隐藏
+- 音频设备右键菜单支持重命名、隐藏和设置快捷键（可为设备录制全局快捷键，一键快速切换默认输出设备）
 
 ### 系统托盘
 
-- 左键弹出设备信息/音量控制页面（支持 tab 切换）
+- 左键弹出设备信息/音量控制页面（默认打开页面可在设置中切换）
+- 托盘图标随默认打开页面切换：默认「音量控制」时显示音量图标
 - 右键原生菜单：设备信息、音量控制、音频设备切换、声音设置、开机自启、设置、关于
 - 音频设备切换子菜单：显示重命名后的名称，自动过滤已隐藏设备
 - 图标悬停显示设备信息（状态、电量），最多支持 4 个设备，状态变化时自动更新
@@ -63,9 +64,10 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 
 ### 设置页
 
-- **通用设置**：开机自启动、音量控制快捷键（提高/降低/静音，支持全局快捷键录制）、硬件加速开关（默认关闭，关闭后 WebView2 减少 20-40MB GPU 内存）、运行日志（开关、级别、保留时长、查看目录）、关机/重启时自动调整音量、更新检测（启用/测试版/手动检测）
+- **通用设置**：开机自启动、默认打开页面（托盘左键点击打开的页面）、音量控制快捷键（提高/降低/静音，支持全局快捷键录制）、硬件加速开关（默认关闭，关闭后 WebView2 减少 20-40MB GPU 内存）、运行日志（开关、级别、保留时长、查看目录）、关机/重启时自动调整音量、更新检测（启用/测试版/手动检测）
+- **快捷键设置**：打开设备信息/音量控制快捷键、音量控制快捷键（提高/降低/静音）、输出设备快捷键集中管理（在音量控制页为设备设置的快捷键，即使设备断开也保留，支持修改、清除、删除）
 - **设备信息设置**：设备过滤（正则表达式编辑、设备去重）、显示无名称蓝牙设备、使用系统蓝牙连接、2.4G 设备列表、设备分组管理
-- **音量控制设置**：音量控制页设备列表独立显隐控制
+- **音量控制设置**：音量控制页设备列表独立显隐控制、关机/重启时自动调整音量
 
 ### 更新检测
 
@@ -83,6 +85,7 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 - 运行日志系统：支持标准/详细两级日志，可配置保留时长（一次/一天/三天/一周/一月）
 - WebView2 硬件加速开关（设置页可切换，关闭后减少 GPU 内存占用）
 - 音量控制全局快捷键（提高/降低/静音，通过系统媒体键模拟，显示 Windows 原生音量 OSD）
+- 输出设备全局快捷键（为音频输出设备录制的快捷键，触发后快速切换默认输出设备）
 
 ## 截图
 
@@ -143,6 +146,7 @@ PeriphMonitor/
 │   │   ├── commands.rs               # Tauri 命令处理器
 │   │   ├── popup.rs                  # 弹出窗口生命周期（toggle/open/close）与动画
 │   │   ├── tray.rs                   # 系统托盘菜单与事件处理
+│   │   ├── shortcut.rs               # 全局快捷键注册
 │   │   ├── update.rs                 # GitHub 更新检测（WinHTTP + semver）
 │   │   ├── windows.rs                # 窗口创建与 DWM 圆角
 │   │   └── process.rs               # 进程工具（日志、ShellExecuteW）
@@ -151,11 +155,11 @@ PeriphMonitor/
 │   │   ├── settings.html             # 设置页
 │   │   ├── about.html                # 关于页
 │   │   ├── scripts/
-│   │   │   ├── common.js             # 共享常量与工具函数（CATEGORIES、throttle、getInvoke、右键菜单、重命名对话框、通用对话框、Toast）
+│   │   │   ├── common.js             # 共享常量与工具函数（CATEGORIES、throttle、getInvoke、右键菜单、重命名对话框、通用对话框、Toast、快捷键录制）
 │   │   │   ├── popup.js              # 主窗口逻辑（设备列表、蓝牙操作、右键菜单）
-│   │   │   ├── audio.js              # 音量控制逻辑（设备/会话音量、滑块、右键菜单）
+│   │   │   ├── audio.js              # 音量控制逻辑（设备/会话音量、滑块、右键菜单、设备快捷键设置）
 │   │   │   ├── settings.js           # 设置页入口（Tab 切换、通用设置项、saveConfig）
-│   │   │   ├── settings-general.js   # 通用设置（快捷键录制、开机自启等）
+│   │   │   ├── settings-general.js   # 通用设置（快捷键录制、输出设备快捷键管理、开机自启等）
 │   │   │   ├── settings-devices.js   # 设备信息设置（分组渲染、过滤、去重）
 │   │   │   └── settings-audio.js     # 音量控制设置（音频设备列表、关机音量）
 │   │   └── styles/
@@ -175,9 +179,9 @@ PeriphMonitor/
 
 ### 代码组织说明
 
-- **后端**：`dedup.rs` 封装设备去重逻辑（核心名称提取、去重插入），`wmi_query.rs` 负责 WMI 查询编排与过滤，`process.rs` 统一管理日志和 ShellExecuteW 调用，`audio.rs` 提取 `with_enumerator()` 消除 COM 初始化样板代码，`popup.rs` 提供 `compute_position()` 计算弹窗位置，`update.rs` 实现 GitHub API 更新检测
-- **前端**：按功能拆分 — `popup.js` 负责设备列表，`audio.js` 负责音量控制；共享工具函数、throttle、右键菜单、对话框统一在 `common.js`；设置页按四个文件组织 — `settings.js`（入口与通用设置）、`settings-general.js`（快捷键录制）、`settings-devices.js`（设备分组渲染）、`settings-audio.js`（音频设备列表、关机音量）；CSS 拆分为 `base.css`（全局重置、音量滑块）、`popup.css`、`audio.css`、`settings.css`、`about.css`
-- **配置**：TOML 格式，`log_level`/`log_retention` 使用枚举类型（支持大小写不敏感反序列化），包含 hidden_devices、hidden_audio_devices、device_names、device_groups、shutdown_volume_enabled、shutdown_volume_devices、shortcut_volume_up/down/mute、hardware_acceleration 等字段
+- **后端**：`dedup.rs` 封装设备去重逻辑（核心名称提取、去重插入），`wmi_query.rs` 负责 WMI 查询编排与过滤，`process.rs` 统一管理日志和 ShellExecuteW 调用，`audio.rs` 提取 `with_enumerator()` 消除 COM 初始化样板代码，`shortcut.rs` 统一注册全局快捷键，`popup.rs` 提供 `compute_position()` 计算弹窗位置，`update.rs` 实现 GitHub API 更新检测
+- **前端**：按功能拆分 — `popup.js` 负责设备列表，`audio.js` 负责音量控制；共享工具函数、throttle、右键菜单、对话框、快捷键录制统一在 `common.js`；设置页按四个文件组织 — `settings.js`（入口与通用设置）、`settings-general.js`（快捷键录制、输出设备快捷键管理）、`settings-devices.js`（设备分组渲染）、`settings-audio.js`（音频设备列表、关机音量）；CSS 拆分为 `base.css`（全局重置、音量滑块）、`popup.css`、`audio.css`、`settings.css`、`about.css`
+- **配置**：TOML 格式，`log_level`/`log_retention` 使用枚举类型（支持大小写不敏感反序列化），包含 hidden_devices、hidden_audio_devices、device_names、device_groups、shutdown_volume_enabled、shutdown_volume_devices、shortcut_volume_up/down/mute、device_shortcuts、default_popup_tab、hardware_acceleration 等字段
 - **日志**：标准级别记录关键运行事件，详细级别记录诊断信息；支持按保留时长自动清理
 - **内存优化**：图标缓存使用 LRU（容量 256）防止内存泄漏，音频回调使用 `Arc<str>` 共享 device_id 减少字符串复制，设备分类函数避免重复计算 uppercase，配置枚举替代 String 减少堆分配
 - **WebView2 优化**：`--renderer-process-limit=1` 共享渲染进程，`--disable-gpu` 关闭时节省 20-40MB GPU 内存，`--disable-breakpad` 禁用崩溃转储，`--disable-features` 禁用不需要的浏览器功能
