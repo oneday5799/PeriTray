@@ -351,6 +351,76 @@ body {
   background: #e8f4fd;
 }
 
+/* Shortcut dialog */
+.shortcut-dialog-device {
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 8px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.shortcut-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-dialog-hint {
+  font-size: 12px;
+  color: #999;
+  margin-top: 8px;
+}
+
+.shortcut-key-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #333;
+  background: #fff;
+  outline: none;
+  text-align: center;
+}
+
+.shortcut-key-input:focus {
+  border-color: #0078d7;
+  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.15);
+}
+
+.shortcut-key-input.recording {
+  border-color: #0078d7;
+  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25);
+  animation: recording-pulse 1s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25); }
+  50% { box-shadow: 0 0 0 4px rgba(0, 120, 215, 0.15); }
+}
+
+.shortcut-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: #999;
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 50%;
+  transition: color 0.15s, background 0.15s;
+}
+
+.shortcut-clear-btn:hover {
+  color: #e81123;
+  background: rgba(232, 17, 35, 0.08);
+}
+
 /* Group list for change group dialog */
 .group-list {
   display: flex;

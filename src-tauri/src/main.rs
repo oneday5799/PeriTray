@@ -135,6 +135,8 @@ fn main() {
             commands::open_log_dir,
             commands::check_for_update,
             commands::set_hotkey_config,
+            commands::set_device_shortcut,
+            commands::remove_device_shortcut,
         ])
         .setup(move |app| {
             if let Err(e) = tray::setup_tray(app) {

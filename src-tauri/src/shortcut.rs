@@ -21,6 +21,15 @@ pub fn register_shortcuts(app: &tauri::AppHandle) {
     if let Some(ref key) = vol_mute_key {
         register_single(&app, key, "volume_mute");
     }
+
+    let device_shortcuts = crate::config::with_config(|c| c.device_shortcuts.clone());
+    for (device_id, entry) in device_shortcuts {
+        if let Some(ref key) = entry.shortcut {
+            let action = format!("device_shortcut:{}", device_id);
+            let action = Box::leak(action.into_boxed_str());
+            register_single(&app, key, action);
+        }
+    }
 }
 
 fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {

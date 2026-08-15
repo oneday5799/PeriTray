@@ -514,3 +514,35 @@ html, body {
   color: #999;
   padding: 4px 0 0 0;
 }
+
+.shortcut-delete-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  background: #fff;
+  color: #e81123;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.shortcut-delete-btn:hover {
+  background: rgba(232, 17, 35, 0.08);
+}
+
+.device-shortcut-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#device-shortcut-list .setting-row {
+  align-items: center;
+}
+
+#device-shortcut-list .shortcut-input-wrap {
+  flex: 1;
+  justify-content: flex-end;
+}

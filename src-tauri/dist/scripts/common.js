@@ -141,6 +141,166 @@ function updateSliderGradient(slider) {
   slider.style.setProperty('--track-color', `linear-gradient(to right, #0078d7 0%, #0078d7 ${percentage}%, #e0e0e0 ${percentage}%, #e0e0e0 100%)`);
 }
 
+// ── 快捷键录制（共享工具） ────────────────────────────────
+
+window.shortcutCodeMap = {
+  "Space": { display: "Space", key: "Space" },
+  "Backspace": { display: "Backspace", key: "Backspace" },
+  "Delete": { display: "Delete", key: "Delete" },
+  "Tab": { display: "Tab", key: "Tab" },
+  "CapsLock": { display: "CapsLock", key: "CapsLock" },
+  "Escape": { display: "Escape", key: "Escape" },
+  "Insert": { display: "Insert", key: "Insert" },
+  "Home": { display: "Home", key: "Home" },
+  "End": { display: "End", key: "End" },
+  "PageUp": { display: "PageUp", key: "PageUp" },
+  "PageDown": { display: "PageDown", key: "PageDown" },
+  "ArrowUp": { display: "↑", key: "ArrowUp" },
+  "ArrowDown": { display: "↓", key: "ArrowDown" },
+  "ArrowLeft": { display: "←", key: "ArrowLeft" },
+  "ArrowRight": { display: "→", key: "ArrowRight" },
+  "PrintScreen": { display: "PrtSc", key: "PrintScreen" },
+  "ScrollLock": { display: "ScrLk", key: "ScrollLock" },
+  "Pause": { display: "Pause", key: "Pause" },
+  "NumLock": { display: "NumLock", key: "NumLock" },
+  "NumpadAdd": { display: "Num+", key: "NumpadAdd" },
+  "NumpadSubtract": { display: "Num-", key: "NumpadSubtract" },
+  "NumpadMultiply": { display: "Num*", key: "NumpadMultiply" },
+  "NumpadDivide": { display: "Num/", key: "NumpadDivide" },
+  "NumpadDecimal": { display: "Num.", key: "NumpadDecimal" },
+  "NumpadEnter": { display: "NumEnter", key: "NumpadEnter" },
+  "MediaPlayPause": { display: "MediaPlayPause", key: "MediaPlayPause" },
+  "MediaStop": { display: "MediaStop", key: "MediaStop" },
+  "MediaNextTrack": { display: "MediaNextTrack", key: "MediaNextTrack" },
+  "MediaPrevTrack": { display: "MediaPrevTrack", key: "MediaPrevTrack" },
+  "VolumeUp": { display: "VolumeUp", key: "VolumeUp" },
+  "VolumeDown": { display: "VolumeDown", key: "VolumeDown" },
+  "VolumeMute": { display: "VolumeMute", key: "VolumeMute" },
+  "Semicolon": { display: ";", key: "Semicolon" },
+  "Equal": { display: "=", key: "Equal" },
+  "Comma": { display: ",", key: "Comma" },
+  "Period": { display: ".", key: "Period" },
+  "Slash": { display: "/", key: "Slash" },
+  "Backquote": { display: "`", key: "Backquote" },
+  "Backslash": { display: "\\", key: "Backslash" },
+  "BracketLeft": { display: "[", key: "BracketLeft" },
+  "BracketRight": { display: "]", key: "BracketRight" },
+  "Minus": { display: "-", key: "Minus" },
+  "Quote": { display: "'", key: "Quote" },
+  "Enter": { display: "Enter", key: "Enter" },
+};
+
+window.shortcutReverseCodeMap = {};
+for (const v of Object.values(window.shortcutCodeMap)) {
+  window.shortcutReverseCodeMap[v.key] = v.display;
+}
+
+window.shortcutJoinSaved = function (saved) {
+  if (!saved) return "";
+  return saved.split("+").map(p => window.shortcutReverseCodeMap[p] || p).join("+");
+};
+
+// 绑定快捷键输入框录制行为。input/clearBtn 为 DOM 元素，getSavedKey() 返回当前保存的原始快捷键（含 Super）
+// onSaved(display, shortcut) 在录制成功或点击清除时回调（清除时 shortcut 为空串）；onError(msg) 在失败时回调
+window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, onError) {
+  let recording = false;
+  let keys = new Set();
+
+  function resetRecording() {
+    recording = false;
+    keys.clear();
+    input.classList.remove("recording");
+    input.placeholder = "点击录制快捷键";
+  }
+
+  function restoreSaved() {
+    resetRecording();
+    const savedKey = getSavedKey();
+    input.value = savedKey ? window.shortcutJoinSaved(savedKey).replace("Super", "Win") : "";
+    if (clearBtn) clearBtn.style.display = savedKey ? "" : "none";
+  }
+
+  input.addEventListener("click", () => {
+    if (recording) return;
+    recording = true;
+    keys.clear();
+    input.value = "";
+    input.classList.add("recording");
+    input.placeholder = "请按下组合键...";
+  });
+
+  input.addEventListener("blur", () => {
+    resetRecording();
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === "Escape") {
+      restoreSaved();
+      return;
+    }
+
+    keys.clear();
+    if (e.ctrlKey) keys.add({ display: "Ctrl", key: "Ctrl" });
+    if (e.shiftKey) keys.add({ display: "Shift", key: "Shift" });
+    if (e.altKey) keys.add({ display: "Alt", key: "Alt" });
+    if (e.metaKey) keys.add({ display: "Win", key: "Super" });
+
+    const code = e.code;
+    if (code === "ControlLeft" || code === "ControlRight" ||
+        code === "ShiftLeft" || code === "ShiftRight" ||
+        code === "AltLeft" || code === "AltRight" ||
+        code === "MetaLeft" || code === "MetaRight") {
+      const preview = [...keys].map(k => k.display).join("+");
+      input.value = preview;
+      return;
+    }
+
+    if (code.startsWith("Numpad") && /\d/.test(code[6]) && code.length === 7) {
+      restoreSaved();
+      if (onError) onError("暂不支持该快捷键。");
+      return;
+    }
+    if (window.shortcutCodeMap[code]) {
+      const entry = window.shortcutCodeMap[code];
+      keys.add({ display: entry.display, key: entry.key });
+    } else if (code.startsWith("F") && code.length >= 2 && code.length <= 3) {
+      keys.add({ display: code, key: code });
+    } else if (code.startsWith("Digit") && code.length === 6) {
+      keys.add({ display: code, key: code });
+    } else if (code.startsWith("Key") && code.length === 4) {
+      keys.add({ display: code[3], key: code });
+    } else {
+      restoreSaved();
+      if (onError) onError("暂不支持该快捷键。");
+      return;
+    }
+
+    const display = [...keys].map(k => k.display).join("+");
+    const shortcut = [...keys].map(k => k.key).join("+");
+    if (display) {
+      recording = false;
+      input.value = display;
+      input.classList.remove("recording");
+      input.placeholder = "点击录制快捷键";
+      if (onSaved) onSaved(display, shortcut.replace("Win", "Super"));
+    }
+  });
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (onSaved) onSaved("", "");
+    });
+  }
+
+  restoreSaved();
+  return { restore: restoreSaved };
+};
+
 // ── Dialog ──────────────────────────────────────────────
 
 window.createDialog = function ({ title, content = [], buttons = [] }) {

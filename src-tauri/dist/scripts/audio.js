@@ -3,6 +3,7 @@ let audioSessions = [];
 let selectedDeviceId = null;
 let hiddenAudioDevices = [];
 let audioDeviceNames = {};
+let deviceShortcuts = {};
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -201,9 +202,109 @@ function showAudioContextMenu(x, y, device) {
   });
   menu.appendChild(hideItem);
 
+  const shortcutItem = document.createElement("div");
+  shortcutItem.className = "context-menu-item";
+  shortcutItem.textContent = "快捷键";
+  shortcutItem.addEventListener("click", () => {
+    hideAllContextMenus();
+    showDeviceShortcutDialog(device);
+  });
+  menu.appendChild(shortcutItem);
+
   document.body.appendChild(menu);
   clampMenuPosition(menu, x, y);
   activeAudioMenu = menu;
+}
+
+function showDeviceShortcutDialog(device) {
+  const invoke = getInvoke();
+  if (!invoke) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "shortcut-dialog";
+
+  const deviceLabel = document.createElement("div");
+  deviceLabel.className = "shortcut-dialog-device";
+  deviceLabel.textContent = audioDeviceNames[device.name] || device.name;
+  wrap.appendChild(deviceLabel);
+
+  const row = document.createElement("div");
+  row.className = "shortcut-dialog-row";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "shortcut-key-input dialog-input";
+  input.placeholder = "点击录制快捷键";
+  input.readOnly = true;
+
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "shortcut-clear-btn";
+  clearBtn.textContent = "×";
+  clearBtn.title = "清除快捷键";
+  clearBtn.style.display = "none";
+
+  const hint = document.createElement("div");
+  hint.className = "shortcut-dialog-hint";
+  hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备";
+
+  row.appendChild(input);
+  row.appendChild(clearBtn);
+  wrap.appendChild(row);
+  wrap.appendChild(hint);
+
+  const buttons = [];
+  buttons.push({
+    text: "取消",
+    className: "cancel",
+    onClick: () => closeDialog(overlay),
+  });
+  buttons.push({
+    text: "完成",
+    className: "confirm",
+    onClick: () => closeDialog(overlay),
+  });
+
+  const overlay = createDialog({
+    title: "设置设备快捷键",
+    content: [wrap],
+    buttons,
+  });
+
+  bindShortcutRecorder(
+    input,
+    clearBtn,
+    () => (deviceShortcuts[device.id] || {}).shortcut || null,
+    (display, shortcut) => {
+      if (shortcut === "") {
+        invoke("set_device_shortcut", { deviceId: device.id, name: device.name, key: null }).catch(() => {});
+        deviceShortcuts[device.id] = { name: device.name, shortcut: null };
+        input.value = "";
+        clearBtn.style.display = "none";
+        input.placeholder = "点击录制快捷键";
+        return;
+      }
+      invoke("set_device_shortcut", { deviceId: device.id, name: device.name, key: shortcut })
+        .then(() => {
+          deviceShortcuts[device.id] = { name: device.name, shortcut };
+          clearBtn.style.display = "";
+          hint.textContent = `快捷键 "${display}" 已保存`;
+          hint.style.color = "#4caf50";
+          setTimeout(() => {
+            hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备";
+            hint.style.color = "#999";
+          }, 2500);
+        })
+        .catch((err) => {
+          const msg = String(err);
+          if (msg.includes("已被占用")) {
+            hint.textContent = `"${display}" 已被其他功能占用，请选择其他快捷键。`;
+          } else {
+            hint.textContent = "暂不支持该快捷键。";
+          }
+          hint.style.color = "#e81123";
+        });
+    }
+  );
 }
 
 async function loadAudioDevices() {
@@ -217,6 +318,7 @@ async function loadAudioDevices() {
     audioDevices = devices;
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
+    deviceShortcuts = cfg.device_shortcuts || {};
     renderAudioDevices();
     if (audioDevices.length > 0 && !selectedDeviceId) {
       const firstVisible = audioDevices.find(d => !hiddenAudioDevices.includes(d.name));

@@ -178,6 +178,7 @@ async function init() {
     loadAudioDevicesAsync();
     initShutdownVolumeSettings();
     initShortcutSettings();
+    initDeviceShortcutSettings();
 
     // Open 2.4G device list button
     document.getElementById("btn-add-24g").addEventListener("click", async () => {

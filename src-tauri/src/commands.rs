@@ -318,7 +318,84 @@ fn set_config_key(action: &str, key: Option<String>) {
     });
 }
 
+#[tauri::command]
+pub fn set_device_shortcut(
+    app: tauri::AppHandle,
+    device_id: String,
+    name: String,
+    key: Option<String>,
+) -> Result<(), String> {
+    let prev_key = config::with_config(|c| {
+        c.device_shortcuts.get(&device_id).and_then(|d| d.shortcut.clone())
+    });
+    if let Some(ref pk) = prev_key {
+        if let Ok(sc) = parse_shortcut(pk) {
+            let _ = app.global_shortcut().unregister(sc);
+            crate::process::append_log(&format!("[hotkey] unregistered old key {} for device {}", pk, device_id));
+        }
+    }
+    if let Some(ref new_key_str) = key {
+        let sc = parse_shortcut(new_key_str)?;
+        if app.global_shortcut().is_registered(sc.clone()) {
+            set_device_shortcut_key(&device_id, &name, None);
+            return Err("快捷键已被占用".to_string());
+        }
+        let action = format!("device_shortcut:{}", device_id);
+        let action_clone = action.clone();
+        let key_clone = new_key_str.clone();
+        app.global_shortcut()
+            .on_shortcut(sc, move |_app, _shortcut, event| {
+                if event.state != ShortcutState::Pressed {
+                    return;
+                }
+                dispatch_shortcut_action(_app, &action_clone);
+            })
+            .map_err(|e| e.to_string())?;
+        crate::process::append_log(&format!("[hotkey] registered {} {}", key_clone, action));
+    }
+    set_device_shortcut_key(&device_id, &name, key);
+    Ok(())
+}
+
+fn set_device_shortcut_key(device_id: &str, name: &str, key: Option<String>) {
+    config::with_config_mut(|c| {
+        if let Some(k) = key {
+            c.device_shortcuts.insert(
+                device_id.to_string(),
+                crate::config::DeviceShortcut { name: name.to_string(), shortcut: Some(k) },
+            );
+        } else if let Some(entry) = c.device_shortcuts.get_mut(device_id) {
+            entry.shortcut = None;
+            entry.name = name.to_string();
+        }
+    });
+}
+
+#[tauri::command]
+pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
+    let prev_key = config::with_config(|c| {
+        c.device_shortcuts.get(&device_id).and_then(|d| d.shortcut.clone())
+    });
+    if let Some(ref pk) = prev_key {
+        if let Ok(sc) = parse_shortcut(pk) {
+            let _ = app.global_shortcut().unregister(sc);
+            crate::process::append_log(&format!("[hotkey] unregistered {} for device {}", pk, device_id));
+        }
+    }
+    config::with_config_mut(|c| {
+        c.device_shortcuts.remove(&device_id);
+    });
+}
+
 pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str) {
+    if let Some(device_id) = action.strip_prefix("device_shortcut:") {
+        crate::process::append_log(&format!("[hotkey] device shortcut triggered: {}", device_id));
+        if let Err(e) = crate::audio::set_default_device(device_id) {
+            crate::process::append_log(&format!("[hotkey] set default device failed: {}", e));
+        }
+        let _ = app.emit("audio-devices-changed", ());
+        return;
+    }
     match action {
         "devices" => crate::popup::open_popup(app, "devices"),
         "volume" => crate::popup::open_popup(app, "volume"),

@@ -42,6 +42,12 @@ impl Default for LogRetention {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceShortcut {
+    pub name: String,
+    pub shortcut: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub auto_start: bool,
     pub hidden_devices: Vec<String>,
@@ -83,6 +89,8 @@ pub struct Config {
     pub hardware_acceleration: bool,
     #[serde(default = "default_popup_tab")]
     pub default_popup_tab: String,
+    #[serde(default)]
+    pub device_shortcuts: std::collections::HashMap<String, DeviceShortcut>,
 }
 
 fn default_true() -> bool { true }
@@ -116,6 +124,7 @@ impl Default for Config {
             shortcut_volume_mute: None,
             hardware_acceleration: false,
             default_popup_tab: default_popup_tab(),
+            device_shortcuts: std::collections::HashMap::new(),
         }
     }
 }
