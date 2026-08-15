@@ -143,6 +143,15 @@ html, body {
 }
 
 @media (prefers-color-scheme: dark) {
+  .setting-row {
+    background: rgba(255, 255, 255, 0.0605);
+    border-color: rgba(255, 255, 255, 0.0706);
+  }
+
+  .setting-row:hover {
+    background: rgba(255, 255, 255, 0.0837);
+  }
+
   .win-nav-top-bar {
     border-bottom-color: #1d1d1d;
   }
@@ -251,29 +260,25 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
-  background: #fff;
+  padding: 10px 14px;
   border-radius: 6px;
+  background: #fff;
   border: 1px solid #e0e0e0;
   margin-bottom: 3px;
-  transition: background 0.12s ease;
+}
+
+.setting-row-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  margin-right: 12px;
 }
 
 .setting-row:hover {
   background: rgba(0, 0, 0, 0.03);
 }
 
-.setting-row-col {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-}
-
-.setting-row-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
 
 /* 无展开项时隐藏 separator */
 .separator {
@@ -285,6 +290,37 @@ html, body {
   color: #1a1a1a;
   display: inline-flex;
   align-items: center;
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.setting-link {
+  font-size: 12px;
+  color: #0067c0;
+  text-decoration: none;
+}
+
+.setting-link:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  .setting-label {
+    color: #ffffff;
+  }
+
+  .setting-desc {
+    color: rgba(255, 255, 255, 0.62);
+  }
+
+  .setting-link {
+    color: #4cc2ff;
+  }
 }
 
 /* 展开箭头（仅展开项显示） */
@@ -584,6 +620,7 @@ html, body {
 /* 2.4G device list button */
 .add-device-btn {
   min-width: 120px;
+  height: 32px;
   padding: 5px 11px 6px;
   border-left: 1px solid rgba(0, 0, 0, 0.06);
   border-top: 1px solid rgba(0, 0, 0, 0.06);
@@ -595,7 +632,6 @@ html, body {
   font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   font-weight: normal;
-  min-height: 32px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -722,6 +758,7 @@ html, body {
 .win-combo-btn {
   width: 100%;
   min-width: 120px;
+  height: 32px;
   padding: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 38px;
@@ -738,7 +775,6 @@ html, body {
   border-radius: 4px;
   font-family: inherit;
   font-size: 14px;
-  min-height: 32px;
   cursor: pointer;
   outline: none;
   transition: background-color 0.167s cubic-bezier(0, 0, 0, 1);
