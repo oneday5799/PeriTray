@@ -583,23 +583,58 @@ html, body {
 
 /* 2.4G device list button */
 .add-device-btn {
-  padding: 6px 16px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
-  font-size: 13px;
+  min-width: 120px;
+  padding: 5px 11px 6px;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.70);
+  color: rgba(0, 0, 0, 0.89);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: normal;
+  min-height: 32px;
   cursor: pointer;
-  transition: background 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
+  user-select: none;
+  white-space: nowrap;
 }
 
 .add-device-btn:hover {
-  background: #f0f0f0;
-  border-color: #bbb;
+  background: rgba(249, 249, 249, 0.50);
 }
 
 .add-device-btn:active {
-  background: #e0e0e0;
+  background: rgba(249, 249, 249, 0.30);
+  color: rgba(0, 0, 0, 0.62);
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  .add-device-btn {
+    border-left: 1px solid rgba(255, 255, 255, 0.0706);
+    border-top: 1px solid rgba(255, 255, 255, 0.0941);
+    border-right: 1px solid rgba(255, 255, 255, 0.0706);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.0706);
+    background: rgba(255, 255, 255, 0.0605);
+    color: #ffffff;
+  }
+
+  .add-device-btn:hover {
+    background: rgba(255, 255, 255, 0.0837);
+  }
+
+  .add-device-btn:active {
+    background: rgba(255, 255, 255, 0.0326);
+    color: rgba(255, 255, 255, 0.77);
+    border-bottom-color: rgba(255, 255, 255, 0.0706);
+  }
 }
 
 .setting-select {
@@ -1026,18 +1061,37 @@ html, body {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border: none;
+  border: 0;
   background: transparent;
-  color: #999;
+  color: rgba(0, 0, 0, 0.62);
   font-size: 16px;
   cursor: pointer;
-  border-radius: 50%;
-  transition: color 0.15s, background 0.15s;
+  border-radius: 4px;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
 }
 
 .shortcut-clear-btn:hover {
   color: #e81123;
   background: rgba(232, 17, 35, 0.08);
+}
+
+.shortcut-clear-btn:active {
+  background: rgba(232, 17, 35, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .shortcut-clear-btn {
+    color: rgba(255, 255, 255, 0.77);
+  }
+
+  .shortcut-clear-btn:hover {
+    color: #ff6b7a;
+    background: rgba(255, 107, 122, 0.08);
+  }
+
+  .shortcut-clear-btn:active {
+    background: rgba(255, 107, 122, 0.12);
+  }
 }
 
 .shortcut-hint {
