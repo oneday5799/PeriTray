@@ -566,7 +566,7 @@ function initAboutTab() {
     versionBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
-        await invoke("check_for_updates");
+        await invoke("check_for_update");
       } catch (err) {
         console.error("Failed to check for updates:", err);
       }

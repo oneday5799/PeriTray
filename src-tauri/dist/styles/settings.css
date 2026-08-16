@@ -1204,13 +1204,13 @@ html, body {
 
 /* About tab */
 #tab-about {
-  padding-top: 48px;
 }
 
 .about-info-card .group-header {
   height: auto;
   min-height: 60px;
   padding: 14px 16px;
+  border-bottom: 1px solid #e0e0e0;
 }
 
 .about-info-card .group-header:hover {
@@ -1238,6 +1238,12 @@ html, body {
   color: #444;
   line-height: 1.6;
   margin: 0 0 12px;
+}
+
+.about-links-divider {
+  height: 1px;
+  background: #e0e0e0;
+  margin: 4px 0 12px;
 }
 
 .about-links {
@@ -1288,6 +1294,14 @@ html, body {
 
   .about-info-card .group-header:hover {
     background: rgba(255, 255, 255, 0.04);
+  }
+
+  .about-info-card .group-header {
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .about-links-divider {
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .about-content p {
