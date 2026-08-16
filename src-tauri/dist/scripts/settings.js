@@ -552,10 +552,12 @@ function selectTab(tab) {
 function initAboutTab() {
   const header = document.getElementById("about-info-header");
   const items = document.getElementById("about-info-items");
+  const arrow = document.getElementById("arrow-about");
   if (header && items) {
     header.addEventListener("click", () => {
       const expanded = items.style.maxHeight !== "0px";
       items.style.maxHeight = expanded ? "0px" : "999px";
+      if (arrow) arrow.classList.toggle("expanded", !expanded);
     });
   }
 
