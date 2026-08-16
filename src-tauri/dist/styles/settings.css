@@ -1228,6 +1228,23 @@ html, body {
   flex-shrink: 0;
 }
 
+#about-info-items .device-item {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 10px 16px;
+}
+
+#about-info-items .device-item-name {
+  flex: none;
+  margin-right: 0;
+  margin-bottom: 8px;
+}
+
+#about-info-items .device-item-controls {
+  margin-left: 0;
+}
+
 .about-item-controls {
   flex-direction: column;
   align-items: flex-start;
