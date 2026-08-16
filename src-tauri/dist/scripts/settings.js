@@ -394,47 +394,52 @@ function initUpdateSettings() {
     set: (v) => { config.include_prerelease = v; }
   });
 
-  document.getElementById("btn-check-update").addEventListener("click", async () => {
-    const btn = document.getElementById("btn-check-update");
-    const originalText = btn.textContent;
-    btn.textContent = "检测中...";
-    btn.disabled = true;
-    const timeoutId = setTimeout(() => {
-      btn.textContent = originalText;
-      btn.disabled = false;
-    }, 30000);
-
-    try {
-      const info = await invoke("check_for_update", {
-        includePrerelease: config.include_prerelease || false
-      });
-      clearTimeout(timeoutId);
-      if (info.has_update) {
-        showToast(
-          `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
-          () => invoke("open_url", { url: info.release_url })
-        );
-      } else {
-        showToast("已是最新版本");
-      }
-    } catch (e) {
-      clearTimeout(timeoutId);
-      const err = String(e);
-      if (err.includes("超时") || err.includes("timeout")) {
-        showToast(
-          "检测超时，请检查网络后重试<br>点击前往 Release 页面",
-          () => invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor/releases" })
-        );
-      } else if (err.includes("频繁") || err.includes("rate_limited")) {
-        showToast("GitHub API 请求过于频繁，请稍后再试");
-      } else {
-        showToast("检测失败：" + err);
-      }
-    } finally {
-      btn.textContent = originalText;
-      btn.disabled = false;
-    }
+  document.getElementById("btn-check-update").addEventListener("click", () => {
+    runUpdateCheck("btn-check-update");
   });
+}
+
+async function runUpdateCheck(btnId) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  const originalText = btn.textContent;
+  btn.textContent = "检测中...";
+  btn.disabled = true;
+  const timeoutId = setTimeout(() => {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }, 30000);
+
+  try {
+    const info = await invoke("check_for_update", {
+      includePrerelease: config.include_prerelease || false
+    });
+    clearTimeout(timeoutId);
+    if (info.has_update) {
+      showToast(
+        `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
+        () => invoke("open_url", { url: info.release_url })
+      );
+    } else {
+      showToast("已是最新版本");
+    }
+  } catch (e) {
+    clearTimeout(timeoutId);
+    const err = String(e);
+    if (err.includes("超时") || err.includes("timeout")) {
+      showToast(
+        "检测超时，请检查网络后重试<br>点击前往 Release 页面",
+        () => invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor/releases" })
+      );
+    } else if (err.includes("频繁") || err.includes("rate_limited")) {
+      showToast("GitHub API 请求过于频繁，请稍后再试");
+    } else {
+      showToast("检测失败：" + err);
+    }
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 function initDeviceFilterTab() {
@@ -563,15 +568,9 @@ function initAboutTab() {
 
   const versionBtn = document.getElementById("about-version-btn");
   if (versionBtn) {
-    versionBtn.addEventListener("click", async (e) => {
+    versionBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      try {
-        await invoke("check_for_update", {
-          includePrerelease: config.include_prerelease || false
-        });
-      } catch (err) {
-        console.error("Failed to check for updates:", err);
-      }
+      runUpdateCheck("about-version-btn");
     });
   }
 

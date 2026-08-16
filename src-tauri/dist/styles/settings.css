@@ -1210,7 +1210,6 @@ html, body {
   height: auto;
   min-height: 60px;
   padding: 14px 16px;
-  border-bottom: 1px solid #e0e0e0;
 }
 
 .about-info-card .group-header:hover {
@@ -1233,16 +1232,19 @@ html, body {
   padding: 12px 16px 16px;
 }
 
+.about-content .device-item {
+  padding: 10px 0;
+}
+
+.about-content .device-item .about-section-title {
+  margin: 0;
+}
+
 .about-content p {
   font-size: 14px;
   color: #444;
   line-height: 1.6;
   margin: 0 0 12px;
-}
-
-.about-links-divider {
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  margin: 4px 0 12px;
 }
 
 .about-section-title {
@@ -1300,14 +1302,6 @@ html, body {
 
   .about-info-card .group-header:hover {
     background: rgba(255, 255, 255, 0.04);
-  }
-
-  .about-info-card .group-header {
-    border-bottom-color: rgba(255, 255, 255, 0.08);
-  }
-
-  .about-links-divider {
-    border-top-color: rgba(255, 255, 255, 0.08);
   }
 
   .about-section-title {
