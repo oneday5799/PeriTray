@@ -412,32 +412,51 @@ html, body {
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: 260px;
-  padding: 10px 12px;
-  background: #333;
-  color: #fff;
+  width: max-content;
+  max-width: 320px;
+  box-sizing: border-box;
+  padding: 6px 9px 8px;
+  background: rgba(252, 252, 252, 0.92);
+  color: rgba(0, 0, 0, 0.89);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-size: 12px;
   font-weight: 400;
-  line-height: 1.5;
-  border-radius: 6px;
+  line-height: 16px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
   white-space: normal;
+  overflow-wrap: anywhere;
   z-index: 100;
   pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
-.tooltip-content::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: #333;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
+  -webkit-backdrop-filter: blur(30px) saturate(160%) brightness(1.02);
+  backdrop-filter: blur(30px) saturate(160%) brightness(1.02);
 }
 
 .tooltip-trigger:hover .tooltip-content {
   display: block;
+  animation: win-tooltip-fade-in 167ms linear both;
+}
+
+@keyframes win-tooltip-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .tooltip-content {
+    background: rgba(44, 44, 44, 0.86);
+    border: 1px solid rgba(0, 0, 0, 0.20);
+    color: #ffffff;
+    -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
+    backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-trigger:hover .tooltip-content {
+    animation-duration: 1ms;
+  }
 }
 
 /* Toggle switch */

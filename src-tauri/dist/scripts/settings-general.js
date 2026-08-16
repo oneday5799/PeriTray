@@ -1,7 +1,4 @@
 function initShortcutSettings() {
-  const hintEl = document.getElementById("shortcut-hint");
-  let hintTimer = null;
-
   const cycleToggle = document.getElementById("toggle-device-shortcut-cycle");
   if (cycleToggle) {
     cycleToggle.checked = !!config.enable_device_shortcut_cycle;
@@ -9,16 +6,6 @@ function initShortcutSettings() {
       config.enable_device_shortcut_cycle = cycleToggle.checked;
       await saveConfig();
     });
-  }
-
-  function showHint(msg, isError) {
-    clearTimeout(hintTimer);
-    hintEl.textContent = msg;
-    hintEl.style.color = isError ? "#e81123" : "#999";
-    hintTimer = setTimeout(() => {
-      hintEl.textContent = "";
-      hintEl.style.color = "#999";
-    }, 3000);
   }
 
   const actions = [
@@ -52,7 +39,7 @@ function initShortcutSettings() {
             config[keyField] = shortcut;
             clearBtn.style.display = "";
             await saveConfig();
-            showHint(`快捷键 "${display}" 已保存`, false);
+            showToast(`快捷键 "${display}" 已保存`);
           })
           .catch((err) => {
             const msg = String(err);
@@ -60,9 +47,9 @@ function initShortcutSettings() {
             input.value = "";
             clearBtn.style.display = "none";
             if (msg.includes("已被占用")) {
-              showHint(`"${display}" 已被其他功能占用，请选择其他快捷键。`, true);
+              showToast(`"${display}" 已被其他功能占用，请选择其他快捷键。`, null, true);
             } else {
-              showHint("暂不支持该快捷键。", true);
+              showToast("暂不支持该快捷键。", null, true);
             }
           });
       }
@@ -157,9 +144,9 @@ function initDeviceShortcutSettings() {
             .catch((err) => {
               const msg = String(err);
               if (msg.includes("已被占用")) {
-                showToast(`"${display}" 已被其他功能占用，请选择其他快捷键。`);
+                showToast(`"${display}" 已被其他功能占用，请选择其他快捷键。`, null, true);
               } else {
-                showToast("暂不支持该快捷键。");
+                showToast("暂不支持该快捷键。", null, true);
               }
               render();
             });

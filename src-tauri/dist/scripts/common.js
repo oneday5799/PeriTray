@@ -405,7 +405,7 @@ window.closeDialog = function (overlay) {
 
 // ── Toast 通知 ──────────────────────────────────────────
 
-window.showToast = function (msg, onClick) {
+window.showToast = function (msg, onClick, isError) {
   let el = document.querySelector(".toast");
   if (!el) {
     el = document.createElement("div");
@@ -413,12 +413,14 @@ window.showToast = function (msg, onClick) {
     document.body.appendChild(el);
   }
   el.innerHTML = msg;
+  el.classList.toggle("error", !!isError);
   el.classList.add("show");
   el.style.cursor = onClick ? "pointer" : "default";
   el.onclick = onClick || null;
   clearTimeout(el._timer);
   el._timer = setTimeout(() => {
     el.classList.remove("show");
+    el.classList.remove("error");
     el.onclick = null;
     el.style.cursor = "default";
   }, 5000);
