@@ -1201,3 +1201,91 @@ html, body {
   flex: 1;
   justify-content: flex-end;
 }
+
+/* About tab */
+#tab-about {
+  padding-top: 48px;
+}
+
+.about-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.about-icon {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  background: linear-gradient(180deg, #FF8033, #FF7500);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.about-icon svg {
+  width: 36px;
+  height: 36px;
+}
+
+.about-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 4px;
+}
+
+.about-version {
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 16px;
+}
+
+.about-desc {
+  font-size: 14px;
+  color: #444;
+  line-height: 1.6;
+  margin-bottom: 20px;
+}
+
+.about-compat {
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 24px;
+}
+
+.about-homepage {
+  font-size: 13px;
+  color: #0078d7;
+  text-decoration: none;
+  margin-bottom: 24px;
+  cursor: pointer;
+}
+
+.about-homepage:hover {
+  text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  .about-title {
+    color: #ffffff;
+  }
+
+  .about-version {
+    color: rgba(255, 255, 255, 0.54);
+  }
+
+  .about-desc {
+    color: rgba(255, 255, 255, 0.77);
+  }
+
+  .about-compat {
+    color: rgba(255, 255, 255, 0.54);
+  }
+
+  .about-homepage {
+    color: #4cc2ff;
+  }
+}

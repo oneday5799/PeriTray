@@ -110,7 +110,6 @@ fn main() {
             commands::toggle_audio_device_hidden,
             commands::open_settings,
             commands::exit_app,
-            commands::close_window,
             commands::rename_device,
             commands::change_device_group,
             commands::toggle_group_hidden,
@@ -193,7 +192,7 @@ fn main() {
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     let label = window.label();
-                    if label == "settings" || label == "about" {
+                    if label == "settings" {
                         api.prevent_close();
                         let _ = window.destroy();
                     } else if label == "popup" {

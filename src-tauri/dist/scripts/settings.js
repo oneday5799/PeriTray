@@ -544,8 +544,30 @@ function initDeviceFilterTab() {
   });
 }
 
+function selectTab(tab) {
+  const nav = document.querySelector(`.win-nav-item[data-tab="${tab}"]`);
+  if (nav) nav.click();
+}
+
+function initAboutTab() {
+  const link = document.getElementById("about-homepage");
+  if (!link) return;
+  link.addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor" });
+    } catch (err) {
+      console.error("Failed to open URL:", err);
+    }
+  });
+}
+
 async function init() {
   initNavigation();
+
+  // 从托盘「关于」打开时定位到对应标签页
+  const hash = location.hash.slice(1);
+  if (hash) selectTab(hash);
 
   try {
     config = await invoke("get_config");
@@ -554,6 +576,7 @@ async function init() {
     initUpdateSettings();
     initLogSettings();
     initDeviceFilterTab();
+    initAboutTab();
 
     loadDevicesAsync();
     loadAudioDevicesAsync();
@@ -573,6 +596,11 @@ window.__TAURI__.event.listen("config-changed", async () => {
   await loadAudioDevicesAsync();
   const listEl = document.getElementById("device-shortcut-list");
   if (listEl) initDeviceShortcutSettings();
+});
+
+// 托盘「关于」指向设置页关于标签（窗口已存在时）
+window.__TAURI__.event.listen("settings-tab", (e) => {
+  selectTab(e.payload);
 });
 
 init();

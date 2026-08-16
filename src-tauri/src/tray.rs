@@ -175,7 +175,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 "show" => { crate::popup::open_popup(app, "devices"); }
                 "volume" => { crate::popup::open_popup(app, "volume"); }
                 "settings" => { windows::open_settings(app); }
-                "about" => { windows::open_about(app); }
+                "about" => { windows::open_settings_tab(app, "about"); }
                 "auto_start" => {
                     let old = AUTO_START.load(Ordering::Relaxed);
                     let new_val = !old;

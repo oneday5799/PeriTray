@@ -1,4 +1,4 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use crate::config;
 
 #[cfg(target_os = "windows")]
@@ -11,54 +11,44 @@ pub(crate) fn browser_args() -> String {
 }
 
 pub fn open_settings(app: &tauri::AppHandle) {
-    open_or_create_window(app, "settings", "设置 - 外设监控", "settings.html", 600.0, 800.0, true, false);
+    open_settings_inner(app, None);
 }
 
-pub fn open_about(app: &tauri::AppHandle) {
-    open_or_create_window(app, "about", "关于 外设监控", "about.html", 380.0, 360.0, false, true);
+pub fn open_settings_tab(app: &tauri::AppHandle, tab: &str) {
+    open_settings_inner(app, Some(tab));
 }
 
-fn open_or_create_window(
-    app: &tauri::AppHandle,
-    label: &str,
-    title: &str,
-    url: &str,
-    width: f64,
-    height: f64,
-    resizable: bool,
-    center: bool,
-) {
-    if let Some(win) = app.get_webview_window(label) {
+fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
+    if let Some(win) = app.get_webview_window("settings") {
+        if let Some(t) = tab {
+            let _ = app.emit_to("settings", "settings-tab", t);
+        }
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
         return;
     }
     let app = app.clone();
-    let label = label.to_string();
-    let url = url.to_string();
-    let title = title.to_string();
+    let url = match tab {
+        Some(t) => format!("settings.html#{}", t),
+        None => "settings.html".to_string(),
+    };
     tauri::async_runtime::spawn(async move {
         let mut builder = tauri::WebviewWindowBuilder::new(
             &app,
-            &label,
+            "settings",
             tauri::WebviewUrl::App(url.into()),
         )
-        .title(&title)
-        .inner_size(width, height)
-        .resizable(resizable)
-        .visible(false);
+        .title("设置 - 外设监控")
+        .inner_size(600.0, 800.0)
+        .resizable(true)
+        .visible(false)
+        .min_inner_size(400.0, 300.0)
+        .background_color(tauri::utils::config::Color(243, 243, 243, 255));
 
         #[cfg(target_os = "windows")]
         {
             builder = builder.additional_browser_args(&browser_args());
-        }
-
-        if center {
-            builder = builder.center();
-        } else {
-            builder = builder.min_inner_size(400.0, 300.0)
-                .background_color(tauri::utils::config::Color(243, 243, 243, 255));
         }
 
         if let Ok(win) = builder.build() {

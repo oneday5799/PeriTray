@@ -3,7 +3,7 @@ use crate::device;
 use crate::process;
 use crate::wmi_query::query_devices;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// 快捷键录制期间置位，抑制全局快捷键触发，避免录制时误触发动作
@@ -118,13 +118,6 @@ pub fn open_bt_settings() -> Result<(), String> {
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), String> {
     process::open_with_system(&url)
-}
-
-#[tauri::command]
-pub fn close_window(app: tauri::AppHandle, name: String) {
-    if let Some(window) = app.get_webview_window(&name) {
-        let _ = window.close();
-    }
 }
 
 #[tauri::command]
