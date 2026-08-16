@@ -1241,9 +1241,15 @@ html, body {
 }
 
 .about-links-divider {
-  height: 1px;
-  background: #e0e0e0;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
   margin: 4px 0 12px;
+}
+
+.about-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 8px;
 }
 
 .about-links {
@@ -1301,7 +1307,11 @@ html, body {
   }
 
   .about-links-divider {
-    background: rgba(255, 255, 255, 0.08);
+    border-top-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .about-section-title {
+    color: rgba(255, 255, 255, 0.9);
   }
 
   .about-content p {
