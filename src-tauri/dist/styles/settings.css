@@ -1274,7 +1274,8 @@ html, body {
 .win-hyperlink-btn {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
+  height: 32px;
+  padding: 5px 11px 6px;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -1290,6 +1291,64 @@ html, body {
 }
 
 .win-hyperlink-btn:active {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.win-infobar {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.03);
+  color: #1a1a1a;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.win-infobar-layout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.win-infobar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: #0078d7;
+}
+
+.win-infobar-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.win-infobar-close-button {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-right: -6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 83ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.win-infobar-close-button:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.win-infobar-close-button:active {
   background: rgba(0, 0, 0, 0.08);
 }
 
@@ -1319,6 +1378,24 @@ html, body {
   }
 
   .win-hyperlink-btn:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .win-infobar {
+    border-color: rgba(255, 255, 255, 0.0706);
+    background: rgba(255, 255, 255, 0.0314);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .win-infobar-icon {
+    color: #4cc2ff;
+  }
+
+  .win-infobar-close-button:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .win-infobar-close-button:active {
     background: rgba(255, 255, 255, 0.1);
   }
 }

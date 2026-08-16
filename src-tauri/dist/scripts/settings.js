@@ -574,12 +574,21 @@ function initAboutTab() {
     });
   }
 
+  const infobarClose = document.getElementById("infobar-close");
+  if (infobarClose) {
+    infobarClose.addEventListener("click", () => {
+      const bar = document.getElementById("about-infobar");
+      if (bar) bar.style.display = "none";
+    });
+  }
+
   const links = {
     "about-dev": "https://github.com/oneday5799",
     "about-license": "https://github.com/oneday5799/PeriphMonitor/blob/main/LICENSE",
     "about-homepage": "https://github.com/oneday5799/PeriphMonitor",
-    "about-help": "mailto:gongzizh@outlook.com",
-    "about-feedback": "https://github.com/oneday5799/PeriphMonitor/issues"
+    "about-help": "https://github.com/oneday5799/PeriphMonitor/issues",
+    "about-feedback": "https://github.com/oneday5799/PeriphMonitor/issues",
+    "about-pr": "https://github.com/oneday5799/PeriphMonitor/pulls"
   };
   Object.entries(links).forEach(([id, url]) => {
     const el = document.getElementById(id);
