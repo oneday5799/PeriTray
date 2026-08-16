@@ -1207,85 +1207,130 @@ html, body {
   padding-top: 48px;
 }
 
-.about-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
+.about-info-card .group-header {
+  cursor: default;
+  height: auto;
+  min-height: 60px;
+  padding: 14px 16px;
 }
 
-.about-icon {
-  width: 64px;
-  height: 64px;
-  margin-bottom: 16px;
-  background: linear-gradient(180deg, #FF8033, #FF7500);
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.about-info-card .group-header:hover {
+  background: transparent;
 }
 
-.about-icon svg {
-  width: 36px;
-  height: 36px;
-}
-
-.about-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin-bottom: 4px;
-}
-
-.about-version {
+.about-info-card .group-desc {
   font-size: 13px;
   color: #888;
-  margin-bottom: 16px;
+  margin-top: 2px;
 }
 
-.about-desc {
+.about-version-btn {
+  padding: 5px 11px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #0078d7;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 83ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.about-version-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.about-version-btn:active {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.about-content {
+  padding: 12px 16px 16px;
+}
+
+.about-content p {
   font-size: 14px;
   color: #444;
   line-height: 1.6;
-  margin-bottom: 20px;
+  margin: 0 0 12px;
 }
 
-.about-compat {
-  font-size: 13px;
-  color: #666;
-  margin-bottom: 24px;
+.about-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.about-homepage {
-  font-size: 13px;
+.about-link-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.about-link-label {
+  font-size: 14px;
+  color: #1a1a1a;
+  flex-shrink: 0;
+}
+
+.win-hyperlink-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   color: #0078d7;
+  font-size: 14px;
   text-decoration: none;
-  margin-bottom: 24px;
   cursor: pointer;
+  transition: background 83ms cubic-bezier(0.1, 0.9, 0.2, 1);
 }
 
-.about-homepage:hover {
-  text-decoration: underline;
+.win-hyperlink-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.win-hyperlink-btn:active {
+  background: rgba(0, 0, 0, 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
-  .about-title {
-    color: #ffffff;
-  }
-
-  .about-version {
+  .about-info-card .group-desc {
     color: rgba(255, 255, 255, 0.54);
   }
 
-  .about-desc {
+  .about-version-btn {
+    color: #4cc2ff;
+  }
+
+  .about-version-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .about-version-btn:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .about-content p {
     color: rgba(255, 255, 255, 0.77);
   }
 
-  .about-compat {
-    color: rgba(255, 255, 255, 0.54);
+  .about-link-label {
+    color: rgba(255, 255, 255, 0.9);
   }
 
-  .about-homepage {
+  .win-hyperlink-btn {
     color: #4cc2ff;
+  }
+
+  .win-hyperlink-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .win-hyperlink-btn:active {
+    background: rgba(255, 255, 255, 0.1);
   }
 }

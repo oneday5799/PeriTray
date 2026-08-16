@@ -550,14 +550,45 @@ function selectTab(tab) {
 }
 
 function initAboutTab() {
-  const link = document.getElementById("about-homepage");
-  if (!link) return;
-  link.addEventListener("click", async (e) => {
-    e.preventDefault();
-    try {
-      await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor" });
-    } catch (err) {
-      console.error("Failed to open URL:", err);
+  const header = document.getElementById("about-info-header");
+  const items = document.getElementById("about-info-items");
+  if (header && items) {
+    header.addEventListener("click", () => {
+      const expanded = items.style.maxHeight !== "0px";
+      items.style.maxHeight = expanded ? "0px" : "999px";
+    });
+  }
+
+  const versionBtn = document.getElementById("about-version-btn");
+  if (versionBtn) {
+    versionBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await invoke("check_for_updates");
+      } catch (err) {
+        console.error("Failed to check for updates:", err);
+      }
+    });
+  }
+
+  const links = {
+    "about-dev": "https://github.com/oneday5799",
+    "about-license": "https://github.com/oneday5799/PeriphMonitor/blob/main/LICENSE",
+    "about-homepage": "https://github.com/oneday5799/PeriphMonitor",
+    "about-help": "mailto:gongzizh@outlook.com",
+    "about-feedback": "https://github.com/oneday5799/PeriphMonitor/issues"
+  };
+  Object.entries(links).forEach(([id, url]) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try {
+          await invoke("open_url", { url });
+        } catch (err) {
+          console.error("Failed to open URL:", err);
+        }
+      });
     }
   });
 }
