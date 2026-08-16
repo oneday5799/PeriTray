@@ -109,7 +109,6 @@ async function initShutdownVolumeSettings() {
   const items = document.getElementById("shutdown-device-items");
   const arrow = document.getElementById("arrow-shutdown");
   const header = document.getElementById("shutdown-card-header");
-  const deviceList = document.getElementById("shutdown-device-list");
 
   toggle.checked = config.shutdown_volume_enabled || false;
 
@@ -156,7 +155,7 @@ async function initShutdownVolumeSettings() {
     const audioDevices = await invoke("get_audio_devices");
     const savedDevices = config.shutdown_volume_devices || {};
 
-    deviceList.innerHTML = "";
+    items.innerHTML = "";
 
     for (const dev of audioDevices) {
       const savedVolume = savedDevices[dev.name];
@@ -164,14 +163,14 @@ async function initShutdownVolumeSettings() {
       const volume = isEnabled ? Math.round(savedVolume * 100) : 50;
 
       const item = document.createElement("div");
-      item.className = "shutdown-device-item";
+      item.className = "device-item";
 
       const nameEl = document.createElement("div");
-      nameEl.className = "device-name" + (isEnabled ? "" : " inactive");
+      nameEl.className = "device-item-name" + (isEnabled ? "" : " hidden");
       nameEl.textContent = dev.name;
 
       const controls = document.createElement("div");
-      controls.className = "shutdown-device-controls";
+      controls.className = "device-item-controls";
 
       const numberbox = document.createElement("div");
       numberbox.className = "win-numberbox";
@@ -286,13 +285,13 @@ async function initShutdownVolumeSettings() {
       deviceInput.addEventListener("change", async () => {
         if (deviceInput.checked) {
           config.shutdown_volume_devices[dev.name] = parseInt(input.value) / 100;
-          nameEl.classList.remove("inactive");
+          nameEl.classList.remove("hidden");
           input.disabled = false;
           btnUp.disabled = parseInt(input.value) >= 100;
           btnDown.disabled = parseInt(input.value) <= 0;
         } else {
           delete config.shutdown_volume_devices[dev.name];
-          nameEl.classList.add("inactive");
+          nameEl.classList.add("hidden");
           input.disabled = true;
           btnUp.disabled = true;
           btnDown.disabled = true;
@@ -304,7 +303,7 @@ async function initShutdownVolumeSettings() {
       controls.appendChild(deviceToggle);
       item.appendChild(nameEl);
       item.appendChild(controls);
-      deviceList.appendChild(item);
+      items.appendChild(item);
     }
   } catch (e) {
     console.error("Failed to load audio devices for shutdown volume:", e);

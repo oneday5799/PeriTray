@@ -356,6 +356,7 @@ async function init() {
     regexInput.value = config.filter_regex || "";
     regexInput.style.height = "auto";
     regexInput.style.minHeight = "80px";
+    regexInput.style.height = Math.max(regexInput.scrollHeight, 80) + "px";
 
     function setFilterExpanded(expanded) {
       if (expanded) {
@@ -404,12 +405,7 @@ async function init() {
     regexInput.addEventListener("input", () => {
       regexInput.style.height = "auto";
       regexInput.style.minHeight = "80px";
-      if (filterWrap.classList.contains("show")) {
-        filterWrap.style.maxHeight = "999px";
-        requestAnimationFrame(() => {
-          filterWrap.style.maxHeight = filterWrap.scrollHeight + "px";
-        });
-      }
+      regexInput.style.height = Math.max(regexInput.scrollHeight, 80) + "px";
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(async () => {
         config.filter_regex = regexInput.value;

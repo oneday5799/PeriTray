@@ -526,7 +526,7 @@ html, body {
 .filter-regex-wrap {
   max-height: 0;
   overflow: hidden;
-  transition: max-height 0.2s ease;
+  transition: max-height 0.2s ease, padding 0.2s ease;
   padding: 0 14px;
 }
 
@@ -593,8 +593,6 @@ html, body {
   resize: none;
   overflow: hidden;
   box-sizing: border-box;
-  outline: none;
-}
   outline: none;
 }
 
@@ -677,6 +675,8 @@ html, body {
 }
 
 .group-title {
+  display: inline-flex;
+  align-items: center;
   font-size: 15px;
   font-weight: 400;
   color: #1a1a1a;
@@ -1127,39 +1127,12 @@ html, body {
   box-sizing: border-box;
 }
 
-.shutdown-device-list {
-  display: flex;
-  flex-direction: column;
-  margin-bottom: 14px;
-}
-
-.shutdown-device-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.shutdown-device-item .device-name {
-  font-size: 14px;
-  color: #1a1a1a;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  margin-right: 12px;
-}
-
-.shutdown-device-item .device-name.inactive {
-  color: #aaa;
-}
-
-.shutdown-device-controls {
+.device-item-controls {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* NumberBox */
