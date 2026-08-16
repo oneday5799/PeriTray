@@ -1,4 +1,4 @@
-html, body {
+﻿html, body {
   width: 100%;
   height: 100%;
   user-select: none;
@@ -6,82 +6,81 @@ html, body {
 
 .settings-container {
   height: 100%;
-  padding: 10px 20px 20px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
+  display: flex;
+  overflow: hidden;
 }
 
-.page-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: #1a1a1a;
-  padding: 10px 0 12px;
-}
-
-/* ── NavigationView Top Bar (WinUIonWeb 风格) ──────── */
-.win-nav-top-bar {
-  position: relative;
-  box-sizing: border-box;
-  width: calc(100% + 40px);
-  margin: 0 -20px;
-  height: 48px;
+/* ── Left Sidebar (NavigationView Pane) ──────── */
+.win-nav-left-panel {
+  width: 240px;
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
+  position: relative;
+}
+
+.win-nav-left-panel::-webkit-scrollbar {
+  display: none;
+}
+
+.win-nav-header {
+  padding: 12px 16px;
+  display: flex;
   align-items: center;
-  border-bottom: 1px solid #e5e5e5;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.win-nav-indicator-track {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: visible;
+.win-nav-logo {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
 }
 
-.win-nav-indicator {
-  position: absolute;
-  bottom: 4px;
-  left: 0;
-  height: 3px;
-  width: 16px;
-  background: #0078d7;
-  border-radius: 2px;
-  pointer-events: none;
-  z-index: 10;
-  will-change: transform, width;
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
+.win-nav-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary, #1a1a1a);
+  white-space: nowrap;
 }
 
 .win-nav-menu {
+  flex: 1;
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  height: 100%;
+  flex-direction: column;
+  gap: 2px;
   padding: 0 4px;
-  gap: 0;
+  margin-left: 4px;
+  overflow: hidden;
 }
 
 .win-nav-item {
   position: relative;
   box-sizing: border-box;
-  width: max-content;
-  height: 40px;
-  min-height: 40px;
-  margin: 2px 4px;
-  padding: 0 12px;
+  height: 36px;
+  min-height: 36px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 10px;
+  padding: 0 12px;
   border-radius: 4px;
   cursor: pointer;
   background: transparent;
-  color: rgba(0, 0, 0, 0.62);
+  color: var(--text-primary, #1a1a1a);
   transition: background 0.167s cubic-bezier(0, 0, 0, 1),
     color 0.167s cubic-bezier(0, 0, 0, 1);
   white-space: nowrap;
   user-select: none;
+}
+
+.win-nav-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: inherit;
 }
 
 .win-nav-item .label {
@@ -92,27 +91,65 @@ html, body {
 
 .win-nav-item:hover {
   background: rgba(0, 0, 0, 0.0373);
-  color: rgba(0, 0, 0, 0.89);
+  color: var(--text-primary, #1a1a1a);
 }
 
 .win-nav-item:active {
-  background: rgba(0, 0, 0, 0.0241);
-  color: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.049);
+  color: var(--text-secondary, rgba(0, 0, 0, 0.62));
 }
 
 .win-nav-item.is-selected {
-  background: transparent;
-  color: rgba(0, 0, 0, 0.89);
+  background: rgba(0, 0, 0, 0.0373);
+  color: var(--text-primary, #1a1a1a);
 }
 
 .win-nav-item.is-selected:hover {
-  background: transparent;
-  color: rgba(0, 0, 0, 0.89);
+  background: rgba(0, 0, 0, 0.0241);
+  color: var(--text-primary, #1a1a1a);
 }
 
 .win-nav-item.is-selected:active {
-  background: transparent;
-  color: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.0373);
+  color: var(--text-secondary, rgba(0, 0, 0, 0.62));
+}
+
+/* ── Navigation Indicator (single element, WinUI NavigationView style) ──────── */
+.win-nav-indicator {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  width: 3px;
+  height: 16px;
+  background: #0078d7;
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 10;
+  will-change: transform, height;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* ── Right Content (NavigationView Content) ──────── */
+.win-nav-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 20px 20px;
+  scrollbar-gutter: stable;
+  min-width: 0;
+}
+
+.win-nav-page-header {
+  padding: 10px 0 12px;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-primary, #1a1a1a);
+  min-height: 40px;
+  flex-shrink: 0;
+  border-bottom: 1px solid transparent;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -125,12 +162,12 @@ html, body {
     background: rgba(255, 255, 255, 0.0837);
   }
 
-  .win-nav-top-bar {
-    border-bottom-color: #1d1d1d;
+  .win-nav-left-panel {
+    border-right-color: #1d1d1d;
   }
 
-  .win-nav-indicator {
-    background: #4cc2ff;
+  .win-nav-title {
+    color: #ffffff;
   }
 
   .win-nav-item {
@@ -148,82 +185,92 @@ html, body {
   }
 
   .win-nav-item.is-selected {
+    background: rgba(255, 255, 255, 0.0605);
     color: #ffffff;
   }
 
   .win-nav-item.is-selected:hover {
+    background: rgba(255, 255, 255, 0.0419);
     color: #ffffff;
   }
 
   .win-nav-item.is-selected:active {
+    background: rgba(255, 255, 255, 0.0419);
     color: rgba(255, 255, 255, 0.77);
+  }
+
+  .win-nav-page-header {
+    color: #ffffff;
+  }
+
+  .win-nav-indicator {
+    background: #4cc2ff;
   }
 }
 
 .tab-content {
   display: none;
-  margin-top: 20px;
 }
 
 .tab-content.active {
   display: block;
 }
 
-/* ── Slide Navigation Transition (WinUIonWeb 风格) ─── */
+/* ── Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, vertical) ─── */
 .tab-content.slide-active {
   display: block;
   will-change: opacity, transform;
 }
 
-/* Enter from right */
-.tab-content.slide-enter-right {
-  animation: SlideFromRight_Enter 0.45s cubic-bezier(0.1, 0.9, 0.2, 1) both;
+/* Enter from bottom (forward navigation — going down the list) */
+.tab-content.slide-enter-down {
+  animation: SlideFromBottom_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
 }
 
-/* Leave to left */
-.tab-content.slide-leave-left {
-  animation: SlideFromRight_Leave 0.15s cubic-bezier(0.7, 0, 1, 0.5) both;
+/* Leave to top (forward navigation) */
+.tab-content.slide-leave-up {
+  animation: SlideFromBottom_Leave 167ms cubic-bezier(0.7, 0, 1, 0.5) both;
 }
 
-/* Enter from left */
-.tab-content.slide-enter-left {
-  animation: SlideFromLeft_Enter 0.45s cubic-bezier(0.1, 0.9, 0.2, 1) both;
+/* Enter from top (backward navigation — going up the list) */
+.tab-content.slide-enter-up {
+  animation: SlideFromTop_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
 }
 
-/* Leave to right */
-.tab-content.slide-leave-right {
-  animation: SlideFromLeft_Leave 0.15s cubic-bezier(0.7, 0, 1, 0.5) both;
+/* Leave to bottom (backward navigation) */
+.tab-content.slide-leave-down {
+  animation: SlideFromTop_Leave 167ms cubic-bezier(0.7, 0, 1, 0.5) both;
 }
 
-@keyframes SlideFromRight_Enter {
-  0%   { opacity: 0; transform: translateX(200px); }
-  33.333% { opacity: 0; transform: translateX(200px); }
-  33.334% { opacity: 1; transform: translateX(200px); }
-  100% { opacity: 1; transform: translateX(0); }
+@keyframes SlideFromBottom_Enter {
+  0%   { opacity: 0; transform: translateY(80px); }
+  33.333% { opacity: 0; transform: translateY(80px); }
+  33.334% { opacity: 1; transform: translateY(80px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes SlideFromRight_Leave {
-  from { opacity: 1; transform: translateX(0); }
-  to   { opacity: 0; transform: translateX(-150px); }
+@keyframes SlideFromBottom_Leave {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-60px); }
 }
 
-@keyframes SlideFromLeft_Enter {
-  0%   { opacity: 0; transform: translateX(-200px); }
-  33.333% { opacity: 0; transform: translateX(-200px); }
-  33.334% { opacity: 1; transform: translateX(-200px); }
-  100% { opacity: 1; transform: translateX(0); }
+@keyframes SlideFromTop_Enter {
+  0%   { opacity: 0; transform: translateY(-80px); }
+  33.333% { opacity: 0; transform: translateY(-80px); }
+  33.334% { opacity: 1; transform: translateY(-80px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes SlideFromLeft_Leave {
-  from { opacity: 1; transform: translateX(0); }
-  to   { opacity: 0; transform: translateX(150px); }
+@keyframes SlideFromTop_Leave {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(60px); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tab-content.slide-enter-right,
-  .tab-content.slide-leave-left,
-  .tab-content.slide-enter-left,
-  .tab-content.slide-leave-right {
+  .tab-content.slide-enter-down,
+  .tab-content.slide-leave-up,
+  .tab-content.slide-enter-up,
+  .tab-content.slide-leave-down {
     animation: none !important;
   }
 }

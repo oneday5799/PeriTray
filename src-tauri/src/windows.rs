@@ -40,7 +40,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             tauri::WebviewUrl::App(url.into()),
         )
         .title("设置 - 外设监控")
-        .inner_size(600.0, 800.0)
+        .inner_size(960.0, 720.0)
         .resizable(true)
         .visible(false)
         .min_inner_size(400.0, 300.0)

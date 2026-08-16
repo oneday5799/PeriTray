@@ -216,98 +216,55 @@ function initComboBox(comboId, selectedValue, onChange) {
 }
 
 function initNavigation() {
-  // NavigationView Top indicator (WinUIonWeb stretch animation)
+  let currentTabIndex = 0;
   const INDICATOR_SIZE = 16;
   const EASE_OUT = 'cubic-bezier(0.1, 0.9, 0.2, 1)';
-  let indicatorAnimationId = 0;
-  let currentTabIndex = 0;
-  let isTransitioning = false;
 
-  function getIndicatorX(item) {
+  function getIndicatorY(item) {
     const itemRect = item.getBoundingClientRect();
-    const track = document.querySelector('.win-nav-indicator-track');
-    const trackRect = track.getBoundingClientRect();
-    return itemRect.left - trackRect.left + (itemRect.width / 2) - (INDICATOR_SIZE / 2);
+    const panelRect = document.querySelector('.win-nav-left-panel').getBoundingClientRect();
+    return itemRect.top - panelRect.top + (itemRect.height / 2) - (INDICATOR_SIZE / 2);
   }
 
-  function setIndicatorRestingStyle(indicatorEl, x) {
-    indicatorEl.style.transform = `translateX(${x}px)`;
-    indicatorEl.style.width = INDICATOR_SIZE + 'px';
+  function setIndicatorStyle(indicatorEl, y, h) {
+    indicatorEl.style.transform = `translateY(${y}px)`;
+    indicatorEl.style.height = (h || INDICATOR_SIZE) + 'px';
     indicatorEl.style.transition = 'none';
   }
 
-  function animateIndicator(oldX, newX) {
+  function animateIndicator(oldY, newY) {
     const indicatorEl = document.getElementById('nav-indicator');
     if (!indicatorEl) return;
     indicatorEl.getAnimations().forEach(a => a.cancel());
-    const animationId = ++indicatorAnimationId;
-    const distance = Math.abs(newX - oldX);
-    const edge = Math.min(oldX, newX);
-    const dur = 600;
+    const distance = Math.abs(newY - oldY);
+    const edge = Math.min(oldY, newY);
     const keyframes = [
-      { transform: `translateX(${oldX}px)`, width: INDICATOR_SIZE + 'px', offset: 0, easing: 'cubic-bezier(0.9, 0.1, 1, 0.2)' },
-      { transform: `translateX(${edge}px)`, width: (distance + INDICATOR_SIZE) + 'px', offset: 0.333, easing: EASE_OUT },
-      { transform: `translateX(${newX}px)`, width: INDICATOR_SIZE + 'px', offset: 1 }
+      { transform: `translateY(${oldY}px)`, height: INDICATOR_SIZE + 'px', offset: 0, easing: 'cubic-bezier(0.9, 0.1, 1, 0.2)' },
+      { transform: `translateY(${edge}px)`, height: (distance + INDICATOR_SIZE) + 'px', offset: 0.333, easing: EASE_OUT },
+      { transform: `translateY(${newY}px)`, height: INDICATOR_SIZE + 'px', offset: 1 }
     ];
-    const anim = indicatorEl.animate(keyframes, { duration: dur, fill: 'forwards' });
+    const anim = indicatorEl.animate(keyframes, { duration: 200, fill: 'forwards' });
     anim.onfinish = () => {
-      if (animationId === indicatorAnimationId) {
-        setIndicatorRestingStyle(indicatorEl, newX);
+      // Sync computed transform back to style (Web Animations API doesn't update style.transform)
+      const computed = getComputedStyle(indicatorEl).transform;
+      const match = computed.match(/matrix.*\((.+)\)/);
+      if (match) {
+        // matrix(a,b,c,d,tx,ty) — ty is at index 5
+        const parts = match[1].split(',').map(s => s.trim());
+        const ty = parts[5] ? parseFloat(parts[5]) : newY;
+        indicatorEl.style.transform = `translateY(${ty}px)`;
       }
+      indicatorEl.style.height = INDICATOR_SIZE + 'px';
     };
   }
 
-  function moveIndicator(item, animate) {
-    const indicatorEl = document.getElementById('nav-indicator');
-    if (!indicatorEl || !item) return;
-    const newX = getIndicatorX(item);
-    if (animate) {
-      const oldTransform = indicatorEl.style.transform;
-      const oldX = oldTransform ? parseFloat(oldTransform.match(/translateX\(([^)]+)px\)/)?.[1] || 0) : newX;
-      animateIndicator(oldX, newX);
-    } else {
-      setIndicatorRestingStyle(indicatorEl, newX);
-    }
-  }
-
-  // Slide page transition (WinUIonWeb SlideNavigationTransitionInfo)
-  function slideTransition(oldTab, newTab, oldIndex, newIndex) {
-    if (isTransitioning) return;
-    isTransitioning = true;
-    const goingRight = newIndex > oldIndex;
-    const oldContent = document.getElementById('tab-' + oldTab.dataset.tab);
-    const newContent = document.getElementById('tab-' + newTab.dataset.tab);
-
-    // Remove any lingering animation classes
-    document.querySelectorAll('.tab-content').forEach(c => {
-      c.classList.remove('slide-enter-right', 'slide-leave-left', 'slide-enter-left', 'slide-leave-right', 'slide-active');
-    });
-
-    // Start leave animation on old content
-    if (oldContent) {
-      oldContent.classList.add(goingRight ? 'slide-leave-left' : 'slide-leave-right');
-    }
-
-    // Start enter animation on new content
-    newContent.classList.add('slide-active', goingRight ? 'slide-enter-right' : 'slide-enter-left');
-
-    // After leave animation finishes, hide old content
-    setTimeout(() => {
-      if (oldContent) {
-        oldContent.classList.remove('active', 'slide-leave-left', 'slide-leave-right', 'slide-active');
-      }
-      isTransitioning = false;
-    }, 150);
-  }
-
-  // Tab switching (NavigationView Top mode)
+  // Tab switching (NavigationView Left mode)
   const navItems = document.querySelectorAll(".win-nav-item");
+  const pageHeader = document.getElementById("page-header");
   navItems.forEach((tab, index) => {
     tab.addEventListener("click", () => {
-      if (isTransitioning) return;
+      if (currentTabIndex === index) return;
       const oldIndex = currentTabIndex;
-      const newIndex = index;
-      if (oldIndex === newIndex) return;
 
       // Update nav item states
       navItems.forEach(t => {
@@ -319,31 +276,51 @@ function initNavigation() {
       tab.setAttribute("aria-selected", "true");
       tab.setAttribute("tabindex", "0");
 
-      // Get old and new tab elements
-      const oldTab = navItems[oldIndex];
-      const newTab = navItems[newIndex];
+      // Animate indicator with stretch
+      const indicatorEl = document.getElementById('nav-indicator');
+      if (indicatorEl) {
+        const oldTransform = indicatorEl.style.transform;
+        const oldY = oldTransform ? parseFloat(oldTransform.match(/translateY\(([-\d.]+)px\)/)?.[1] || 0) : 0;
+        const newY = getIndicatorY(tab);
+        animateIndicator(oldY, newY);
+      }
 
-      // Animate indicator
-      moveIndicator(tab, true);
+      // Slide transition — always: old content slides up, new content slides in from bottom
+      const oldContent = document.getElementById('tab-' + navItems[oldIndex].dataset.tab);
+      const newContent = document.getElementById('tab-' + tab.dataset.tab);
 
-      // Animate page transition
-      slideTransition(oldTab, newTab, oldIndex, newIndex);
+      document.querySelectorAll('.tab-content').forEach(c => {
+        c.classList.remove('slide-enter-down', 'slide-leave-up', 'slide-enter-up', 'slide-leave-down', 'slide-active');
+      });
 
-      currentTabIndex = newIndex;
+      if (oldContent) oldContent.classList.add('slide-leave-up');
+      newContent.classList.add('slide-active', 'slide-enter-down');
+
+      setTimeout(() => {
+        if (oldContent) oldContent.classList.remove('active', 'slide-leave-up', 'slide-leave-down', 'slide-active');
+      }, 170);
+
+      if (pageHeader) pageHeader.textContent = tab.querySelector('.label').textContent;
+      currentTabIndex = index;
     });
   });
 
-  // Initialize indicator position (no animation)
-  requestAnimationFrame(() => {
+  // Initialize indicator position after layout is stable
+  function initIndicator() {
     const selected = document.querySelector(".win-nav-item.is-selected");
-    if (selected) moveIndicator(selected, false);
-  });
-
-  // Reposition indicator on resize (no animation)
-  window.addEventListener("resize", () => {
-    const selected = document.querySelector(".win-nav-item.is-selected");
-    if (selected) moveIndicator(selected, false);
-  });
+    if (!selected) return;
+    const indicatorEl = document.getElementById('nav-indicator');
+    if (!indicatorEl) return;
+    const y = getIndicatorY(selected);
+    // Verify position is reasonable (within panel bounds)
+    if (y >= 0 && y < 500) {
+      setIndicatorStyle(indicatorEl, y);
+    } else {
+      // Retry after layout settles
+      requestAnimationFrame(() => initIndicator());
+    }
+  }
+  requestAnimationFrame(() => requestAnimationFrame(initIndicator));
 }
 
 function initGeneralTab() {
