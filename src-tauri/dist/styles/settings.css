@@ -553,7 +553,7 @@ html, body {
 
 .filter-textarea-focus-border {
   position: absolute;
-  inset: -1px;
+  inset: 0;
   z-index: 4;
   pointer-events: none;
   border-radius: inherit;
@@ -565,7 +565,7 @@ html, body {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 3px;
+  height: 1.5px;
   background: transparent;
   transition: background 0.15s ease;
 }
@@ -1158,7 +1158,7 @@ html, body {
 
 .win-numberbox-focus-border {
   position: absolute;
-  inset: -1px;
+  inset: 0;
   z-index: 4;
   pointer-events: none;
   border-radius: inherit;
@@ -1170,7 +1170,7 @@ html, body {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 3px;
+  height: 1.5px;
   background: transparent;
   transition: background 0.15s ease;
 }
@@ -1253,13 +1253,24 @@ html, body {
   gap: 6px;
 }
 
+.shortcut-key-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
 .shortcut-key-input {
   width: 180px;
-  padding: 6px 10px;
-  font-size: 13px;
-  border: 1px solid #d0d0d0;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 4px 8px 5px 8px;
+  font-size: 14px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 20px;
+  border: 1px solid #e0e0e0;
+  border-bottom-color: #888;
   border-radius: 4px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.70);
   color: #1a1a1a;
   outline: none;
   cursor: pointer;
@@ -1267,23 +1278,18 @@ html, body {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.shortcut-key-input:focus {
-  border-color: #0078d7;
-  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.15);
-}
-
+.shortcut-key-input:focus,
 .shortcut-key-input.recording {
-  border-color: #0078d7;
-  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25);
-  animation: recording-pulse 1s ease-in-out infinite;
-}
-
-@keyframes recording-pulse {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25); }
-  50% { box-shadow: 0 0 0 4px rgba(0, 120, 215, 0.15); }
+  border-color: #e0e0e0;
+  border-bottom-color: #e0e0e0;
+  box-shadow: inset 0 -1.5px 0 0 #0078d7;
 }
 
 .shortcut-clear-btn {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1295,7 +1301,14 @@ html, body {
   font-size: 16px;
   cursor: pointer;
   border-radius: 4px;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
+  opacity: 0;
+  pointer-events: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s, opacity 0.15s;
+}
+
+.shortcut-key-box:hover .shortcut-clear-btn {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .shortcut-clear-btn:hover {
@@ -1329,19 +1342,56 @@ html, body {
 }
 
 .shortcut-delete-btn {
-  padding: 4px 10px;
-  font-size: 12px;
-  border: 1px solid #d0d0d0;
+  height: 32px;
+  padding: 5px 11px 6px;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
   border-radius: 4px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.70);
   color: #e81123;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: normal;
   cursor: pointer;
-  transition: background 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
 }
 
 .shortcut-delete-btn:hover {
-  background: rgba(232, 17, 35, 0.08);
+  background: rgba(249, 249, 249, 0.50);
+}
+
+.shortcut-delete-btn:active {
+  background: rgba(249, 249, 249, 0.30);
+  color: rgba(0, 0, 0, 0.62);
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  .shortcut-delete-btn {
+    border-left: 1px solid rgba(255, 255, 255, 0.0706);
+    border-top: 1px solid rgba(255, 255, 255, 0.0941);
+    border-right: 1px solid rgba(255, 255, 255, 0.0706);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.0706);
+    background: rgba(255, 255, 255, 0.0605);
+    color: #e81123;
+  }
+
+  .shortcut-delete-btn:hover {
+    background: rgba(255, 255, 255, 0.0837);
+  }
+
+  .shortcut-delete-btn:active {
+    background: rgba(255, 255, 255, 0.0326);
+    color: rgba(255, 255, 255, 0.77);
+    border-bottom-color: rgba(255, 255, 255, 0.0706);
+  }
 }
 
 .device-shortcut-label {

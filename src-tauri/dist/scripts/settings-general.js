@@ -16,7 +16,7 @@ function initShortcutSettings() {
     hintEl.textContent = msg;
     hintEl.style.color = isError ? "#e81123" : "#999";
     hintTimer = setTimeout(() => {
-      hintEl.textContent = "点击输入框后按下键盘组合键录制快捷键，如 Ctrl+Shift+D";
+      hintEl.textContent = "";
       hintEl.style.color = "#999";
     }, 3000);
   }
@@ -124,8 +124,12 @@ function initDeviceShortcutSettings() {
         }
       });
 
-      wrap.appendChild(input);
-      wrap.appendChild(clearBtn);
+      const box = document.createElement("div");
+      box.className = "shortcut-key-box";
+      box.appendChild(input);
+      box.appendChild(clearBtn);
+
+      wrap.appendChild(box);
       wrap.appendChild(deleteBtn);
       item.appendChild(wrap);
       listEl.appendChild(item);

@@ -163,6 +163,16 @@ window.shortcutCodeMap = {
   "ScrollLock": { display: "ScrLk", key: "ScrollLock" },
   "Pause": { display: "Pause", key: "Pause" },
   "NumLock": { display: "NumLock", key: "NumLock" },
+  "Numpad0": { display: "Num0", key: "Numpad0" },
+  "Numpad1": { display: "Num1", key: "Numpad1" },
+  "Numpad2": { display: "Num2", key: "Numpad2" },
+  "Numpad3": { display: "Num3", key: "Numpad3" },
+  "Numpad4": { display: "Num4", key: "Numpad4" },
+  "Numpad5": { display: "Num5", key: "Numpad5" },
+  "Numpad6": { display: "Num6", key: "Numpad6" },
+  "Numpad7": { display: "Num7", key: "Numpad7" },
+  "Numpad8": { display: "Num8", key: "Numpad8" },
+  "Numpad9": { display: "Num9", key: "Numpad9" },
   "NumpadAdd": { display: "Num+", key: "NumpadAdd" },
   "NumpadSubtract": { display: "Num-", key: "NumpadSubtract" },
   "NumpadMultiply": { display: "Num*", key: "NumpadMultiply" },
@@ -197,7 +207,12 @@ for (const v of Object.values(window.shortcutCodeMap)) {
 
 window.shortcutJoinSaved = function (saved) {
   if (!saved) return "";
-  return saved.split("+").map(p => window.shortcutReverseCodeMap[p] || p).join("+");
+  return saved.split("+").map(p => {
+    if (window.shortcutReverseCodeMap[p]) return window.shortcutReverseCodeMap[p];
+    if (p.length === 4 && p.startsWith("Key")) return p[3];
+    if (p.length === 6 && p.startsWith("Digit")) return p[5];
+    return p;
+  }).join("+");
 };
 
 // 绑定快捷键输入框录制行为。input/clearBtn 为 DOM 元素，getSavedKey() 返回当前保存的原始快捷键（含 Super）
@@ -282,17 +297,14 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
     }
 
     if (code.startsWith("Numpad") && /\d/.test(code[6]) && code.length === 7) {
-      restoreSaved();
-      if (onError) onError("暂不支持该快捷键。");
-      return;
-    }
-    if (window.shortcutCodeMap[code]) {
+      keys.add({ display: "Num" + code[6], key: code });
+    } else if (window.shortcutCodeMap[code]) {
       const entry = window.shortcutCodeMap[code];
       keys.add({ display: entry.display, key: entry.key });
     } else if (code.startsWith("F") && code.length >= 2 && code.length <= 3) {
       keys.add({ display: code, key: code });
     } else if (code.startsWith("Digit") && code.length === 6) {
-      keys.add({ display: code, key: code });
+      keys.add({ display: code[5], key: code });
     } else if (code.startsWith("Key") && code.length === 4) {
       keys.add({ display: code[3], key: code });
     } else {
