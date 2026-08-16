@@ -1235,10 +1235,10 @@ html, body {
   padding: 10px 16px;
 }
 
-#about-info-items .device-item-name {
-  flex: none;
-  margin-right: 0;
+#about-info-items .section-title {
+  margin-top: 0;
   margin-bottom: 8px;
+  flex: none;
 }
 
 #about-info-items .device-item-controls {
