@@ -1,9 +1,36 @@
+let config = null;
+
 async function saveConfig() {
   try {
     await invoke("update_config", { newConfig: config });
   } catch (e) {
     console.error("Failed to save config:", e);
   }
+}
+
+function bindToggle(id, { get, set, onChange }) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.checked = !!get();
+  el.addEventListener("change", async () => {
+    set(el.checked);
+    await saveConfig();
+    if (onChange) await onChange(el.checked);
+  });
+}
+
+function createToggle(checked, onChange, extraClass) {
+  const toggle = document.createElement("label");
+  toggle.className = "toggle" + (extraClass ? " " + extraClass : "");
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = !!checked;
+  const slider = document.createElement("span");
+  slider.className = "slider";
+  toggle.appendChild(input);
+  toggle.appendChild(slider);
+  if (onChange) input.addEventListener("change", () => onChange(input));
+  return { toggle, input };
 }
 
 function initComboBox(comboId, selectedValue, onChange) {
@@ -188,11 +215,10 @@ function initComboBox(comboId, selectedValue, onChange) {
   };
 }
 
-async function init() {
+function initNavigation() {
   // NavigationView Top indicator (WinUIonWeb stretch animation)
   const INDICATOR_SIZE = 16;
   const EASE_OUT = 'cubic-bezier(0.1, 0.9, 0.2, 1)';
-  const EASE_COLLAPSE = 'cubic-bezier(0.4, 0.0, 0.7, 0.3)';
   let indicatorAnimationId = 0;
   let currentTabIndex = 0;
   let isTransitioning = false;
@@ -318,204 +344,216 @@ async function init() {
     const selected = document.querySelector(".win-nav-item.is-selected");
     if (selected) moveIndicator(selected, false);
   });
+}
+
+function initGeneralTab() {
+  bindToggle("toggle-autostart", {
+    get: () => config.auto_start,
+    set: (v) => { config.auto_start = v; }
+  });
+
+  initComboBox("combo-default-popup-tab", config.default_popup_tab || "devices", async (val) => {
+    config.default_popup_tab = val;
+    await saveConfig();
+  });
+
+  bindToggle("toggle-hardware-acceleration", {
+    get: () => config.hardware_acceleration || false,
+    set: (v) => { config.hardware_acceleration = v; }
+  });
+}
+
+function initLogSettings() {
+  bindToggle("toggle-log", {
+    get: () => config.log_enabled,
+    set: (v) => { config.log_enabled = v; }
+  });
+
+  initComboBox("combo-log-retention", config.log_retention || "one_day", async (val) => {
+    config.log_retention = val;
+    await saveConfig();
+  });
+
+  document.getElementById("btn-log-dir").addEventListener("click", async () => {
+    try {
+      await invoke("open_log_dir");
+    } catch (e) {
+      console.error("Failed to open log dir:", e);
+    }
+  });
+}
+
+function initUpdateSettings() {
+  bindToggle("toggle-check-updates", {
+    get: () => config.check_updates !== false,
+    set: (v) => { config.check_updates = v; }
+  });
+
+  bindToggle("toggle-include-prerelease", {
+    get: () => config.include_prerelease || false,
+    set: (v) => { config.include_prerelease = v; }
+  });
+
+  document.getElementById("btn-check-update").addEventListener("click", async () => {
+    const btn = document.getElementById("btn-check-update");
+    const originalText = btn.textContent;
+    btn.textContent = "检测中...";
+    btn.disabled = true;
+    const timeoutId = setTimeout(() => {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }, 30000);
+
+    try {
+      const info = await invoke("check_for_update", {
+        includePrerelease: config.include_prerelease || false
+      });
+      clearTimeout(timeoutId);
+      if (info.has_update) {
+        showToast(
+          `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
+          () => invoke("open_url", { url: info.release_url })
+        );
+      } else {
+        showToast("已是最新版本");
+      }
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const err = String(e);
+      if (err.includes("超时") || err.includes("timeout")) {
+        showToast(
+          "检测超时，请检查网络后重试<br>点击前往 Release 页面",
+          () => invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor/releases" })
+        );
+      } else if (err.includes("频繁") || err.includes("rate_limited")) {
+        showToast("GitHub API 请求过于频繁，请稍后再试");
+      } else {
+        showToast("检测失败：" + err);
+      }
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  });
+}
+
+function initDeviceFilterTab() {
+  const filterWrap = document.getElementById("filter-regex-wrap");
+  const filterArrow = document.getElementById("arrow-filter");
+  const filterCardHeader = document.getElementById("filter-card-header");
+
+  // Filter regex input
+  const regexInput = document.getElementById("filter-regex");
+  regexInput.value = config.filter_regex || "";
+
+  function resizeRegexInput() {
+    regexInput.style.height = "auto";
+    regexInput.style.minHeight = "80px";
+    regexInput.style.height = Math.max(regexInput.scrollHeight, 80) + "px";
+  }
+  resizeRegexInput();
+
+  function setFilterExpanded(expanded) {
+    if (expanded) {
+      filterWrap.classList.add("show");
+      filterWrap.style.maxHeight = "999px";
+    } else {
+      filterWrap.classList.remove("show");
+      filterWrap.style.maxHeight = "0px";
+    }
+    regexInput.style.height = "auto";
+    regexInput.style.minHeight = "80px";
+    if (filterArrow) filterArrow.classList.toggle("expanded", expanded);
+  }
+
+  bindToggle("toggle-filter", {
+    get: () => config.filter_enabled,
+    set: (v) => { config.filter_enabled = v; },
+    onChange: async (checked) => {
+      setFilterExpanded(checked);
+      await loadDevicesAsync();
+    }
+  });
+
+  if (config.filter_enabled) {
+    filterWrap.classList.add("show");
+    filterWrap.style.transition = "none";
+    filterWrap.style.maxHeight = "999px";
+    regexInput.style.height = "auto";
+    regexInput.style.minHeight = "80px";
+    requestAnimationFrame(() => {
+      filterWrap.style.transition = "";
+    });
+  } else {
+    filterWrap.style.maxHeight = "0px";
+  }
+  if (filterArrow) filterArrow.classList.toggle("expanded", config.filter_enabled);
+
+  if (filterCardHeader) {
+    filterCardHeader.addEventListener("click", (e) => {
+      if (e.target.closest('.toggle')) return;
+      const isOpen = filterWrap.classList.contains("show");
+      setFilterExpanded(!isOpen);
+    });
+  }
+
+  let debounceTimer = null;
+  regexInput.addEventListener("input", () => {
+    resizeRegexInput();
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      config.filter_regex = regexInput.value;
+      await saveConfig();
+      await loadDevicesAsync();
+    }, 500);
+  });
+
+  bindToggle("toggle-dedup", {
+    get: () => config.dedup_devices,
+    set: (v) => { config.dedup_devices = v; },
+    onChange: async () => { await loadDevicesAsync(); }
+  });
+
+  bindToggle("toggle-unnamed-bt", {
+    get: () => config.show_unnamed_bt,
+    set: (v) => { config.show_unnamed_bt = v; },
+    onChange: async () => { await loadDevicesAsync(); }
+  });
+
+  bindToggle("toggle-use-system-bt", {
+    get: () => config.use_system_bt,
+    set: (v) => { config.use_system_bt = v; }
+  });
+
+  // Open 2.4G device list button
+  document.getElementById("btn-add-24g").addEventListener("click", async () => {
+    try {
+      await invoke("open_24g_device_file");
+    } catch (e) {
+      console.error("Failed to open file:", e);
+    }
+  });
+
+  // Help link for 2.4G device
+  document.getElementById("help-24g").addEventListener("click", async () => {
+    try {
+      await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor#%E6%B7%BB%E5%8A%A0%E8%87%AA%E5%AE%9A%E4%B9%89-24g-%E8%AE%BE%E5%A4%87" });
+    } catch (e) {
+      console.error("Failed to open URL:", e);
+    }
+  });
+}
+
+async function init() {
+  initNavigation();
 
   try {
     config = await invoke("get_config");
 
-    // Auto-start toggle
-    const toggle = document.getElementById("toggle-autostart");
-    toggle.checked = config.auto_start;
-    toggle.addEventListener("change", async () => {
-      config.auto_start = toggle.checked;
-      await saveConfig();
-    });
-
-    // Default popup tab
-    initComboBox("combo-default-popup-tab", config.default_popup_tab || "devices", async (val) => {
-      config.default_popup_tab = val;
-      await saveConfig();
-    });
-
-    // Hardware acceleration toggle
-    const hwAccel = document.getElementById("toggle-hardware-acceleration");
-    hwAccel.checked = config.hardware_acceleration || false;
-    hwAccel.addEventListener("change", async () => {
-      config.hardware_acceleration = hwAccel.checked;
-      await saveConfig();
-    });
-
-    // Filter toggle
-    const filterToggle = document.getElementById("toggle-filter");
-    const filterWrap = document.getElementById("filter-regex-wrap");
-    const filterArrow = document.getElementById("arrow-filter");
-    const filterCardHeader = document.getElementById("filter-card-header");
-    filterToggle.checked = config.filter_enabled;
-
-    // Filter regex input - MUST be declared before use
-    const regexInput = document.getElementById("filter-regex");
-    regexInput.value = config.filter_regex || "";
-    regexInput.style.height = "auto";
-    regexInput.style.minHeight = "80px";
-    regexInput.style.height = Math.max(regexInput.scrollHeight, 80) + "px";
-
-    function setFilterExpanded(expanded) {
-      if (expanded) {
-        filterWrap.classList.add("show");
-        filterWrap.style.maxHeight = "999px";
-        regexInput.style.height = "auto";
-        regexInput.style.minHeight = "80px";
-      } else {
-        filterWrap.classList.remove("show");
-        filterWrap.style.maxHeight = "0px";
-        regexInput.style.height = "auto";
-        regexInput.style.minHeight = "80px";
-      }
-      if (filterArrow) filterArrow.classList.toggle("expanded", expanded);
-    }
-
-    if (config.filter_enabled) {
-      filterWrap.classList.add("show");
-      filterWrap.style.transition = "none";
-      filterWrap.style.maxHeight = "999px";
-      regexInput.style.height = "auto";
-      regexInput.style.minHeight = "80px";
-      requestAnimationFrame(() => {
-        filterWrap.style.transition = "";
-      });
-    } else {
-      filterWrap.style.maxHeight = "0px";
-    }
-    if (filterArrow) filterArrow.classList.toggle("expanded", config.filter_enabled);
-
-    filterToggle.addEventListener("change", async () => {
-      config.filter_enabled = filterToggle.checked;
-      setFilterExpanded(filterToggle.checked);
-      await saveConfig();
-      await loadDevicesAsync();
-    });
-    if (filterCardHeader) {
-      filterCardHeader.addEventListener("click", (e) => {
-        if (e.target.closest('.toggle')) return;
-        const isOpen = filterWrap.classList.contains("show");
-        setFilterExpanded(!isOpen);
-      });
-    }
-
-    let debounceTimer = null;
-    regexInput.addEventListener("input", () => {
-      regexInput.style.height = "auto";
-      regexInput.style.minHeight = "80px";
-      regexInput.style.height = Math.max(regexInput.scrollHeight, 80) + "px";
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        config.filter_regex = regexInput.value;
-        await saveConfig();
-        await loadDevicesAsync();
-      }, 500);
-    });
-
-    // Dedup toggle
-    const dedupToggle = document.getElementById("toggle-dedup");
-    dedupToggle.checked = config.dedup_devices;
-    dedupToggle.addEventListener("change", async () => {
-      config.dedup_devices = dedupToggle.checked;
-      await saveConfig();
-      await loadDevicesAsync();
-    });
-
-    // Show unnamed BT devices toggle
-    const unnamedBtToggle = document.getElementById("toggle-unnamed-bt");
-    unnamedBtToggle.checked = config.show_unnamed_bt;
-    unnamedBtToggle.addEventListener("change", async () => {
-      config.show_unnamed_bt = unnamedBtToggle.checked;
-      await saveConfig();
-      await loadDevicesAsync();
-    });
-
-    // Use system Bluetooth connection toggle
-    const useSystemBtToggle = document.getElementById("toggle-use-system-bt");
-    useSystemBtToggle.checked = config.use_system_bt;
-    useSystemBtToggle.addEventListener("change", async () => {
-      config.use_system_bt = useSystemBtToggle.checked;
-      await saveConfig();
-    });
-
-    // Logging settings
-    const logToggle = document.getElementById("toggle-log");
-    logToggle.checked = config.log_enabled;
-    logToggle.addEventListener("change", async () => {
-      config.log_enabled = logToggle.checked;
-      await saveConfig();
-    });
-
-    initComboBox("combo-log-retention", config.log_retention || "one_day", async (val) => {
-      config.log_retention = val;
-      await saveConfig();
-    });
-
-    document.getElementById("btn-log-dir").addEventListener("click", async () => {
-      try {
-        await invoke("open_log_dir");
-      } catch (e) {
-        console.error("Failed to open log dir:", e);
-      }
-    });
-
-    const checkUpdatesToggle = document.getElementById("toggle-check-updates");
-    checkUpdatesToggle.checked = config.check_updates !== false;
-    checkUpdatesToggle.addEventListener("change", async () => {
-      config.check_updates = checkUpdatesToggle.checked;
-      await saveConfig();
-    });
-
-    const includePrereleaseToggle = document.getElementById("toggle-include-prerelease");
-    includePrereleaseToggle.checked = config.include_prerelease || false;
-    includePrereleaseToggle.addEventListener("change", async () => {
-      config.include_prerelease = includePrereleaseToggle.checked;
-      await saveConfig();
-    });
-
-    document.getElementById("btn-check-update").addEventListener("click", async () => {
-      const btn = document.getElementById("btn-check-update");
-      const originalText = btn.textContent;
-      btn.textContent = "检测中...";
-      btn.disabled = true;
-      const timeoutId = setTimeout(() => {
-        btn.textContent = originalText;
-        btn.disabled = false;
-      }, 30000);
-
-      try {
-        const info = await invoke("check_for_update", {
-          includePrerelease: config.include_prerelease || false
-        });
-        clearTimeout(timeoutId);
-        if (info.has_update) {
-          showToast(
-            `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
-            () => invoke("open_url", { url: info.release_url })
-          );
-        } else {
-          showToast("已是最新版本");
-        }
-      } catch (e) {
-        clearTimeout(timeoutId);
-        const err = String(e);
-        if (err.includes("超时") || err.includes("timeout")) {
-          showToast(
-            "检测超时，请检查网络后重试<br>点击前往 Release 页面",
-            () => invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor/releases" })
-          );
-        } else if (err.includes("频繁") || err.includes("rate_limited")) {
-          showToast("GitHub API 请求过于频繁，请稍后再试");
-        } else {
-          showToast("检测失败：" + err);
-        }
-      } finally {
-        btn.textContent = originalText;
-        btn.disabled = false;
-      }
-    });
+    initGeneralTab();
+    initUpdateSettings();
+    initLogSettings();
+    initDeviceFilterTab();
 
     loadDevicesAsync();
     loadAudioDevicesAsync();
@@ -523,27 +561,18 @@ async function init() {
     initShutdownVolumeSettings();
     initShortcutSettings();
     initDeviceShortcutSettings();
-
-    // Open 2.4G device list button
-    document.getElementById("btn-add-24g").addEventListener("click", async () => {
-      try {
-        await invoke("open_24g_device_file");
-      } catch (e) {
-        console.error("Failed to open file:", e);
-      }
-    });
-
-    // Help link for 2.4G device
-    document.getElementById("help-24g").addEventListener("click", async () => {
-      try {
-        await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor#%E6%B7%BB%E5%8A%A0%E8%87%AA%E5%AE%9A%E4%B9%89-24g-%E8%AE%BE%E5%A4%87" });
-      } catch (e) {
-        console.error("Failed to open URL:", e);
-      }
-    });
   } catch (e) {
     console.error("Failed to load settings:", e);
   }
 }
+
+// config-changed: reload config and refresh all dynamic lists
+window.__TAURI__.event.listen("config-changed", async () => {
+  config = await invoke("get_config");
+  await loadDevicesAsync();
+  await loadAudioDevicesAsync();
+  const listEl = document.getElementById("device-shortcut-list");
+  if (listEl) initDeviceShortcutSettings();
+});
 
 init();

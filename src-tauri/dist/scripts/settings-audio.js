@@ -1,8 +1,3 @@
-window.__TAURI__.event.listen("config-changed", async () => {
-  loadDevicesAsync().catch(console.error);
-  loadAudioDevicesAsync().catch(console.error);
-});
-
 async function loadAudioDevicesAsync() {
   try {
     config = await invoke("get_config");
@@ -21,7 +16,7 @@ function renderAudioDeviceGroups(audioDevices) {
   container.innerHTML = "";
 
   if (audioDevices.length === 0) {
-    container.innerHTML = '<div class="device-item"><div class="device-item-name" style="color:#888">没有检测到音频设备</div></div';
+    container.innerHTML = '<div class="device-item"><div class="device-item-name" style="color:#888">没有检测到音频设备</div></div>';
     if (arrow) arrow.classList.remove("expanded");
     container.style.maxHeight = "0px";
     return;
@@ -44,24 +39,11 @@ function renderAudioDeviceGroups(audioDevices) {
     const isHidden = (config.hidden_audio_devices || []).includes(dev.name);
     if (isHidden) nameEl.classList.add("hidden");
 
-    const toggle = document.createElement("label");
-    toggle.className = "toggle";
-
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = !isHidden;
-
-    input.addEventListener("change", async () => {
+    const { toggle, input } = createToggle(!isHidden, async (input) => {
       await invoke("toggle_audio_device_hidden", { name: dev.name });
       config = await invoke("get_config");
       nameEl.classList.toggle("hidden", !input.checked);
     });
-
-    const slider = document.createElement("span");
-    slider.className = "slider";
-
-    toggle.appendChild(input);
-    toggle.appendChild(slider);
 
     item.appendChild(nameEl);
     item.appendChild(toggle);
@@ -110,8 +92,6 @@ async function initShutdownVolumeSettings() {
   const arrow = document.getElementById("arrow-shutdown");
   const header = document.getElementById("shutdown-card-header");
 
-  toggle.checked = config.shutdown_volume_enabled || false;
-
   function setShutdownExpanded(expanded) {
     if (expanded) {
       items.classList.add("show");
@@ -121,6 +101,12 @@ async function initShutdownVolumeSettings() {
     }
     if (arrow) arrow.classList.toggle("expanded", expanded);
   }
+
+  bindToggle("toggle-shutdown-volume", {
+    get: () => config.shutdown_volume_enabled || false,
+    set: (v) => { config.shutdown_volume_enabled = v; },
+    onChange: async (checked) => { setShutdownExpanded(checked); }
+  });
 
   if (toggle.checked) {
     items.classList.add("show");
@@ -143,12 +129,6 @@ async function initShutdownVolumeSettings() {
       items.style.maxHeight = "0px";
     }
     if (arrow) arrow.classList.toggle("expanded", isExpanded);
-  });
-
-  toggle.addEventListener("change", async () => {
-    config.shutdown_volume_enabled = toggle.checked;
-    setShutdownExpanded(toggle.checked);
-    await saveConfig();
   });
 
   try {
@@ -272,17 +252,7 @@ async function initShutdownVolumeSettings() {
       numberboxBorder.appendChild(spin);
       numberbox.appendChild(numberboxBorder);
 
-      const deviceToggle = document.createElement("label");
-      deviceToggle.className = "toggle";
-      const deviceInput = document.createElement("input");
-      deviceInput.type = "checkbox";
-      deviceInput.checked = isEnabled;
-      const deviceSlider = document.createElement("span");
-      deviceSlider.className = "slider";
-      deviceToggle.appendChild(deviceInput);
-      deviceToggle.appendChild(deviceSlider);
-
-      deviceInput.addEventListener("change", async () => {
+      const { toggle: deviceToggle, input: deviceInput } = createToggle(isEnabled, async (deviceInput) => {
         if (deviceInput.checked) {
           config.shutdown_volume_devices[dev.name] = parseInt(input.value) / 100;
           nameEl.classList.remove("hidden");

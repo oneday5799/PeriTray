@@ -1,12 +1,8 @@
 function initShortcutSettings() {
-  const cycleToggle = document.getElementById("toggle-device-shortcut-cycle");
-  if (cycleToggle) {
-    cycleToggle.checked = !!config.enable_device_shortcut_cycle;
-    cycleToggle.addEventListener("change", async () => {
-      config.enable_device_shortcut_cycle = cycleToggle.checked;
-      await saveConfig();
-    });
-  }
+  bindToggle("toggle-device-shortcut-cycle", {
+    get: () => config.enable_device_shortcut_cycle,
+    set: (v) => { config.enable_device_shortcut_cycle = v; }
+  });
 
   const actions = [
     { id: "devices", inputId: "shortcut-devices", clearId: "clear-shortcut-devices", configKey: "shortcut_devices" },
@@ -60,7 +56,8 @@ function initShortcutSettings() {
 function initDeviceShortcutSettings() {
   const listEl = document.getElementById("device-shortcut-list");
 
-  function render() {    const shortcuts = config.device_shortcuts || {};
+  function render() {
+    const shortcuts = config.device_shortcuts || {};
     const ids = Object.keys(shortcuts);
     listEl.innerHTML = "";
 
@@ -157,11 +154,3 @@ function initDeviceShortcutSettings() {
 
   render();
 }
-
-window.__TAURI__.event.listen("config-changed", async () => {
-  const listEl = document.getElementById("device-shortcut-list");
-  if (listEl) {
-    config = await invoke("get_config");
-    initDeviceShortcutSettings();
-  }
-});

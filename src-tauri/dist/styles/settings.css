@@ -8,6 +8,7 @@ html, body {
   height: 100%;
   padding: 10px 20px 20px;
   overflow-y: auto;
+  overflow-x: hidden;
   scrollbar-gutter: stable;
 }
 
@@ -16,34 +17,6 @@ html, body {
   font-weight: 600;
   color: #1a1a1a;
   padding: 10px 0 12px;
-}
-
-/* Tab bar (old - keep for compatibility) */
-.tab-bar {
-  display: flex;
-  gap: 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  margin-bottom: 4px;
-}
-
-.tab-item {
-  padding: 8px 16px;
-  font-size: 14px;
-  color: #666;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: color 0.15s, border-color 0.15s;
-  user-select: none;
-}
-
-.tab-item:hover {
-  color: #1a1a1a;
-}
-
-.tab-item.active {
-  color: #0078d7;
-  border-bottom-color: #0078d7;
-  font-weight: 500;
 }
 
 /* ── NavigationView Top Bar (WinUIonWeb 风格) ──────── */
@@ -255,15 +228,19 @@ html, body {
   }
 }
 
-/* Setting row — 匹配 group-card 卡片风格 */
+/* Card base — setting-row 与 group-card 共享卡片风格 */
+.setting-row,
+.group-card {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+}
+
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-radius: 6px;
-  background: #fff;
-  border: 1px solid #e0e0e0;
   margin-bottom: 3px;
   min-height: 60px;
   box-sizing: border-box;
@@ -277,21 +254,22 @@ html, body {
   margin-right: 12px;
 }
 
-.setting-row:hover {
+.setting-row:hover,
+.group-header:hover {
   background: rgba(0, 0, 0, 0.03);
 }
 
-
-/* 无展开项时隐藏 separator */
-.separator {
-  display: none;
+.card-actions {
+  display: flex;
+  align-items: center;
 }
 
-.setting-label {
-  font-size: 15px;
-  color: #1a1a1a;
+.setting-label,
+.group-title {
   display: inline-flex;
   align-items: center;
+  font-size: 15px;
+  color: #1a1a1a;
 }
 
 .section-title {
@@ -309,10 +287,14 @@ html, body {
   }
 }
 
-.setting-desc {
+.setting-desc,
+.group-subtitle {
   font-size: 12px;
   color: #666;
   margin-top: 2px;
+}
+
+.setting-desc {
   line-height: 1.4;
 }
 
@@ -340,28 +322,6 @@ html, body {
   }
 }
 
-/* 展开箭头（仅展开项显示） */
-.setting-arrow {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #888;
-  flex-shrink: 0;
-  margin-left: 8px;
-}
-
-.setting-arrow.expanded svg {
-  transform: rotate(180deg);
-}
-
-.setting-hint {
-  font-size: 12px;
-  color: #888;
-  margin-left: 8px;
-}
-
 /* Tooltip trigger */
 .tooltip-trigger {
   display: inline-flex;
@@ -381,28 +341,6 @@ html, body {
 }
 
 .tooltip-trigger:hover {
-  background: #999;
-}
-
-.help-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #d0d0d0;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  text-decoration: none;
-  margin-left: 6px;
-  cursor: pointer;
-  position: relative;
-  vertical-align: middle;
-}
-
-.help-link:hover {
   background: #999;
 }
 
@@ -502,13 +440,6 @@ html, body {
   transform: translateX(20px);
 }
 
-/* Separator */
-.separator {
-  height: 1px;
-  background: rgba(0, 0, 0, 0.08);
-  margin: 6px 0;
-}
-
 /* Filter regex */
 #filter-card {
   margin-bottom: 3px;
@@ -518,20 +449,12 @@ html, body {
   margin-bottom: 3px;
 }
 
-#audio-card .group-header {
+#audio-card .group-header,
+#filter-card .group-header,
+#shutdown-card .group-header {
   padding: 10px 14px;
   height: 60px;
   box-sizing: border-box;
-}
-
-#filter-card .group-header {
-  padding: 10px 14px;
-  height: 60px;
-  box-sizing: border-box;
-}
-
-#filter-card .group-header:hover {
-  background: rgba(0, 0, 0, 0.03);
 }
 
 #filter-card .setting-row-left {
@@ -550,13 +473,17 @@ html, body {
   padding: 10px 14px;
 }
 
-.filter-textarea-border {
+.filter-textarea-border,
+.win-numberbox-border {
   position: relative;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.7);
+  overflow: hidden;
+}
+
+.filter-textarea-border {
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-bottom-color: rgba(0, 0, 0, 0.45);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.70);
-  overflow: hidden;
   transition: background 0.167s cubic-bezier(0, 0, 0, 1), border-color 0.167s ease;
 }
 
@@ -570,7 +497,8 @@ html, body {
   border-bottom-color: rgba(0, 0, 0, 0.06);
 }
 
-.filter-textarea-focus-border {
+.filter-textarea-focus-border,
+.win-numberbox-focus-border {
   position: absolute;
   inset: 0;
   z-index: 4;
@@ -578,7 +506,8 @@ html, body {
   border-radius: inherit;
 }
 
-.filter-textarea-focus-border::after {
+.filter-textarea-focus-border::after,
+.win-numberbox-focus-border::after {
   content: "";
   position: absolute;
   left: 0;
@@ -642,18 +571,12 @@ html, body {
 }
 
 /* Device groups */
-.device-groups {
-}
-
 .group {
   margin-bottom: 3px;
 }
 
 /* Windows 11 settings card */
 .group-card {
-  background: #fff;
-  border-radius: 6px;
-  border: 1px solid #e0e0e0;
   overflow: hidden;
 }
 
@@ -665,10 +588,6 @@ html, body {
   transition: background 0.12s ease;
   height: 60px;
   box-sizing: border-box;
-}
-
-.group-header:hover {
-  background: rgba(0, 0, 0, 0.03);
 }
 
 .group-toggle {
@@ -687,20 +606,6 @@ html, body {
 .group-text {
   flex: 1;
   margin-left: 0;
-}
-
-.group-title {
-  display: inline-flex;
-  align-items: center;
-  font-size: 15px;
-  font-weight: 400;
-  color: #1a1a1a;
-}
-
-.group-subtitle {
-  font-size: 12px;
-  color: #666;
-  margin-top: 2px;
 }
 
 .group-arrow {
@@ -750,9 +655,9 @@ html, body {
   color: #a0a0a0;
 }
 
-/* 2.4G device list button */
-.add-device-btn {
-  min-width: 120px;
+/* Windows 11 buttons */
+.add-device-btn,
+.shortcut-delete-btn {
   height: 32px;
   padding: 5px 11px 6px;
   border-left: 1px solid rgba(0, 0, 0, 0.06);
@@ -769,111 +674,60 @@ html, body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
-  user-select: none;
   white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
 }
 
-.add-device-btn:hover {
+.add-device-btn {
+  min-width: 120px;
+  gap: 8px;
+}
+
+.shortcut-delete-btn {
+  color: #e81123;
+}
+
+.add-device-btn:hover,
+.shortcut-delete-btn:hover {
   background: rgba(249, 249, 249, 0.50);
 }
 
-.add-device-btn:active {
+.add-device-btn:active,
+.shortcut-delete-btn:active {
   background: rgba(249, 249, 249, 0.30);
   color: rgba(0, 0, 0, 0.62);
   border-bottom-color: rgba(0, 0, 0, 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
-  .add-device-btn {
+  .add-device-btn,
+  .shortcut-delete-btn {
     border-left: 1px solid rgba(255, 255, 255, 0.0706);
     border-top: 1px solid rgba(255, 255, 255, 0.0941);
     border-right: 1px solid rgba(255, 255, 255, 0.0706);
     border-bottom: 1px solid rgba(255, 255, 255, 0.0706);
     background: rgba(255, 255, 255, 0.0605);
+  }
+
+  .add-device-btn {
     color: #ffffff;
   }
 
-  .add-device-btn:hover {
+  .shortcut-delete-btn {
+    color: #e81123;
+  }
+
+  .add-device-btn:hover,
+  .shortcut-delete-btn:hover {
     background: rgba(255, 255, 255, 0.0837);
   }
 
-  .add-device-btn:active {
+  .add-device-btn:active,
+  .shortcut-delete-btn:active {
     background: rgba(255, 255, 255, 0.0326);
     color: rgba(255, 255, 255, 0.77);
     border-bottom-color: rgba(255, 255, 255, 0.0706);
-  }
-}
-
-.setting-select {
-  appearance: none;
-  -webkit-appearance: none;
-  height: 32px;
-  min-height: 32px;
-  padding: 5px 36px 6px 11px;
-  border-left: 1px solid rgba(0, 0, 0, 0.06);
-  border-top: 1px solid rgba(0, 0, 0, 0.16);
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.70);
-  color: rgba(0, 0, 0, 0.89);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 20px;
-  cursor: pointer;
-  outline: none;
-  background-image: url("data:image/svg+xml,%3Csvg width='8' height='4' viewBox='0 0 8 4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0.64 0.64L4 4L7.36 0.64' stroke='%23000000' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  transition: background-color 0.167s cubic-bezier(0, 0, 0, 1);
-}
-
-.setting-select:hover {
-  background-color: rgba(249, 249, 249, 0.50);
-}
-
-.setting-select:active {
-  background-color: rgba(249, 249, 249, 0.30);
-}
-
-.setting-select:focus {
-  border-bottom-color: #0067c0;
-}
-
-.setting-select option {
-  padding: 5px 11px 7px;
-  background: #fff;
-  color: rgba(0, 0, 0, 0.89);
-}
-
-@media (prefers-color-scheme: dark) {
-  .setting-select {
-    border-left: 1px solid rgba(255, 255, 255, 0.0706);
-    border-top: 1px solid rgba(255, 255, 255, 0.0941);
-    border-right: 1px solid rgba(255, 255, 255, 0.0706);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.0941);
-    background: rgba(255, 255, 255, 0.0605);
-    color: #ffffff;
-    background-image: url("data:image/svg+xml,%3Csvg width='8' height='4' viewBox='0 0 8 4' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0.64 0.64L4 4L7.36 0.64' stroke='%23ffffff' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  }
-
-  .setting-select:hover {
-    background-color: rgba(255, 255, 255, 0.0837);
-  }
-
-  .setting-select:active {
-    background-color: rgba(255, 255, 255, 0.0326);
-  }
-
-  .setting-select:focus {
-    border-bottom-color: #4cc2ff;
-  }
-
-  .setting-select option {
-    background: #2c2c2c;
-    color: #ffffff;
   }
 }
 
@@ -1135,12 +989,7 @@ html, body {
   overflow: visible;
 }
 
-#shutdown-card .group-header {
-  padding: 10px 14px;
-  height: 60px;
-  box-sizing: border-box;
-}
-
+#filter-card .group-arrow,
 #shutdown-card .group-arrow {
   margin-left: 8px;
 }
@@ -1169,29 +1018,6 @@ html, body {
   min-height: 30px;
   border: 1px solid #e0e0e0;
   border-bottom-color: #888;
-  border-radius: 4px;
-  background: rgba(255,255,255,0.7);
-  overflow: hidden;
-  position: relative;
-}
-
-.win-numberbox-focus-border {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  pointer-events: none;
-  border-radius: inherit;
-}
-
-.win-numberbox-focus-border::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 1.5px;
-  background: transparent;
-  transition: background 0.15s ease;
 }
 
 .win-numberbox:focus-within .win-numberbox-border {
@@ -1358,59 +1184,6 @@ html, body {
   font-size: 12px;
   color: #999;
   padding: 4px 0 0 0;
-}
-
-.shortcut-delete-btn {
-  height: 32px;
-  padding: 5px 11px 6px;
-  border-left: 1px solid rgba(0, 0, 0, 0.06);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.70);
-  color: #e81123;
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  font-weight: normal;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  user-select: none;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
-}
-
-.shortcut-delete-btn:hover {
-  background: rgba(249, 249, 249, 0.50);
-}
-
-.shortcut-delete-btn:active {
-  background: rgba(249, 249, 249, 0.30);
-  color: rgba(0, 0, 0, 0.62);
-  border-bottom-color: rgba(0, 0, 0, 0.06);
-}
-
-@media (prefers-color-scheme: dark) {
-  .shortcut-delete-btn {
-    border-left: 1px solid rgba(255, 255, 255, 0.0706);
-    border-top: 1px solid rgba(255, 255, 255, 0.0941);
-    border-right: 1px solid rgba(255, 255, 255, 0.0706);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.0706);
-    background: rgba(255, 255, 255, 0.0605);
-    color: #e81123;
-  }
-
-  .shortcut-delete-btn:hover {
-    background: rgba(255, 255, 255, 0.0837);
-  }
-
-  .shortcut-delete-btn:active {
-    background: rgba(255, 255, 255, 0.0326);
-    color: rgba(255, 255, 255, 0.77);
-    border-bottom-color: rgba(255, 255, 255, 0.0706);
-  }
 }
 
 .device-shortcut-label {

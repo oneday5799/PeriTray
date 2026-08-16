@@ -1,4 +1,3 @@
-let config = null;
 let devices = [];
 let expandedGroups = new Set();
 let deviceGroups = {};
@@ -56,28 +55,21 @@ function renderGroups() {
 
     header.appendChild(textWrap);
 
-    const groupToggle = document.createElement("label");
-    groupToggle.className = "toggle group-toggle";
     const isGroupHidden = config.hidden_groups.includes(group.key);
-    const groupInput = document.createElement("input");
-    groupInput.type = "checkbox";
-    groupInput.checked = !isGroupHidden;
+    const { toggle: groupToggle } = createToggle(
+      !isGroupHidden,
+      async () => {
+        await invoke("toggle_group_hidden", { group: group.key });
+        const cfg = await invoke("get_config");
+        config.hidden_groups = cfg.hidden_groups || [];
+        renderGroups();
+      },
+      "group-toggle"
+    );
 
     groupToggle.addEventListener("click", (e) => {
       e.stopPropagation();
     });
-    groupInput.addEventListener("change", async (e) => {
-      e.stopPropagation();
-      await invoke("toggle_group_hidden", { group: group.key });
-      const cfg = await invoke("get_config");
-      config.hidden_groups = cfg.hidden_groups || [];
-      renderGroups();
-    });
-
-    const groupSlider = document.createElement("span");
-    groupSlider.className = "slider";
-    groupToggle.appendChild(groupInput);
-    groupToggle.appendChild(groupSlider);
     header.appendChild(groupToggle);
 
     const arrow = document.createElement("div");
@@ -116,23 +108,11 @@ function renderGroups() {
       const isHidden = config.hidden_devices.includes(dev.name);
       if (isHidden) nameEl.classList.add("hidden");
 
-      const toggle = document.createElement("label");
-      toggle.className = "toggle";
-
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = !isHidden;
-      input.addEventListener("change", async () => {
+      const { toggle, input } = createToggle(!isHidden, async (input) => {
         await invoke("toggle_device_hidden", { name: dev.name });
         config = await invoke("get_config");
         nameEl.classList.toggle("hidden", !input.checked);
       });
-
-      const slider = document.createElement("span");
-      slider.className = "slider";
-
-      toggle.appendChild(input);
-      toggle.appendChild(slider);
 
       item.appendChild(nameEl);
       item.appendChild(toggle);
