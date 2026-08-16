@@ -352,12 +352,8 @@ html, body {
   margin-left: 8px;
 }
 
-.setting-arrow svg {
-  transition: transform 0.15s ease;
-}
-
 .setting-arrow.expanded svg {
-  transform: rotate(90deg);
+  transform: rotate(180deg);
 }
 
 .setting-hint {
@@ -695,12 +691,11 @@ html, body {
   align-items: center;
   justify-content: center;
   color: #888;
-  transition: transform 0.2s ease;
   flex-shrink: 0;
 }
 
 .group-arrow.expanded {
-  transform: rotate(90deg);
+  transform: rotate(180deg);
 }
 
 /* Expandable items */
@@ -1125,6 +1120,10 @@ html, body {
   padding: 10px 14px;
   height: 60px;
   box-sizing: border-box;
+}
+
+#shutdown-card .group-arrow {
+  margin-left: 8px;
 }
 
 .device-item-controls {
