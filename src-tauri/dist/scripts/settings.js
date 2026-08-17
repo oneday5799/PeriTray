@@ -646,26 +646,60 @@ window.__TAURI__.event.listen("settings-tab", (e) => {
 
 // 初始化输入框 focus 状态（替代 :focus-within，WebView2 兼容）
 function setupInputFocus() {
-  document.querySelectorAll(".win-numberbox").forEach(nb => {
+  function setupNumberbox(nb) {
+    if (nb.dataset.focusSetup) return;
+    nb.dataset.focusSetup = "1";
     const input = nb.querySelector(".win-numberbox-input");
+    const border = nb.querySelector(".win-numberbox-border");
     if (!input) return;
     const setFocus = () => nb.classList.add("is-focused");
     const clearFocus = () => nb.classList.remove("is-focused");
     input.addEventListener("focus", setFocus);
     input.addEventListener("blur", clearFocus);
-  });
-  document.querySelectorAll(".shortcut-key-input").forEach(input => {
+    if (border) {
+      const setHover = () => border.classList.add("is-hovered");
+      const clearHover = () => border.classList.remove("is-hovered");
+      nb.addEventListener("mouseenter", setHover);
+      nb.addEventListener("mouseleave", clearHover);
+    }
+    nb.querySelectorAll(".win-numberbox-spin-btn").forEach(btn => {
+      const setHover = () => btn.classList.add("is-hovered");
+      const clearHover = () => btn.classList.remove("is-hovered");
+      btn.addEventListener("mouseenter", setHover);
+      btn.addEventListener("mouseleave", clearHover);
+    });
+  }
+
+  function setupShortcutInput(input) {
+    if (input.dataset.focusSetup) return;
+    input.dataset.focusSetup = "1";
     const setFocus = () => input.classList.add("is-focused");
     const clearFocus = () => input.classList.remove("is-focused");
     input.addEventListener("focus", setFocus);
     input.addEventListener("blur", clearFocus);
+    const setHover = () => input.classList.add("is-hovered");
+    const clearHover = () => input.classList.remove("is-hovered");
+    input.addEventListener("mouseenter", setHover);
+    input.addEventListener("mouseleave", clearHover);
+  }
+
+  // 绑定已存在的元素
+  document.querySelectorAll(".win-numberbox").forEach(setupNumberbox);
+  document.querySelectorAll(".shortcut-key-input").forEach(setupShortcutInput);
+
+  // 监听后续动态添加的元素
+  const observer = new MutationObserver(mutations => {
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        if (node.classList.contains("win-numberbox")) setupNumberbox(node);
+        if (node.classList.contains("shortcut-key-input")) setupShortcutInput(node);
+        node.querySelectorAll(".win-numberbox").forEach(setupNumberbox);
+        node.querySelectorAll(".shortcut-key-input").forEach(setupShortcutInput);
+      }
+    }
   });
-  document.querySelectorAll(".win-numberbox-spin-btn").forEach(btn => {
-    const setHover = () => btn.classList.add("is-hovered");
-    const clearHover = () => btn.classList.remove("is-hovered");
-    btn.addEventListener("mouseenter", setHover);
-    btn.addEventListener("mouseleave", clearHover);
-  });
+  observer.observe(document.body, { childList: true, subtree: true });
 }
 
 init();
