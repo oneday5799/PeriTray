@@ -4,6 +4,83 @@
   user-select: none;
 }
 
+/* ── Theme overrides (must come before media queries) ──────── */
+html[data-theme="dark"],
+html[data-theme="dark"] body,
+html[data-theme="dark"] .settings-container,
+html[data-theme="dark"] .win-nav-left-panel {
+  background: #202020 !important;
+}
+
+html[data-theme="dark"] .win-nav-item {
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .win-nav-item:hover {
+  background: rgba(255, 255, 255, 0.0605) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .win-nav-item.is-selected {
+  background: rgba(255, 255, 255, 0.0605) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .win-nav-item.is-selected:hover {
+  background: rgba(255, 255, 255, 0.0419) !important;
+  color: #ffffff !important;
+}
+
+/* 跟随系统：移除 theme 属性时恢复默认颜色 */
+html:not([data-theme]) .win-nav-item,
+html[data-theme="light"] .win-nav-item {
+  color: #1a1a1a !important;
+}
+
+html:not([data-theme]) .win-nav-item:hover,
+html[data-theme="light"] .win-nav-item:hover {
+  background: rgba(0, 0, 0, 0.0373) !important;
+  color: #1a1a1a !important;
+}
+
+html:not([data-theme]) .win-nav-item.is-selected,
+html[data-theme="light"] .win-nav-item.is-selected {
+  background: rgba(0, 0, 0, 0.0373) !important;
+  color: #1a1a1a !important;
+}
+
+html:not([data-theme]) .win-nav-item.is-selected:hover,
+html[data-theme="light"] .win-nav-item.is-selected:hover {
+  background: rgba(0, 0, 0, 0.0241) !important;
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"],
+html[data-theme="light"] body,
+html[data-theme="light"] .settings-container,
+html[data-theme="light"] .win-nav-left-panel {
+  background: #f3f3f3 !important;
+}
+
+html[data-theme="light"] .win-nav-item {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-nav-item:hover {
+  background: rgba(0, 0, 0, 0.0373) !important;
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-nav-item.is-selected {
+  background: rgba(0, 0, 0, 0.0373) !important;
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-nav-item.is-selected:hover {
+  background: rgba(0, 0, 0, 0.0241) !important;
+  color: #1a1a1a !important;
+}
+
 .settings-container {
   height: 100%;
   display: flex;
@@ -1429,7 +1506,7 @@
   }
 
   .win-infobar {
-    border-color: rgba(255, 255, 255, 0.0706);
+    border: 1px solid rgb(0 0 0 / 30%);
     background: rgba(255, 255, 255, 0.0314);
     color: rgba(255, 255, 255, 0.9);
   }
@@ -1446,3 +1523,543 @@
     background: rgba(255, 255, 255, 0.1);
   }
 }
+
+/* ── Theme override: forces light/dark regardless of system preference ──────── */
+html[data-theme="light"] .setting-row,
+html[data-theme="light"] .group-card,
+html[data-theme="light"] .group-header,
+html[data-theme="light"] .group-items {
+  background: #fff !important;
+  border-color: #e0e0e0 !important;
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .setting-row:hover,
+html[data-theme="light"] .group-header:hover {
+  background: rgba(0, 0, 0, 0.0373) !important;
+}
+
+html[data-theme="light"] .section-title,
+html[data-theme="light"] .win-nav-title,
+html[data-theme="light"] .win-nav-page-header,
+html[data-theme="light"] .setting-label,
+html[data-theme="light"] .group-title,
+html[data-theme="light"] .group-text,
+html[data-theme="light"] .win-combo-btn,
+html[data-theme="light"] .win-combo-item,
+html[data-theme="light"] .add-device-btn,
+html[data-theme="light"] .shortcut-delete-btn,
+html[data-theme="light"] .shortcut-clear-btn,
+html[data-theme="light"] .shortcut-key-input,
+html[data-theme="light"] .filter-textarea {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .add-device-btn,
+html[data-theme="light"] .shortcut-delete-btn {
+  background: rgba(255, 255, 255, 0.70) !important;
+  border-left: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-right: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16) !important;
+}
+
+html[data-theme="light"] .add-device-btn:hover,
+html[data-theme="light"] .shortcut-delete-btn:hover {
+  background: rgba(249, 249, 249, 0.50) !important;
+}
+
+html[data-theme="light"] .add-device-btn:active,
+html[data-theme="light"] .shortcut-delete-btn:active {
+  background: rgba(249, 249, 249, 0.30) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+html[data-theme="light"] .setting-desc,
+html[data-theme="light"] .group-subtitle {
+  color: #666 !important;
+}
+
+html[data-theme="light"] .tooltip-content {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid #e0e0e0 !important;
+  color: #1a1a1a !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+}
+
+html[data-theme="light"] .filter-textarea-border {
+  border: 1px solid #e0e0e0 !important;
+  border-bottom-color: #e0e0e0 !important;
+  background: #fff !important;
+}
+
+html[data-theme="light"] .filter-textarea-border:focus-within {
+  background: #fff !important;
+  border-color: #0078d7 !important;
+  border-bottom-color: #0078d7 !important;
+}
+
+html[data-theme="light"] .filter-textarea-border:focus-within .filter-textarea-focus-border::after {
+  background: #0078d7 !important;
+}
+
+html[data-theme="light"] .filter-textarea {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-combo-box {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-combo-btn {
+  background: #fff !important;
+  color: #1a1a1a !important;
+  border: 1px solid #e0e0e0 !important;
+}
+
+html[data-theme="light"] .win-combo-chevron {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-combo-flyout {
+  background: #fff !important;
+  border: 1px solid #e0e0e0 !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html[data-theme="light"] .win-combo-item {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-combo-btn:hover {
+  background: rgba(249, 249, 249, 0.50) !important;
+}
+
+html[data-theme="light"] .win-combo-btn:active {
+  background: rgba(249, 249, 249, 0.30) !important;
+}
+
+html[data-theme="light"] .win-nav-indicator {
+  background: rgb(0, 103, 192) !important;
+}
+
+
+html[data-theme="light"] .win-hyperlink-btn {
+  color: rgb(0, 103, 192) !important;
+}
+
+html[data-theme="light"] .win-hyperlink-btn:hover {
+  background: rgba(0, 103, 192, 0.04) !important;
+}
+
+html[data-theme="light"] .win-hyperlink-btn:active {
+  background: rgba(0, 103, 192, 0.08) !important;
+}
+
+html[data-theme="light"] .win-combo-item:hover .win-combo-item-layout {
+  background: rgba(0, 0, 0, 0.0373) !important;
+}
+
+html[data-theme="light"] .win-combo-item:active .win-combo-item-layout {
+  background: rgba(0, 0, 0, 0.049) !important;
+}
+
+html[data-theme="light"] .shortcut-clear-btn {
+  color: rgba(0, 0, 0, 0.62) !important;
+}
+
+html[data-theme="light"] .shortcut-clear-btn:hover {
+  color: #e81123 !important;
+  background: rgba(232, 17, 35, 0.08) !important;
+}
+
+html[data-theme="light"] .shortcut-clear-btn:active {
+  background: rgba(232, 17, 35, 0.12) !important;
+}
+
+html[data-theme="light"] .about-info-card .group-desc {
+  color: rgba(0, 0, 0, 0.54) !important;
+}
+
+html[data-theme="light"] .about-info-card .group-header:hover {
+  background: rgba(0, 0, 0, 0.0373) !important;
+}
+
+html[data-theme="light"] .about-item-controls p {
+  color: rgba(0, 0, 0, 0.89) !important;
+}
+
+html[data-theme="light"] .about-link-label {
+  color: rgba(0, 0, 0, 0.89) !important;
+}
+
+html[data-theme="light"] .win-infobar {
+  border-color: #e0e0e0 !important;
+  background: rgba(0, 0, 0, 0.03) !important;
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-infobar-icon {
+  color: #0078d7 !important;
+}
+
+html[data-theme="light"] .win-infobar-content {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-infobar-close-button {
+  color: #1a1a1a !important;
+}
+
+html[data-theme="light"] .win-infobar-close-button:hover {
+  background: rgba(0, 0, 0, 0.04) !important;
+}
+
+html[data-theme="light"] .win-infobar-close-button:active {
+  background: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Force dark mode when data-theme="dark" overrides a light system */
+html[data-theme="dark"] .setting-row,
+html[data-theme="dark"] .group-header {
+  background: rgba(255, 255, 255, 0.0605) !important;
+  border-color: rgb(0 0 0 / 30%) !important;
+}
+
+html[data-theme="dark"] .group-card,
+html[data-theme="dark"] .group-items {
+  background: transparent !important;
+  border-color: rgb(0 0 0 / 30%) !important;
+}
+
+html[data-theme="dark"] .filter-regex-wrap {
+  background: rgba(255, 255, 255, 0.0605) !important;
+}
+
+html[data-theme="dark"] .setting-row:hover,
+html[data-theme="dark"] .group-header:hover {
+  background: rgba(255, 255, 255, 0.0837) !important;
+}
+
+html[data-theme="dark"] .section-title,
+html[data-theme="dark"] .win-nav-title,
+html[data-theme="dark"] .win-nav-page-header,
+html[data-theme="dark"] .setting-label,
+html[data-theme="dark"] .group-title,
+html[data-theme="dark"] .group-text,
+html[data-theme="dark"] .win-combo-btn,
+html[data-theme="dark"] .win-combo-item,
+html[data-theme="dark"] .add-device-btn,
+html[data-theme="dark"] .shortcut-delete-btn,
+html[data-theme="dark"] .shortcut-clear-btn,
+html[data-theme="dark"] .shortcut-key-input,
+html[data-theme="dark"] .filter-textarea {
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .setting-desc,
+html[data-theme="dark"] .group-subtitle {
+  color: rgba(255, 255, 255, 0.62) !important;
+}
+
+html[data-theme="dark"] .tooltip-content {
+  background: rgba(44, 44, 44, 0.86) !important;
+  border: 1px solid rgba(0, 0, 0, 0.20) !important;
+  color: #ffffff !important;
+  -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05) !important;
+  backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05) !important;
+}
+
+html[data-theme="dark"] .filter-textarea-border {
+  border: 1px solid rgba(0, 0, 0, 0.07) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.54) !important;
+  background: rgba(255, 255, 255, 0.0605) !important;
+}
+
+html[data-theme="dark"] .filter-textarea-border:hover {
+  background: rgba(255, 255, 255, 0.0837) !important;
+}
+
+body.html[data-theme="dark"] .filter-textarea-border:focus-within {
+  background: rgba(30, 30, 30, 0.70) !important;
+  border: none !important;
+  background-clip: padding-box !important;
+}
+
+body.html[data-theme="dark"] .filter-textarea-border:focus-within .filter-textarea-focus-border::after {
+  background: #4cc2ff !important;
+  height: 2px !important;
+  bottom: 0 !important;
+}
+
+html[data-theme="dark"] .filter-textarea {
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .win-combo-box {
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .win-combo-btn {
+  background: rgba(255, 255, 255, 0.0605) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.0706) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.0941) !important;
+}
+
+html[data-theme="dark"] .win-combo-btn:hover {
+  background: rgba(255, 255, 255, 0.0837) !important;
+}
+
+html[data-theme="dark"] .win-combo-btn:active {
+  background: rgba(255, 255, 255, 0.0326) !important;
+}
+
+
+html[data-theme="dark"] .win-combo-chevron {
+  color: rgba(255, 255, 255, 0.77) !important;
+}
+
+html[data-theme="dark"] .win-combo-flyout {
+  background: rgba(44, 44, 44, 0.86) !important;
+  border: 1px solid rgba(0, 0, 0, 0.20) !important;
+  box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2) !important;
+  -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05) !important;
+  backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05) !important;
+}
+
+html[data-theme="dark"] .win-combo-item {
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .win-combo-item:hover .win-combo-item-layout {
+  background: rgba(255, 255, 255, 0.0605) !important;
+}
+
+html[data-theme="dark"] .win-combo-item:active .win-combo-item-layout {
+  color: rgba(255, 255, 255, 0.77) !important;
+  background: rgba(255, 255, 255, 0.0419) !important;
+}
+
+html[data-theme="dark"] .shortcut-clear-btn {
+  color: rgba(255, 255, 255, 0.77) !important;
+}
+
+html[data-theme="dark"] .shortcut-clear-btn:hover {
+  color: #ff6b7a !important;
+  background: rgba(255, 107, 122, 0.08) !important;
+}
+
+html[data-theme="dark"] .shortcut-clear-btn:active {
+  background: rgba(255, 107, 122, 0.12) !important;
+}
+
+html[data-theme="dark"] .about-info-card .group-desc {
+  color: rgba(255, 255, 255, 0.54) !important;
+}
+
+html[data-theme="dark"] .about-info-card .group-header:hover {
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+
+html[data-theme="dark"] .about-item-controls p {
+  color: rgba(255, 255, 255, 0.77) !important;
+}
+
+html[data-theme="dark"] .about-link-label {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html[data-theme="dark"] .win-hyperlink-btn {
+  color: #4cc2ff !important;
+}
+
+html[data-theme="dark"] .win-hyperlink-btn:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+html[data-theme="dark"] .win-hyperlink-btn:active {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+html[data-theme="dark"] .win-infobar {
+  border: 1px solid rgb(0 0 0 / 30%) !important;
+  background: rgba(255, 255, 255, 0.0314) !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html[data-theme="dark"] .win-infobar-icon {
+  color: #4cc2ff !important;
+}
+
+html[data-theme="dark"] .win-infobar-content {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html[data-theme="dark"] .win-infobar-close-button {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html[data-theme="dark"] .win-infobar-close-button:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+html[data-theme="dark"] .win-infobar-close-button:active {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* ── Device item list (音量控制页设备列表) ──────── */
+html[data-theme="dark"] .device-item {
+  border-top: 0.8px solid rgb(0 0 0 / 30%) !important;
+  background: rgba(255, 255, 255, 0.0605) !important;
+}
+
+html[data-theme="dark"] .device-item-name {
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .device-item-name.hidden {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* ── NumberBox (关机/重启时自动调整音量 音量输入框) ──────── */
+html[data-theme="dark"] .win-numberbox-border {
+  background: rgba(255, 255, 255, 0.0605) !important;
+  border: 1px solid rgba(255, 255, 255, 0.0706) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.54) !important;
+}
+
+html[data-theme="dark"] .win-numberbox:focus-within .win-numberbox-border {
+  background: rgba(30, 30, 30, 0.70) !important;
+  border-color: rgba(0, 0, 0, 0.07) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.07) !important;
+}
+
+html[data-theme="dark"] .win-numberbox:focus-within .win-numberbox-focus-border::after {
+  background: #4cc2ff !important;
+}
+
+html[data-theme="dark"] .win-numberbox-input {
+  color: #ffffff !important;
+}
+
+/* ── Group header text color ──────── */
+html[data-theme="dark"] .group-header {
+  color: #ffffff !important;
+}
+
+/* ── Missing dark mode overrides (added to fix issues) ──────── */
+html[data-theme="dark"] .add-device-btn,
+html[data-theme="dark"] .shortcut-delete-btn {
+  background: rgba(255, 255, 255, 0.0605) !important;
+  border-color: rgba(255, 255, 255, 0.0706) !important;
+  border-top-color: rgba(255, 255, 255, 0.0941) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .add-device-btn:hover,
+html[data-theme="dark"] .shortcut-delete-btn:hover {
+  background: rgba(255, 255, 255, 0.0837) !important;
+}
+
+html[data-theme="dark"] .add-device-btn:active,
+html[data-theme="dark"] .shortcut-delete-btn:active {
+  background: rgba(255, 255, 255, 0.0326) !important;
+  color: rgba(255, 255, 255, 0.77) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.0706) !important;
+}
+
+html[data-theme="dark"] .shortcut-delete-btn {
+  color: #e81123 !important;
+}
+
+html[data-theme="dark"] .shortcut-clear-btn {
+  color: rgba(255, 255, 255, 0.77) !important;
+}
+
+html[data-theme="dark"] .shortcut-clear-btn:hover {
+  color: #ff6b7a !important;
+  background: rgba(255, 107, 122, 0.08) !important;
+}
+
+html[data-theme="dark"] .shortcut-clear-btn:active {
+  background: rgba(255, 107, 122, 0.12) !important;
+}
+
+/* Toggle switch - dark mode */
+html[data-theme="dark"] .slider {
+  background: #666666 !important;
+}
+
+html[data-theme="dark"] .toggle input:checked + .slider {
+  background: #0078d7 !important;
+}
+
+html[data-theme="dark"] .toggle input:checked + .slider::before {
+  transform: translateX(20px);
+}
+
+/* Shortcut input - dark mode */
+html[data-theme="dark"] .shortcut-key-input {
+  background: rgba(255, 255, 255, 0.0605) !important;
+  border-color: rgba(255, 255, 255, 0.0706) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.54) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .shortcut-key-input:focus,
+html[data-theme="dark"] .shortcut-key-input.recording {
+  border-color: rgba(0, 0, 0, 0.07) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.07) !important;
+  box-shadow: inset 0 -1.5px 0 0 #4cc2ff !important;
+  background: rgba(30, 30, 30, 0.70) !important;
+}
+
+html[data-theme="dark"] .shortcut-key-input.is-focused,
+html[data-theme="dark"] .shortcut-key-input.recording {
+  border-color: rgba(0, 0, 0, 0.07) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.07) !important;
+  box-shadow: inset 0 -1.5px 0 0 #4cc2ff !important;
+  background: rgba(30, 30, 30, 0.70) !important;
+}
+
+
+/* NumberBox spin buttons - dark mode */
+html[data-theme="dark"] .win-numberbox-spin-btn {
+  color: rgba(255, 255, 255, 0.77) !important;
+}
+
+html[data-theme="dark"] .win-numberbox-spin-btn:hover,
+html[data-theme="dark"] .win-numberbox-spin-btn.is-hovered {
+  background: rgba(255, 255, 255, 0.0837) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .win-numberbox-spin-btn:active {
+  background: rgba(255, 255, 255, 0.0419) !important;
+}
+
+
+/* Tooltip trigger icon - dark mode */
+html[data-theme="dark"] .tooltip-trigger {
+  background: #404040 !important;
+  color: #ffffff !important;
+}
+
+html[data-theme="dark"] .tooltip-trigger:hover {
+  background: #555555 !important;
+}
+
+/* Dark mode numberbox border - hover matching filter textarea hover */
+body.html[data-theme="dark"] .win-numberbox-border:hover {
+  background: rgba(255, 255, 255, 0.0837) !important;
+}
+
+body.html[data-theme="dark"] .shortcut-key-input:hover {
+  background: rgba(255, 255, 255, 0.0837) !important;
+}
+

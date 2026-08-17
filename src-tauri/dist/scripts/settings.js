@@ -338,6 +338,12 @@ function initGeneralTab() {
     get: () => config.hardware_acceleration || false,
     set: (v) => { config.hardware_acceleration = v; }
   });
+
+  initComboBox("combo-theme-mode", config.theme_mode || "follow_system", async (val) => {
+    config.theme_mode = val;
+    await saveConfig();
+    applyThemeMode(val);
+  });
 }
 
 function initLogSettings() {
@@ -526,6 +532,19 @@ function initDeviceFilterTab() {
   });
 }
 
+function applyThemeMode(mode) {
+  const html = document.documentElement;
+  if (mode === "light") {
+    html.setAttribute("data-theme", "light");
+  } else if (mode === "dark") {
+    html.setAttribute("data-theme", "dark");
+  } else {
+    // follow_system: set data-theme based on system preference
+    const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    html.setAttribute("data-theme", isDark ? "dark" : "light");
+  }
+}
+
 function selectTab(tab) {
   const nav = document.querySelector(`.win-nav-item[data-tab="${tab}"]`);
   if (nav) nav.click();
@@ -592,6 +611,7 @@ async function init() {
   try {
     config = await invoke("get_config");
 
+    applyThemeMode(config.theme_mode || "follow_system");
     initGeneralTab();
     initUpdateSettings();
     initLogSettings();
@@ -604,6 +624,7 @@ async function init() {
     initShutdownVolumeSettings();
     initShortcutSettings();
     initDeviceShortcutSettings();
+    setupInputFocus();
   } catch (e) {
     console.error("Failed to load settings:", e);
   }
@@ -622,5 +643,29 @@ window.__TAURI__.event.listen("config-changed", async () => {
 window.__TAURI__.event.listen("settings-tab", (e) => {
   selectTab(e.payload);
 });
+
+// 初始化输入框 focus 状态（替代 :focus-within，WebView2 兼容）
+function setupInputFocus() {
+  document.querySelectorAll(".win-numberbox").forEach(nb => {
+    const input = nb.querySelector(".win-numberbox-input");
+    if (!input) return;
+    const setFocus = () => nb.classList.add("is-focused");
+    const clearFocus = () => nb.classList.remove("is-focused");
+    input.addEventListener("focus", setFocus);
+    input.addEventListener("blur", clearFocus);
+  });
+  document.querySelectorAll(".shortcut-key-input").forEach(input => {
+    const setFocus = () => input.classList.add("is-focused");
+    const clearFocus = () => input.classList.remove("is-focused");
+    input.addEventListener("focus", setFocus);
+    input.addEventListener("blur", clearFocus);
+  });
+  document.querySelectorAll(".win-numberbox-spin-btn").forEach(btn => {
+    const setHover = () => btn.classList.add("is-hovered");
+    const clearHover = () => btn.classList.remove("is-hovered");
+    btn.addEventListener("mouseenter", setHover);
+    btn.addEventListener("mouseleave", clearHover);
+  });
+}
 
 init();

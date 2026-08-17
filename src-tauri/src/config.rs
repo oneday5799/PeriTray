@@ -93,10 +93,13 @@ pub struct Config {
     pub device_shortcuts: std::collections::HashMap<String, DeviceShortcut>,
     #[serde(default)]
     pub enable_device_shortcut_cycle: bool,
+    #[serde(default = "default_theme_mode")]
+    pub theme_mode: String,
 }
 
 fn default_true() -> bool { true }
 fn default_popup_tab() -> String { "devices".to_string() }
+fn default_theme_mode() -> String { "follow_system".to_string() }
 
 impl Default for Config {
     fn default() -> Self {
@@ -128,6 +131,7 @@ impl Default for Config {
             default_popup_tab: default_popup_tab(),
             device_shortcuts: std::collections::HashMap::new(),
             enable_device_shortcut_cycle: false,
+            theme_mode: default_theme_mode(),
         }
     }
 }
