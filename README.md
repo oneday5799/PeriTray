@@ -74,6 +74,8 @@ PeriphMonitor/
 
 当前版本仅支持显示 2.4G 无线设备（按设备类型归入对应分组），**暂不支持获取电量**。
 
+不同 2.4G 设备的通信协议各不相同，无法统一获取电量信息。若需实现，需先获取设备 VID/PID，再借助 Wireshark 与 USBPcap 嗅探并解析设备电量变化时发送的数据包。可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的实现方案。**欢迎有能力的开发者贡献代码或思路，帮助扩展对这些设备的支持。**
+
 可在设置页点击「打开」编辑 `wireless_24g_devices_user.json` 添加自定义设备（应用更新时不会覆盖），同 VID/PID 时用户条目优先。VID/PID 可通过 [USB 设备查看器](https://www.codertools.net/tools/usb-device-viewer.php?lang=zh) 获取：
 
 ```json
