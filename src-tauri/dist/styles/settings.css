@@ -1130,7 +1130,7 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
 .win-numberbox {
   display: flex;
   align-items: stretch;
-  min-height: 30px;
+  min-height: 32px;
   width: 120px;
   position: relative;
 }
@@ -1139,7 +1139,7 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   display: flex;
   align-items: stretch;
   flex: 1;
-  min-height: 30px;
+  min-height: 32px;
   border: 1px solid #e0e0e0;
   border-bottom-color: #888;
 }
@@ -1177,29 +1177,34 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
 .win-numberbox-spin {
   display: flex;
   flex-direction: row;
+  align-items: center;
   align-self: stretch;
 }
 
 .win-numberbox-spin-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  min-width: 28px;
+  width: 22px;
+  height: 22px;
+  min-width: 0;
   border: 0;
   background: transparent;
   color: #666;
+  font-size: 16px;
   cursor: pointer;
-  padding: 0;
+  border-radius: 4px;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
+  flex: 0 0 22px;
 }
 
 .win-numberbox-spin-btn:hover {
-  background: rgba(0,0,0,0.04);
+  background: rgba(0, 0, 0, 0.04);
   color: #1a1a1a;
 }
 
 .win-numberbox-spin-btn:active {
-  background: rgba(0,0,0,0.08);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .win-numberbox-spin-btn:disabled {
@@ -1207,13 +1212,10 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   cursor: default;
 }
 
-.win-numberbox-spin-btn:disabled:hover {
-  background: transparent;
-}
-
 .win-numberbox-spin-btn svg {
   width: 10px;
   height: 10px;
+  display: block;
 }
 
 .shortcut-input-wrap {
@@ -1230,9 +1232,9 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
 
 .shortcut-key-input {
   width: 180px;
-  height: 30px;
+  height: 32px;
   box-sizing: border-box;
-  padding: 4px 8px 5px 8px;
+  padding: 5px 8px;
   font-size: 14px;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   line-height: 20px;
@@ -1311,10 +1313,11 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
 }
 
 .device-shortcut-label {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-all;
+}
+
+#device-shortcut-list .setting-row-left {
+  min-width: auto;
 }
 
 #device-shortcut-list .setting-row {
@@ -2035,8 +2038,7 @@ html[data-theme="dark"] .win-numberbox-spin-btn {
 
 html[data-theme="dark"] .win-numberbox-spin-btn:hover,
 html[data-theme="dark"] .win-numberbox-spin-btn.is-hovered {
-  background: rgba(255, 255, 255, 0.0837) !important;
-  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.0605) !important;
 }
 
 html[data-theme="dark"] .win-numberbox-spin-btn:active {
@@ -2076,4 +2078,3 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background-clip: padding-box !important;
   border-width: 2px !important;
 }
-
