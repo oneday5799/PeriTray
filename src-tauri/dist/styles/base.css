@@ -8,6 +8,7 @@
 :root {
   --page-bg: #f3f3f3;
   --card-bg: #ffffff;
+  --card-bg-solid: #ffffff;
   --card-border: #e0e0e0;
   --card-hover: rgba(0, 0, 0, 0.03);
   --card-item-border: rgba(0, 0, 0, 0.06);
@@ -15,13 +16,58 @@
   --text-secondary: #666666;
   --text-tertiary: #888888;
   --text-disabled: #a0a0a0;
+  --text-body: #444444;
   --accent: #0078d7;
+  --accent-hover: #106ebe;
+  --accent-subtle-bg: #e8f4fd;
+  --text-on-accent: #ffffff;
+  --link: #0067c0;
+  --link-hover-bg: rgba(0, 103, 192, 0.04);
+  --link-pressed-bg: rgba(0, 103, 192, 0.08);
+  --hover-overlay: rgba(0, 0, 0, 0.0373);
+  --pressed-overlay: rgba(0, 0, 0, 0.0241);
+  --active-overlay: rgba(0, 0, 0, 0.049);
+  --pressed-text: rgba(0, 0, 0, 0.62);
+  --icon-color: #404040;
+  --icon-hover-color: #1a1a1a;
+  --control-bg: rgba(255, 255, 255, 0.70);
+  --control-bg-hover: rgba(249, 249, 249, 0.50);
+  --control-bg-pressed: rgba(249, 249, 249, 0.30);
+  --control-border: rgba(0, 0, 0, 0.06);
+  --control-border-strong: rgba(0, 0, 0, 0.16);
+  --field-border: #e0e0e0;
+  --field-border-strong: #888888;
+  --field-border-focus: #e0e0e0;
+  --field-bg: rgba(255, 255, 255, 0.70);
+  --field-bg-hover: rgba(249, 249, 249, 0.50);
+  --field-bg-focus: #ffffff;
+  --field-text: #1a1a1a;
+  --focus-ring: rgba(0, 120, 215, 0.25);
+  --focus-ring-strong: rgba(0, 120, 215, 0.15);
+  --danger: #e81123;
+  --danger-hover: #e81123;
+  --danger-hover-bg: rgba(232, 17, 35, 0.08);
+  --danger-pressed-bg: rgba(232, 17, 35, 0.12);
+  --toggle-track: #999999;
+  --toggle-checked: #0078d7;
+  --surface-subtle: rgba(0, 0, 0, 0.03);
+  --dialog-bg: #ffffff;
+  --scrim: rgba(0, 0, 0, 0.3);
+  --panel-border: #e5e5e5;
+  --flyout-bg: rgba(252, 252, 252, 0.92);
+  --flyout-border: rgba(0, 0, 0, 0.06);
+  --flyout-text: rgba(0, 0, 0, 0.89);
+  --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
+  --flyout-backdrop: blur(30px) saturate(160%) brightness(1.02);
+  --tooltip-icon-bg: #d0d0d0;
+  --tooltip-icon-hover: #999999;
   --slider-track: #e0e0e0;
 }
 
 html[data-theme="light"] {
   --page-bg: #f3f3f3;
   --card-bg: #ffffff;
+  --card-bg-solid: #ffffff;
   --card-border: #e0e0e0;
   --card-hover: rgba(0, 0, 0, 0.03);
   --card-item-border: rgba(0, 0, 0, 0.06);
@@ -29,13 +75,58 @@ html[data-theme="light"] {
   --text-secondary: #666666;
   --text-tertiary: #888888;
   --text-disabled: #a0a0a0;
+  --text-body: #444444;
   --accent: #0078d7;
+  --accent-hover: #106ebe;
+  --accent-subtle-bg: #e8f4fd;
+  --text-on-accent: #ffffff;
+  --link: #0067c0;
+  --link-hover-bg: rgba(0, 103, 192, 0.04);
+  --link-pressed-bg: rgba(0, 103, 192, 0.08);
+  --hover-overlay: rgba(0, 0, 0, 0.0373);
+  --pressed-overlay: rgba(0, 0, 0, 0.0241);
+  --active-overlay: rgba(0, 0, 0, 0.049);
+  --pressed-text: rgba(0, 0, 0, 0.62);
+  --icon-color: #404040;
+  --icon-hover-color: #1a1a1a;
+  --control-bg: rgba(255, 255, 255, 0.70);
+  --control-bg-hover: rgba(249, 249, 249, 0.50);
+  --control-bg-pressed: rgba(249, 249, 249, 0.30);
+  --control-border: rgba(0, 0, 0, 0.06);
+  --control-border-strong: rgba(0, 0, 0, 0.16);
+  --field-border: #e0e0e0;
+  --field-border-strong: #888888;
+  --field-border-focus: #e0e0e0;
+  --field-bg: rgba(255, 255, 255, 0.70);
+  --field-bg-hover: rgba(249, 249, 249, 0.50);
+  --field-bg-focus: #ffffff;
+  --field-text: #1a1a1a;
+  --focus-ring: rgba(0, 120, 215, 0.25);
+  --focus-ring-strong: rgba(0, 120, 215, 0.15);
+  --danger: #e81123;
+  --danger-hover: #e81123;
+  --danger-hover-bg: rgba(232, 17, 35, 0.08);
+  --danger-pressed-bg: rgba(232, 17, 35, 0.12);
+  --toggle-track: #999999;
+  --toggle-checked: #0078d7;
+  --surface-subtle: rgba(0, 0, 0, 0.03);
+  --dialog-bg: #ffffff;
+  --scrim: rgba(0, 0, 0, 0.3);
+  --panel-border: #e5e5e5;
+  --flyout-bg: rgba(252, 252, 252, 0.92);
+  --flyout-border: rgba(0, 0, 0, 0.06);
+  --flyout-text: rgba(0, 0, 0, 0.89);
+  --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
+  --flyout-backdrop: blur(30px) saturate(160%) brightness(1.02);
+  --tooltip-icon-bg: #d0d0d0;
+  --tooltip-icon-hover: #999999;
   --slider-track: #e0e0e0;
 }
 
 html[data-theme="dark"] {
   --page-bg: #202020;
   --card-bg: rgba(255, 255, 255, 0.0605);
+  --card-bg-solid: #2d2d2d;
   --card-border: rgb(0 0 0 / 30%);
   --card-hover: rgba(255, 255, 255, 0.0837);
   --card-item-border: rgb(0 0 0 / 30%);
@@ -43,7 +134,51 @@ html[data-theme="dark"] {
   --text-secondary: rgba(255, 255, 255, 0.62);
   --text-tertiary: rgba(255, 255, 255, 0.54);
   --text-disabled: rgba(255, 255, 255, 0.40);
+  --text-body: rgba(255, 255, 255, 0.77);
   --accent: #4cc2ff;
+  --accent-hover: #3a9ee0;
+  --accent-subtle-bg: rgba(76, 194, 255, 0.12);
+  --text-on-accent: #1a1a1a;
+  --link: #4cc2ff;
+  --link-hover-bg: rgba(255, 255, 255, 0.06);
+  --link-pressed-bg: rgba(255, 255, 255, 0.1);
+  --hover-overlay: rgba(255, 255, 255, 0.0605);
+  --pressed-overlay: rgba(255, 255, 255, 0.0419);
+  --active-overlay: rgba(255, 255, 255, 0.0326);
+  --pressed-text: rgba(255, 255, 255, 0.77);
+  --icon-color: rgba(255, 255, 255, 0.62);
+  --icon-hover-color: #ffffff;
+  --control-bg: rgba(255, 255, 255, 0.0605);
+  --control-bg-hover: rgba(255, 255, 255, 0.0837);
+  --control-bg-pressed: rgba(255, 255, 255, 0.0326);
+  --control-border: rgba(255, 255, 255, 0.0706);
+  --control-border-strong: rgba(255, 255, 255, 0.54);
+  --field-border: rgba(255, 255, 255, 0.0706);
+  --field-border-strong: rgba(255, 255, 255, 0.54);
+  --field-border-focus: rgba(0, 0, 0, 0.07);
+  --field-bg: rgba(255, 255, 255, 0.0605);
+  --field-bg-hover: rgba(255, 255, 255, 0.0837);
+  --field-bg-focus: rgba(30, 30, 30, 0.70);
+  --field-text: #ffffff;
+  --focus-ring: rgba(76, 194, 255, 0.25);
+  --focus-ring-strong: rgba(76, 194, 255, 0.15);
+  --danger: #e81123;
+  --danger-hover: #ff6b7a;
+  --danger-hover-bg: rgba(255, 107, 122, 0.08);
+  --danger-pressed-bg: rgba(255, 107, 122, 0.12);
+  --toggle-track: #666666;
+  --toggle-checked: #0078d7;
+  --surface-subtle: rgba(255, 255, 255, 0.0314);
+  --dialog-bg: #2b2b2b;
+  --scrim: rgba(0, 0, 0, 0.3);
+  --panel-border: #1d1d1d;
+  --flyout-bg: rgba(44, 44, 44, 0.86);
+  --flyout-border: rgba(0, 0, 0, 0.20);
+  --flyout-text: #ffffff;
+  --flyout-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
+  --flyout-backdrop: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
+  --tooltip-icon-bg: #404040;
+  --tooltip-icon-hover: #555555;
   --slider-track: rgba(255, 255, 255, 0.25);
 }
 
@@ -74,7 +209,20 @@ html, body {
   border-width: 2px;
 }
 
-/* Volume slider */
+html[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.50);
+  border: 3.5px solid transparent;
+  border-radius: 5px;
+  background-clip: padding-box;
+}
+
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.57);
+  background-clip: padding-box;
+  border-width: 2px;
+}
+
+/* ── Volume slider ─────────────────────────────── */
 .volume-slider {
   flex: 1;
   -webkit-appearance: none;
@@ -181,6 +329,11 @@ html, body {
   overflow: hidden;
 }
 
+/* 展开的列表用不透明背景覆盖自身，使 hover 效果只显示在卡片标题区 */
+.card.expandable .card-items {
+  background: var(--card-bg-solid, var(--card-bg, #fff));
+}
+
 /* 两行布局（popup 音频设备卡） */
 .card.column {
   flex-direction: column;
@@ -277,6 +430,24 @@ html, body {
   border-top: 1px solid var(--card-item-border, rgba(0, 0, 0, 0.06));
 }
 
+/* 纵向堆叠的 card-item（关于页使用） */
+.card-item--stack {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 10px 14px;
+}
+
+.card-item--stack .section-title {
+  margin-top: 0;
+  margin-bottom: 8px;
+  flex: none;
+}
+
+.card-item--stack .card-item-controls {
+  margin-left: 0;
+}
+
 .card-item-name {
   font-size: 14px;
   color: var(--text-primary, #1a1a1a);
@@ -359,20 +530,977 @@ html, body {
   object-fit: contain;
 }
 
-html[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.50);
-  border: 3.5px solid transparent;
-  border-radius: 5px;
-  background-clip: padding-box;
+/* ── Navigation (shared: settings left pane + popup top bar) ── */
+.win-nav-item {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary, #1a1a1a);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1),
+    color 0.167s cubic-bezier(0, 0, 0, 1);
 }
 
-html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.57);
-  background-clip: padding-box;
-  border-width: 2px;
+.win-nav-item:hover {
+  background: var(--hover-overlay);
+  color: var(--text-primary, #1a1a1a);
 }
 
-/* ── Toast 通知 ─────────────────────────────────────── */
+.win-nav-item:active {
+  background: var(--pressed-overlay);
+  color: var(--pressed-text);
+}
+
+.win-nav-item.is-selected {
+  background: var(--hover-overlay);
+  color: var(--text-primary, #1a1a1a);
+}
+
+.win-nav-item.is-selected:hover {
+  background: var(--pressed-overlay);
+  color: var(--text-primary, #1a1a1a);
+}
+
+.win-nav-item.is-selected:active {
+  background: var(--hover-overlay);
+  color: var(--pressed-text);
+}
+
+.win-nav-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+
+.win-nav-item .label {
+  font-size: 14px;
+  line-height: 20px;
+  color: inherit;
+}
+
+.win-nav-icon-btn {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  margin: 2px 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--icon-color, #404040);
+  cursor: pointer;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s cubic-bezier(0, 0, 0, 1);
+}
+
+.win-nav-icon-btn:hover {
+  background: var(--hover-overlay);
+  color: var(--icon-hover-color, #1a1a1a);
+}
+
+.win-nav-icon-btn:active {
+  background: var(--pressed-overlay);
+  color: var(--pressed-text);
+}
+
+/* ── Button (shared) ─────────────────────────────── */
+.btn,
+.dialog-btn,
+.connect-btn,
+.add-device-btn,
+.shortcut-delete-btn {
+  height: 32px;
+  padding: 5px 11px 6px;
+  border-left: 1px solid var(--control-border);
+  border-top: 1px solid var(--control-border);
+  border-right: 1px solid var(--control-border);
+  border-bottom: 1px solid var(--control-border-strong);
+  border-radius: 4px;
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: normal;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
+}
+
+.btn:hover,
+.dialog-btn:hover,
+.connect-btn:hover,
+.add-device-btn:hover,
+.shortcut-delete-btn:hover {
+  background: var(--control-bg-hover);
+}
+
+.btn:active,
+.dialog-btn:active,
+.connect-btn:active,
+.add-device-btn:active,
+.shortcut-delete-btn:active {
+  background: var(--control-bg-pressed);
+  color: var(--pressed-text);
+  border-bottom-color: var(--control-border);
+}
+
+.add-device-btn {
+  min-width: 120px;
+  gap: 8px;
+}
+
+.shortcut-delete-btn {
+  color: var(--danger);
+}
+
+.dialog-btn.confirm,
+.btn--primary {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+.dialog-btn.confirm:hover,
+.btn--primary:hover {
+  background: var(--accent-hover);
+}
+
+.dialog-btn.restore,
+.btn--outline {
+  background: var(--control-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+  margin-right: auto;
+}
+
+.dialog-btn.restore:hover,
+.btn--outline:hover {
+  background: var(--accent-subtle-bg);
+}
+
+.connect-btn:disabled,
+.connect-btn.loading {
+  background: var(--control-bg-hover);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.connect-btn:disabled:hover,
+.connect-btn.loading:hover {
+  background: var(--control-bg-hover);
+}
+
+/* Link / hyperlink */
+.setting-link {
+  font-size: 12px;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.setting-link:hover {
+  text-decoration: underline;
+}
+
+.win-hyperlink-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 5px 11px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--link);
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 83ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.win-hyperlink-btn:hover {
+  background: var(--link-hover-bg);
+}
+
+.win-hyperlink-btn:active {
+  background: var(--link-pressed-bg);
+}
+
+/* ── Text field (shared) ─────────────────────────── */
+.text-field,
+.shortcut-key-input {
+  width: 180px;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font-size: 14px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 20px;
+  border: 1px solid var(--field-border);
+  border-bottom-color: var(--field-border-strong);
+  border-radius: 4px;
+  background: var(--field-bg);
+  color: var(--field-text);
+  outline: none;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.text-field:hover,
+.shortcut-key-input:hover {
+  background: var(--field-bg-hover);
+}
+
+.text-field:focus,
+.text-field.recording,
+.shortcut-key-input:focus,
+.shortcut-key-input.recording {
+  border-color: var(--field-border-focus);
+  border-bottom-color: var(--field-border-focus);
+  box-shadow: inset 0 -1.5px 0 0 var(--accent);
+  background: var(--field-bg-focus);
+}
+
+/* Box variant（对话框输入框） */
+.text-field--box,
+.dialog-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--field-border);
+  border-bottom-color: var(--field-border);
+  border-radius: 6px;
+  background: var(--field-bg);
+  color: var(--field-text);
+  text-align: left;
+}
+
+.text-field--box:hover,
+.dialog-input:hover {
+  background: var(--field-bg-hover);
+}
+
+.text-field--box:focus,
+.dialog-input:focus,
+.text-field--box.recording,
+.dialog-input.recording {
+  border-color: var(--accent);
+  border-bottom-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+  background: var(--field-bg-focus);
+}
+
+.text-field--box.recording,
+.dialog-input.recording {
+  animation: recording-pulse 1s ease-in-out infinite;
+}
+
+/* 快捷键录制框在对话框内仍居中显示 */
+.shortcut-key-input.dialog-input {
+  text-align: center;
+}
+
+@keyframes recording-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--focus-ring); }
+  50% { box-shadow: 0 0 0 4px var(--focus-ring-strong); }
+}
+
+/* Multiline variant（过滤正则文本域） */
+.text-field--multiline,
+.filter-textarea {
+  width: 100%;
+  min-height: 80px;
+  height: auto;
+  padding: 5px 6px 10px 10px;
+  border: 0;
+  border-radius: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--field-text);
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+  box-sizing: border-box;
+  outline: none;
+}
+
+/* Field border wrapper（过滤框 / NumberBox 共用） */
+.field-border,
+.filter-textarea-border,
+.win-numberbox-border {
+  position: relative;
+  border-radius: 4px;
+  background: var(--field-bg);
+  overflow: hidden;
+  border: 1px solid var(--field-border);
+  border-bottom-color: var(--field-border-strong);
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), border-color 0.167s ease;
+}
+
+.field-border:hover,
+.filter-textarea-border:hover,
+.win-numberbox-border:hover {
+  background: var(--field-bg-hover);
+}
+
+.field-border:focus-within,
+.filter-textarea-border:focus-within,
+.win-numberbox:focus-within .win-numberbox-border {
+  background: var(--field-bg-focus);
+  border-color: var(--field-border-focus);
+  border-bottom-color: var(--field-border-focus);
+}
+
+.field-focus-line,
+.filter-textarea-focus-border,
+.win-numberbox-focus-border {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.field-focus-line::after,
+.filter-textarea-focus-border::after,
+.win-numberbox-focus-border::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.5px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.field-border:focus-within .field-focus-line::after,
+.filter-textarea-border:focus-within .filter-textarea-focus-border::after,
+.win-numberbox:focus-within .win-numberbox-focus-border::after {
+  background: var(--accent);
+}
+
+/* Shortcut capture input + clear button */
+.shortcut-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-key-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.shortcut-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  color: var(--pressed-text);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s, opacity 0.15s;
+}
+
+.shortcut-key-box .shortcut-clear-btn {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.shortcut-key-box:hover .shortcut-clear-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.shortcut-clear-btn:hover {
+  color: var(--danger-hover);
+  background: var(--danger-hover-bg);
+}
+
+.shortcut-clear-btn:active {
+  background: var(--danger-pressed-bg);
+}
+
+/* ── Toggle switch (shared) ─────────────────────── */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--toggle-track);
+  border-radius: 12px;
+  transition: background 0.2s ease;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+
+.toggle input:checked + .slider {
+  background: var(--toggle-checked);
+}
+
+.toggle input:checked + .slider::before {
+  transform: translateX(20px);
+}
+
+/* ── Tooltip (shared) ────────────────────────────── */
+.tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--tooltip-icon-bg);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+}
+
+.tooltip-trigger:hover {
+  background: var(--tooltip-icon-hover);
+}
+
+.tooltip-content {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 320px;
+  box-sizing: border-box;
+  padding: 6px 9px 8px;
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  border: 1px solid var(--flyout-border);
+  border-radius: 4px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+}
+
+.tooltip-trigger:hover .tooltip-content {
+  display: block;
+  animation: win-tooltip-fade-in 167ms linear both;
+}
+
+@keyframes win-tooltip-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-trigger:hover .tooltip-content {
+    animation-duration: 1ms;
+  }
+}
+
+/* ── ComboBox (shared) ───────────────────────────── */
+.win-combo-box {
+  position: relative;
+  display: inline-block;
+  min-width: 64px;
+  vertical-align: top;
+  color: var(--field-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.win-combo-btn {
+  width: 100%;
+  min-width: 120px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 0;
+  align-items: stretch;
+  text-align: left;
+  appearance: none;
+  background: var(--control-bg);
+  color: var(--field-text);
+  border-left: 1px solid var(--control-border);
+  border-top: 1px solid var(--control-border);
+  border-right: 1px solid var(--control-border);
+  border-bottom: 1px solid var(--control-border-strong);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.167s cubic-bezier(0, 0, 0, 1);
+}
+
+.win-combo-btn:hover {
+  background: var(--control-bg-hover);
+}
+
+.win-combo-btn:active {
+  background: var(--control-bg-pressed);
+}
+
+.win-combo-content {
+  min-width: 0;
+  padding: 5px 0 7px 12px;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.win-combo-chevron {
+  grid-row: 1;
+  grid-column: 2;
+  width: 12px;
+  height: 12px;
+  margin: 0 14px 0 0;
+  place-self: center end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--pressed-text);
+  transition: transform 0.2s cubic-bezier(0, 0, 0, 1);
+}
+
+.win-combo-box.is-open .win-combo-chevron {
+  transform: rotate(180deg);
+}
+
+.win-combo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+}
+
+.win-combo-flyout {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  min-width: 80px;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: var(--flyout-text);
+  background: var(--flyout-bg);
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+  visibility: hidden;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.win-combo-flyout::-webkit-scrollbar {
+  display: none;
+}
+
+.win-combo-items-presenter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 0;
+}
+
+.win-combo-item {
+  appearance: none;
+  position: relative;
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  box-sizing: border-box;
+  color: var(--flyout-text);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.win-combo-item-layout {
+  position: relative;
+  width: calc(100% - 10px);
+  min-height: 32px;
+  margin: 2px 5px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  border-radius: 3px;
+}
+
+.win-combo-item-content {
+  min-width: 0;
+  padding: 5px 11px 7px;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.win-combo-item:hover .win-combo-item-layout {
+  background: var(--hover-overlay);
+}
+
+.win-combo-item:active .win-combo-item-layout {
+  color: var(--pressed-text);
+  background: var(--pressed-overlay);
+}
+
+.win-combo-item.selected .win-combo-item-layout {
+  background: var(--hover-overlay);
+}
+
+.win-combo-item.selected:hover .win-combo-item-layout {
+  background: var(--pressed-overlay);
+}
+
+.win-combo-item-pill {
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 1.5px;
+  background: var(--accent);
+  transform: translateY(-50%);
+  transition: height 167ms cubic-bezier(0, 0, 0, 1);
+  display: none;
+}
+
+.win-combo-item.selected .win-combo-item-pill {
+  display: block;
+}
+
+.win-combo-item.selected:active .win-combo-item-pill {
+  height: 10px;
+}
+
+/* ── NumberBox (shared) ──────────────────────────── */
+.win-numberbox {
+  display: flex;
+  align-items: stretch;
+  min-height: 32px;
+  width: 120px;
+  position: relative;
+}
+
+.win-numberbox-border {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-height: 32px;
+}
+
+.win-numberbox-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px 5px 10px;
+  font-size: 14px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 20px;
+  color: var(--field-text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.win-numberbox-input::-webkit-outer-spin-button,
+.win-numberbox-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.win-numberbox-spin {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: stretch;
+}
+
+.win-numberbox-spin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
+  flex: 0 0 22px;
+}
+
+.win-numberbox-spin-btn:hover,
+.win-numberbox-spin-btn.is-hovered {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
+}
+
+.win-numberbox-spin-btn:active {
+  background: var(--active-overlay);
+}
+
+.win-numberbox-spin-btn:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.win-numberbox-spin-btn svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+/* ── Dialog (shared) ─────────────────────────────── */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.rename-dialog {
+  background: var(--dialog-bg);
+  border-radius: 8px;
+  padding: 20px;
+  width: 280px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.shortcut-dialog-device {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.shortcut-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-dialog-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 8px;
+}
+
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0;
+}
+
+.group-option {
+  padding: 10px 14px;
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.group-option:hover {
+  background: var(--hover-overlay);
+}
+
+.group-option.selected {
+  background: var(--accent-subtle-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Context menu (shared) ───────────────────────── */
+.context-menu {
+  position: fixed;
+  background: var(--dialog-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  z-index: 1000;
+  min-width: 120px;
+}
+
+.context-menu-item {
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.context-menu-item:hover {
+  background: var(--hover-overlay);
+}
+
+/* ── Infobar (shared) ────────────────────────────── */
+.win-infobar {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.win-infobar-layout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.win-infobar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.win-infobar-content {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.win-infobar-close-button {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-right: -6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 83ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.win-infobar-close-button:hover {
+  background: var(--hover-overlay);
+}
+
+.win-infobar-close-button:active {
+  background: var(--pressed-overlay);
+}
+
+/* ── Toast 通知 ─────────────────────────────────── */
 .toast {
   position: fixed;
   bottom: 20px;

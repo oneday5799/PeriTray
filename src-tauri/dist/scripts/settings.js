@@ -691,11 +691,13 @@ function setupInputFocus() {
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  document.querySelectorAll(".card.expandable").forEach(card => {
+  // 折叠卡 hover 抑制（事件委托，兼容动态添加的分组卡片）
+  document.addEventListener("mouseover", (e) => {
+    const card = e.target.closest?.(".card.expandable");
+    if (!card) return;
     const items = card.querySelector(".card-items");
     if (!items) return;
-    items.addEventListener("mouseenter", () => card.classList.add("no-hover"));
-    items.addEventListener("mouseleave", () => card.classList.remove("no-hover"));
+    card.classList.toggle("no-hover", items.contains(e.target));
   });
 }
 

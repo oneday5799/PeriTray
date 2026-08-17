@@ -20,16 +20,16 @@
 }
 
 .audio-device-name:hover {
-  color: #0078d7;
+  color: var(--accent, #0078d7);
 }
 
 .audio-device-name.default {
-  color: #0078d7;
+  color: var(--accent, #0078d7);
 }
 
 .default-badge {
   font-size: 12px;
-  color: #0078d7;
+  color: var(--accent, #0078d7);
   margin-left: 8px;
 }
 
@@ -40,20 +40,21 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #666;
+  color: var(--text-secondary, #666);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   outline: none;
+  transition: background 0.12s;
 }
 
 .mute-btn:hover {
-  background: #f0f0f0;
+  background: var(--hover-overlay, rgba(0, 0, 0, 0.0373));
 }
 
 .mute-btn.muted {
-  color: #e74c3c;
+  color: var(--danger-hover, #e81123);
 }
 
 /* Slider tooltip */
@@ -61,18 +62,18 @@
   position: absolute;
   bottom: calc(100% + 8px);
   transform: translateX(-50%);
-  background: #fff;
-  border: 1px solid #d0d0d0;
+  background: var(--dialog-bg, #fff);
+  border: 1px solid var(--card-border, #e0e0e0);
   border-radius: 6px;
   padding: 4px 10px;
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--text-primary, #333);
   line-height: 1;
   white-space: nowrap;
   pointer-events: none;
   z-index: 10;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
 }
 
 /* Audio session card */
@@ -86,36 +87,4 @@
 
 .session-slider {
   flex: 1;
-}
-
-/* ── Dark theme (main window follows settings theme_mode) ─────────────── */
-html[data-theme="dark"] .audio-device-name:hover {
-  color: #4cc2ff;
-}
-
-html[data-theme="dark"] .audio-device-name.default {
-  color: #4cc2ff;
-}
-
-html[data-theme="dark"] .default-badge {
-  color: #4cc2ff;
-}
-
-html[data-theme="dark"] .mute-btn {
-  color: rgba(255, 255, 255, 0.62);
-}
-
-html[data-theme="dark"] .mute-btn:hover {
-  background: rgba(255, 255, 255, 0.0605);
-}
-
-html[data-theme="dark"] .mute-btn.muted {
-  color: #ff6b7a;
-}
-
-html[data-theme="dark"] .slider-tooltip {
-  background: #2b2b2b;
-  border-color: rgb(0 0 0 / 30%);
-  color: rgba(255, 255, 255, 0.89);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }

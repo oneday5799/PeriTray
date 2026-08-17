@@ -74,11 +74,18 @@ function initDeviceShortcutSettings() {
       const item = document.createElement("div");
       item.className = "card";
 
+      const left = document.createElement("div");
+      left.className = "card-left";
+
       const label = document.createElement("span");
       label.className = "card-title device-shortcut-label";
       label.textContent = entry.name;
       label.title = entry.name;
-      item.appendChild(label);
+      left.appendChild(label);
+      item.appendChild(left);
+
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
 
       const wrap = document.createElement("div");
       wrap.className = "shortcut-input-wrap";
@@ -115,7 +122,8 @@ function initDeviceShortcutSettings() {
 
       wrap.appendChild(box);
       wrap.appendChild(deleteBtn);
-      item.appendChild(wrap);
+      actions.appendChild(wrap);
+      item.appendChild(actions);
       listEl.appendChild(item);
 
       bindShortcutRecorder(

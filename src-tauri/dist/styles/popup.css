@@ -12,7 +12,7 @@ body {
   overflow: hidden;
 }
 
-/* WinUI NavigationView - Top pane */
+/* ── WinUI NavigationView - Top pane ───────────── */
 .win-nav-top-bar {
   position: relative;
   display: flex;
@@ -20,7 +20,7 @@ body {
   height: 48px;
   padding: 0 12px;
   flex-shrink: 0;
-  border-bottom: 1px solid #e5e5e5;
+  border-bottom: 1px solid var(--panel-border, #e5e5e5);
 }
 
 .win-nav-menu {
@@ -33,36 +33,12 @@ body {
   min-width: 0;
 }
 
+/* Top 形态的导航项（共享基类在 base.css） */
 .win-nav-item {
-  position: relative;
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
   justify-content: center;
   height: 40px;
   min-height: 40px;
   margin: 2px 4px;
-  padding: 0 12px;
-  border: 0;
-  background: transparent;
-  border-radius: 4px;
-  color: #1a1a1a;
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 20px;
-  cursor: pointer;
-  white-space: nowrap;
-  user-select: none;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s cubic-bezier(0, 0, 0, 1);
-}
-
-.win-nav-item:hover {
-  background: rgba(0, 0, 0, 0.0373);
-}
-
-.win-nav-item:active {
-  background: rgba(0, 0, 0, 0.0241);
-  color: rgba(0, 0, 0, 0.62);
 }
 
 .win-nav-item.active,
@@ -72,7 +48,7 @@ body {
 
 .win-nav-item.active:active {
   background: transparent;
-  color: rgba(0, 0, 0, 0.62);
+  color: var(--pressed-text);
 }
 
 /* Right-side footer buttons (refresh / settings) */
@@ -81,35 +57,6 @@ body {
   align-items: center;
   margin-left: auto;
   flex: 0 0 auto;
-}
-
-.win-nav-icon-btn {
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  min-height: 40px;
-  margin: 2px 4px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  border-radius: 4px;
-  color: #404040;
-  cursor: pointer;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s cubic-bezier(0, 0, 0, 1);
-}
-
-.win-nav-icon-btn:hover {
-  background: rgba(0, 0, 0, 0.0373);
-  color: #1a1a1a;
-}
-
-.win-nav-icon-btn:active {
-  background: rgba(0, 0, 0, 0.0241);
-  color: rgba(0, 0, 0, 0.62);
 }
 
 /* Sliding accent underline indicator (WinUI top-pane style) */
@@ -128,7 +75,7 @@ body {
   bottom: 4px;
   width: 16px;
   height: 3px;
-  background: #0078d7;
+  background: var(--accent, #0078d7);
   border-radius: 2px;
   pointer-events: none;
   contain: layout paint;
@@ -137,7 +84,7 @@ body {
   backface-visibility: hidden;
 }
 
-/* Tab viewport (content area) */
+/* ── Tab viewport (content area) ──────────────── */
 .tab-viewport {
   position: relative;
   flex: 1;
@@ -206,7 +153,7 @@ body {
   }
 }
 
-/* Device list */
+/* ── Device list ─────────────────────────────── */
 .device-list {
   flex: 1;
   overflow-y: auto;
@@ -216,22 +163,13 @@ body {
 .loading {
   text-align: center;
   padding: 40px 0;
-  color: #888;
+  color: var(--text-tertiary, #888);
   font-size: 14px;
 }
 
-/* Category group */
+/* Category group（标题使用 base.css 的 .section-title） */
 .category {
   margin-bottom: 12px;
-}
-
-.category-header {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin-top: 20px;
-  margin-bottom: 6px;
-  padding: 0;
 }
 
 /* Device card uses shared .card component (base.css) */
@@ -268,443 +206,4 @@ body {
 
 .card.device .card-tags:empty {
   display: none;
-}
-
-/* Device actions (connect/disconnect button) */
-.connect-btn {
-  height: 32px;
-  padding: 5px 11px 6px;
-  border-left: 1px solid rgba(0, 0, 0, 0.06);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.70);
-  color: rgba(0, 0, 0, 0.89);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  font-weight: normal;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  user-select: none;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
-}
-
-.connect-btn:hover {
-  background: rgba(249, 249, 249, 0.50);
-}
-
-.connect-btn:active {
-  background: rgba(249, 249, 249, 0.30);
-  color: rgba(0, 0, 0, 0.62);
-  border-bottom-color: rgba(0, 0, 0, 0.06);
-}
-
-.connect-btn:disabled,
-.connect-btn.loading {
-  background: rgba(249, 249, 249, 0.50);
-  color: rgba(0, 0, 0, 0.36);
-  cursor: not-allowed;
-}
-
-.connect-btn:disabled:hover,
-.connect-btn.loading:hover {
-  background: rgba(249, 249, 249, 0.50);
-}
-
-/* Context menu */
-.context-menu {
-  position: fixed;
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-  padding: 4px 0;
-  z-index: 1000;
-  min-width: 120px;
-}
-
-.context-menu-item {
-  padding: 8px 16px;
-  font-size: 13px;
-  color: #333;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.context-menu-item:hover {
-  background: #f0f0f0;
-}
-
-/* Dialog overlay */
-.dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2000;
-}
-
-/* Rename dialog */
-.rename-dialog {
-  background: #fff;
-  border-radius: 8px;
-  padding: 20px;
-  width: 280px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-}
-
-.dialog-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin-bottom: 12px;
-}
-
-.dialog-input {
-  width: 100%;
-  padding: 8px 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  font-size: 14px;
-  color: #333;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.dialog-input:focus {
-  border-color: #0078d7;
-}
-
-.dialog-buttons {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.dialog-btn {
-  height: 32px;
-  padding: 5px 11px 6px;
-  border-left: 1px solid rgba(0, 0, 0, 0.06);
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.70);
-  color: rgba(0, 0, 0, 0.89);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  font-weight: normal;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  user-select: none;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
-}
-
-.dialog-btn.cancel {
-  background: rgba(255, 255, 255, 0.70);
-  color: rgba(0, 0, 0, 0.89);
-}
-
-.dialog-btn.cancel:hover {
-  background: rgba(249, 249, 249, 0.50);
-}
-
-.dialog-btn.confirm {
-  background: #0078d7;
-  color: #fff;
-  border-color: #0078d7;
-}
-
-.dialog-btn.confirm:hover {
-  background: #106ebe;
-}
-
-.dialog-btn.restore {
-  background: rgba(255, 255, 255, 0.70);
-  color: #0078d7;
-  border-color: #0078d7;
-  margin-right: auto;
-}
-
-.dialog-btn.restore:hover {
-  background: #e8f4fd;
-}
-
-/* Shortcut dialog */
-.shortcut-dialog-device {
-  font-size: 13px;
-  color: #333;
-  margin-bottom: 8px;
-  font-weight: 600;
-  word-break: break-all;
-}
-
-.shortcut-dialog-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.shortcut-dialog-hint {
-  font-size: 12px;
-  color: #999;
-  margin-top: 8px;
-}
-
-.shortcut-key-input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  font-size: 14px;
-  color: #333;
-  background: #fff;
-  outline: none;
-  text-align: center;
-}
-
-.shortcut-key-input:focus {
-  border-color: #0078d7;
-  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.15);
-}
-
-.shortcut-key-input.recording {
-  border-color: #0078d7;
-  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25);
-  animation: recording-pulse 1s ease-in-out infinite;
-}
-
-@keyframes recording-pulse {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25); }
-  50% { box-shadow: 0 0 0 4px rgba(0, 120, 215, 0.15); }
-}
-
-.shortcut-clear-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  background: transparent;
-  color: #999;
-  font-size: 16px;
-  cursor: pointer;
-  border-radius: 50%;
-  transition: color 0.15s, background 0.15s;
-}
-
-.shortcut-clear-btn:hover {
-  color: #e81123;
-  background: rgba(232, 17, 35, 0.08);
-}
-
-/* Group list for change group dialog */
-.group-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 12px 0;
-}
-
-.group-option {
-  padding: 10px 14px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  font-size: 14px;
-  color: #333;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.group-option:hover {
-  background: #f0f0f0;
-}
-
-.group-option.selected {
-  background: #e8f4fd;
-  border-color: #0078d7;
-  color: #0078d7;
-}
-
-/* ── Dark theme (popup 跟随设置页 theme_mode) ─────────────── */
-html[data-theme="dark"] .win-nav-top-bar {
-  border-bottom-color: #1d1d1d;
-}
-
-html[data-theme="dark"] .win-nav-item {
-  color: #ffffff;
-}
-
-html[data-theme="dark"] .win-nav-item:hover {
-  background: rgba(255, 255, 255, 0.0605);
-}
-
-html[data-theme="dark"] .win-nav-item:active {
-  background: rgba(255, 255, 255, 0.0241);
-  color: rgba(255, 255, 255, 0.62);
-}
-
-html[data-theme="dark"] .win-nav-item.active:active {
-  background: transparent;
-}
-
-html[data-theme="dark"] .win-nav-icon-btn {
-  color: rgba(255, 255, 255, 0.62);
-}
-
-html[data-theme="dark"] .win-nav-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.0605);
-  color: #ffffff;
-}
-
-html[data-theme="dark"] .win-nav-icon-btn:active {
-  background: rgba(255, 255, 255, 0.0241);
-  color: rgba(255, 255, 255, 0.62);
-}
-
-html[data-theme="dark"] .category-header {
-  color: #ffffff;
-}
-
-html[data-theme="dark"] .loading {
-  color: rgba(255, 255, 255, 0.54);
-}
-
-html[data-theme="dark"] .connect-btn,
-html[data-theme="dark"] .dialog-btn {
-  background: rgba(255, 255, 255, 0.0605);
-  color: rgba(255, 255, 255, 0.89);
-  border-left-color: rgba(255, 255, 255, 0.0706);
-  border-top-color: rgba(255, 255, 255, 0.0706);
-  border-right-color: rgba(255, 255, 255, 0.0706);
-  border-bottom-color: rgba(255, 255, 255, 0.54);
-}
-
-html[data-theme="dark"] .connect-btn:hover,
-html[data-theme="dark"] .dialog-btn.cancel:hover {
-  background: rgba(255, 255, 255, 0.0837);
-}
-
-html[data-theme="dark"] .connect-btn:active,
-html[data-theme="dark"] .dialog-btn.cancel:active {
-  background: rgba(255, 255, 255, 0.0241);
-  color: rgba(255, 255, 255, 0.62);
-}
-
-html[data-theme="dark"] .connect-btn:disabled,
-html[data-theme="dark"] .connect-btn.loading {
-  background: rgba(255, 255, 255, 0.0837);
-  color: rgba(255, 255, 255, 0.36);
-}
-
-html[data-theme="dark"] .connect-btn:disabled:hover,
-html[data-theme="dark"] .connect-btn.loading:hover {
-  background: rgba(255, 255, 255, 0.0837);
-}
-
-html[data-theme="dark"] .dialog-btn.confirm {
-  background: #4cc2ff;
-  color: #1a1a1a;
-  border-color: #4cc2ff;
-}
-
-html[data-theme="dark"] .dialog-btn.confirm:hover {
-  background: #3a9ee0;
-}
-
-html[data-theme="dark"] .dialog-btn.restore {
-  background: rgba(255, 255, 255, 0.0605);
-  color: #4cc2ff;
-  border-color: #4cc2ff;
-}
-
-html[data-theme="dark"] .dialog-btn.restore:hover {
-  background: rgba(76, 194, 255, 0.12);
-}
-
-html[data-theme="dark"] .context-menu {
-  background: #2b2b2b;
-  border-color: rgb(0 0 0 / 30%);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-}
-
-html[data-theme="dark"] .context-menu-item {
-  color: rgba(255, 255, 255, 0.89);
-}
-
-html[data-theme="dark"] .context-menu-item:hover {
-  background: rgba(255, 255, 255, 0.0605);
-}
-
-html[data-theme="dark"] .rename-dialog {
-  background: #2b2b2b;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-}
-
-html[data-theme="dark"] .dialog-title {
-  color: #ffffff;
-}
-
-html[data-theme="dark"] .dialog-input {
-  background: rgba(255, 255, 255, 0.0605);
-  border-color: rgb(0 0 0 / 30%);
-  color: #ffffff;
-}
-
-html[data-theme="dark"] .dialog-input:focus {
-  border-color: #4cc2ff;
-}
-
-html[data-theme="dark"] .shortcut-dialog-device {
-  color: rgba(255, 255, 255, 0.89);
-}
-
-html[data-theme="dark"] .shortcut-dialog-hint {
-  color: rgba(255, 255, 255, 0.54);
-}
-
-html[data-theme="dark"] .shortcut-key-input {
-  background: rgba(255, 255, 255, 0.0605);
-  border-color: rgb(0 0 0 / 30%);
-  color: #ffffff;
-}
-
-html[data-theme="dark"] .shortcut-key-input:focus {
-  border-color: #4cc2ff;
-  box-shadow: 0 0 0 2px rgba(76, 194, 255, 0.25);
-}
-
-html[data-theme="dark"] .shortcut-key-input.recording {
-  border-color: #4cc2ff;
-  box-shadow: 0 0 0 2px rgba(76, 194, 255, 0.25);
-}
-
-html[data-theme="dark"] .group-option {
-  border-color: rgb(0 0 0 / 30%);
-  color: rgba(255, 255, 255, 0.89);
-}
-
-html[data-theme="dark"] .group-option:hover {
-  background: rgba(255, 255, 255, 0.0605);
-}
-
-html[data-theme="dark"] .group-option.selected {
-  background: rgba(76, 194, 255, 0.12);
-  border-color: #4cc2ff;
-  color: #4cc2ff;
 }

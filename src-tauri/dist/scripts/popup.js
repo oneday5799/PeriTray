@@ -70,7 +70,7 @@ function renderDevices() {
     section.className = "category";
 
     const header = document.createElement("div");
-    header.className = "category-header";
+    header.className = "section-title";
     header.textContent = cat.label;
     section.appendChild(header);
 
