@@ -228,6 +228,8 @@ function showDeviceShortcutDialog(device) {
   deviceLabel.textContent = audioDeviceNames[device.name] || device.name;
   wrap.appendChild(deviceLabel);
 
+  const DEFAULT_HINT = "点击输入框后按下键盘组合键，用于快速切换到此设备。在设置中开启共享开关后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
+
   const row = document.createElement("div");
   row.className = "shortcut-dialog-row";
 
@@ -237,22 +239,34 @@ function showDeviceShortcutDialog(device) {
   input.placeholder = "点击录制快捷键";
   input.readOnly = true;
 
-  const clearBtn = document.createElement("button");
-  clearBtn.className = "shortcut-clear-btn";
-  clearBtn.textContent = "×";
-  clearBtn.title = "清除快捷键";
-  clearBtn.style.display = "none";
-
   const hint = document.createElement("div");
   hint.className = "shortcut-dialog-hint";
-  hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备。在设置中开启共享开关后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
+  hint.textContent = DEFAULT_HINT;
 
   row.appendChild(input);
-  row.appendChild(clearBtn);
   wrap.appendChild(row);
   wrap.appendChild(hint);
 
+  let savedShortcut = (deviceShortcuts[device.id] || {}).shortcut || null;
+  let clearBtn = null;
+
+  const clearShortcut = () => {
+    invoke("set_device_shortcut", { deviceId: device.id, name: device.name, key: null }).catch(() => {});
+    deviceShortcuts[device.id] = { name: device.name, shortcut: null };
+    savedShortcut = null;
+    input.value = "";
+    input.placeholder = "点击录制快捷键";
+    if (clearBtn) clearBtn.disabled = true;
+    hint.textContent = DEFAULT_HINT;
+    hint.style.color = "#999";
+  };
+
   const buttons = [];
+  buttons.push({
+    text: "清除",
+    className: "danger",
+    onClick: clearShortcut,
+  });
   buttons.push({
     text: "取消",
     className: "cancel",
@@ -270,27 +284,23 @@ function showDeviceShortcutDialog(device) {
     buttons,
   });
 
+  clearBtn = overlay.querySelector(".dialog-btn.danger");
+  if (clearBtn) clearBtn.disabled = !savedShortcut;
+
   bindShortcutRecorder(
     input,
-    clearBtn,
-    () => (deviceShortcuts[device.id] || {}).shortcut || null,
+    null,
+    () => savedShortcut,
     (display, shortcut) => {
-      if (shortcut === "") {
-        invoke("set_device_shortcut", { deviceId: device.id, name: device.name, key: null }).catch(() => {});
-        deviceShortcuts[device.id] = { name: device.name, shortcut: null };
-        input.value = "";
-        clearBtn.style.display = "none";
-        input.placeholder = "点击录制快捷键";
-        return;
-      }
       invoke("set_device_shortcut", { deviceId: device.id, name: device.name, key: shortcut })
         .then(() => {
           deviceShortcuts[device.id] = { name: device.name, shortcut };
-          clearBtn.style.display = "";
+          savedShortcut = shortcut;
+          if (clearBtn) clearBtn.disabled = false;
           hint.textContent = `快捷键 "${display}" 已保存`;
           hint.style.color = "#4caf50";
           setTimeout(() => {
-            hint.textContent = "点击输入框后按下键盘组合键，用于快速切换到此设备。在设置中开启共享开关后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
+            hint.textContent = DEFAULT_HINT;
             hint.style.color = "#999";
           }, 2500);
         })

@@ -377,6 +377,7 @@ pub fn set_device_shortcut(
     }
     set_device_shortcut_key(&device_id, &name, key);
     crate::shortcut::sync_device_shortcuts(&app);
+    let _ = app.emit("config-changed", ());
     Ok(())
 }
 
@@ -400,6 +401,7 @@ pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
         c.device_shortcuts.remove(&device_id);
     });
     crate::shortcut::sync_device_shortcuts(&app);
+    let _ = app.emit("config-changed", ());
 }
 
 /// 在共用同一快捷键的设备间循环切换默认输出设备（按设备列表自然顺序）
