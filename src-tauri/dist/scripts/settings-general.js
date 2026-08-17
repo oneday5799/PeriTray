@@ -72,10 +72,10 @@ function initDeviceShortcutSettings() {
     for (const id of ids) {
       const entry = shortcuts[id];
       const item = document.createElement("div");
-      item.className = "setting-row";
+      item.className = "card";
 
       const label = document.createElement("span");
-      label.className = "setting-label device-shortcut-label";
+      label.className = "card-title device-shortcut-label";
       label.textContent = entry.name;
       label.title = entry.name;
       item.appendChild(label);

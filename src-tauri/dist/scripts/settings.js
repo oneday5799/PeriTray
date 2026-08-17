@@ -428,7 +428,7 @@ async function runUpdateCheck(btnId) {
 function initDeviceFilterTab() {
   const filterWrap = document.getElementById("filter-regex-wrap");
   const filterArrow = document.getElementById("arrow-filter");
-  const filterCardHeader = document.getElementById("filter-card-header");
+  const filterCard = document.getElementById("filter-card");
 
   // Filter regex input
   const regexInput = document.getElementById("filter-regex");
@@ -477,8 +477,9 @@ function initDeviceFilterTab() {
   }
   if (filterArrow) filterArrow.classList.toggle("expanded", config.filter_enabled);
 
-  if (filterCardHeader) {
-    filterCardHeader.addEventListener("click", (e) => {
+  if (filterCard) {
+    filterCard.addEventListener("click", (e) => {
+      if (e.target.closest('.card-items')) return;
       if (e.target.closest('.toggle')) return;
       const isOpen = filterWrap.classList.contains("show");
       setFilterExpanded(!isOpen);
@@ -532,30 +533,19 @@ function initDeviceFilterTab() {
   });
 }
 
-function applyThemeMode(mode) {
-  const html = document.documentElement;
-  if (mode === "light") {
-    html.setAttribute("data-theme", "light");
-  } else if (mode === "dark") {
-    html.setAttribute("data-theme", "dark");
-  } else {
-    // follow_system: set data-theme based on system preference
-    const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    html.setAttribute("data-theme", isDark ? "dark" : "light");
-  }
-}
-
 function selectTab(tab) {
   const nav = document.querySelector(`.win-nav-item[data-tab="${tab}"]`);
   if (nav) nav.click();
 }
 
 function initAboutTab() {
-  const header = document.getElementById("about-info-header");
+  const card = document.getElementById("about-info-card");
   const items = document.getElementById("about-info-items");
   const arrow = document.getElementById("arrow-about");
-  if (header && items) {
-    header.addEventListener("click", () => {
+  if (card && items) {
+    card.addEventListener("click", (e) => {
+      if (e.target.closest('.card-items')) return;
+      if (e.target.closest("button") || e.target.closest("a")) return;
       const expanded = items.style.maxHeight !== "0px";
       items.style.maxHeight = expanded ? "0px" : "999px";
       if (arrow) arrow.classList.toggle("expanded", !expanded);
@@ -700,6 +690,13 @@ function setupInputFocus() {
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
+
+  document.querySelectorAll(".card.expandable").forEach(card => {
+    const items = card.querySelector(".card-items");
+    if (!items) return;
+    items.addEventListener("mouseenter", () => card.classList.add("no-hover"));
+    items.addEventListener("mouseleave", () => card.classList.remove("no-hover"));
+  });
 }
 
 init();

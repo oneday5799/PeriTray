@@ -70,9 +70,9 @@
 
       <!-- Tab: General -->
       <div class="tab-content active" id="tab-general">
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">开机自启动</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">开机自启动</span>
         </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-autostart">
@@ -80,10 +80,10 @@
         </label>
       </div>
 
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">默认打开页面</span>
-          <div class="setting-desc">自定义左键点击托盘图标时打开的页面</div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">默认打开页面</span>
+          <div class="card-desc">自定义左键点击托盘图标时打开的页面</div>
         </div>
         <div class="win-combo-box" id="combo-default-popup-tab">
           <button class="win-combo-btn" role="combobox" aria-expanded="false">
@@ -113,10 +113,10 @@
         </div>
       </div>
 
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">硬件加速</span>
-          <div class="setting-desc">关闭可降低内存占用，开启可使动画更流畅，修改后重启生效</div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">硬件加速</span>
+          <div class="card-desc">关闭可降低内存占用，开启可使动画更流畅，修改后重启生效</div>
         </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-hardware-acceleration">
@@ -124,10 +124,10 @@
         </label>
       </div>
 
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">主题模式</span>
-          <div class="setting-desc">切换设置页的显示主题，修改后立即生效</div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">主题模式</span>
+          <div class="card-desc">切换设置页的显示主题，修改后立即生效</div>
         </div>
         <div class="win-combo-box" id="combo-theme-mode">
           <button class="win-combo-btn" role="combobox" aria-expanded="false">
@@ -165,46 +165,46 @@
 
       <div class="section-title">更新设置</div>
 
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">启动时检测更新</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">启动时检测更新</span>
         </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-check-updates">
           <span class="slider"></span>
         </label>
       </div>
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">获取测试版更新</span>
-          <div class="setting-desc">关闭时只获取正式版更新，开启后会获取测试版更新</div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">获取测试版更新</span>
+          <div class="card-desc">关闭时只获取正式版更新，开启后会获取测试版更新</div>
         </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-include-prerelease">
           <span class="slider"></span>
         </label>
       </div>
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">手动检测更新</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">手动检测更新</span>
         </div>
         <button class="add-device-btn" id="btn-check-update">检测更新</button>
       </div>
 
       <div class="section-title">日志设置</div>
 
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">运行日志</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">运行日志</span>
         </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-log">
           <span class="slider"></span>
         </label>
       </div>
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">保留时长</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">保留时长</span>
         </div>
         <div class="win-combo-box" id="combo-log-retention">
           <button class="win-combo-btn" role="combobox" aria-expanded="false">
@@ -251,9 +251,9 @@
           </div>
         </div>
       </div>
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">查看日志</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">查看日志</span>
         </div>
         <button class="add-device-btn" id="btn-log-dir">打开目录</button>
       </div>
@@ -262,8 +262,8 @@
     <!-- Tab: Shortcut -->
     <div class="tab-content" id="tab-shortcut">
       <div class="section-title">基础快捷键</div>
-      <div class="setting-row">
-        <span class="setting-label">打开设备信息</span>
+      <div class="card">
+        <span class="card-title">打开设备信息</span>
         <div class="shortcut-input-wrap">
           <div class="shortcut-key-box">
             <input type="text" class="shortcut-key-input" id="shortcut-devices" placeholder="点击录制快捷键" readonly>
@@ -271,8 +271,8 @@
           </div>
         </div>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">打开音量控制</span>
+      <div class="card">
+        <span class="card-title">打开音量控制</span>
         <div class="shortcut-input-wrap">
           <div class="shortcut-key-box">
             <input type="text" class="shortcut-key-input" id="shortcut-volume" placeholder="点击录制快捷键" readonly>
@@ -280,8 +280,8 @@
           </div>
         </div>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">提高音量</span>
+      <div class="card">
+        <span class="card-title">提高音量</span>
         <div class="shortcut-input-wrap">
           <div class="shortcut-key-box">
             <input type="text" class="shortcut-key-input" id="shortcut-volume-up" placeholder="点击录制快捷键" readonly>
@@ -289,8 +289,8 @@
           </div>
         </div>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">降低音量</span>
+      <div class="card">
+        <span class="card-title">降低音量</span>
         <div class="shortcut-input-wrap">
           <div class="shortcut-key-box">
             <input type="text" class="shortcut-key-input" id="shortcut-volume-down" placeholder="点击录制快捷键" readonly>
@@ -298,8 +298,8 @@
           </div>
         </div>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">设备静音</span>
+      <div class="card">
+        <span class="card-title">设备静音</span>
         <div class="shortcut-input-wrap">
           <div class="shortcut-key-box">
             <input type="text" class="shortcut-key-input" id="shortcut-volume-mute" placeholder="点击录制快捷键" readonly>
@@ -309,9 +309,9 @@
       </div>
 
       <div class="section-title">设备快捷键</div>
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">设备快捷键共享切换
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">设备快捷键共享切换
             <span class="tooltip-trigger">?
               <span class="tooltip-content">开启后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换默认输出设备；关闭时每个快捷键仅能分配给一个设备。</span>
             </span>
@@ -327,23 +327,21 @@
 
     <!-- Tab: Device Info -->
     <div class="tab-content" id="tab-device">
-      <div class="group-card" id="filter-card">
-        <div class="group-header" id="filter-card-header">
-          <div class="setting-row-left">
-            <span class="setting-label">设备过滤</span>
-            <div class="setting-desc">匹配设备名称的正则表达式，不区分大小写，匹配到的设备将被隐藏</div>
-          </div>
-          <div class="card-actions">
-            <label class="toggle">
-              <input type="checkbox" id="toggle-filter">
-              <span class="slider"></span>
-            </label>
-            <span class="group-arrow" id="arrow-filter">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </span>
-          </div>
+      <div class="card expandable" id="filter-card">
+        <div class="card-left">
+          <span class="card-title">设备过滤</span>
+          <div class="card-desc">匹配设备名称的正则表达式，不区分大小写，匹配到的设备将被隐藏</div>
         </div>
-        <div class="filter-regex-wrap" id="filter-regex-wrap">
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-filter">
+            <span class="slider"></span>
+          </label>
+          <span class="card-arrow" id="arrow-filter">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+        </div>
+        <div class="card-items filter-regex-wrap" id="filter-regex-wrap">
           <div class="filter-textarea-border">
             <div class="filter-textarea-focus-border"></div>
             <textarea id="filter-regex" class="filter-textarea" rows="4" spellcheck="false"></textarea>
@@ -351,42 +349,54 @@
         </div>
       </div>
 
-      <div class="setting-row">
-        <span class="setting-label">设备去重</span>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-dedup">
-          <span class="slider"></span>
-        </label>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">设备去重</span>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-dedup">
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
 
-      <div class="setting-row">
-        <span class="setting-label">显示无名称蓝牙设备</span>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-unnamed-bt">
-          <span class="slider"></span>
-        </label>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">显示无名称蓝牙设备</span>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-unnamed-bt">
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
 
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">使用系统蓝牙连接
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">使用系统蓝牙连接
             <span class="tooltip-trigger">?
               <span class="tooltip-content">应用内通过启用/禁用蓝牙服务来实现连接/断开蓝牙设备连接，可能会出现兼容性问题，如果出现问题可打开此开关通过跳转到系统蓝牙设置页进行管理。</span>
             </span>
           </span>
         </div>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-use-system-bt">
-          <span class="slider"></span>
-        </label>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-use-system-bt">
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
 
-      <div class="setting-row">
-        <div class="setting-row-left">
-          <span class="setting-label">自定义 2.4G 设备列表</span>
-          <div class="setting-desc"><a href="#" id="help-24g" class="setting-link">点击查看如何添加 2.4G 设备</a></div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">自定义 2.4G 设备列表</span>
+          <div class="card-desc"><a href="#" id="help-24g" class="setting-link">点击查看如何添加 2.4G 设备</a></div>
         </div>
-        <button class="add-device-btn" id="btn-add-24g">打开</button>
+        <div class="card-actions">
+          <button class="add-device-btn" id="btn-add-24g">打开</button>
+        </div>
       </div>
 
       <div class="section-title">设备信息页设备列表</div>
@@ -395,67 +405,65 @@
 
     <!-- Tab: Audio -->
     <div class="tab-content" id="tab-audio">
-      <div class="group-card" id="audio-card">
-        <div class="group-header" id="audio-card-header">
-          <div class="group-text">
-            <div class="group-title">音量控制页设备列表</div>
-          </div>
-          <div class="group-arrow" id="arrow-audio">
+      <div class="card expandable" id="audio-card">
+        <div class="card-left">
+          <div class="card-title">音量控制页设备列表</div>
+        </div>
+        <div class="card-actions">
+          <div class="card-arrow" id="arrow-audio">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
         </div>
-        <div class="group-items" id="audio-device-items">
+        <div class="card-items" id="audio-device-items">
         </div>
       </div>
 
-      <div class="group-card" id="shutdown-card">
-        <div class="group-header" id="shutdown-card-header">
-          <div class="group-text">
-            <div class="group-title">关机/重启时自动调整音量
-              <span class="tooltip-trigger">?
-                <span class="tooltip-content">关机或重启时自动将指定音频设备的音量调整到设定值，适用于需要固定关机音量及重置开机音量的场景。</span>
-              </span>
-            </div>
+      <div class="card expandable" id="shutdown-card">
+        <div class="card-left">
+          <div class="card-title">关机/重启时自动调整音量
+            <span class="tooltip-trigger">?
+              <span class="tooltip-content">关机或重启时自动将指定音频设备的音量调整到设定值，适用于需要固定关机音量及重置开机音量的场景。</span>
+            </span>
           </div>
-          <div class="card-actions">
-            <label class="toggle">
-              <input type="checkbox" id="toggle-shutdown-volume">
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="group-arrow" id="arrow-shutdown">
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-shutdown-volume">
+            <span class="slider"></span>
+          </label>
+          <div class="card-arrow" id="arrow-shutdown">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
         </div>
-        <div class="group-items" id="shutdown-device-items">
+        <div class="card-items" id="shutdown-device-items">
         </div>
       </div>
     </div>
 
     <!-- Tab: About -->
     <div class="tab-content" id="tab-about">
-      <div class="group-card about-info-card">
-        <div class="group-header" id="about-info-header">
-          <div class="group-text">
-            <div class="group-title">PeriphMonitor - 外设监控</div>
-            <div class="group-desc">© 2026 PeriphMonitor Project. All Rights Reserved.</div>
-          </div>
+      <div class="card expandable about-info-card" id="about-info-card">
+        <div class="card-left">
+          <div class="card-title">PeriphMonitor - 外设监控</div>
+          <div class="card-desc">© 2026 PeriphMonitor Project. All Rights Reserved.</div>
+        </div>
+        <div class="card-actions">
           <button class="add-device-btn" id="about-version-btn">版本 v1.0.0</button>
-          <div class="group-arrow expanded" id="arrow-about">
+          <div class="card-arrow expanded" id="arrow-about">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
         </div>
-        <div class="group-items show" id="about-info-items" style="max-height: 999px;">
-          <div class="device-item">
+        <div class="card-items show" id="about-info-items" style="max-height: 999px;">
+          <div class="card-item">
             <div class="section-title">功能简介</div>
-            <div class="device-item-controls about-item-controls">
+            <div class="card-item-controls about-item-controls">
               <p>监控并显示所有连接外设的信息，支持音频、USB、蓝牙、电池和显示器设备；</p>
               <p>查看并控制所有已连接的音频设备，支持独立调整正在播放的设备和应用的音量。</p>
             </div>
           </div>
-          <div class="device-item">
+          <div class="card-item">
             <div class="section-title">相关信息</div>
-            <div class="device-item-controls about-item-controls">
+            <div class="card-item-controls about-item-controls">
               <div class="about-link-item">
                 <span class="about-link-label">开发人员：</span>
                 <a class="win-hyperlink-btn" href="#" id="about-dev">oneday5799</a>
@@ -470,9 +478,9 @@
               </div>
             </div>
           </div>
-          <div class="device-item">
+          <div class="card-item">
             <div class="section-title">其他链接</div>
-            <div class="device-item-controls about-item-controls">
+            <div class="card-item-controls about-item-controls">
               <div class="about-link-item">
                 <a class="win-hyperlink-btn" href="#" id="about-help">获取帮助</a>
                 <a class="win-hyperlink-btn" href="#" id="about-feedback">提供反馈</a>

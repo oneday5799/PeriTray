@@ -76,22 +76,22 @@ function renderDevices() {
 
     for (const dev of devs) {
       const card = document.createElement("div");
-      card.className = "device-card";
+      card.className = "card device";
 
       const infoEl = document.createElement("div");
-      infoEl.className = "device-info";
+      infoEl.className = "card-left";
 
       const nameEl = document.createElement("div");
-      nameEl.className = "device-name";
+      nameEl.className = "card-title device-name";
       nameEl.textContent = getDisplayName(dev, deviceNames);
       infoEl.appendChild(nameEl);
 
       const statusRow = document.createElement("div");
-      statusRow.className = "device-status-row";
+      statusRow.className = "card-tags";
 
       if (dev.is_bluetooth || dev.is_wireless_24g) {
         const statusEl = document.createElement("div");
-        statusEl.className = "device-status";
+        statusEl.className = "card-tag status";
         if (dev.status === "已连接") {
           statusEl.classList.add("connected");
         } else if (dev.status === "已配对") {
@@ -103,19 +103,19 @@ function renderDevices() {
 
       if (dev.is_bluetooth) {
         const tagEl = document.createElement("div");
-        tagEl.className = "tag-bluetooth";
+        tagEl.className = "card-tag bluetooth";
         tagEl.textContent = "蓝牙";
         statusRow.appendChild(tagEl);
       } else if (dev.is_wireless_24g) {
         const tagEl = document.createElement("div");
-        tagEl.className = "tag-24g";
+        tagEl.className = "card-tag wireless";
         tagEl.textContent = "2.4G";
         statusRow.appendChild(tagEl);
       }
 
       if (dev.battery != null) {
         const batteryEl = document.createElement("div");
-        batteryEl.className = "device-battery";
+        batteryEl.className = "card-tag battery";
         batteryEl.textContent = `${dev.battery}%`;
         statusRow.appendChild(batteryEl);
       }
@@ -125,7 +125,7 @@ function renderDevices() {
 
       if (dev.is_bluetooth && (dev.status === "已配对" || dev.status === "已连接")) {
         const actionsEl = document.createElement("div");
-        actionsEl.className = "device-actions";
+        actionsEl.className = "card-actions";
 
         const connectBtn = document.createElement("button");
         connectBtn.className = "connect-btn";
@@ -155,8 +155,8 @@ function renderDevices() {
           connectBtn.disabled = true;
           connectBtn.classList.add("loading");
 
-          const statusEl = card.querySelector(".device-status");
-          const batteryEl = card.querySelector(".device-battery");
+          const statusEl = card.querySelector(".card-tag.status");
+          const batteryEl = card.querySelector(".card-tag.battery");
           if (statusEl) {
             statusEl.textContent = isConnect ? "正在连接..." : "正在断开...";
             statusEl.classList.remove("connected", "paired");
@@ -209,8 +209,8 @@ function renderDevices() {
             newStatus = refreshed.status;
           }
 
-          const newStatusEl = card.querySelector(".device-status");
-          const newBatteryEl = card.querySelector(".device-battery");
+          const newStatusEl = card.querySelector(".card-tag.status");
+          const newBatteryEl = card.querySelector(".card-tag.battery");
           if (newStatusEl) {
             newStatusEl.textContent = newStatus;
             newStatusEl.classList.remove("connected", "paired");
@@ -465,6 +465,7 @@ window.addEventListener("focus", async () => {
 });
 
 if (window.__TAURI__) {
+  initTheme();
   loadDevices();
 } else {
   window.addEventListener("DOMContentLoaded", () => {

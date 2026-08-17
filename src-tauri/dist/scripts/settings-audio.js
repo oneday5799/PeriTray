@@ -16,7 +16,7 @@ function renderAudioDeviceGroups(audioDevices) {
   container.innerHTML = "";
 
   if (audioDevices.length === 0) {
-    container.innerHTML = '<div class="device-item"><div class="device-item-name" style="color:#888">没有检测到音频设备</div></div>';
+    container.innerHTML = '<div class="card-item"><div class="card-item-name" style="color:#888">没有检测到音频设备</div></div>';
     if (arrow) arrow.classList.remove("expanded");
     container.style.maxHeight = "0px";
     return;
@@ -24,10 +24,10 @@ function renderAudioDeviceGroups(audioDevices) {
 
   for (const dev of audioDevices) {
     const item = document.createElement("div");
-    item.className = "device-item";
+    item.className = "card-item";
 
     const nameEl = document.createElement("div");
-    nameEl.className = "device-item-name";
+    nameEl.className = "card-item-name";
     nameEl.textContent = dev.name;
     if (dev.is_default) {
       const badge = document.createElement("span");
@@ -66,13 +66,14 @@ function renderAudioDeviceGroups(audioDevices) {
 }
 
 function initAudioCardToggle() {
-  const header = document.getElementById("audio-card-header");
+  const card = document.getElementById("audio-card");
   const items = document.getElementById("audio-device-items");
   const arrow = document.getElementById("arrow-audio");
 
-  if (!header || !items || !arrow) return;
+  if (!card || !items || !arrow) return;
 
-  header.addEventListener("click", () => {
+  card.addEventListener("click", (e) => {
+    if (e.target.closest('.card-items')) return;
     const isExpanded = items.classList.toggle("show");
     arrow.classList.toggle("expanded", isExpanded);
     audioExpanded = isExpanded;
@@ -90,7 +91,7 @@ async function initShutdownVolumeSettings() {
   const toggle = document.getElementById("toggle-shutdown-volume");
   const items = document.getElementById("shutdown-device-items");
   const arrow = document.getElementById("arrow-shutdown");
-  const header = document.getElementById("shutdown-card-header");
+  const card = document.getElementById("shutdown-card");
 
   function setShutdownExpanded(expanded) {
     if (expanded) {
@@ -120,7 +121,8 @@ async function initShutdownVolumeSettings() {
     items.style.maxHeight = "0px";
   }
 
-  header.addEventListener("click", (e) => {
+  card.addEventListener("click", (e) => {
+    if (e.target.closest('.card-items')) return;
     if (e.target.closest(".toggle") || e.target.closest("input")) return;
     const isExpanded = items.classList.toggle("show");
     if (isExpanded) {
@@ -143,14 +145,14 @@ async function initShutdownVolumeSettings() {
       const volume = isEnabled ? Math.round(savedVolume * 100) : 50;
 
       const item = document.createElement("div");
-      item.className = "device-item";
+      item.className = "card-item";
 
       const nameEl = document.createElement("div");
-      nameEl.className = "device-item-name" + (isEnabled ? "" : " hidden");
+      nameEl.className = "card-item-name" + (isEnabled ? "" : " hidden");
       nameEl.textContent = dev.name;
 
       const controls = document.createElement("div");
-      controls.className = "device-item-controls";
+      controls.className = "card-item-controls";
 
       const numberbox = document.createElement("div");
       numberbox.className = "win-numberbox";

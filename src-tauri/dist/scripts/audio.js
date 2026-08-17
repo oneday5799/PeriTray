@@ -12,7 +12,7 @@ document.addEventListener("mouseup", () => {
 });
 
 function updateSessionCard(session) {
-  const cards = document.querySelectorAll('.audio-session-card');
+  const cards = document.querySelectorAll('.card.session');
   for (const card of cards) {
     if (card.dataset.sessionId === session.id) {
       updateSliderValue(card.querySelector('.volume-slider'), session.volume);
@@ -51,7 +51,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
 }
 
 function updateDeviceCard(device) {
-  const cards = document.querySelectorAll('.audio-device-card');
+  const cards = document.querySelectorAll('.card.audio-device');
   let targetCard = null;
   for (const card of cards) {
     if (card.dataset.deviceId === device.id) {
@@ -325,7 +325,7 @@ async function loadAudioDevices() {
       if (firstVisible) selectDevice(firstVisible.id);
     }
   } catch (e) {
-    if (list.querySelectorAll('.audio-device-card').length === 0) {
+    if (list.querySelectorAll('.card.audio-device').length === 0) {
       list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
     }
   }
@@ -344,7 +344,7 @@ function renderAudioDevices() {
   list.querySelectorAll('.loading').forEach(el => el.remove());
 
   const existingCards = new Map();
-  list.querySelectorAll('.audio-device-card').forEach(card => {
+  list.querySelectorAll('.card.audio-device').forEach(card => {
     existingCards.set(card.dataset.deviceId, card);
   });
 
@@ -370,15 +370,15 @@ function renderAudioDevices() {
 
 function createAudioDeviceCard(device) {
   const card = document.createElement("div");
-  card.className = "audio-device-card";
+  card.className = "card column audio-device";
   card.dataset.deviceId = device.id;
   card.dataset.deviceName = device.name;
 
   const header = document.createElement("div");
-  header.className = "audio-device-header";
+  header.className = "card-left";
 
   const nameEl = document.createElement("div");
-  nameEl.className = "audio-device-name" + (device.is_default ? " default" : "");
+  nameEl.className = "card-title audio-device-name" + (device.is_default ? " default" : "");
   nameEl.textContent = audioDeviceNames[device.name] || device.name;
   if (device.is_default) {
     const badge = document.createElement("span");
@@ -414,7 +414,7 @@ function createAudioDeviceCard(device) {
   card.appendChild(header);
 
   const controls = document.createElement("div");
-  controls.className = "audio-device-controls";
+  controls.className = "card-controls";
 
   const slider = document.createElement("input");
   slider.type = "range";
@@ -507,7 +507,7 @@ async function loadAudioSessions(deviceId) {
     audioSessions = await invoke("get_audio_sessions", { deviceId });
     renderAudioSessions();
   } catch (e) {
-    if (list.querySelectorAll('.audio-session-card').length === 0) {
+    if (list.querySelectorAll('.card.session').length === 0) {
       list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
     }
   }
@@ -523,7 +523,7 @@ function renderAudioSessions() {
   list.querySelectorAll('.loading').forEach(el => el.remove());
 
   const existingCards = new Map();
-  list.querySelectorAll('.audio-session-card').forEach(card => {
+  list.querySelectorAll('.card.session').forEach(card => {
     existingCards.set(card.dataset.sessionId, card);
   });
 
@@ -549,11 +549,11 @@ function renderAudioSessions() {
 
 function createAudioSessionCard(session) {
   const card = document.createElement("div");
-  card.className = "audio-session-card";
+  card.className = "card session";
   card.dataset.sessionId = session.id;
 
   const iconEl = document.createElement("div");
-  iconEl.className = "session-icon";
+  iconEl.className = "card-icon session-icon";
   if (session.icon && session.icon.length > 100) {
     const img = document.createElement("img");
     img.src = `data:image/png;base64,${session.icon}`;
@@ -572,7 +572,7 @@ function createAudioSessionCard(session) {
   card.appendChild(iconEl);
 
   const controls = document.createElement("div");
-  controls.className = "session-controls";
+  controls.className = "card-controls session-controls";
 
   const slider = document.createElement("input");
   slider.type = "range";

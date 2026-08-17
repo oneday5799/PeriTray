@@ -33,6 +33,38 @@ window.getInvoke = function () {
     : null;
 };
 
+// ── 主题（共享：设置页 + 主窗口） ─────────────────────
+let themeMode = "follow_system";
+
+window.applyThemeMode = function (mode) {
+  themeMode = mode || "follow_system";
+  const html = document.documentElement;
+  const isDark = themeMode === "dark" ||
+    (themeMode === "follow_system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  html.setAttribute("data-theme", isDark ? "dark" : "light");
+};
+
+window.initTheme = async function () {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  try {
+    const config = await invoke("get_config");
+    applyThemeMode(config.theme_mode || "follow_system");
+  } catch (e) {
+    console.error("Failed to init theme:", e);
+  }
+};
+
+// 跟随系统时实时响应系统主题切换
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  if (themeMode === "follow_system") applyThemeMode("follow_system");
+});
+
+// config-changed: 设置页切主题时，主窗口/设置页实时同步
+window.__TAURI__.event.listen("config-changed", () => {
+  initTheme();
+});
+
 window.getDisplayName = function (dev, deviceNames) {
   return deviceNames[dev.name] || dev.name;
 };
@@ -138,7 +170,7 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
 function updateSliderGradient(slider) {
   const value = slider.value;
   const percentage = ((value - slider.min) / (slider.max - slider.min)) * 100;
-  slider.style.setProperty('--track-color', `linear-gradient(to right, #0078d7 0%, #0078d7 ${percentage}%, #e0e0e0 ${percentage}%, #e0e0e0 100%)`);
+  slider.style.setProperty('--track-color', `linear-gradient(to right, #0078d7 0%, #0078d7 ${percentage}%, var(--slider-track, #e0e0e0) ${percentage}%, var(--slider-track, #e0e0e0) 100%)`);
 }
 
 // ── 快捷键录制（共享工具） ────────────────────────────────

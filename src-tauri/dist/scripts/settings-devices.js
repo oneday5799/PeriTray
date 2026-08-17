@@ -26,34 +26,27 @@ function renderGroups() {
 
   for (const group of CATEGORIES) {
     const devs = groups[group.key] || [];
-    const groupEl = document.createElement("div");
-    groupEl.className = "group";
 
     const card = document.createElement("div");
-    card.className = "group-card";
+    card.className = "card expandable";
 
-    const header = document.createElement("div");
-    header.className = "group-header";
-
-    const icon = document.createElement("div");
-    icon.className = "group-icon";
-    icon.textContent = group.icon;
-    header.appendChild(icon);
-
-    const textWrap = document.createElement("div");
-    textWrap.className = "group-text";
+    const left = document.createElement("div");
+    left.className = "card-left";
 
     const title = document.createElement("div");
-    title.className = "group-title";
+    title.className = "card-title";
     title.textContent = group.label;
-    textWrap.appendChild(title);
+    left.appendChild(title);
 
     const subtitle = document.createElement("div");
-    subtitle.className = "group-subtitle";
+    subtitle.className = "card-desc";
     subtitle.textContent = group.subtitle;
-    textWrap.appendChild(subtitle);
+    left.appendChild(subtitle);
 
-    header.appendChild(textWrap);
+    card.appendChild(left);
+
+    const actions = document.createElement("div");
+    actions.className = "card-actions";
 
     const isGroupHidden = config.hidden_groups.includes(group.key);
     const { toggle: groupToggle } = createToggle(
@@ -64,23 +57,26 @@ function renderGroups() {
         config.hidden_groups = cfg.hidden_groups || [];
         renderGroups();
       },
-      "group-toggle"
+      "card-toggle"
     );
 
     groupToggle.addEventListener("click", (e) => {
       e.stopPropagation();
     });
-    header.appendChild(groupToggle);
+    actions.appendChild(groupToggle);
 
     const arrow = document.createElement("div");
-    arrow.className = "group-arrow";
+    arrow.className = "card-arrow";
     arrow.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-    header.appendChild(arrow);
+    actions.appendChild(arrow);
+
+    card.appendChild(actions);
 
     const items = document.createElement("div");
-    items.className = "group-items";
+    items.className = "card-items";
 
-    header.addEventListener("click", () => {
+    card.addEventListener("click", (e) => {
+      if (e.target.closest('.card-items')) return;
       const isExpanded = items.classList.toggle("show");
       arrow.classList.toggle("expanded", isExpanded);
       if (isExpanded) {
@@ -99,10 +95,10 @@ function renderGroups() {
 
     for (const dev of devs) {
       const item = document.createElement("div");
-      item.className = "device-item";
+      item.className = "card-item";
 
       const nameEl = document.createElement("div");
-      nameEl.className = "device-item-name";
+      nameEl.className = "card-item-name";
       nameEl.textContent = dev.name;
 
       const isHidden = config.hidden_devices.includes(dev.name);
@@ -119,10 +115,8 @@ function renderGroups() {
       items.appendChild(item);
     }
 
-    card.appendChild(header);
     card.appendChild(items);
-    groupEl.appendChild(card);
-    container.appendChild(groupEl);
+    container.appendChild(card);
 
     if (expandedGroups.has(group.key)) {
       requestAnimationFrame(() => {

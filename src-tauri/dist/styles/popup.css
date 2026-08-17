@@ -234,100 +234,43 @@ body {
   padding: 0;
 }
 
-/* Device card */
-.device-card {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  padding: 12px 14px;
-  margin-bottom: 6px;
+/* Device card uses shared .card component (base.css) */
+.card.device {
+  min-height: 60px;
+}
+
+.card.column.audio-device,
+.card.session {
+  min-height: 60px;
+}
+
+.card.device .card-left {
+  height: 60px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: default;
-  transition: background 0.12s;
+  flex-direction: column;
+  justify-content: center;
 }
 
-.device-card:hover {
-  background: rgba(0, 0, 0, 0.03);
+.card.device .card-actions {
+  height: 60px;
 }
 
-.device-info {
-  flex: 1;
-  min-width: 0;
-  margin-right: 12px;
-}
-
-.device-name {
-  font-size: 14px;
-  color: #000;
+.card.device .card-title {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 2px;
 }
 
-.device-status-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.card.device .card-tags {
+  margin-top: 4px;
 }
 
-.device-status {
-  font-size: 12px;
-  color: #808080;
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.device-status.connected::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #4caf50;
-  margin-right: 6px;
-  vertical-align: middle;
-}
-
-.device-status.paired::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #999;
-  margin-right: 6px;
-  vertical-align: middle;
-}
-
-.device-battery {
-  font-size: 12px;
-  color: #808080;
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.tag-bluetooth {
-  font-size: 12px;
-  color: #1976d2;
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.tag-24g {
-  font-size: 12px;
-  color: #388e3c;
-  white-space: nowrap;
-  line-height: 1;
+.card.device .card-tags:empty {
+  display: none;
 }
 
 /* Device actions (connect/disconnect button) */
-.device-actions {
-  flex-shrink: 0;
-}
-
 .connect-btn {
   height: 32px;
   padding: 5px 11px 6px;
@@ -596,4 +539,172 @@ body {
   background: #e8f4fd;
   border-color: #0078d7;
   color: #0078d7;
+}
+
+/* ── Dark theme (popup 跟随设置页 theme_mode) ─────────────── */
+html[data-theme="dark"] .win-nav-top-bar {
+  border-bottom-color: #1d1d1d;
+}
+
+html[data-theme="dark"] .win-nav-item {
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .win-nav-item:hover {
+  background: rgba(255, 255, 255, 0.0605);
+}
+
+html[data-theme="dark"] .win-nav-item:active {
+  background: rgba(255, 255, 255, 0.0241);
+  color: rgba(255, 255, 255, 0.62);
+}
+
+html[data-theme="dark"] .win-nav-item.active:active {
+  background: transparent;
+}
+
+html[data-theme="dark"] .win-nav-icon-btn {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+html[data-theme="dark"] .win-nav-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.0605);
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .win-nav-icon-btn:active {
+  background: rgba(255, 255, 255, 0.0241);
+  color: rgba(255, 255, 255, 0.62);
+}
+
+html[data-theme="dark"] .category-header {
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .loading {
+  color: rgba(255, 255, 255, 0.54);
+}
+
+html[data-theme="dark"] .connect-btn,
+html[data-theme="dark"] .dialog-btn {
+  background: rgba(255, 255, 255, 0.0605);
+  color: rgba(255, 255, 255, 0.89);
+  border-left-color: rgba(255, 255, 255, 0.0706);
+  border-top-color: rgba(255, 255, 255, 0.0706);
+  border-right-color: rgba(255, 255, 255, 0.0706);
+  border-bottom-color: rgba(255, 255, 255, 0.54);
+}
+
+html[data-theme="dark"] .connect-btn:hover,
+html[data-theme="dark"] .dialog-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.0837);
+}
+
+html[data-theme="dark"] .connect-btn:active,
+html[data-theme="dark"] .dialog-btn.cancel:active {
+  background: rgba(255, 255, 255, 0.0241);
+  color: rgba(255, 255, 255, 0.62);
+}
+
+html[data-theme="dark"] .connect-btn:disabled,
+html[data-theme="dark"] .connect-btn.loading {
+  background: rgba(255, 255, 255, 0.0837);
+  color: rgba(255, 255, 255, 0.36);
+}
+
+html[data-theme="dark"] .connect-btn:disabled:hover,
+html[data-theme="dark"] .connect-btn.loading:hover {
+  background: rgba(255, 255, 255, 0.0837);
+}
+
+html[data-theme="dark"] .dialog-btn.confirm {
+  background: #4cc2ff;
+  color: #1a1a1a;
+  border-color: #4cc2ff;
+}
+
+html[data-theme="dark"] .dialog-btn.confirm:hover {
+  background: #3a9ee0;
+}
+
+html[data-theme="dark"] .dialog-btn.restore {
+  background: rgba(255, 255, 255, 0.0605);
+  color: #4cc2ff;
+  border-color: #4cc2ff;
+}
+
+html[data-theme="dark"] .dialog-btn.restore:hover {
+  background: rgba(76, 194, 255, 0.12);
+}
+
+html[data-theme="dark"] .context-menu {
+  background: #2b2b2b;
+  border-color: rgb(0 0 0 / 30%);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="dark"] .context-menu-item {
+  color: rgba(255, 255, 255, 0.89);
+}
+
+html[data-theme="dark"] .context-menu-item:hover {
+  background: rgba(255, 255, 255, 0.0605);
+}
+
+html[data-theme="dark"] .rename-dialog {
+  background: #2b2b2b;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="dark"] .dialog-title {
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .dialog-input {
+  background: rgba(255, 255, 255, 0.0605);
+  border-color: rgb(0 0 0 / 30%);
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .dialog-input:focus {
+  border-color: #4cc2ff;
+}
+
+html[data-theme="dark"] .shortcut-dialog-device {
+  color: rgba(255, 255, 255, 0.89);
+}
+
+html[data-theme="dark"] .shortcut-dialog-hint {
+  color: rgba(255, 255, 255, 0.54);
+}
+
+html[data-theme="dark"] .shortcut-key-input {
+  background: rgba(255, 255, 255, 0.0605);
+  border-color: rgb(0 0 0 / 30%);
+  color: #ffffff;
+}
+
+html[data-theme="dark"] .shortcut-key-input:focus {
+  border-color: #4cc2ff;
+  box-shadow: 0 0 0 2px rgba(76, 194, 255, 0.25);
+}
+
+html[data-theme="dark"] .shortcut-key-input.recording {
+  border-color: #4cc2ff;
+  box-shadow: 0 0 0 2px rgba(76, 194, 255, 0.25);
+}
+
+html[data-theme="dark"] .group-option {
+  border-color: rgb(0 0 0 / 30%);
+  color: rgba(255, 255, 255, 0.89);
+}
+
+html[data-theme="dark"] .group-option:hover {
+  background: rgba(255, 255, 255, 0.0605);
+}
+
+html[data-theme="dark"] .group-option.selected {
+  background: rgba(76, 194, 255, 0.12);
+  border-color: #4cc2ff;
+  color: #4cc2ff;
 }

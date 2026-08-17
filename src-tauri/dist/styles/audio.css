@@ -9,40 +9,14 @@
   margin-bottom: 12px;
 }
 
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin-top: 20px;
-  margin-bottom: 6px;
-  padding: 0;
-}
-
-/* Audio device card */
-.audio-device-card {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  padding: 12px 14px;
-  margin-bottom: 6px;
-  transition: background 0.12s;
-}
-
-.audio-device-card:hover {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-.audio-device-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+/* Audio device card (two-row: header + volume controls) */
+.audio-device {
+  cursor: pointer;
 }
 
 .audio-device-name {
-  font-size: 14px;
-  color: #000;
   cursor: pointer;
+  min-width: 0;
 }
 
 .audio-device-name:hover {
@@ -57,12 +31,6 @@
   font-size: 12px;
   color: #0078d7;
   margin-left: 8px;
-}
-
-.audio-device-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* Mute button */
@@ -108,48 +76,46 @@
 }
 
 /* Audio session card */
-.audio-session-card {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  padding: 10px 14px;
-  margin-bottom: 6px;
-  display: flex;
-  align-items: center;
+.session {
   gap: 12px;
-  transition: background 0.12s;
-}
-
-.audio-session-card:hover {
-  background: rgba(0, 0, 0, 0.03);
-}
-
-.session-icon {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  background: #f0f0f0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.session-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 
 .session-controls {
   flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .session-slider {
   flex: 1;
+}
+
+/* ── Dark theme (main window follows settings theme_mode) ─────────────── */
+html[data-theme="dark"] .audio-device-name:hover {
+  color: #4cc2ff;
+}
+
+html[data-theme="dark"] .audio-device-name.default {
+  color: #4cc2ff;
+}
+
+html[data-theme="dark"] .default-badge {
+  color: #4cc2ff;
+}
+
+html[data-theme="dark"] .mute-btn {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+html[data-theme="dark"] .mute-btn:hover {
+  background: rgba(255, 255, 255, 0.0605);
+}
+
+html[data-theme="dark"] .mute-btn.muted {
+  color: #ff6b7a;
+}
+
+html[data-theme="dark"] .slider-tooltip {
+  background: #2b2b2b;
+  border-color: rgb(0 0 0 / 30%);
+  color: rgba(255, 255, 255, 0.89);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }

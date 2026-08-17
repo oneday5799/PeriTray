@@ -4,7 +4,7 @@
   user-select: none;
 }
 
-/* ── Theme overrides (must come before media queries) ──────── */
+/* ── Theme overrides: 导航栏配色，跟随 data-theme ──────── */
 html[data-theme="dark"],
 html[data-theme="dark"] body,
 html[data-theme="dark"] .settings-container,
@@ -229,60 +229,23 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   border-bottom: 1px solid transparent;
 }
 
-@media (prefers-color-scheme: dark) {
-  .setting-row {
-    background: rgba(255, 255, 255, 0.0605);
-    border-color: rgba(255, 255, 255, 0.0706);
-  }
+/* 暗色导航激活态/指示器（其余导航色由顶部 html[data-theme] 块接管） */
+html[data-theme="dark"] .win-nav-left-panel {
+  border-right-color: #1d1d1d;
+}
 
-  .setting-row:hover {
-    background: rgba(255, 255, 255, 0.0837);
-  }
+html[data-theme="dark"] .win-nav-item:active {
+  background: rgba(255, 255, 255, 0.0419);
+  color: rgba(255, 255, 255, 0.77);
+}
 
-  .win-nav-left-panel {
-    border-right-color: #1d1d1d;
-  }
+html[data-theme="dark"] .win-nav-item.is-selected:active {
+  background: rgba(255, 255, 255, 0.0419);
+  color: rgba(255, 255, 255, 0.77);
+}
 
-  .win-nav-title {
-    color: #ffffff;
-  }
-
-  .win-nav-item {
-    color: rgba(255, 255, 255, 0.77);
-  }
-
-  .win-nav-item:hover {
-    background: rgba(255, 255, 255, 0.0605);
-    color: #ffffff;
-  }
-
-  .win-nav-item:active {
-    background: rgba(255, 255, 255, 0.0419);
-    color: rgba(255, 255, 255, 0.77);
-  }
-
-  .win-nav-item.is-selected {
-    background: rgba(255, 255, 255, 0.0605);
-    color: #ffffff;
-  }
-
-  .win-nav-item.is-selected:hover {
-    background: rgba(255, 255, 255, 0.0419);
-    color: #ffffff;
-  }
-
-  .win-nav-item.is-selected:active {
-    background: rgba(255, 255, 255, 0.0419);
-    color: rgba(255, 255, 255, 0.77);
-  }
-
-  .win-nav-page-header {
-    color: #ffffff;
-  }
-
-  .win-nav-indicator {
-    background: #4cc2ff;
-  }
+html[data-theme="dark"] .win-nav-indicator {
+  background: #4cc2ff;
 }
 
 .tab-content {
@@ -352,76 +315,42 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   }
 }
 
-/* Card base — setting-row 与 group-card 共享卡片风格 */
-.setting-row,
-.group-card {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-}
-
-.setting-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+/* Card 组件已统一定义于 base.css；此处仅调整设置页尺寸 */
+.settings-container .card {
+  min-height: 60px;
   padding: 10px 14px;
   margin-bottom: 3px;
-  min-height: 60px;
-  box-sizing: border-box;
 }
 
-.setting-row-left {
+.settings-container .card {
+  padding: 0 14px;
+}
+
+.settings-container .card-left {
+  height: 60px;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  flex: 1;
-  margin-right: 12px;
+  justify-content: center;
 }
 
-.setting-row:hover,
-.group-header:hover {
-  background: rgba(0, 0, 0, 0.03);
+.settings-container .card-actions {
+  height: 60px;
 }
 
-.card-actions {
-  display: flex;
-  align-items: center;
+.settings-container .card.expandable .card-items {
+  flex-basis: auto;
+  width: calc(100% + 28px);
+  max-width: none;
+  margin-left: -14px;
+  margin-right: -14px;
 }
 
-.setting-label,
-.group-title {
-  display: inline-flex;
-  align-items: center;
-  font-size: 14px;
-  color: #1a1a1a;
+.settings-container .card.expandable .card-item {
+  padding-left: 30px;
+  padding-right: 30px;
 }
 
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin-top: 20px;
-  margin-bottom: 6px;
-  padding: 0;
-}
-
-@media (prefers-color-scheme: dark) {
-  .section-title {
-    color: #ffffff;
-  }
-}
-
-.setting-desc,
-.group-subtitle {
-  font-size: 12px;
-  color: #666;
-  margin-top: 2px;
-}
-
-.setting-desc {
-  line-height: 1.4;
-}
-
+/* 设置页卡内标题/描述占位（基础样式在 base.css，dark 由主题令牌接管） */
 .setting-link {
   font-size: 12px;
   color: #0067c0;
@@ -432,18 +361,8 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   text-decoration: underline;
 }
 
-@media (prefers-color-scheme: dark) {
-  .setting-label {
-    color: #ffffff;
-  }
-
-  .setting-desc {
-    color: rgba(255, 255, 255, 0.62);
-  }
-
-  .setting-link {
-    color: #4cc2ff;
-  }
+html[data-theme="dark"] .setting-link {
+  color: #4cc2ff;
 }
 
 /* Tooltip trigger */
@@ -505,16 +424,6 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   to { opacity: 1; }
 }
 
-@media (prefers-color-scheme: dark) {
-  .tooltip-content {
-    background: rgba(44, 44, 44, 0.86);
-    border: 1px solid rgba(0, 0, 0, 0.20);
-    color: #ffffff;
-    -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
-    backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .tooltip-trigger:hover .tooltip-content {
     animation-duration: 1ms;
@@ -565,36 +474,16 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
 }
 
 /* Filter regex */
-#filter-card {
-  margin-bottom: 3px;
-}
-
-#audio-card {
-  margin-bottom: 3px;
-}
-
-#audio-card .group-header,
-#filter-card .group-header,
-#shutdown-card .group-header {
-  padding: 10px 14px;
-  height: 60px;
-  box-sizing: border-box;
-}
-
-#filter-card .setting-row-left {
-  margin-right: 12px;
-}
-
 .filter-regex-wrap {
   max-height: 0;
   overflow: hidden;
   transition: max-height 0.2s ease, padding 0.2s ease;
-  padding: 0 14px;
+  padding: 0 28px;
 }
 
 .filter-regex-wrap.show {
   max-height: 400px;
-  padding: 10px 14px;
+  padding: 10px 28px;
 }
 
 .filter-textarea-border,
@@ -612,6 +501,14 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
 }
 
 .filter-textarea-border:hover {
+  background: rgba(249, 249, 249, 0.50);
+}
+
+.win-numberbox-border:hover {
+  background: rgba(249, 249, 249, 0.50);
+}
+
+.shortcut-key-input:hover {
   background: rgba(249, 249, 249, 0.50);
 }
 
@@ -664,120 +561,7 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   outline: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  #filter-card .group-header:hover {
-    background: rgba(255, 255, 255, 0.0605);
-  }
-
-  .filter-textarea-border {
-    border: 1px solid rgba(0, 0, 0, 0.07);
-    border-bottom-color: rgba(255, 255, 255, 0.54);
-    background: rgba(255, 255, 255, 0.0605);
-  }
-
-  .filter-textarea-border:hover {
-    background: rgba(255, 255, 255, 0.0837);
-  }
-
-  .filter-textarea-border:focus-within {
-    background: rgba(30, 30, 30, 0.70);
-    border-color: rgba(0, 0, 0, 0.07);
-    border-bottom-color: rgba(0, 0, 0, 0.07);
-  }
-
-  .filter-textarea-border:focus-within .filter-textarea-focus-border::after {
-    background: #4cc2ff;
-  }
-
-  .filter-textarea {
-    color: #ffffff;
-  }
-}
-
-/* Device groups */
-.group {
-  margin-bottom: 3px;
-}
-
-/* Windows 11 settings card */
-.group-card {
-  overflow: hidden;
-}
-
-.group-header {
-  display: flex;
-  align-items: center;
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: background 0.12s ease;
-  height: 60px;
-  box-sizing: border-box;
-}
-
-.group-toggle {
-  margin-left: auto;
-  margin-right: 8px;
-}
-
-.group-toggle input {
-  cursor: pointer;
-}
-
-.group-icon {
-  display: none;
-}
-
-.group-text {
-  flex: 1;
-  margin-left: 0;
-}
-
-.group-arrow {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #888;
-  flex-shrink: 0;
-}
-
-.group-arrow.expanded {
-  transform: rotate(180deg);
-}
-
-/* Expandable items */
-.group-items {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.2s ease;
-}
-
-.group-items.show {
-  max-height: 1000px;
-}
-
-.device-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px 10px 64px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.device-item-name {
-  font-size: 14px;
-  color: #1a1a1a;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  margin-right: 12px;
-}
-
-.device-item-name.hidden {
-  color: #a0a0a0;
-}
+/* Device groups: 卡片及子元素统一使用 base.css 的 .card 组件 */
 
 /* Windows 11 buttons */
 .add-device-btn,
@@ -822,37 +606,6 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   background: rgba(249, 249, 249, 0.30);
   color: rgba(0, 0, 0, 0.62);
   border-bottom-color: rgba(0, 0, 0, 0.06);
-}
-
-@media (prefers-color-scheme: dark) {
-  .add-device-btn,
-  .shortcut-delete-btn {
-    border-left: 1px solid rgba(255, 255, 255, 0.0706);
-    border-top: 1px solid rgba(255, 255, 255, 0.0941);
-    border-right: 1px solid rgba(255, 255, 255, 0.0706);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.0706);
-    background: rgba(255, 255, 255, 0.0605);
-  }
-
-  .add-device-btn {
-    color: #ffffff;
-  }
-
-  .shortcut-delete-btn {
-    color: #e81123;
-  }
-
-  .add-device-btn:hover,
-  .shortcut-delete-btn:hover {
-    background: rgba(255, 255, 255, 0.0837);
-  }
-
-  .add-device-btn:active,
-  .shortcut-delete-btn:active {
-    background: rgba(255, 255, 255, 0.0326);
-    color: rgba(255, 255, 255, 0.77);
-    border-bottom-color: rgba(255, 255, 255, 0.0706);
-  }
 }
 
 /* ── WinUIonWeb ComboBox ─── */
@@ -984,6 +737,7 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   border-radius: 3px;
   cursor: pointer;
   font: inherit;
+  font-size: 14px;
   line-height: 20px;
   text-align: left;
   white-space: nowrap;
@@ -1047,83 +801,21 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   height: 10px;
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .win-combo-box {
-    color: #ffffff;
-  }
+/* 暗色 ComboBox 选中态/指示条（其余 combo 暗色由下方 html[data-theme] 块接管） */
+html[data-theme="dark"] .win-combo-item.selected .win-combo-item-layout {
+  background: rgba(255, 255, 255, 0.0605);
+}
 
-  .win-combo-btn {
-    background: rgba(255, 255, 255, 0.0605);
-    color: #ffffff;
-    border-left: 1px solid rgba(255, 255, 255, 0.0706);
-    border-top: 1px solid rgba(255, 255, 255, 0.0941);
-    border-right: 1px solid rgba(255, 255, 255, 0.0706);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.0941);
-  }
+html[data-theme="dark"] .win-combo-item.selected:hover .win-combo-item-layout {
+  background: rgba(255, 255, 255, 0.0419);
+}
 
-  .win-combo-btn:hover {
-    background: rgba(255, 255, 255, 0.0837);
-  }
-
-  .win-combo-btn:active {
-    background: rgba(255, 255, 255, 0.0326);
-  }
-
-  .win-combo-chevron {
-    color: rgba(255, 255, 255, 0.77);
-  }
-
-  .win-combo-flyout {
-    background: rgba(44, 44, 44, 0.86);
-    border: 1px solid rgba(0, 0, 0, 0.20);
-    box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
-    -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
-    backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
-  }
-
-  .win-combo-item {
-    color: #ffffff;
-  }
-
-  .win-combo-item:hover .win-combo-item-layout {
-    background: rgba(255, 255, 255, 0.0605);
-  }
-
-  .win-combo-item:active .win-combo-item-layout {
-    color: rgba(255, 255, 255, 0.77);
-    background: rgba(255, 255, 255, 0.0419);
-  }
-
-  .win-combo-item.selected .win-combo-item-layout {
-    background: rgba(255, 255, 255, 0.0605);
-  }
-
-  .win-combo-item.selected:hover .win-combo-item-layout {
-    background: rgba(255, 255, 255, 0.0419);
-  }
-
-  .win-combo-item-pill {
-    background: #4cc2ff;
-  }
+html[data-theme="dark"] .win-combo-item-pill {
+  background: #4cc2ff;
 }
 
 #shutdown-card {
-  margin-bottom: 3px;
   overflow: visible;
-}
-
-#filter-card .group-arrow,
-#shutdown-card .group-arrow {
-  margin-left: 8px;
-}
-
-.device-item-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
-  flex-shrink: 0;
 }
 
 /* NumberBox */
@@ -1291,21 +983,6 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   background: rgba(232, 17, 35, 0.12);
 }
 
-@media (prefers-color-scheme: dark) {
-  .shortcut-clear-btn {
-    color: rgba(255, 255, 255, 0.77);
-  }
-
-  .shortcut-clear-btn:hover {
-    color: #ff6b7a;
-    background: rgba(255, 107, 122, 0.08);
-  }
-
-  .shortcut-clear-btn:active {
-    background: rgba(255, 107, 122, 0.12);
-  }
-}
-
 .shortcut-hint {
   font-size: 12px;
   color: #999;
@@ -1316,11 +993,7 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   word-break: break-all;
 }
 
-#device-shortcut-list .setting-row-left {
-  min-width: auto;
-}
-
-#device-shortcut-list .setting-row {
+#device-shortcut-list .card {
   align-items: center;
 }
 
@@ -1330,20 +1003,16 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
 }
 
 /* About tab */
-#tab-about {
-}
-
-.about-info-card .group-header {
+.about-info-card {
   height: auto;
-  min-height: 60px;
   padding: 14px 16px;
 }
 
-.about-info-card .group-header:hover {
-  background: rgba(0, 0, 0, 0.03);
+.about-info-card .card-left {
+  margin-right: 12px;
 }
 
-.about-info-card .group-desc {
+.about-info-card .card-desc {
   font-size: 13px;
   color: #888;
   margin-top: 2px;
@@ -1355,11 +1024,11 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   flex-shrink: 0;
 }
 
-#about-info-items .device-item {
+#about-info-items .card-item {
   flex-direction: column;
   align-items: flex-start;
   justify-content: flex-start;
-  padding: 10px 16px;
+  padding: 10px 14px;
 }
 
 #about-info-items .section-title {
@@ -1368,7 +1037,7 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   flex: none;
 }
 
-#about-info-items .device-item-controls {
+#about-info-items .card-item-controls {
   margin-left: 0;
 }
 
@@ -1479,75 +1148,28 @@ html[data-theme="light"] .win-nav-item.is-selected:hover {
   background: rgba(0, 0, 0, 0.08);
 }
 
-@media (prefers-color-scheme: dark) {
-  .about-info-card .group-desc {
-    color: rgba(255, 255, 255, 0.54);
-  }
-
-  .about-info-card .group-header:hover {
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  .about-item-controls p {
-    color: rgba(255, 255, 255, 0.77);
-  }
-
-  .about-link-label {
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  .win-hyperlink-btn {
-    color: #4cc2ff;
-  }
-
-  .win-hyperlink-btn:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .win-hyperlink-btn:active {
-    background: rgba(255, 255, 255, 0.1);
-  }
-
-  .win-infobar {
-    border: 1px solid rgb(0 0 0 / 30%);
-    background: rgba(255, 255, 255, 0.0314);
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  .win-infobar-icon {
-    color: #4cc2ff;
-  }
-
-  .win-infobar-close-button:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .win-infobar-close-button:active {
-    background: rgba(255, 255, 255, 0.1);
-  }
-}
-
 /* ── Theme override: forces light/dark regardless of system preference ──────── */
-html[data-theme="light"] .setting-row,
-html[data-theme="light"] .group-card,
-html[data-theme="light"] .group-header,
-html[data-theme="light"] .group-items {
+html[data-theme="light"] .card,
+html[data-theme="light"] .settings-container .card,
+html[data-theme="light"] .card-items {
   background: #fff !important;
   border-color: #e0e0e0 !important;
   color: #1a1a1a !important;
 }
 
-html[data-theme="light"] .setting-row:hover,
-html[data-theme="light"] .group-header:hover {
+html[data-theme="light"] .card:hover {
   background: rgba(0, 0, 0, 0.0373) !important;
+}
+
+html[data-theme="light"] .card.expandable.no-hover:hover {
+  background: #fff !important;
 }
 
 html[data-theme="light"] .section-title,
 html[data-theme="light"] .win-nav-title,
 html[data-theme="light"] .win-nav-page-header,
-html[data-theme="light"] .setting-label,
-html[data-theme="light"] .group-title,
-html[data-theme="light"] .group-text,
+html[data-theme="light"] .card-title,
+html[data-theme="light"] .card-left,
 html[data-theme="light"] .win-combo-btn,
 html[data-theme="light"] .win-combo-item,
 html[data-theme="light"] .add-device-btn,
@@ -1578,8 +1200,7 @@ html[data-theme="light"] .shortcut-delete-btn:active {
   border-bottom-color: rgba(0, 0, 0, 0.06) !important;
 }
 
-html[data-theme="light"] .setting-desc,
-html[data-theme="light"] .group-subtitle {
+html[data-theme="light"] .card-desc {
   color: #666 !important;
 }
 
@@ -1598,10 +1219,14 @@ html[data-theme="light"] .filter-textarea-border {
   background: #fff !important;
 }
 
+html[data-theme="light"] .filter-textarea-border:hover {
+  background: rgba(249, 249, 249, 0.50) !important;
+}
+
 html[data-theme="light"] .filter-textarea-border:focus-within {
   background: #fff !important;
-  border-color: #0078d7 !important;
-  border-bottom-color: #0078d7 !important;
+  border-color: rgba(0, 0, 0, 0.06) !important;
+  border-bottom-color: rgba(0, 0, 0, 0.06) !important;
 }
 
 html[data-theme="light"] .filter-textarea-border:focus-within .filter-textarea-focus-border::after {
@@ -1684,12 +1309,8 @@ html[data-theme="light"] .shortcut-clear-btn:active {
   background: rgba(232, 17, 35, 0.12) !important;
 }
 
-html[data-theme="light"] .about-info-card .group-desc {
+html[data-theme="light"] .about-info-card .card-desc {
   color: rgba(0, 0, 0, 0.54) !important;
-}
-
-html[data-theme="light"] .about-info-card .group-header:hover {
-  background: rgba(0, 0, 0, 0.0373) !important;
 }
 
 html[data-theme="light"] .about-item-controls p {
@@ -1727,15 +1348,9 @@ html[data-theme="light"] .win-infobar-close-button:active {
 }
 
 /* Force dark mode when data-theme="dark" overrides a light system */
-html[data-theme="dark"] .setting-row,
-html[data-theme="dark"] .group-header {
+html[data-theme="dark"] .settings-container .card,
+html[data-theme="dark"] .card {
   background: rgba(255, 255, 255, 0.0605) !important;
-  border-color: rgb(0 0 0 / 30%) !important;
-}
-
-html[data-theme="dark"] .group-card,
-html[data-theme="dark"] .group-items {
-  background: transparent !important;
   border-color: rgb(0 0 0 / 30%) !important;
 }
 
@@ -1743,17 +1358,19 @@ html[data-theme="dark"] .filter-regex-wrap {
   background: rgba(255, 255, 255, 0.0605) !important;
 }
 
-html[data-theme="dark"] .setting-row:hover,
-html[data-theme="dark"] .group-header:hover {
+html[data-theme="dark"] .card:hover {
   background: rgba(255, 255, 255, 0.0837) !important;
+}
+
+html[data-theme="dark"] .card.expandable.no-hover:hover {
+  background: rgba(255, 255, 255, 0.0605) !important;
 }
 
 html[data-theme="dark"] .section-title,
 html[data-theme="dark"] .win-nav-title,
 html[data-theme="dark"] .win-nav-page-header,
-html[data-theme="dark"] .setting-label,
-html[data-theme="dark"] .group-title,
-html[data-theme="dark"] .group-text,
+html[data-theme="dark"] .card-title,
+html[data-theme="dark"] .card-left,
 html[data-theme="dark"] .win-combo-btn,
 html[data-theme="dark"] .win-combo-item,
 html[data-theme="dark"] .add-device-btn,
@@ -1764,8 +1381,7 @@ html[data-theme="dark"] .filter-textarea {
   color: #ffffff !important;
 }
 
-html[data-theme="dark"] .setting-desc,
-html[data-theme="dark"] .group-subtitle {
+html[data-theme="dark"] .card-desc {
   color: rgba(255, 255, 255, 0.62) !important;
 }
 
@@ -1861,12 +1477,8 @@ html[data-theme="dark"] .shortcut-clear-btn:active {
   background: rgba(255, 107, 122, 0.12) !important;
 }
 
-html[data-theme="dark"] .about-info-card .group-desc {
+html[data-theme="dark"] .about-info-card .card-desc {
   color: rgba(255, 255, 255, 0.54) !important;
-}
-
-html[data-theme="dark"] .about-info-card .group-header:hover {
-  background: rgba(255, 255, 255, 0.04) !important;
 }
 
 html[data-theme="dark"] .about-item-controls p {
@@ -1916,16 +1528,16 @@ html[data-theme="dark"] .win-infobar-close-button:active {
 }
 
 /* ── Device item list (音量控制页设备列表) ──────── */
-html[data-theme="dark"] .device-item {
+html[data-theme="dark"] .card-item {
   border-top: 0.8px solid rgb(0 0 0 / 30%) !important;
   background: rgba(255, 255, 255, 0.0605) !important;
 }
 
-html[data-theme="dark"] .device-item-name {
+html[data-theme="dark"] .card-item-name {
   color: #ffffff !important;
 }
 
-html[data-theme="dark"] .device-item-name.hidden {
+html[data-theme="dark"] .card-item-name.hidden {
   color: rgba(255, 255, 255, 0.4) !important;
 }
 
@@ -1950,8 +1562,8 @@ html[data-theme="dark"] .win-numberbox-input {
   color: #ffffff !important;
 }
 
-/* ── Group header text color ──────── */
-html[data-theme="dark"] .group-header {
+/* ── Card title text color ──────── */
+html[data-theme="dark"] .card-title {
   color: #ffffff !important;
 }
 
