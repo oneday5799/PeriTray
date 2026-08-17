@@ -10,10 +10,12 @@
 }
 
 .section-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: #000;
-  padding: 8px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-top: 20px;
+  margin-bottom: 6px;
+  padding: 0;
 }
 
 /* Audio device card */
@@ -27,8 +29,7 @@
 }
 
 .audio-device-card:hover {
-  background: #f0f0f0;
-}
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .audio-device-header {
@@ -120,7 +121,7 @@
 }
 
 .audio-session-card:hover {
-  background: #f0f0f0;
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .session-icon {

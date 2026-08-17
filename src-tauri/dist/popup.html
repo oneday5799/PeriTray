@@ -10,48 +10,54 @@
 </head>
 <body oncontextmenu="return false">
   <div class="popup-container" id="app">
-    <!-- Title bar (draggable) -->
-    <div class="title-bar" data-tauri-drag-region>
-      <div class="title-tabs">
-        <span class="tab-title active" data-tab="devices">设备信息</span>
-        <span class="tab-title" data-tab="volume">音量控制</span>
+    <!-- Top navigation (WinUI NavigationView - Top pane) -->
+    <nav class="win-nav-top-bar" data-tauri-drag-region>
+      <div class="win-nav-indicator-track" id="nav-indicator-track">
+        <div class="win-nav-indicator" id="nav-indicator"></div>
       </div>
-      <div class="title-buttons">
-        <button class="icon-btn" id="btn-refresh" title="刷新">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <div class="win-nav-menu">
+        <button class="win-nav-item active" data-tab="devices" aria-selected="true">设备信息</button>
+        <button class="win-nav-item" data-tab="volume" aria-selected="false">音量控制</button>
+      </div>
+      <div class="win-nav-top-footer">
+        <button class="win-nav-icon-btn" id="btn-refresh" title="刷新" aria-label="刷新">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 4v6h-6"/>
             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
           </svg>
         </button>
-        <button class="icon-btn" id="btn-settings" title="设置">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button class="win-nav-icon-btn" id="btn-settings" title="设置" aria-label="设置">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
         </button>
       </div>
-    </div>
+    </nav>
 
-    <!-- Device list (tab 1) -->
-    <div class="tab-content active" id="tab-devices">
-      <div class="device-list" id="device-list">
-        <div class="loading">加载中...</div>
-      </div>
-    </div>
-
-    <!-- Volume control (tab 2) -->
-    <div class="tab-content" id="tab-volume" style="display: none;">
-      <div class="volume-control">
-        <div class="volume-section">
-          <div class="section-title">设备音量</div>
-          <div id="audio-device-list" class="audio-device-list">
-            <div class="loading">加载中...</div>
-          </div>
+    <!-- Tab viewport (WinUI NavigationView content area) -->
+    <div class="tab-viewport">
+      <!-- Device list (tab 1) -->
+      <div class="tab-content active" id="tab-devices">
+        <div class="device-list" id="device-list">
+          <div class="loading">加载中...</div>
         </div>
-        <div class="volume-section">
-          <div class="section-title">应用音量</div>
-          <div id="audio-session-list" class="audio-session-list">
-            <div class="loading">没有正在播放的应用</div>
+      </div>
+
+      <!-- Volume control (tab 2) -->
+      <div class="tab-content" id="tab-volume" style="display: none;">
+        <div class="volume-control">
+          <div class="volume-section">
+            <div class="section-title">设备音量</div>
+            <div id="audio-device-list" class="audio-device-list">
+              <div class="loading">加载中...</div>
+            </div>
+          </div>
+          <div class="volume-section">
+            <div class="section-title">应用音量</div>
+            <div id="audio-session-list" class="audio-session-list">
+              <div class="loading">没有正在播放的应用</div>
+            </div>
           </div>
         </div>
       </div>

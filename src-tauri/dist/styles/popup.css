@@ -12,72 +12,198 @@ body {
   overflow: hidden;
 }
 
-/* Title bar */
-.title-bar {
+/* WinUI NavigationView - Top pane */
+.win-nav-top-bar {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  height: 50px;
-  padding: 0 16px;
+  height: 48px;
+  padding: 0 12px;
   flex-shrink: 0;
+  border-bottom: 1px solid #e5e5e5;
 }
 
-/* Title tabs */
-.title-tabs {
+.win-nav-menu {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  height: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.tab-title {
-  font-size: 18px;
-  font-weight: 400;
-  color: #999;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-
-.tab-title:hover {
-  color: #666;
-}
-
-.tab-title.active {
-  font-weight: 700;
-  color: #000;
-}
-
-/* Tab content */
-.tab-content {
-  flex: 1;
-  overflow-y: auto;
-}
-
-.title-buttons {
-  display: flex;
-  gap: 4px;
-}
-
-.icon-btn {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 8px;
+.win-nav-item {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  min-height: 40px;
+  margin: 2px 4px;
+  padding: 0 12px;
+  border: 0;
   background: transparent;
-  color: #404040;
+  border-radius: 4px;
+  color: #1a1a1a;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
   cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s cubic-bezier(0, 0, 0, 1);
+}
+
+.win-nav-item:hover {
+  background: rgba(0, 0, 0, 0.0373);
+}
+
+.win-nav-item:active {
+  background: rgba(0, 0, 0, 0.0241);
+  color: rgba(0, 0, 0, 0.62);
+}
+
+.win-nav-item.active,
+.win-nav-item.active:hover {
+  background: transparent;
+}
+
+.win-nav-item.active:active {
+  background: transparent;
+  color: rgba(0, 0, 0, 0.62);
+}
+
+/* Right-side footer buttons (refresh / settings) */
+.win-nav-top-footer {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.win-nav-icon-btn {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s;
-  outline: none;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  margin: 2px 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  color: #404040;
+  cursor: pointer;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s cubic-bezier(0, 0, 0, 1);
 }
 
-.icon-btn:hover {
-  background: #e8e8e8;
+.win-nav-icon-btn:hover {
+  background: rgba(0, 0, 0, 0.0373);
+  color: #1a1a1a;
 }
 
-.icon-btn:active {
-  background: #d0d0d0;
+.win-nav-icon-btn:active {
+  background: rgba(0, 0, 0, 0.0241);
+  color: rgba(0, 0, 0, 0.62);
+}
+
+/* Sliding accent underline indicator (WinUI top-pane style) */
+.win-nav-indicator-track {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 10;
+}
+
+.win-nav-indicator {
+  position: absolute;
+  left: 0;
+  top: auto;
+  bottom: 4px;
+  width: 16px;
+  height: 3px;
+  background: #0078d7;
+  border-radius: 2px;
+  pointer-events: none;
+  contain: layout paint;
+  will-change: transform, width;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* Tab viewport (content area) */
+.tab-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tab-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow-y: auto;
+}
+
+/* ── Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, horizontal) ─── */
+/* Forward: old leaves to left, new enters from right */
+.tab-content.slide-leave-left {
+  animation: SlideRight_Leave 150ms cubic-bezier(0.7, 0, 1, 0.5) both;
+}
+
+.tab-content.slide-enter-right {
+  animation: SlideRight_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
+}
+
+/* Backward: old leaves to right, new enters from left */
+.tab-content.slide-leave-right {
+  animation: SlideLeft_Leave 150ms cubic-bezier(0.7, 0, 1, 0.5) both;
+}
+
+.tab-content.slide-enter-left {
+  animation: SlideLeft_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
+}
+
+@keyframes SlideRight_Enter {
+  0%       { opacity: 0; transform: translateX(200px); }
+  33.333%  { opacity: 0; transform: translateX(200px); }
+  33.334%  { opacity: 1; transform: translateX(200px); }
+  100%     { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes SlideRight_Leave {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(-150px); }
+}
+
+@keyframes SlideLeft_Enter {
+  0%       { opacity: 0; transform: translateX(-200px); }
+  33.333%  { opacity: 0; transform: translateX(-200px); }
+  33.334%  { opacity: 1; transform: translateX(-200px); }
+  100%     { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes SlideLeft_Leave {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(150px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-content.slide-leave-left,
+  .tab-content.slide-enter-right,
+  .tab-content.slide-leave-right,
+  .tab-content.slide-enter-left {
+    animation: none !important;
+  }
 }
 
 /* Device list */
@@ -100,10 +226,12 @@ body {
 }
 
 .category-header {
-  font-size: 16px;
-  font-weight: 700;
-  color: #000;
-  padding: 8px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-top: 20px;
+  margin-bottom: 6px;
+  padding: 0;
 }
 
 /* Device card */
@@ -121,7 +249,7 @@ body {
 }
 
 .device-card:hover {
-  background: #f0f0f0;
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .device-info {
@@ -146,7 +274,7 @@ body {
 }
 
 .device-status {
-  font-size: 13px;
+  font-size: 12px;
   color: #808080;
   white-space: nowrap;
   line-height: 1;
@@ -175,21 +303,21 @@ body {
 }
 
 .device-battery {
-  font-size: 13px;
+  font-size: 12px;
   color: #808080;
   white-space: nowrap;
   line-height: 1;
 }
 
 .tag-bluetooth {
-  font-size: 13px;
+  font-size: 12px;
   color: #1976d2;
   white-space: nowrap;
   line-height: 1;
 }
 
 .tag-24g {
-  font-size: 13px;
+  font-size: 12px;
   color: #388e3c;
   white-space: nowrap;
   line-height: 1;
@@ -201,39 +329,47 @@ body {
 }
 
 .connect-btn {
-  padding: 6px 14px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  background: #fff;
-  color: #333;
-  font-size: 13px;
+  height: 32px;
+  padding: 5px 11px 6px;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.70);
+  color: rgba(0, 0, 0, 0.89);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: normal;
   cursor: pointer;
-  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
 }
 
 .connect-btn:hover {
-  background: #f0f0f0;
-  border-color: #bbb;
+  background: rgba(249, 249, 249, 0.50);
 }
 
 .connect-btn:active {
-  background: #e0e0e0;
+  background: rgba(249, 249, 249, 0.30);
+  color: rgba(0, 0, 0, 0.62);
+  border-bottom-color: rgba(0, 0, 0, 0.06);
 }
 
 .connect-btn:disabled,
 .connect-btn.loading {
-  background: #f5f5f5;
-  color: #999;
-  border-color: #e0e0e0;
+  background: rgba(249, 249, 249, 0.50);
+  color: rgba(0, 0, 0, 0.36);
   cursor: not-allowed;
-  opacity: 0.7;
 }
 
 .connect-btn:disabled:hover,
 .connect-btn.loading:hover {
-  background: #f5f5f5;
-  border-color: #e0e0e0;
+  background: rgba(249, 249, 249, 0.50);
 }
 
 /* Context menu */
@@ -313,21 +449,34 @@ body {
 }
 
 .dialog-btn {
-  padding: 6px 16px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  font-size: 13px;
+  height: 32px;
+  padding: 5px 11px 6px;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.70);
+  color: rgba(0, 0, 0, 0.89);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: normal;
   cursor: pointer;
-  transition: background 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
 }
 
 .dialog-btn.cancel {
-  background: #fff;
-  color: #333;
+  background: rgba(255, 255, 255, 0.70);
+  color: rgba(0, 0, 0, 0.89);
 }
 
 .dialog-btn.cancel:hover {
-  background: #f0f0f0;
+  background: rgba(249, 249, 249, 0.50);
 }
 
 .dialog-btn.confirm {
@@ -341,7 +490,7 @@ body {
 }
 
 .dialog-btn.restore {
-  background: #fff;
+  background: rgba(255, 255, 255, 0.70);
   color: #0078d7;
   border-color: #0078d7;
   margin-right: auto;
