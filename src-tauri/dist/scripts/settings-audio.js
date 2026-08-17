@@ -184,7 +184,7 @@ async function initShutdownVolumeSettings() {
 
       function clamp(v) { return Math.max(0, Math.min(100, v)); }
       function setNumberBoxValue(v) {
-        const val = clamp(Math.round(v / 5) * 5);
+        const val = clamp(Math.round(v));
         input.value = val;
         btnUp.disabled = val >= 100;
         btnDown.disabled = val <= 0;

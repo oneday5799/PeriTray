@@ -1556,7 +1556,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 /* ── Toast 通知 ─────────────────────────────────── */
 .toast {
   position: fixed;
-  bottom: 20px;
+  bottom: 120px;
   left: 50%;
   transform: translateX(-50%) translateY(100px);
   background: var(--flyout-bg);
