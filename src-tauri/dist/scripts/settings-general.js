@@ -80,7 +80,7 @@ function initDeviceShortcutSettings() {
       const label = document.createElement("span");
       label.className = "card-title device-shortcut-label";
       label.textContent = entry.name;
-      label.title = entry.name;
+      window.attachTooltip(label, entry.name, "start");
       left.appendChild(label);
       item.appendChild(left);
 
@@ -99,12 +99,12 @@ function initDeviceShortcutSettings() {
       const clearBtn = document.createElement("button");
       clearBtn.className = "shortcut-clear-btn";
       clearBtn.textContent = "×";
-      clearBtn.title = "清除快捷键";
+      window.attachTooltip(clearBtn, "清除快捷键", "end");
 
       const deleteBtn = document.createElement("button");
       deleteBtn.className = "shortcut-delete-btn";
       deleteBtn.textContent = "删除";
-      deleteBtn.title = "删除此设备快捷键";
+      window.attachTooltip(deleteBtn, "删除此设备快捷键", "end");
       deleteBtn.addEventListener("click", async () => {
         try {
           await invoke("remove_device_shortcut", { deviceId: id });

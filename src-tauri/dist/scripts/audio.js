@@ -87,8 +87,6 @@ function createSliderTooltip(slider) {
   slider.parentElement.style.position = "relative";
   slider.parentElement.appendChild(tooltip);
 
-  let hideTimer = null;
-
   function positionTooltip() {
     const min = parseFloat(slider.min);
     const max = parseFloat(slider.max);
@@ -104,12 +102,9 @@ function createSliderTooltip(slider) {
   function showTooltip() {
     tooltip.style.display = "";
     positionTooltip();
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => { tooltip.style.display = "none"; }, 2000);
   }
 
   function hideTooltip() {
-    clearTimeout(hideTimer);
     tooltip.style.display = "none";
   }
 
@@ -147,9 +142,18 @@ function createSliderTooltip(slider) {
     showTooltip();
   });
 
+  slider.addEventListener("mouseup", () => {
+    slider._isDragging = false;
+    if (slider.matches(":hover")) {
+      showTooltip();
+    } else {
+      hideTooltip();
+    }
+  });
+
   slider.addEventListener("blur", () => {
     slider._isDragging = false;
-    hideTooltip();
+    if (!slider.matches(":hover")) hideTooltip();
   });
 
   slider.addEventListener("input", showTooltip);

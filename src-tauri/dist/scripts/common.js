@@ -27,6 +27,20 @@ window.CATEGORIES = [
   { key: "Other", label: "其他设备", subtitle: "未归类的设备", icon: "📦" },
 ];
 
+// 给元素挂载与「设备快捷键共享切换」一致的样式 tooltip（替代原生 title 提示）
+window.attachTooltip = function (el, text, position) {
+  if (!el || !text || el.dataset.tooltipSetup) return;
+  el.dataset.tooltipSetup = "1";
+  el.classList.add("tooltip-host");
+  const tip = document.createElement("span");
+  tip.className = "tooltip-content";
+  if (position === "below") tip.classList.add("tooltip-content--below");
+  else if (position === "end") tip.classList.add("tooltip-content--end");
+  else if (position === "start") tip.classList.add("tooltip-content--start");
+  tip.textContent = text;
+  el.appendChild(tip);
+};
+
 window.getInvoke = function () {
   return window.__TAURI__ && window.__TAURI__.core
     ? window.__TAURI__.core.invoke

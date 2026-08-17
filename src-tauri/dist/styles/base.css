@@ -54,11 +54,11 @@
   --dialog-bg: #ffffff;
   --scrim: rgba(0, 0, 0, 0.3);
   --panel-border: #e5e5e5;
-  --flyout-bg: rgba(252, 252, 252, 0.92);
+  --flyout-bg: #fcfcfc;
   --flyout-border: rgba(0, 0, 0, 0.06);
   --flyout-text: rgba(0, 0, 0, 0.89);
   --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
-  --flyout-backdrop: blur(30px) saturate(160%) brightness(1.02);
+  --flyout-backdrop: none;
   --tooltip-icon-bg: #d0d0d0;
   --tooltip-icon-hover: #999999;
   --slider-track: #e0e0e0;
@@ -113,11 +113,11 @@ html[data-theme="light"] {
   --dialog-bg: #ffffff;
   --scrim: rgba(0, 0, 0, 0.3);
   --panel-border: #e5e5e5;
-  --flyout-bg: rgba(252, 252, 252, 0.92);
+  --flyout-bg: #fcfcfc;
   --flyout-border: rgba(0, 0, 0, 0.06);
   --flyout-text: rgba(0, 0, 0, 0.89);
   --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
-  --flyout-backdrop: blur(30px) saturate(160%) brightness(1.02);
+  --flyout-backdrop: none;
   --tooltip-icon-bg: #d0d0d0;
   --tooltip-icon-hover: #999999;
   --slider-track: #e0e0e0;
@@ -172,11 +172,11 @@ html[data-theme="dark"] {
   --dialog-bg: #2b2b2b;
   --scrim: rgba(0, 0, 0, 0.3);
   --panel-border: #1d1d1d;
-  --flyout-bg: rgba(44, 44, 44, 0.86);
+  --flyout-bg: #2c2c2c;
   --flyout-border: rgba(0, 0, 0, 0.20);
   --flyout-text: #ffffff;
   --flyout-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
-  --flyout-backdrop: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
+  --flyout-backdrop: none;
   --tooltip-icon-bg: #404040;
   --tooltip-icon-hover: #555555;
   --slider-track: rgba(255, 255, 255, 0.25);
@@ -1019,6 +1019,10 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 /* ── Tooltip (shared) ────────────────────────────── */
+.tooltip-host {
+  position: relative;
+}
+
 .tooltip-trigger {
   display: inline-flex;
   align-items: center;
@@ -1067,9 +1071,31 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   backdrop-filter: var(--flyout-backdrop);
 }
 
+.tooltip-content--below {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+
+.tooltip-content--end {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.tooltip-content--start {
+  left: 0;
+  transform: none;
+}
+
 .tooltip-trigger:hover .tooltip-content {
   display: block;
   animation: win-tooltip-fade-in 167ms linear both;
+}
+
+/* 非「?」提示：悬停 1s 后再弹出 */
+.tooltip-host:hover .tooltip-content {
+  display: block;
+  animation: win-tooltip-fade-in 167ms 1s linear both;
 }
 
 @keyframes win-tooltip-fade-in {
@@ -1080,6 +1106,10 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 @media (prefers-reduced-motion: reduce) {
   .tooltip-trigger:hover .tooltip-content {
     animation-duration: 1ms;
+  }
+  .tooltip-host:hover .tooltip-content {
+    animation-duration: 1ms;
+    animation-delay: 1s;
   }
 }
 
@@ -1529,11 +1559,11 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   bottom: 20px;
   left: 50%;
   transform: translateX(-50%) translateY(100px);
-  background: rgba(252, 252, 252, 0.92);
-  color: rgba(0, 0, 0, 0.89);
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
   font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   padding: 6px 9px 8px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--flyout-border);
   border-radius: 4px;
   font-size: 12px;
   line-height: 16px;
@@ -1543,9 +1573,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   pointer-events: none;
   max-width: 80%;
   text-align: center;
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
-  -webkit-backdrop-filter: blur(30px) saturate(160%) brightness(1.02);
-  backdrop-filter: blur(30px) saturate(160%) brightness(1.02);
+  box-shadow: var(--flyout-shadow);
 }
 .toast.show {
   opacity: 1;
@@ -1555,12 +1583,4 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 
 .toast.error {
   color: #e81123;
-}
-
-html[data-theme="dark"] .toast {
-  background: rgba(44, 44, 44, 0.86);
-  border: 1px solid rgba(0, 0, 0, 0.20);
-  color: #ffffff;
-  -webkit-backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
-  backdrop-filter: blur(44px) saturate(190%) brightness(1.22) contrast(1.05);
 }
