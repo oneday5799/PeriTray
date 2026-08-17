@@ -15,10 +15,8 @@ jobs:
         include:
           - target: x64
             rust_target: x86_64-pc-windows-msvc
-            nsis_arch: x64
           - target: arm64
             rust_target: aarch64-pc-windows-msvc
-            nsis_arch: arm64
 
     runs-on: windows-latest
     steps:
@@ -50,6 +48,9 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(-.+)?$') {
+            throw "Invalid tag format: '$tag' (expected vX.Y.Z or vX.Y.Z-pre)"
+          }
           $version = $tag -replace '^v', ''
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
@@ -86,7 +87,7 @@ jobs:
           Set-Content "src-tauri/dist/settings.html" $settings -Encoding UTF8 -NoNewline
 
       - name: Install npm dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build NSIS installer (${{ matrix.target }})
         run: npm run tauri build -- --bundles nsis --target ${{ matrix.rust_target }}
