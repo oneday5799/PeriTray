@@ -80,10 +80,10 @@ jobs:
           $pkg.version = $version
           $pkg | ConvertTo-Json -Depth 10 | Set-Content "package.json" -Encoding UTF8
 
-          # Update about.html version
-          $about = Get-Content "src-tauri/dist/about.html" -Raw
-          $about = $about -replace 'v[\d]+\.[\d]+\.[\d]+[^<]*', "v$version"
-          Set-Content "src-tauri/dist/about.html" $about -Encoding UTF8 -NoNewline
+          # Update settings.html about tab version
+          $settings = Get-Content "src-tauri/dist/settings.html" -Raw
+          $settings = $settings -replace 'v[\d]+\.[\d]+\.[\d]+', "v$version"
+          Set-Content "src-tauri/dist/settings.html" $settings -Encoding UTF8 -NoNewline
 
       - name: Install npm dependencies
         run: npm install
