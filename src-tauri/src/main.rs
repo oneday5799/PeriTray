@@ -105,6 +105,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_devices,
             commands::get_config,
+            commands::set_window_theme,
             commands::update_config,
             commands::toggle_device_hidden,
             commands::toggle_audio_device_hidden,

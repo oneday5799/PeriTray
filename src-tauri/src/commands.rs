@@ -58,6 +58,17 @@ pub fn get_config() -> Config {
     config::with_config(|c| c.clone())
 }
 
+/// 设置当前窗口的系统标题栏主题（仅影响系统窗口标题栏，不影响页面内容）
+#[tauri::command]
+pub fn set_window_theme(window: tauri::Window, theme: String) {
+    let t = match theme.as_str() {
+        "dark" => Some(tauri::Theme::Dark),
+        "light" => Some(tauri::Theme::Light),
+        _ => None,
+    };
+    let _ = window.set_theme(t);
+}
+
 #[tauri::command]
 pub fn update_config(app: tauri::AppHandle, mut new_config: Config) {
     let cycle_was_enabled = config::with_config(|c| c.enable_device_shortcut_cycle);

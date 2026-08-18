@@ -56,6 +56,12 @@ window.applyThemeMode = function (mode) {
   const isDark = themeMode === "dark" ||
     (themeMode === "follow_system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   html.setAttribute("data-theme", isDark ? "dark" : "light");
+
+  const invoke = getInvoke();
+  if (invoke) {
+    const theme = themeMode === "follow_system" ? "system" : isDark ? "dark" : "light";
+    invoke("set_window_theme", { theme }).catch(() => {});
+  }
 };
 
 window.initTheme = async function () {
