@@ -411,14 +411,18 @@ window.createDialog = function ({ title, content = [], buttons = [] }) {
   const dialog = document.createElement("div");
   dialog.className = "rename-dialog";
 
+  const contentEl = document.createElement("div");
+  contentEl.className = "dialog-content";
+
   const titleEl = document.createElement("div");
   titleEl.className = "dialog-title";
   titleEl.textContent = title;
-  dialog.appendChild(titleEl);
+  contentEl.appendChild(titleEl);
 
   for (const el of content) {
-    dialog.appendChild(el);
+    contentEl.appendChild(el);
   }
+  dialog.appendChild(contentEl);
 
   if (buttons.length > 0) {
     const buttonsEl = document.createElement("div");

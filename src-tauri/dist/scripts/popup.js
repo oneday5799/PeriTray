@@ -286,14 +286,121 @@ function showContextMenu(x, y, dev) {
   });
   menu.appendChild(renameItem);
 
+  const currentGroup = getDeviceGroup(dev);
+
   const groupItem = document.createElement("div");
-  groupItem.className = "context-menu-item";
-  groupItem.textContent = "更改分组";
-  groupItem.addEventListener("click", () => {
+  groupItem.className = "context-menu-item context-menu-subitem";
+  groupItem.innerHTML = "<span>更改分组</span>" +
+    '<svg class="context-menu-chevron" width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  const submenu = document.createElement("div");
+  submenu.className = "context-menu context-submenu";
+  submenu.style.display = "none";
+
+  function applyGroup(newGroup) {
     hideAllContextMenus();
-    showGroupDialog(dev);
+    const invoke = getInvoke();
+    if (!invoke) return;
+    invoke("change_device_group", { name: dev.name, group: newGroup === dev.dt ? "" : newGroup })
+      .then(async () => {
+        const config = await invoke("get_config");
+        deviceGroups = config.device_groups || {};
+        renderDevices();
+      })
+      .catch((e) => showToast(e));
+  }
+
+  for (const cat of CATEGORIES) {
+    const item = document.createElement("div");
+    const isCurrent = cat.key === currentGroup;
+    item.className = "context-menu-item" + (isCurrent ? " selected" : "");
+
+    const leading = document.createElement("span");
+    leading.className = "context-menu-leading";
+    if (isCurrent) {
+      const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      check.setAttribute("class", "context-menu-check");
+      check.setAttribute("width", "12");
+      check.setAttribute("height", "12");
+      check.setAttribute("viewBox", "0 0 12 12");
+      check.setAttribute("fill", "none");
+      check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+      leading.appendChild(check);
+    }
+    item.appendChild(leading);
+
+    const label = document.createElement("span");
+    label.textContent = cat.label;
+    item.appendChild(label);
+    item.dataset.group = cat.key;
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyGroup(cat.key);
+    });
+    submenu.appendChild(item);
+  }
+
+  function positionSubmenu() {
+    const sw = submenu.offsetWidth;
+    const sh = submenu.offsetHeight;
+    let left = menu.offsetLeft + menu.offsetWidth - 7;
+    let top = menu.offsetTop + groupItem.offsetTop;
+    if (left + sw > window.innerWidth) left = menu.offsetLeft - sw + 7;
+    if (top + sh > window.innerHeight) top = Math.max(0, window.innerHeight - sh - 4);
+    submenu.style.left = left + "px";
+    submenu.style.top = top + "px";
+  }
+
+  let closeTimer = null;
+  let openSubmenuTimer = null;
+  function openSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    submenu.style.display = "block";
+    groupItem.classList.add("open");
+    positionSubmenu();
+  }
+  function closeSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    submenu.style.display = "none";
+    groupItem.classList.remove("open");
+  }
+  function queueCloseSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(closeSubmenu, 300);
+  }
+  function queueOpenSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    openSubmenuTimer = setTimeout(openSubmenu, 500);
+  }
+
+  groupItem.addEventListener("pointerenter", queueOpenSubmenu);
+  groupItem.addEventListener("pointerleave", () => {
+    clearTimeout(openSubmenuTimer);
+    queueCloseSubmenu();
   });
+  groupItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (submenu.style.display === "none") openSubmenu();
+    else closeSubmenu();
+  });
+  submenu.addEventListener("pointerenter", () => {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+  });
+  submenu.addEventListener("pointerleave", queueCloseSubmenu);
+
+  menu.addEventListener("pointerover", (e) => {
+    if (!groupItem.contains(e.target) && !submenu.contains(e.target) && submenu.style.display !== "none") {
+      closeSubmenu();
+    }
+  });
+
   menu.appendChild(groupItem);
+  menu.appendChild(submenu);
 
   const hideItem = document.createElement("div");
   hideItem.className = "context-menu-item";
@@ -329,81 +436,6 @@ function showContextMenu(x, y, dev) {
   document.body.appendChild(menu);
   clampMenuPosition(menu, x, y);
   activeMenu = menu;
-}
-
-function showGroupDialog(dev) {
-  const currentGroup = getDeviceGroup(dev);
-  const isCustomGroup = deviceGroups[dev.name] !== undefined;
-
-  const groupList = document.createElement("div");
-  groupList.className = "group-list";
-
-  for (const cat of CATEGORIES) {
-    const item = document.createElement("div");
-    item.className = "group-option" + (cat.key === currentGroup ? " selected" : "");
-    item.textContent = cat.label;
-    item.dataset.group = cat.key;
-
-    item.addEventListener("click", () => {
-      groupList.querySelectorAll(".group-option").forEach(el => el.classList.remove("selected"));
-      item.classList.add("selected");
-    });
-
-    groupList.appendChild(item);
-  }
-
-  const buttons = [];
-
-  if (isCustomGroup) {
-    buttons.push({
-      text: "恢复默认",
-      className: "restore",
-      onClick: async () => {
-        const invoke = getInvoke();
-        if (invoke) {
-          await invoke("change_device_group", { name: dev.name, group: "" });
-          const config = await invoke("get_config");
-          deviceGroups = config.device_groups || {};
-          renderDevices();
-        }
-        closeDialog(overlay);
-      },
-    });
-  }
-
-  buttons.push({
-    text: "取消",
-    className: "cancel",
-    onClick: () => closeDialog(overlay),
-  });
-
-  buttons.push({
-    text: "确定",
-    className: "confirm",
-    onClick: async () => {
-      const selected = groupList.querySelector(".group-option.selected");
-      if (selected) {
-        const newGroup = selected.dataset.group;
-        const invoke = getInvoke();
-        if (invoke) {
-          await invoke("change_device_group", {
-            name: dev.name,
-            group: newGroup === dev.dt ? "" : newGroup
-          });
-          const config = await invoke("get_config");
-          deviceGroups = config.device_groups || {};
-          renderDevices();
-        }
-      }
-      closeDialog(overlay);
-    },
-  });
-
-  const overlay = createDialog({
-    title: "更改分组",
-    content: [groupList],
-    buttons,
-  });
 }
 
 document.getElementById("btn-refresh").addEventListener("click", async () => {
