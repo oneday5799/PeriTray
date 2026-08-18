@@ -134,22 +134,20 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
 
   const buttons = [];
 
-  if (isRenamed) {
-    buttons.push({
-      text: "恢复默认",
-      className: "restore",
-      onClick: async () => {
-        const invoke = getInvoke();
-        if (invoke) {
-          await invoke("rename_device", { original: deviceName, newName: "" });
-          const config = await invoke("get_config");
-          onUpdate(config.device_names || {});
-          onRender();
-        }
-        closeDialog(overlay);
-      },
-    });
-  }
+  buttons.push({
+    text: "恢复默认",
+    className: "danger",
+    onClick: async () => {
+      const invoke = getInvoke();
+      if (invoke) {
+        await invoke("rename_device", { original: deviceName, newName: "" });
+        const config = await invoke("get_config");
+        onUpdate(config.device_names || {});
+        onRender();
+      }
+      closeDialog(overlay);
+    },
+  });
 
   buttons.push({
     text: "取消",
@@ -178,6 +176,9 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
     content: [input],
     buttons,
   });
+
+  const restoreBtn = overlay.querySelector(".dialog-btn.danger");
+  if (restoreBtn) restoreBtn.disabled = !isRenamed;
 
   input.focus();
   input.select();

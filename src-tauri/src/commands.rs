@@ -135,7 +135,7 @@ pub fn open_url(url: String) -> Result<(), String> {
 pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) {
     crate::process::append_log(&format!("[cmd] rename_device: '{}' -> '{}'", original, new_name));
     config::with_config_mut(|c| {
-        if new_name.is_empty() {
+        if new_name.is_empty() || new_name == original {
             c.device_names.remove(&original);
         } else {
             c.device_names.insert(original, new_name);
