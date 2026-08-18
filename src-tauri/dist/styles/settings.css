@@ -1,10 +1,4 @@
-﻿html, body {
-  width: 100%;
-  height: 100%;
-  user-select: none;
-}
-
-.settings-container {
+﻿.settings-container {
   height: 100%;
   display: flex;
   overflow: hidden;
@@ -67,18 +61,11 @@
 
 /* ── Navigation Indicator (single element, WinUI NavigationView style) ──────── */
 .win-nav-indicator {
-  position: absolute;
   left: 8px;
   top: 0;
   width: 3px;
   height: 16px;
-  background: var(--accent, #0078d7);
-  border-radius: 2px;
-  pointer-events: none;
   z-index: 10;
-  will-change: transform, height;
-  -webkit-backface-visibility: hidden;
-  backface-visibility: hidden;
 }
 
 /* ── Right Content (NavigationView Content) ──────── */
@@ -170,21 +157,9 @@
   }
 }
 
-/* ── 设置页卡片尺寸（卡片组件在 base.css） ──────── */
+/* ── 设置页卡片尺寸（卡片组件在 base.css，60px 头部行共享） ──────── */
 .settings-container .card {
-  min-height: 60px;
   margin-bottom: 3px;
-}
-
-.settings-container .card-left {
-  height: 60px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.settings-container .card-actions {
-  height: 60px;
 }
 
 .settings-container .card.expandable .card-items {
@@ -241,10 +216,6 @@
 
 /* ── About tab ────────────────────────────────── */
 /* 关于卡使用标准卡片尺寸（header 60px，列表自然出血到左右下边缘） */
-
-.about-info-card .card-left {
-  margin-right: 12px;
-}
 
 .about-info-card .card-desc {
   font-size: 13px;

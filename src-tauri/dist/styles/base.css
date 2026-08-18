@@ -42,8 +42,6 @@
   --field-bg-hover: rgba(249, 249, 249, 0.50);
   --field-bg-focus: #ffffff;
   --field-text: #1a1a1a;
-  --focus-ring: rgba(0, 120, 215, 0.25);
-  --focus-ring-strong: rgba(0, 120, 215, 0.15);
   --danger: #e81123;
   --danger-hover: #e81123;
   --danger-hover-bg: rgba(232, 17, 35, 0.08);
@@ -51,72 +49,11 @@
   --toggle-track: #999999;
   --toggle-checked: #0078d7;
   --surface-subtle: rgba(0, 0, 0, 0.03);
-  --dialog-bg: #ffffff;
-  --scrim: rgba(0, 0, 0, 0.3);
-  --dialog-background: #fcfcfc;
-  --dialog-content-bg: rgba(255, 255, 255, 0.95);
-  --dialog-overlay: rgba(0, 0, 0, 0.30);
-  --dialog-divider: rgba(0, 0, 0, 0.06);
-  --dialog-button-bg: #f3f3f3;
-  --panel-border: #e5e5e5;
-  --flyout-bg: #fcfcfc;
-  --flyout-border: rgba(0, 0, 0, 0.06);
-  --flyout-text: rgba(0, 0, 0, 0.89);
-  --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
-  --flyout-backdrop: none;
-  --tooltip-icon-bg: #d0d0d0;
-  --tooltip-icon-hover: #999999;
-  --slider-track: #e0e0e0;
-}
-
-html[data-theme="light"] {
-  --page-bg: #f3f3f3;
-  --card-bg: #ffffff;
-  --card-bg-solid: #ffffff;
-  --card-border: #e0e0e0;
-  --card-hover: rgba(0, 0, 0, 0.03);
-  --card-item-border: rgba(0, 0, 0, 0.06);
-  --text-primary: #1a1a1a;
-  --text-secondary: #666666;
-  --text-tertiary: #888888;
-  --text-disabled: #a0a0a0;
-  --text-body: #444444;
-  --accent: #0078d7;
-  --accent-hover: #106ebe;
-  --accent-subtle-bg: #e8f4fd;
-  --text-on-accent: #ffffff;
-  --link: #0067c0;
-  --link-hover-bg: rgba(0, 103, 192, 0.04);
-  --link-pressed-bg: rgba(0, 103, 192, 0.08);
-  --hover-overlay: rgba(0, 0, 0, 0.0373);
-  --pressed-overlay: rgba(0, 0, 0, 0.0241);
-  --active-overlay: rgba(0, 0, 0, 0.049);
-  --pressed-text: rgba(0, 0, 0, 0.62);
-  --icon-color: #404040;
-  --icon-hover-color: #1a1a1a;
-  --control-bg: rgba(255, 255, 255, 0.70);
-  --control-bg-hover: rgba(249, 249, 249, 0.50);
-  --control-bg-pressed: rgba(249, 249, 249, 0.30);
-  --control-border: rgba(0, 0, 0, 0.06);
-  --control-border-strong: rgba(0, 0, 0, 0.16);
-  --field-border: #e0e0e0;
-  --field-border-strong: #888888;
-  --field-border-focus: #e0e0e0;
-  --field-bg: rgba(255, 255, 255, 0.70);
-  --field-bg-hover: rgba(249, 249, 249, 0.50);
-  --field-bg-focus: #ffffff;
-  --field-text: #1a1a1a;
-  --focus-ring: rgba(0, 120, 215, 0.25);
-  --focus-ring-strong: rgba(0, 120, 215, 0.15);
-  --danger: #e81123;
-  --danger-hover: #e81123;
-  --danger-hover-bg: rgba(232, 17, 35, 0.08);
-  --danger-pressed-bg: rgba(232, 17, 35, 0.12);
-  --toggle-track: #999999;
-  --toggle-checked: #0078d7;
-  --surface-subtle: rgba(0, 0, 0, 0.03);
-  --dialog-bg: #ffffff;
-  --scrim: rgba(0, 0, 0, 0.3);
+  --icon-chip-bg: #f0f0f0;
+  --status-success: #4caf50;
+  --status-wireless: #388e3c;
+  --status-bluetooth: #1976d2;
+  --status-paired: #999999;
   --dialog-background: #fcfcfc;
   --dialog-content-bg: rgba(255, 255, 255, 0.95);
   --dialog-overlay: rgba(0, 0, 0, 0.30);
@@ -170,8 +107,6 @@ html[data-theme="dark"] {
   --field-bg-hover: rgba(255, 255, 255, 0.0837);
   --field-bg-focus: rgba(30, 30, 30, 0.70);
   --field-text: #ffffff;
-  --focus-ring: rgba(76, 194, 255, 0.25);
-  --focus-ring-strong: rgba(76, 194, 255, 0.15);
   --danger: #e81123;
   --danger-hover: #ff6b7a;
   --danger-hover-bg: rgba(255, 107, 122, 0.08);
@@ -179,8 +114,11 @@ html[data-theme="dark"] {
   --toggle-track: #666666;
   --toggle-checked: #0078d7;
   --surface-subtle: rgba(255, 255, 255, 0.0314);
-  --dialog-bg: #2b2b2b;
-  --scrim: rgba(0, 0, 0, 0.3);
+  --icon-chip-bg: rgba(255, 255, 255, 0.10);
+  --status-success: #6fc46f;
+  --status-wireless: #7ed97e;
+  --status-bluetooth: #6cb4ff;
+  --status-paired: rgba(255, 255, 255, 0.40);
   --dialog-background: #2c2c2c;
   --dialog-content-bg: rgba(43, 43, 43, 0);
   --dialog-overlay: rgba(0, 0, 0, 0.30);
@@ -198,8 +136,16 @@ html[data-theme="dark"] {
 }
 
 html, body {
+  width: 100%;
+  height: 100%;
   font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
   background: var(--page-bg, #f3f3f3);
+  user-select: none;
+}
+
+body {
+  overflow: hidden;
+  border: none;
 }
 
 /* Windows 11 native scrollbar */
@@ -235,73 +181,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.57);
   background-clip: padding-box;
   border-width: 2px;
-}
-
-/* ── Volume slider ─────────────────────────────── */
-.volume-slider {
-  flex: 1;
-  -webkit-appearance: none;
-  width: 100%;
-  height: 4px;
-  --track-color: linear-gradient(to right, #0078d7 0%, #0078d7 0%, #e0e0e0 0%, #e0e0e0 100%);
-  background: transparent;
-  outline: none;
-  border-radius: 10px;
-}
-
-.volume-slider::-webkit-slider-runnable-track {
-  width: 100%;
-  height: 4px;
-  background: var(--track-color);
-  border-radius: 10px;
-  border: 0;
-}
-
-.volume-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  border: 4px solid #fff;
-  height: 18px;
-  width: 18px;
-  border-radius: 10px;
-  background: #0078d7;
-  margin-top: -8px;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-  transition: all 0.1s;
-}
-
-.volume-slider::-webkit-slider-thumb:hover {
-  border: 3px solid #fff;
-}
-
-.volume-slider::-webkit-slider-thumb:active {
-  border: 5px solid #fff;
-}
-
-.volume-slider::-moz-range-track {
-  width: 100%;
-  height: 4px;
-  background: var(--track-color);
-  border-radius: 10px;
-  border: 0;
-}
-
-.volume-slider::-moz-range-thumb {
-  border: 4px solid #fff;
-  height: 18px;
-  width: 18px;
-  border-radius: 10px;
-  background: #0078d7;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-}
-
-.volume-slider::-moz-range-thumb:hover {
-  border: 3px solid #fff;
-}
-
-.volume-slider::-moz-range-thumb:active {
-  border: 5px solid #fff;
 }
 
 /* ── Section title (shared) ─────────────────────────── */
@@ -511,26 +390,26 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .card-tag.connected::before {
-  background: #4caf50;
+  background: var(--status-success);
 }
 
 .card-tag.paired::before {
-  background: #999;
+  background: var(--status-paired);
 }
 
 .card-tag.bluetooth {
-  color: #1976d2;
+  color: var(--status-bluetooth);
 }
 
 .card-tag.wireless {
-  color: #388e3c;
+  color: var(--status-wireless);
 }
 
 .card-icon {
   width: 16px;
   height: 16px;
   border-radius: 4px;
-  background: #f0f0f0;
+  background: var(--icon-chip-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -543,6 +422,27 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* 卡片尺寸（popup 设备/音频/会话卡与设置页卡片统一：60px 头部行） */
+.card.device,
+.card.column.audio-device,
+.card.session,
+.settings-container .card {
+  min-height: 60px;
+}
+
+.card.device .card-left,
+.settings-container .card-left {
+  height: 60px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.card.device .card-actions,
+.settings-container .card-actions {
+  height: 60px;
 }
 
 /* ── Navigation (shared: settings left pane + popup top bar) ── */
@@ -605,23 +505,42 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   color: inherit;
 }
 
-.win-nav-icon-btn {
-  box-sizing: border-box;
-  display: flex;
+/* 导航指示条基类（popup 顶部下划线 / settings 左侧竖条 共用） */
+.win-nav-indicator {
+  position: absolute;
+  background: var(--accent, #0078d7);
+  border-radius: 2px;
+  pointer-events: none;
+  will-change: transform, width, height;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* ── Icon button (shared base) ─────────────────────── */
+.win-nav-icon-btn,
+.mute-btn,
+.win-infobar-close-button,
+.shortcut-clear-btn,
+.win-numberbox-spin-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
+}
+
+.win-nav-icon-btn {
+  box-sizing: border-box;
   width: 40px;
   height: 40px;
   min-width: 40px;
   min-height: 40px;
   margin: 2px 4px;
   padding: 0;
-  border: 0;
-  background: transparent;
-  border-radius: 4px;
   color: var(--icon-color, #404040);
-  cursor: pointer;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s cubic-bezier(0, 0, 0, 1);
 }
 
 .win-nav-icon-btn:hover {
@@ -635,19 +554,12 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 /* ── Button (shared) ─────────────────────────────── */
-.btn,
 .dialog-btn,
 .connect-btn,
 .add-device-btn,
 .shortcut-delete-btn {
   height: 32px;
   padding: 5px 11px 6px;
-  border-left: 1px solid var(--control-border);
-  border-top: 1px solid var(--control-border);
-  border-right: 1px solid var(--control-border);
-  border-bottom: 1px solid var(--control-border-strong);
-  border-radius: 4px;
-  background: var(--control-bg);
   color: var(--text-primary);
   font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
@@ -661,7 +573,20 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
 }
 
-.btn:hover,
+/* WinUI 控件按钮共用边框/背景（普通按钮 + ComboBox 触发钮） */
+.dialog-btn,
+.connect-btn,
+.add-device-btn,
+.shortcut-delete-btn,
+.win-combo-btn {
+  border-left: 1px solid var(--control-border);
+  border-top: 1px solid var(--control-border);
+  border-right: 1px solid var(--control-border);
+  border-bottom: 1px solid var(--control-border-strong);
+  border-radius: 4px;
+  background: var(--control-bg);
+}
+
 .dialog-btn:hover,
 .connect-btn:hover,
 .add-device-btn:hover,
@@ -669,7 +594,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: var(--control-bg-hover);
 }
 
-.btn:active,
 .dialog-btn:active,
 .connect-btn:active,
 .add-device-btn:active,
@@ -688,28 +612,24 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   color: var(--danger);
 }
 
-.dialog-btn.confirm,
-.btn--primary {
+.dialog-btn.confirm {
   background: var(--accent);
   color: var(--text-on-accent);
   border-color: var(--accent);
 }
 
-.dialog-btn.confirm:hover,
-.btn--primary:hover {
+.dialog-btn.confirm:hover {
   background: var(--accent-hover);
 }
 
-.dialog-btn.restore,
-.btn--outline {
+.dialog-btn.restore {
   background: var(--control-bg);
   color: var(--accent);
   border-color: var(--accent);
   margin-right: auto;
 }
 
-.dialog-btn.restore:hover,
-.btn--outline:hover {
+.dialog-btn.restore:hover {
   background: var(--accent-subtle-bg);
 }
 
@@ -725,22 +645,16 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: var(--control-bg-hover);
 }
 
-.dialog-btn.danger,
-.btn--danger {
-  color: var(--danger);
-}
-
 .dialog-btn.danger {
+  color: var(--danger);
   margin-right: auto;
 }
 
-.dialog-btn.danger:hover,
-.btn--danger:hover {
+.dialog-btn.danger:hover {
   background: var(--danger-hover-bg);
 }
 
 .dialog-btn:disabled,
-.btn:disabled,
 .add-device-btn:disabled,
 .shortcut-delete-btn:disabled {
   background: var(--control-bg-hover);
@@ -783,14 +697,13 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 /* ── Text field (shared) ─────────────────────────── */
-.text-field,
+.dialog-input,
 .shortcut-key-input {
-  width: 180px;
-  height: 32px;
   box-sizing: border-box;
+  height: 32px;
   padding: 5px 8px;
-  font-size: 14px;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
   line-height: 20px;
   border: 1px solid var(--field-border);
   border-bottom-color: var(--field-border-strong);
@@ -798,82 +711,30 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: var(--field-bg);
   color: var(--field-text);
   outline: none;
-  cursor: pointer;
-  text-align: center;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.text-field:hover,
+.shortcut-key-input {
+  width: 180px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dialog-input {
+  flex: 1;
+  width: 100%;
+  text-align: left;
+}
+
+.dialog-input:hover,
 .shortcut-key-input:hover {
   background: var(--field-bg-hover);
 }
 
-.text-field:focus,
-.text-field.recording,
+.dialog-input:focus,
+.dialog-input.recording,
 .shortcut-key-input:focus,
 .shortcut-key-input.recording {
-  border-color: var(--field-border-focus);
-  border-bottom-color: var(--field-border-focus);
-  box-shadow: inset 0 -1.5px 0 0 var(--accent);
-  background: var(--field-bg-focus);
-}
-
-/* Box variant */
-.text-field--box {
-  flex: 1;
-  width: 100%;
-  min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--field-border);
-  border-bottom-color: var(--field-border);
-  border-radius: 6px;
-  background: var(--field-bg);
-  color: var(--field-text);
-  text-align: left;
-}
-
-.text-field--box:hover {
-  background: var(--field-bg-hover);
-}
-
-.text-field--box:focus,
-.text-field--box.recording {
-  border-color: var(--accent);
-  border-bottom-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--focus-ring);
-  background: var(--field-bg-focus);
-}
-
-.text-field--box.recording {
-  animation: recording-pulse 1s ease-in-out infinite;
-}
-
-/* 对话框输入框（与设置页输入框样式一致） */
-.dialog-input {
-  flex: 1;
-  width: 100%;
-  height: 32px;
-  box-sizing: border-box;
-  padding: 5px 8px;
-  font-size: 14px;
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  line-height: 20px;
-  border: 1px solid var(--field-border);
-  border-bottom-color: var(--field-border-strong);
-  border-radius: 4px;
-  background: var(--field-bg);
-  color: var(--field-text);
-  text-align: left;
-  outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.dialog-input:hover {
-  background: var(--field-bg-hover);
-}
-
-.dialog-input:focus,
-.dialog-input.recording {
   border-color: var(--field-border-focus);
   border-bottom-color: var(--field-border-focus);
   box-shadow: inset 0 -1.5px 0 0 var(--accent);
@@ -886,13 +747,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   cursor: pointer;
 }
 
-@keyframes recording-pulse {
-  0%, 100% { box-shadow: 0 0 0 2px var(--focus-ring); }
-  50% { box-shadow: 0 0 0 4px var(--focus-ring-strong); }
-}
-
 /* Multiline variant（过滤正则文本域） */
-.text-field--multiline,
 .filter-textarea {
   width: 100%;
   min-height: 80px;
@@ -912,7 +767,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 /* Field border wrapper（过滤框 / NumberBox 共用） */
-.field-border,
 .filter-textarea-border,
 .win-numberbox-border {
   position: relative;
@@ -924,13 +778,11 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   transition: background 0.167s cubic-bezier(0, 0, 0, 1), border-color 0.167s ease;
 }
 
-.field-border:hover,
 .filter-textarea-border:hover,
 .win-numberbox-border:hover {
   background: var(--field-bg-hover);
 }
 
-.field-border:focus-within,
 .filter-textarea-border:focus-within,
 .win-numberbox:focus-within .win-numberbox-border {
   background: var(--field-bg-focus);
@@ -938,7 +790,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   border-bottom-color: var(--field-border-focus);
 }
 
-.field-focus-line,
 .filter-textarea-focus-border,
 .win-numberbox-focus-border {
   position: absolute;
@@ -948,7 +799,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   border-radius: inherit;
 }
 
-.field-focus-line::after,
 .filter-textarea-focus-border::after,
 .win-numberbox-focus-border::after {
   content: "";
@@ -961,7 +811,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   transition: background 0.15s ease;
 }
 
-.field-border:focus-within .field-focus-line::after,
 .filter-textarea-border:focus-within .filter-textarea-focus-border::after,
 .win-numberbox:focus-within .win-numberbox-focus-border::after {
   background: var(--accent);
@@ -981,17 +830,10 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .shortcut-clear-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 22px;
   height: 22px;
-  border: 0;
-  background: transparent;
   color: var(--pressed-text);
   font-size: 16px;
-  cursor: pointer;
-  border-radius: 4px;
   transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s, opacity 0.15s;
 }
 
@@ -1061,6 +903,24 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   transform: translateX(20px);
 }
 
+/* ── Flyout surface（tooltip / toast 共用，圆角 4） ── */
+.session-tip,
+.tooltip-content,
+.slider-tooltip,
+.toast {
+  padding: 6px 9px 8px;
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-weight: 400;
+  line-height: 16px;
+  border: 1px solid var(--flyout-border);
+  border-radius: 4px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+}
+
 /* ── Tooltip (shared) ────────────────────────────── */
 /* 应用名 tooltip：页面内 fixed 定位，超出边界自动避让 */
 .session-tip {
@@ -1069,18 +929,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   display: none;
   max-width: 320px;
   box-sizing: border-box;
-  padding: 6px 9px 8px;
-  background: var(--flyout-bg);
-  color: var(--flyout-text);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-size: 12px;
-  font-weight: 400;
-  line-height: 16px;
-  border: 1px solid var(--flyout-border);
-  border-radius: 4px;
-  box-shadow: var(--flyout-shadow);
-  -webkit-backdrop-filter: var(--flyout-backdrop);
-  backdrop-filter: var(--flyout-backdrop);
   overflow-wrap: anywhere;
   pointer-events: none;
 }
@@ -1118,22 +967,11 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   width: max-content;
   max-width: 320px;
   box-sizing: border-box;
-  padding: 6px 9px 8px;
-  background: var(--flyout-bg);
-  color: var(--flyout-text);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   font-size: 12px;
-  font-weight: 400;
-  line-height: 16px;
-  border: 1px solid var(--flyout-border);
-  border-radius: 4px;
   white-space: normal;
   overflow-wrap: anywhere;
   z-index: 100;
   pointer-events: none;
-  box-shadow: var(--flyout-shadow);
-  -webkit-backdrop-filter: var(--flyout-backdrop);
-  backdrop-filter: var(--flyout-backdrop);
 }
 
 .tooltip-content--below {
@@ -1200,13 +1038,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   align-items: stretch;
   text-align: left;
   appearance: none;
-  background: var(--control-bg);
   color: var(--field-text);
-  border-left: 1px solid var(--control-border);
-  border-top: 1px solid var(--control-border);
-  border-right: 1px solid var(--control-border);
-  border-bottom: 1px solid var(--control-border-strong);
-  border-radius: 4px;
   font-family: inherit;
   font-size: 14px;
   cursor: pointer;
@@ -1266,13 +1098,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   min-width: 80px;
   box-sizing: border-box;
   overflow: hidden;
-  color: var(--flyout-text);
-  background: var(--flyout-bg);
-  border: 1px solid var(--flyout-border);
-  border-radius: 8px;
-  box-shadow: var(--flyout-shadow);
-  -webkit-backdrop-filter: var(--flyout-backdrop);
-  backdrop-filter: var(--flyout-backdrop);
   visibility: hidden;
   overflow-y: scroll;
   overflow-x: hidden;
@@ -1311,31 +1136,42 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   white-space: nowrap;
 }
 
+/* 菜单项行模式（ComboBox 项 / 右键菜单项 共用） */
+.win-combo-item-layout,
+.context-menu-item {
+  min-height: 32px;
+  margin: 2px 5px;
+  box-sizing: border-box;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+}
+
 .win-combo-item-layout {
   position: relative;
   width: calc(100% - 10px);
-  min-height: 32px;
-  margin: 2px 5px;
-  display: flex;
-  align-items: center;
+}
+
+.win-combo-item-content,
+.context-menu-item {
+  padding: 5px 11px 7px;
   box-sizing: border-box;
-  border-radius: 3px;
 }
 
 .win-combo-item-content {
   min-width: 0;
-  padding: 5px 11px 7px;
   display: block;
-  box-sizing: border-box;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.win-combo-item:hover .win-combo-item-layout {
+.win-combo-item:hover .win-combo-item-layout,
+.context-menu-item:hover {
   background: var(--hover-overlay);
 }
 
-.win-combo-item:active .win-combo-item-layout {
+.win-combo-item:active .win-combo-item-layout,
+.context-menu-item:active {
   color: var(--pressed-text);
   background: var(--pressed-overlay);
 }
@@ -1414,20 +1250,12 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .win-numberbox-spin-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 22px;
   height: 22px;
   min-width: 0;
-  border: 0;
-  background: transparent;
+  flex: 0 0 22px;
   color: var(--text-secondary);
   font-size: 16px;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.167s cubic-bezier(0, 0, 0, 1), color 0.167s;
-  flex: 0 0 22px;
 }
 
 .win-numberbox-spin-btn:hover,
@@ -1523,33 +1351,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   margin-top: 8px;
 }
 
-.group-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 12px 0;
-}
-
-.group-option {
-  padding: 10px 14px;
-  border: 1px solid var(--field-border);
-  border-radius: 6px;
-  font-size: 14px;
-  color: var(--text-primary);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.group-option:hover {
-  background: var(--hover-overlay);
-}
-
-.group-option.selected {
-  background: var(--accent-subtle-bg);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* ── Context menu (shared) ───────────────────────── */
 .context-menu {
   position: fixed;
@@ -1557,38 +1358,15 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   min-width: 120px;
   box-sizing: border-box;
   padding: 4px 0;
-  color: var(--flyout-text);
-  background: var(--flyout-bg);
-  border: 1px solid var(--flyout-border);
-  border-radius: 8px;
-  box-shadow: var(--flyout-shadow);
-  -webkit-backdrop-filter: var(--flyout-backdrop);
-  backdrop-filter: var(--flyout-backdrop);
 }
 
 .context-menu-item {
   position: relative;
-  min-height: 32px;
-  margin: 2px 5px;
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  padding: 5px 11px 7px;
-  border-radius: 3px;
   font-size: 14px;
   line-height: 20px;
   color: var(--flyout-text);
   white-space: nowrap;
   cursor: pointer;
-}
-
-.context-menu-item:hover {
-  background: var(--hover-overlay);
-}
-
-.context-menu-item:active {
-  color: var(--pressed-text);
-  background: var(--pressed-overlay);
 }
 
 .context-menu-subitem {
@@ -1627,6 +1405,20 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   color: var(--accent);
 }
 
+/* ── Flyout surface（下拉 / 右键菜单 / 浮出面板，圆角 8） ── */
+.context-menu,
+.win-combo-flyout,
+.update-error-flyout {
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+}
+
 /* ── Infobar (shared) ────────────────────────────── */
 .win-infobar {
   box-sizing: border-box;
@@ -1637,13 +1429,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   color: var(--text-primary);
   font-size: 14px;
   line-height: 20px;
-}
-
-.win-infobar-layout {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
 }
 
 .win-infobar-icon {
@@ -1667,14 +1452,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   width: 28px;
   height: 28px;
   margin-right: -6px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
   color: inherit;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   transition: background 83ms cubic-bezier(0.1, 0.9, 0.2, 1);
 }
 
@@ -1754,19 +1532,6 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
   flex-direction: row;
   align-items: center;
   gap: 10px;
-  min-width: 0;
-  flex: 1;
-  margin-right: 12px;
-}
-
-.win-infobar.win-infobar-card .win-infobar-icon {
-  flex-shrink: 0;
-}
-
-.win-infobar.win-infobar-card .card-actions {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
 }
 
 .win-infobar.win-infobar-card #about-update-action {
@@ -1792,12 +1557,6 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
   max-width: calc(100vw - 24px);
   box-sizing: border-box;
   padding: 12px 14px 14px;
-  background: var(--flyout-bg);
-  color: var(--flyout-text);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  border: 1px solid var(--flyout-border);
-  border-radius: 8px;
-  box-shadow: var(--flyout-shadow);
   animation: update-flyout-open 167ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
 }
 
@@ -1834,14 +1593,7 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
 .update-error-flyout-footer .dialog-btn {
   height: 30px;
   padding: 4px 14px 5px;
-  border: 1px solid var(--control-border);
-  border-bottom-color: var(--control-border-strong);
-  border-radius: 4px;
-  background: var(--control-bg);
-  color: var(--text-primary);
   font-size: 13px;
-  font-family: inherit;
-  cursor: pointer;
 }
 
 .update-error-flyout-footer .dialog-btn:hover {
@@ -1865,21 +1617,13 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
   bottom: 120px;
   left: 50%;
   transform: translateX(-50%) translateY(100px);
-  background: var(--flyout-bg);
-  color: var(--flyout-text);
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  padding: 6px 9px 8px;
-  border: 1px solid var(--flyout-border);
-  border-radius: 4px;
   font-size: 12px;
-  line-height: 16px;
   z-index: 10000;
   opacity: 0;
   transition: all 0.3s ease;
   pointer-events: none;
   max-width: 80%;
   text-align: center;
-  box-shadow: var(--flyout-shadow);
 }
 .toast.show {
   opacity: 1;
@@ -1888,5 +1632,5 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
 }
 
 .toast.error {
-  color: #e81123;
+  color: var(--danger);
 }
