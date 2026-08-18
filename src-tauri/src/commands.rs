@@ -310,6 +310,7 @@ pub async fn check_for_update(
             crate::update::set_last_status(crate::update::UpdateStatus::from_info(info, status));
         }
         Err(e) => {
+            crate::process::append_log(&format!("[update] check failed: {}", e));
             crate::update::set_last_status(crate::update::UpdateStatus {
                 status: "error".to_string(),
                 current_version: current_version.clone(),

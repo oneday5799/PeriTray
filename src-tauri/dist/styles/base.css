@@ -1567,6 +1567,13 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
   margin-bottom: 8px;
 }
 
+.update-error-flyout-summary {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--status-error, #d32f2f);
+  margin-bottom: 8px;
+}
+
 .update-error-flyout-body {
   box-sizing: border-box;
   max-height: 160px;

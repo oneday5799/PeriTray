@@ -442,10 +442,7 @@ async function runUpdateCheck(btnId) {
       error: err
     });
     if (err.includes("超时") || err.includes("timeout")) {
-      showToast(
-        "检测超时，请检查网络后重试<br>点击前往 Release 页面",
-        () => invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor/releases" })
-      );
+      showToast("检测超时，请检查网络后重试");
     } else if (err.includes("频繁") || err.includes("rate_limited")) {
       showToast("GitHub API 请求过于频繁，请稍后再试");
     } else {
@@ -609,11 +606,34 @@ function copyToClipboard(text) {
   });
 }
 
+function classifyUpdateError(err) {
+  if (err.includes("超时") || err.includes("timeout")) return "检测超时，请检查网络后重试";
+  if (err.includes("频繁") || err.includes("rate_limited")) return "GitHub API 请求过于频繁，请稍后再试";
+  if (err.includes("403")) return "GitHub API 请求被拒绝（403），请稍后再试";
+  if (err.includes("404")) return "未找到发布资源（404），请确认仓库地址";
+  if (err.includes("解析失败")) return "响应数据解析失败，请稍后再试";
+  return "";
+}
+
+function extractErrorCode(err) {
+  const m = String(err).match(/\((\d{2,5})\)\s*$/);
+  return m ? m[1] : "";
+}
+
 function showUpdateErrorFlyout(errorText, anchorBtn) {
   const flyout = document.getElementById("about-update-flyout");
+  const summaryEl = document.getElementById("about-update-error-summary");
   const textEl = document.getElementById("about-update-error-text");
   if (!flyout || !textEl) return;
-  textEl.textContent = errorText || "未知错误";
+  const detail = errorText || "未知错误";
+  const code = extractErrorCode(detail);
+  const message = code ? detail.replace(/\(\d{2,5}\)\s*$/, "").trim() : detail;
+  if (summaryEl) {
+    const summary = classifyUpdateError(detail);
+    summaryEl.textContent = summary;
+    summaryEl.hidden = !summary;
+  }
+  textEl.textContent = code ? `${message}，错误代码：${code}` : message;
   flyout.hidden = false;
   const rect = anchorBtn.getBoundingClientRect();
   let left = rect.right - flyout.offsetWidth;
@@ -628,7 +648,7 @@ function showUpdateErrorFlyout(errorText, anchorBtn) {
   const copyBtn = document.getElementById("about-update-error-copy");
   copyBtn.onclick = async () => {
     try {
-      await copyToClipboard(errorText || "未知错误");
+      await copyToClipboard(detail);
       showToast("已复制到剪贴板");
     } catch (e) {
       showToast("复制失败");

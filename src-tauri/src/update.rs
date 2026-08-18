@@ -104,9 +104,9 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
             WinHttpCloseHandle(connect);
             WinHttpCloseHandle(session);
             return if err == 12007 {
-                Err("DNS 解析失败".to_string())
+                Err(format!("DNS 解析失败 ({})", err))
             } else if err == 12002 || err == 12030 {
-                Err("网络连接超时".to_string())
+                Err(format!("网络连接超时 ({})", err))
             } else {
                 Err(format!("网络错误 ({})", err))
             };
@@ -118,7 +118,7 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
             WinHttpCloseHandle(connect);
             WinHttpCloseHandle(session);
             return if err == 12002 || err == 12030 {
-                Err("网络连接超时".to_string())
+                Err(format!("网络连接超时 ({})", err))
             } else {
                 Err(format!("网络错误 ({})", err))
             };
@@ -142,7 +142,7 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
                 WinHttpCloseHandle(request);
                 WinHttpCloseHandle(connect);
                 WinHttpCloseHandle(session);
-                return Err("HTTP 403，请稍后再试".to_string());
+                return Err("请求过于频繁，请稍后再试 (403)".to_string());
             }
             code => {
                 WinHttpCloseHandle(request);
@@ -158,9 +158,18 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
 
         loop {
             bytes_read = 0;
-            if WinHttpReadData(request, buffer.as_mut_ptr() as *mut c_void, buffer.len() as u32, &mut bytes_read) == 0
-                || bytes_read == 0
-            {
+            if WinHttpReadData(request, buffer.as_mut_ptr() as *mut c_void, buffer.len() as u32, &mut bytes_read) == 0 {
+                let err = GetLastError();
+                WinHttpCloseHandle(request);
+                WinHttpCloseHandle(connect);
+                WinHttpCloseHandle(session);
+                return if err == 12002 || err == 12030 {
+                    Err(format!("网络连接超时 ({})", err))
+                } else {
+                    Err(format!("网络错误 ({})", err))
+                };
+            }
+            if bytes_read == 0 {
                 break;
             }
             body.extend_from_slice(&buffer[..bytes_read as usize]);
