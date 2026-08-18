@@ -1062,6 +1062,29 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 /* ── Tooltip (shared) ────────────────────────────── */
+/* 应用名 tooltip：页面内 fixed 定位，超出边界自动避让 */
+.session-tip {
+  position: fixed;
+  z-index: 1000;
+  display: none;
+  max-width: 320px;
+  box-sizing: border-box;
+  padding: 6px 9px 8px;
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  border: 1px solid var(--flyout-border);
+  border-radius: 4px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
 .tooltip-host {
   position: relative;
 }
@@ -1089,8 +1112,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 
 .tooltip-content {
   display: none;
-  position: absolute;
-  bottom: calc(100% + 8px);
+  position: absolute;  bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
   width: max-content;

@@ -218,7 +218,13 @@ pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
                                 (0.0, false)
                             };
                             let session_name = get_session_display_name(&session_control).unwrap_or_default();
-                            let display_name = if !session_name.is_empty() && session_name != "Unknown App" { session_name } else { format!("App (PID: {})", pid) };
+                            let display_name = if session_name.starts_with('@') {
+                                "System".to_string()
+                            } else if !session_name.is_empty() && session_name != "Unknown App" { session_name } else {
+                                crate::app_icon::get_process_name_by_pid(pid)
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| format!("App (PID: {})", pid))
+                            };
                             let icon = crate::app_icon::get_app_icon_by_pid(pid).unwrap_or_default();
                             let is_active = state.0 == 1;
                             let audio_session = AudioSession { id: session_id, name: display_name, icon, pid, volume, is_muted, device_id: dev_id.clone(), is_active };

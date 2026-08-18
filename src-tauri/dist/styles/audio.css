@@ -82,6 +82,14 @@
   gap: 12px;
 }
 
+.session-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+}
+
 .session-controls {
   flex: 1;
 }

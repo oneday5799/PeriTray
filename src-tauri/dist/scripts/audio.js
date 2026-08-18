@@ -583,7 +583,11 @@ function createAudioSessionCard(session) {
     iconEl.style.color = "#fff";
     iconEl.style.fontWeight = "bold";
   }
-  card.appendChild(iconEl);
+  const iconWrap = document.createElement("div");
+  iconWrap.className = "session-icon-wrap";
+  iconWrap.appendChild(iconEl);
+  card.appendChild(iconWrap);
+  window.attachSessionTooltip(iconWrap, session.name);
 
   const controls = document.createElement("div");
   controls.className = "card-controls session-controls";

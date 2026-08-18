@@ -7,6 +7,109 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 
 static ICON_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new();
+static NAME_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new();
+
+/// 从进程PID获取应用名称（优先读取 exe 文件版本信息的 FileDescription，回退到 exe 文件名）
+pub fn get_process_name_by_pid(pid: u32) -> Option<Arc<str>> {
+    let cache = NAME_CACHE.get_or_init(|| {
+        Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))
+    });
+    {
+        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(name) = guard.get(&pid) {
+            return Some(Arc::clone(name));
+        }
+    }
+    let name: Option<Arc<str>> = resolve_process_name(pid).map(|s| Arc::from(s.as_str()));
+    if let Some(name) = &name {
+        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        guard.put(pid, Arc::clone(name));
+    }
+    name
+}
+
+/// 从进程PID解析应用名称
+fn resolve_process_name(pid: u32) -> Option<String> {
+    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW};
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let process_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut path_buf = [0u16; 1024];
+        let mut path_size = path_buf.len() as u32;
+        let result = QueryFullProcessImageNameW(
+            process_handle,
+            PROCESS_NAME_FORMAT(0),
+            windows::core::PWSTR(path_buf.as_mut_ptr()),
+            &mut path_size,
+        );
+        let _ = windows::Win32::Foundation::CloseHandle(process_handle);
+        if result.is_err() {
+            return None;
+        }
+        let exe_path = String::from_utf16_lossy(&path_buf[..path_size as usize]);
+
+        // 读取文件版本信息中的 FileDescription（如 "Google Chrome"）
+        let wide_path: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let size = GetFileVersionInfoSizeW(windows::core::PCWSTR(wide_path.as_ptr()), None);
+        if size > 0 {
+            let mut data = vec![0u8; size as usize];
+            if GetFileVersionInfoW(
+                windows::core::PCWSTR(wide_path.as_ptr()),
+                None,
+                size,
+                data.as_mut_ptr() as *mut _,
+            ).is_ok() {
+                if let Some(name) = query_file_description(&data) {
+                    return Some(name);
+                }
+            }
+        }
+
+        // 回退：exe 文件名（去掉扩展名）
+        std::path::Path::new(&exe_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+    }
+}
+
+/// 从版本信息数据中查询 FileDescription
+unsafe fn query_file_description(data: &[u8]) -> Option<String> {
+    use windows::Win32::Storage::FileSystem::VerQueryValueW;
+
+    let mut buf: *mut core::ffi::c_void = std::ptr::null_mut();
+    let mut len: u32 = 0;
+    let ok = VerQueryValueW(
+        data.as_ptr() as *const _,
+        windows::core::w!("\\VarFileInfo\\Translation"),
+        &mut buf,
+        &mut len,
+    );
+    if !ok.as_bool() || buf.is_null() || len < 4 {
+        return None;
+    }
+    let lang = (buf as *const u16).read();
+    let codepage = (buf as *const u16).add(1).read();
+    let key = format!("\\StringFileInfo\\{:04X}{:04X}\\FileDescription", lang, codepage);
+    let key_wide: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut buf2: *mut core::ffi::c_void = std::ptr::null_mut();
+    let mut len2: u32 = 0;
+    let ok2 = VerQueryValueW(
+        data.as_ptr() as *const _,
+        windows::core::PCWSTR(key_wide.as_ptr()),
+        &mut buf2,
+        &mut len2,
+    );
+    if !ok2.as_bool() || buf2.is_null() {
+        return None;
+    }
+    let name = String::from_utf16_lossy(std::slice::from_raw_parts(buf2 as *const u16, len2 as usize));
+    let name = name.split('\0').next().unwrap_or("").trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
+}
 
 /// 从进程PID获取应用图标（返回base64编码的PNG）
 pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {

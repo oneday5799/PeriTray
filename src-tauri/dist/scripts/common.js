@@ -89,6 +89,52 @@ window.getDisplayName = function (dev, deviceNames) {
   return deviceNames[dev.name] || dev.name;
 };
 
+// ── 应用名 tooltip（页面内，超出边界自动避让） ────────────
+let sessionTipTimer = null;
+let sessionTip = null;
+
+function getSessionTip() {
+  if (!sessionTip) {
+    sessionTip = document.createElement("div");
+    sessionTip.className = "session-tip";
+    document.body.appendChild(sessionTip);
+  }
+  return sessionTip;
+}
+
+function showSessionTip(el, text) {
+  const tip = getSessionTip();
+  tip.textContent = text;
+  tip.style.visibility = "hidden";
+  tip.style.display = "block";
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  const rect = el.getBoundingClientRect();
+  let left = rect.left + rect.width / 2 - tw / 2;
+  left = Math.max(4, Math.min(left, window.innerWidth - tw - 4));
+  let top = rect.top - th - 8;
+  if (top < 4) top = rect.bottom + 8;
+  if (top + th > window.innerHeight - 4) top = window.innerHeight - th - 4;
+  tip.style.left = left + "px";
+  tip.style.top = top + "px";
+  tip.style.visibility = "visible";
+}
+
+window.attachSessionTooltip = function (el, text) {
+  el.addEventListener("pointerenter", () => {
+    if (sessionTipTimer) clearTimeout(sessionTipTimer);
+    sessionTipTimer = setTimeout(() => showSessionTip(el, text), 800);
+  });
+  el.addEventListener("pointerleave", () => {
+    if (sessionTipTimer) {
+      clearTimeout(sessionTipTimer);
+      sessionTipTimer = null;
+    }
+    const tip = getSessionTip();
+    tip.style.display = "none";
+  });
+};
+
 // ── 右键菜单共享工具 ─────────────────────────────────────
 
 const contextMenuHolders = [];
