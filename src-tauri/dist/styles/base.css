@@ -1590,16 +1590,6 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
   margin-top: 10px;
 }
 
-.update-error-flyout-footer .dialog-btn {
-  height: 30px;
-  padding: 4px 14px 5px;
-  font-size: 13px;
-}
-
-.update-error-flyout-footer .dialog-btn:hover {
-  background: var(--control-bg-hover);
-}
-
 @keyframes update-flyout-open {
   from {
     opacity: 0;
