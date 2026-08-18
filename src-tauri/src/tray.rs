@@ -88,6 +88,113 @@ fn start_device_watcher() {
     });
 }
 
+/// 读取系统深色模式（仅跟随系统主题，与应用内主题设置无关）
+fn system_dark_mode() -> bool {
+    use windows_sys::core::w;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+    };
+
+    unsafe {
+        let mut hkey = std::ptr::null_mut();
+        let status = RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            0,
+            KEY_READ,
+            &mut hkey,
+        );
+        if status != 0 {
+            return false;
+        }
+        let mut value: u32 = 1;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let mut data_type: u32 = REG_DWORD;
+        let status = RegQueryValueExW(
+            hkey,
+            w!("AppsUseLightTheme"),
+            std::ptr::null_mut(),
+            &mut data_type,
+            &mut value as *mut u32 as *mut u8,
+            &mut size,
+        );
+        RegCloseKey(hkey);
+        if status != 0 {
+            return false;
+        }
+        value == 0
+    }
+}
+
+/// 根据默认打开页面与系统深色模式选择托盘图标
+fn pick_tray_icon() -> Image<'static> {
+    let is_volume = config::with_config(|c| c.default_popup_tab == "volume");
+    let dark = system_dark_mode();
+    if is_volume {
+        let bytes = if dark {
+            include_bytes!("../icons/tray-volume-icon-dark.png").to_vec()
+        } else {
+            include_bytes!("../icons/tray-volume-icon.png").to_vec()
+        };
+        Image::from_bytes(&bytes).expect("Failed to load tray volume icon")
+    } else {
+        let bytes = if dark {
+            include_bytes!("../icons/tray-icon-dark.png").to_vec()
+        } else {
+            include_bytes!("../icons/tray-icon.png").to_vec()
+        };
+        Image::from_bytes(&bytes).expect("Failed to load tray icon")
+    }
+}
+
+/// 后台线程：监听系统深色模式变化并刷新托盘图标（仅跟随系统）
+/// 通过 RegNotifyChangeKeyValue 注册表变更通知实现事件驱动，无轮询
+fn start_theme_watcher() {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegNotifyChangeKeyValue, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_READ,
+        REG_NOTIFY_CHANGE_LAST_SET,
+    };
+    use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
+
+    std::thread::spawn(move || {
+        unsafe {
+            let mut hkey = std::ptr::null_mut();
+            let status = RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                windows_sys::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+                0,
+                KEY_READ,
+                &mut hkey,
+            );
+            if status != 0 {
+                return;
+            }
+
+            let event = CreateEventW(std::ptr::null(), 1, 0, std::ptr::null());
+            if event.is_null() {
+                RegCloseKey(hkey);
+                return;
+            }
+
+            let mut last = system_dark_mode();
+            loop {
+                let status = RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1);
+                if status != 0 {
+                    // 通知注册失败时退避重试，避免线程空转
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    continue;
+                }
+                WaitForSingleObject(event, INFINITE);
+                let current = system_dark_mode();
+                if current != last {
+                    last = current;
+                    std::thread::spawn(move || update_tray_icon());
+                }
+            }
+        }
+    });
+}
+
 pub fn refresh_tray_tooltip(_app_handle: &tauri::AppHandle) {
     refresh_devices_cache();
     update_tooltip();
@@ -157,13 +264,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let menu = build_full_menu(app.handle(), &audio_devices_menu)?;
 
-    let tray_icon = if config::with_config(|c| c.default_popup_tab == "volume") {
-        Image::from_bytes(include_bytes!("../icons/tray-volume-icon.png"))
-            .expect("Failed to load tray volume icon")
-    } else {
-        Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
-            .expect("Failed to load tray icon")
-    };
+    let tray_icon = pick_tray_icon();
 
     let _tray = TrayIconBuilder::with_id("main-tray")
         .icon(tray_icon)
@@ -281,6 +382,8 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     // 启动后台设备监控线程
     start_device_watcher();
+    // 启动系统深色模式监听线程（仅跟随系统）
+    start_theme_watcher();
 
     Ok(())
 }
@@ -300,19 +403,12 @@ fn update_auto_text() {
     }
 }
 
-/// 根据默认打开页面更新托盘图标
+/// 根据默认打开页面与系统深色模式更新托盘图标
 fn update_tray_icon() {
-    let is_volume = config::with_config(|c| c.default_popup_tab == "volume");
-    let icon = if is_volume {
-        Image::from_bytes(include_bytes!("../icons/tray-volume-icon.png")).ok()
-    } else {
-        Image::from_bytes(include_bytes!("../icons/tray-icon.png")).ok()
-    };
-    if let Some(icon) = icon {
-        if let Ok(guard) = TRAY_ICON.get().unwrap().lock() {
-            if let Some(ref tray) = *guard {
-                let _ = tray.set_icon(Some(icon));
-            }
+    let icon = pick_tray_icon();
+    if let Ok(guard) = TRAY_ICON.get().unwrap().lock() {
+        if let Some(ref tray) = *guard {
+            let _ = tray.set_icon(Some(icon));
         }
     }
 }
