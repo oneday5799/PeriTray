@@ -297,11 +297,34 @@ pub async fn check_for_update(
 ) -> Result<crate::update::UpdateInfo, String> {
     let current_version = app.package_info().version.to_string();
     // WinHTTP is blocking but fast; spawn_blocking to avoid blocking Tauri's async runtime
-    tokio::task::spawn_blocking(move || {
-        crate::update::check_for_update(&current_version, include_prerelease)
+    let ver_for_check = current_version.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::update::check_for_update(&ver_for_check, include_prerelease)
     })
     .await
-    .map_err(|e| format!("task error: {}", e))?
+    .map_err(|e| format!("task error: {}", e))?;
+
+    match &result {
+        Ok(info) => {
+            let status = if info.has_update { "update" } else { "latest" };
+            crate::update::set_last_status(crate::update::UpdateStatus::from_info(info, status));
+        }
+        Err(e) => {
+            crate::update::set_last_status(crate::update::UpdateStatus {
+                status: "error".to_string(),
+                current_version: current_version.clone(),
+                latest_version: String::new(),
+                release_url: String::new(),
+                error: Some(e.clone()),
+            });
+        }
+    }
+    result
+}
+
+#[tauri::command]
+pub fn get_update_status() -> Option<crate::update::UpdateStatus> {
+    crate::update::get_last_status()
 }
 
 fn parse_shortcut(s: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, String> {

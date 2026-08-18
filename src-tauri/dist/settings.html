@@ -462,6 +462,26 @@
 
     <!-- Tab: About -->
     <div class="tab-content" id="tab-about">
+      <div class="win-infobar win-infobar-card" id="about-update-infobar" role="alert" hidden>
+        <div class="card-left">
+          <span class="win-infobar-icon" id="about-update-icon">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11z"/>
+              <path d="M8 6.75c.41 0 .75.34.75.75v3.25a.75.75 0 1 1-1.5 0V7.5c0-.41.34-.75.75-.75z"/>
+              <circle cx="8" cy="5" r="1"/>
+            </svg>
+          </span>
+          <div class="win-infobar-content" id="about-update-content"></div>
+        </div>
+        <div class="card-actions">
+          <button class="add-device-btn" id="about-update-action" hidden></button>
+          <button class="win-infobar-close-button" id="about-update-close" aria-label="关闭">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
       <div class="card expandable about-info-card" id="about-info-card">
         <div class="card-left">
           <div class="card-title">PeriphMonitor - 外设监控</div>
@@ -512,8 +532,8 @@
           </div>
         </div>
       </div>
-      <div class="win-infobar" id="about-infobar" role="alert">
-        <div class="win-infobar-layout">
+      <div class="win-infobar win-infobar-card" id="about-infobar" role="alert">
+        <div class="card-left">
           <span class="win-infobar-icon">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
               <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11z"/>
@@ -522,6 +542,8 @@
             </svg>
           </span>
           <div class="win-infobar-content">本工具支持 Windows 10 （大概）以及 Windows 11 版本，具体兼容性请自行测试。</div>
+        </div>
+        <div class="card-actions">
           <button class="win-infobar-close-button" id="infobar-close" aria-label="关闭">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
               <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
@@ -531,6 +553,14 @@
       </div>
     </div>
     </main>
+  </div>
+
+  <div class="update-error-flyout" id="about-update-flyout" role="dialog" hidden>
+    <div class="update-error-flyout-title">更新检测失败</div>
+    <div class="update-error-flyout-body" id="about-update-error-text"></div>
+    <div class="update-error-flyout-footer">
+      <button class="dialog-btn" id="about-update-error-copy">复制</button>
+    </div>
   </div>
 
   <script src="scripts/common.js"></script>

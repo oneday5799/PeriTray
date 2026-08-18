@@ -134,6 +134,7 @@ fn main() {
             commands::set_default_device,
             commands::open_log_dir,
             commands::check_for_update,
+            commands::get_update_status,
             commands::set_hotkey_config,
             commands::set_device_shortcut,
             commands::remove_device_shortcut,
@@ -163,16 +164,30 @@ fn main() {
                     })
                     .await;
                     match result {
-                        Ok(Ok(info)) if info.has_update => {
-                            let _ = app_handle.emit("update-available", info);
+                        Ok(Ok(info)) => {
+                            let status = if info.has_update { "update" } else { "latest" };
+                            let payload = crate::update::UpdateStatus::from_info(&info, status);
+                            crate::update::set_last_status(payload.clone());
+                            let _ = app_handle.emit("update-status", payload);
+                            if info.has_update {
+                                let _ = app_handle.emit("update-available", info);
+                            }
                         }
                         Ok(Err(e)) => {
                             process::append_log(&format!("[update] startup check failed: {}", e));
+                            let payload = crate::update::UpdateStatus {
+                                status: "error".to_string(),
+                                current_version: app_handle.package_info().version.to_string(),
+                                latest_version: String::new(),
+                                release_url: String::new(),
+                                error: Some(e),
+                            };
+                            crate::update::set_last_status(payload.clone());
+                            let _ = app_handle.emit("update-status", payload);
                         }
                         Err(e) => {
                             process::append_log(&format!("[update] task failed: {}", e));
                         }
-                        _ => {}
                     }
                 });
             }

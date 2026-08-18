@@ -369,7 +369,18 @@ function initLogSettings() {
 function initUpdateSettings() {
   bindToggle("toggle-check-updates", {
     get: () => config.check_updates !== false,
-    set: (v) => { config.check_updates = v; }
+    set: (v) => { config.check_updates = v; },
+    onChange: (enabled) => {
+      if (!enabled) {
+        hideUpdateErrorFlyout();
+        const bar = document.getElementById("about-update-infobar");
+        if (bar) bar.hidden = true;
+      } else {
+        invoke("get_update_status").then((status) => {
+          renderUpdateInfobar(status);
+        }).catch(() => {});
+      }
+    }
   });
 
   bindToggle("toggle-include-prerelease", {
@@ -399,16 +410,37 @@ async function runUpdateCheck(btnId) {
     });
     clearTimeout(timeoutId);
     if (info.has_update) {
+      renderUpdateInfobar({
+        status: "update",
+        currentVersion: info.current_version,
+        latestVersion: info.latest_version,
+        releaseUrl: info.release_url,
+        error: null
+      });
       showToast(
         `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
         () => invoke("open_url", { url: info.release_url })
       );
     } else {
+      renderUpdateInfobar({
+        status: "latest",
+        currentVersion: info.current_version,
+        latestVersion: info.latest_version,
+        releaseUrl: info.release_url,
+        error: null
+      });
       showToast("已是最新版本");
     }
   } catch (e) {
     clearTimeout(timeoutId);
     const err = String(e);
+    renderUpdateInfobar({
+      status: "error",
+      currentVersion: "",
+      latestVersion: "",
+      releaseUrl: "",
+      error: err
+    });
     if (err.includes("超时") || err.includes("timeout")) {
       showToast(
         "检测超时，请检查网络后重试<br>点击前往 Release 页面",
@@ -538,6 +570,118 @@ function selectTab(tab) {
   if (nav) nav.click();
 }
 
+const UPDATE_ICONS = {
+  success: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm3.53 4.03l-4.28 4.28-1.78-1.77a.75.75 0 1 0-1.06 1.06l2.31 2.31c.29.3.77.3 1.06 0l4.81-4.81a.75.75 0 1 0-1.06-1.06z"/></svg>',
+  warning: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5L.75 14.5h14.5L8 1.5zm0 3.26l5.04 8.74H2.96L8 4.76zM8.75 7.5v3a.75.75 0 1 1-1.5 0v-3a.75.75 0 1 1 1.5 0zM8 12.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5z"/></svg>',
+  error: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11zm2.03-8.53L8 6.94 5.97 4.97 4.97 5.97 6.94 8l-1.97 2.03 1 1L8 9.06l2.03 1.97 1-1L9.06 8l1.97-2.03-1-1z"/></svg>'
+};
+
+const RELEASES_URL = "https://github.com/oneday5799/PeriphMonitor/releases";
+
+function hideUpdateErrorFlyout() {
+  const flyout = document.getElementById("about-update-flyout");
+  if (flyout) flyout.hidden = true;
+  if (window.__updateFlyoutDismiss) {
+    document.removeEventListener("pointerdown", window.__updateFlyoutDismiss);
+    window.__updateFlyoutDismiss = null;
+  }
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      ok ? resolve() : reject(new Error("copy failed"));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function showUpdateErrorFlyout(errorText, anchorBtn) {
+  const flyout = document.getElementById("about-update-flyout");
+  const textEl = document.getElementById("about-update-error-text");
+  if (!flyout || !textEl) return;
+  textEl.textContent = errorText || "未知错误";
+  flyout.hidden = false;
+  const rect = anchorBtn.getBoundingClientRect();
+  let left = rect.right - flyout.offsetWidth;
+  let top = rect.bottom + 8;
+  if (left < 8) left = 8;
+  if (top + flyout.offsetHeight > window.innerHeight - 8) {
+    top = Math.max(8, rect.top - flyout.offsetHeight - 8);
+  }
+  flyout.style.left = left + "px";
+  flyout.style.top = top + "px";
+
+  const copyBtn = document.getElementById("about-update-error-copy");
+  copyBtn.onclick = async () => {
+    try {
+      await copyToClipboard(errorText || "未知错误");
+      showToast("已复制到剪贴板");
+    } catch (e) {
+      showToast("复制失败");
+    }
+    hideUpdateErrorFlyout();
+  };
+
+  const dismiss = (e) => {
+    if (!flyout.contains(e.target) && e.target !== anchorBtn && !anchorBtn.contains(e.target)) {
+      hideUpdateErrorFlyout();
+    }
+  };
+  window.__updateFlyoutDismiss = dismiss;
+  document.addEventListener("pointerdown", dismiss);
+}
+
+function renderUpdateInfobar(status) {
+  const bar = document.getElementById("about-update-infobar");
+  if (!bar) return;
+  if (!status || !status.status) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  bar.classList.remove("win-infobar-success", "win-infobar-warning", "win-infobar-error");
+
+  const icon = document.getElementById("about-update-icon");
+  const content = document.getElementById("about-update-content");
+  const action = document.getElementById("about-update-action");
+  if (!icon || !content || !action) return;
+  action.hidden = false;
+
+  if (status.status === "latest") {
+    bar.classList.add("win-infobar-success");
+    icon.innerHTML = UPDATE_ICONS.success;
+    content.textContent = `当前版本 v${status.currentVersion} ，已是最新版本。`;
+    action.textContent = "查看更新日志";
+    action.onclick = () => invoke("open_url", { url: RELEASES_URL });
+  } else if (status.status === "update") {
+    bar.classList.add("win-infobar-warning");
+    icon.innerHTML = UPDATE_ICONS.warning;
+    content.textContent = `检测到新版本 v${status.latestVersion} ，当前版本 v${status.currentVersion} 。`;
+    action.textContent = "下载最新版本";
+    action.onclick = () => invoke("open_url", { url: status.releaseUrl || RELEASES_URL });
+  } else {
+    bar.classList.add("win-infobar-error");
+    icon.innerHTML = UPDATE_ICONS.error;
+    content.textContent = "无法检测更新，请检查网络状况或稍后再试。";
+    action.textContent = "查看详细信息";
+    action.onclick = () => showUpdateErrorFlyout(status.error, action);
+  }
+}
+
 function initAboutTab() {
   const card = document.getElementById("about-info-card");
   const items = document.getElementById("about-info-items");
@@ -567,6 +711,25 @@ function initAboutTab() {
       if (bar) bar.style.display = "none";
     });
   }
+
+  const updateInfobarClose = document.getElementById("about-update-close");
+  if (updateInfobarClose) {
+    updateInfobarClose.addEventListener("click", () => {
+      hideUpdateErrorFlyout();
+      const bar = document.getElementById("about-update-infobar");
+      if (bar) bar.hidden = true;
+    });
+  }
+
+  // 恢复上次更新检测结果（仅当确实检测过时 get_update_status 才有值）
+  invoke("get_update_status").then((status) => {
+    renderUpdateInfobar(status);
+  }).catch(() => {});
+
+  // 启动时自动检测完成后实时更新 infobar
+  window.__TAURI__.event.listen("update-status", (event) => {
+    renderUpdateInfobar(event.payload);
+  });
 
   const links = {
     "about-dev": "https://github.com/oneday5799",

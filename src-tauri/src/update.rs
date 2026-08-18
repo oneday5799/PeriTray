@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::ffi::c_void;
+use std::sync::Mutex;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Networking::WinHttp::*;
 
@@ -9,6 +10,42 @@ pub struct UpdateInfo {
     pub current_version: String,
     pub latest_version: String,
     pub release_url: String,
+}
+
+/// 更新检查状态（供设置页「关于」infobar 展示）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStatus {
+    /// "latest" | "update" | "error"
+    pub status: String,
+    pub current_version: String,
+    pub latest_version: String,
+    pub release_url: String,
+    pub error: Option<String>,
+}
+
+impl UpdateStatus {
+    pub fn from_info(info: &UpdateInfo, status: &str) -> Self {
+        UpdateStatus {
+            status: status.to_string(),
+            current_version: info.current_version.clone(),
+            latest_version: info.latest_version.clone(),
+            release_url: info.release_url.clone(),
+            error: None,
+        }
+    }
+}
+
+static LAST_STATUS: Mutex<Option<UpdateStatus>> = Mutex::new(None);
+
+pub fn set_last_status(status: UpdateStatus) {
+    if let Ok(mut guard) = LAST_STATUS.lock() {
+        *guard = Some(status);
+    }
+}
+
+pub fn get_last_status() -> Option<UpdateStatus> {
+    LAST_STATUS.lock().ok().and_then(|guard| guard.clone())
 }
 
 #[derive(Debug, serde::Deserialize)]
