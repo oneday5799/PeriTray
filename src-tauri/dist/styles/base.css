@@ -1472,25 +1472,42 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 /* ── Context menu (shared) ───────────────────────── */
 .context-menu {
   position: fixed;
-  background: var(--dialog-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  padding: 4px 0;
   z-index: 1000;
   min-width: 120px;
+  box-sizing: border-box;
+  padding: 4px 0;
+  color: var(--flyout-text);
+  background: var(--flyout-bg);
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
 }
 
 .context-menu-item {
-  padding: 8px 16px;
-  font-size: 13px;
-  color: var(--text-primary);
+  position: relative;
+  min-height: 32px;
+  margin: 2px 5px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 5px 11px 7px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--flyout-text);
+  white-space: nowrap;
   cursor: pointer;
-  transition: background 0.1s;
 }
 
 .context-menu-item:hover {
   background: var(--hover-overlay);
+}
+
+.context-menu-item:active {
+  color: var(--pressed-text);
+  background: var(--pressed-overlay);
 }
 
 /* ── Infobar (shared) ────────────────────────────── */
