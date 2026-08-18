@@ -2,6 +2,7 @@
 /src-tauri/target
 /src-tauri/gen
 *.pdb
+generate_icons.mjs
 
 # Logs
 *.log
