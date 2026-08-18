@@ -634,14 +634,14 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .connect-btn:disabled,
-.connect-btn.loading {
+.connect-btn.btn-loading {
   background: var(--control-bg-hover);
   color: var(--text-disabled);
   cursor: not-allowed;
 }
 
 .connect-btn:disabled:hover,
-.connect-btn.loading:hover {
+.connect-btn.btn-loading:hover {
   background: var(--control-bg-hover);
 }
 

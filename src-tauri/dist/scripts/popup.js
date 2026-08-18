@@ -153,7 +153,7 @@ function renderDevices() {
           }
 
           connectBtn.disabled = true;
-          connectBtn.classList.add("loading");
+          connectBtn.classList.add("btn-loading");
 
           const statusEl = card.querySelector(".card-tag.status");
           const batteryEl = card.querySelector(".card-tag.battery");
@@ -222,7 +222,7 @@ function renderDevices() {
             newBatteryEl.style.display = "";
           }
           connectBtn.disabled = false;
-          connectBtn.classList.remove("loading");
+          connectBtn.classList.remove("btn-loading");
           if (newStatus === "已连接") {
             connectBtn.textContent = "断开";
             connectBtn.dataset.action = "disconnect";
