@@ -1631,7 +1631,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 .win-infobar {
   box-sizing: border-box;
   width: 100%;
-  margin-top: 12px;
   border: 1px solid var(--card-border);
   border-radius: 6px;
   background: var(--surface-subtle);
