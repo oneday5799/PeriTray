@@ -795,6 +795,7 @@ async function init() {
     loadAudioDevicesAsync();
     initAudioCardToggle();
     initMuteLockSettings();
+    initFineAdjustSettings();
     initShutdownVolumeSettings();
     initShortcutSettings();
     initDeviceShortcutSettings();

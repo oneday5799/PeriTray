@@ -5,6 +5,7 @@ let hiddenAudioDevices = [];
 let audioDeviceNames = {};
 let deviceShortcuts = {};
 let muteLockEnabled = false;
+let fineAdjustEnabled = false;
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -55,12 +56,16 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     try {
       const cfg = await getInvoke()("get_config");
       muteLockEnabled = !!cfg.mute_lock;
+      fineAdjustEnabled = !!cfg.volume_fine_adjust;
       for (const d of audioDevices) {
         d.permanentMute = muteLockEnabled && !!(d.is_muted && d.volume > 0);
       }
       for (const s of audioSessions) {
         s.permanentMute = muteLockEnabled && !!(s.is_muted && s.volume > 0);
       }
+      document.querySelectorAll('.volume-slider').forEach(s => {
+        s.step = fineAdjustEnabled ? "0.1" : "1";
+      });
       renderAudioDevices();
       renderAudioSessions();
     } catch (e) {
@@ -86,7 +91,7 @@ function updateDeviceCard(device) {
 
 function updateSliderValue(slider, volume) {
   if (slider && document.activeElement !== slider) {
-    slider.value = Math.round(volume * 100);
+    slider.value = fineAdjustEnabled ? Math.round(volume * 1000) / 10 : Math.round(volume * 100);
     updateSliderGradient(slider);
   }
 }
@@ -191,7 +196,12 @@ function createSliderTooltip(slider) {
     const min = parseFloat(slider.min);
     const max = parseFloat(slider.max);
     let val = parseFloat(slider.value);
-    val = e.deltaY < 0 ? Math.min(val + 1, max) : Math.max(val - 1, min);
+    if (fineAdjustEnabled) {
+      val = Math.round((val + (e.deltaY < 0 ? 0.1 : -0.1)) * 10) / 10;
+    } else {
+      val = e.deltaY < 0 ? Math.floor(val) + 1 : Math.ceil(val) - 1;
+    }
+    val = Math.min(Math.max(val, min), max);
     slider.value = val;
     slider.dispatchEvent(new Event("input"));
   }, { passive: false });
@@ -358,6 +368,7 @@ async function loadAudioDevices() {
   try {
     const [devices, cfg] = await Promise.all([invoke("get_audio_devices"), invoke("get_config")]);
     muteLockEnabled = !!cfg.mute_lock;
+    fineAdjustEnabled = !!cfg.volume_fine_adjust;
     audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && !!(d.is_muted && d.volume > 0) }));
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
@@ -464,12 +475,13 @@ function createAudioDeviceCard(device) {
   slider.className = "volume-slider";
   slider.min = "0";
   slider.max = "100";
+  slider.step = fineAdjustEnabled ? "0.1" : "1";
   slider.value = Math.round(device.volume * 100);
 
   const throttledSetDeviceVolume = throttle(setDeviceVolume, 150);
 
   slider.addEventListener("input", (e) => {
-    const value = parseInt(e.target.value) / 100;
+    const value = parseFloat(e.target.value) / 100;
     const dev = audioDevices.find(d => d.id === card.dataset.deviceId);
     if (!dev) return;
     const wasMuted = dev.is_muted;
@@ -641,12 +653,13 @@ function createAudioSessionCard(session) {
   slider.className = "volume-slider session-slider";
   slider.min = "0";
   slider.max = "100";
+  slider.step = fineAdjustEnabled ? "0.1" : "1";
   slider.value = Math.round(session.volume * 100);
 
   const throttledSetSessionVolume = throttle(setSessionVolume, 100);
 
   slider.addEventListener("input", async (e) => {
-    const value = parseInt(e.target.value) / 100;
+    const value = parseFloat(e.target.value) / 100;
     const sess = audioSessions.find(s => s.id === card.dataset.sessionId);
     if (!sess) return;
     const wasMuted = sess.is_muted;
@@ -766,8 +779,8 @@ async function setSessionVolume(sessionId, volume) {
 }
 
 function getVolumeIcon(volume) {
-  const pct = Math.round((volume || 0) * 100);
-  if (pct <= 0) return getMuteIcon();
+  if (!(volume > 0)) return getMuteIcon();
+  const pct = Math.floor(volume * 100);
   if (pct <= 32) {
     return `<svg width="16" height="16" viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true"><path d="M256 298.965333L341.162667 298.666667l199.466666-159.36q31.914667-20.906667 65.493334-2.730667 33.578667 18.133333 34.048 56.32v638.72q0 38.101333-33.536 56.234667-33.578667 18.176-65.536-2.730667L341.674667 726.186667l-85.162667 0.256q-35.370667 0-60.330667-25.002667-25.002667-25.002667-25.514666-60.330667v-256.853333q0-35.328 25.002666-60.288 25.002667-25.002667 60.330667-25.002667zM366.592 384L256 384.298667l0.512 256.810666 110.549333-0.256 187.733334 151.338667-0.426667-559.786667L366.549333 384z m361.386667-0.128a42.666667 42.666667 0 0 0 7.594666 24.32q32.042667 46.208 32.426667 102.442667 0.341333 56.234667-31.061333 102.869333l-1.706667 2.56a42.666667 42.666667 0 1 0 70.826667 47.658667l1.664-2.517334q22.826667-33.877333 34.474666-72.96 11.392-38.229333 11.136-78.165333-0.256-39.978667-12.16-78.037333-12.202667-38.912-35.456-72.490667a42.666667 42.666667 0 0 0-77.781333 24.32z"/></svg>`;
   }

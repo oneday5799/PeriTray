@@ -73,6 +73,8 @@ pub struct Config {
     pub shutdown_volume_devices: std::collections::HashMap<String, f32>,
     #[serde(default)]
     pub mute_lock: bool,
+    #[serde(default)]
+    pub volume_fine_adjust: bool,
     #[serde(default = "default_true")]
     pub check_updates: bool,
     #[serde(default)]
@@ -123,6 +125,7 @@ impl Default for Config {
             shutdown_volume_enabled: false,
             shutdown_volume_devices: std::collections::HashMap::new(),
             mute_lock: false,
+            volume_fine_adjust: false,
             check_updates: true,
             include_prerelease: false,
             shortcut_devices: None,

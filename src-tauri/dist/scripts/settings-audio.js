@@ -94,6 +94,13 @@ function initMuteLockSettings() {
   });
 }
 
+function initFineAdjustSettings() {
+  bindToggle("toggle-fine-adjust", {
+    get: () => config.volume_fine_adjust || false,
+    set: (v) => { config.volume_fine_adjust = v; },
+  });
+}
+
 async function initShutdownVolumeSettings() {
   const toggle = document.getElementById("toggle-shutdown-volume");
   const items = document.getElementById("shutdown-device-items");
