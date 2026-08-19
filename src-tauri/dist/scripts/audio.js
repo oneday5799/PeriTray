@@ -4,6 +4,7 @@ let selectedDeviceId = null;
 let hiddenAudioDevices = [];
 let audioDeviceNames = {};
 let deviceShortcuts = {};
+let muteLockEnabled = false;
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -16,7 +17,7 @@ function updateSessionCard(session) {
   for (const card of cards) {
     if (card.dataset.sessionId === session.id) {
       updateSliderValue(card.querySelector('.volume-slider'), session.volume);
-      updateMuteButton(card.querySelector('.mute-btn'), session.is_muted);
+updateMuteButton(card.querySelector('.mute-btn'), session.is_muted, session.volume, session.permanentMute);
       break;
     }
   }
@@ -31,6 +32,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
         if (device) {
           device.volume = change.volume;
           device.is_muted = change.is_muted;
+          if (!change.is_muted) device.permanentMute = false;
           updateDeviceCard(device);
         }
         if (change.session_id) {
@@ -48,6 +50,23 @@ if (window.__TAURI__ && window.__TAURI__.event) {
   window.__TAURI__.event.listen('audio-devices-changed', () => {
     loadAudioDevices();
   });
+
+  window.__TAURI__.event.listen('config-changed', async () => {
+    try {
+      const cfg = await getInvoke()("get_config");
+      muteLockEnabled = !!cfg.mute_lock;
+      for (const d of audioDevices) {
+        d.permanentMute = muteLockEnabled && !!(d.is_muted && d.volume > 0);
+      }
+      for (const s of audioSessions) {
+        s.permanentMute = muteLockEnabled && !!(s.is_muted && s.volume > 0);
+      }
+      renderAudioDevices();
+      renderAudioSessions();
+    } catch (e) {
+      console.error("Failed to reload mute lock config:", e);
+    }
+  });
 }
 
 function updateDeviceCard(device) {
@@ -62,7 +81,7 @@ function updateDeviceCard(device) {
   if (!targetCard) return;
 
   updateSliderValue(targetCard.querySelector('.volume-slider'), device.volume);
-  updateMuteButton(targetCard.querySelector('.mute-btn'), device.is_muted);
+  updateMuteButton(targetCard.querySelector('.mute-btn'), device.is_muted, device.volume, device.permanentMute);
 }
 
 function updateSliderValue(slider, volume) {
@@ -72,10 +91,12 @@ function updateSliderValue(slider, volume) {
   }
 }
 
-function updateMuteButton(muteBtn, isMuted) {
+function updateMuteButton(muteBtn, isMuted, volume, permanent) {
   if (muteBtn) {
-    muteBtn.className = "mute-btn" + (isMuted ? " muted" : "");
-    muteBtn.innerHTML = isMuted ? getMuteIcon() : getVolumeIcon();
+    const cls = "mute-btn" + (isMuted && permanent ? " muted" : "");
+    const html = isMuted ? getMuteIcon() : getVolumeIcon(volume);
+    if (muteBtn.className !== cls) muteBtn.className = cls;
+    if (muteBtn.innerHTML !== html) muteBtn.innerHTML = html;
   }
 }
 
@@ -329,7 +350,8 @@ async function loadAudioDevices() {
   }
   try {
     const [devices, cfg] = await Promise.all([invoke("get_audio_devices"), invoke("get_config")]);
-    audioDevices = devices;
+    muteLockEnabled = !!cfg.mute_lock;
+    audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && !!(d.is_muted && d.volume > 0) }));
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
     deviceShortcuts = cfg.device_shortcuts || {};
@@ -441,9 +463,20 @@ function createAudioDeviceCard(device) {
 
   slider.addEventListener("input", (e) => {
     const value = parseInt(e.target.value) / 100;
-    device.volume = value;
+    const dev = audioDevices.find(d => d.id === card.dataset.deviceId);
+    if (!dev) return;
+    const wasMuted = dev.is_muted;
+    dev.volume = value;
     updateSliderGradient(e.target);
-    throttledSetDeviceVolume(device.id, value);
+    if (!dev.permanentMute) {
+      const targetMuted = value <= 0;
+      if (targetMuted !== wasMuted) {
+        dev.is_muted = targetMuted;
+        setDeviceMute(dev.id, targetMuted);
+      }
+    }
+    updateMuteButton(muteBtn, dev.is_muted, dev.volume, dev.permanentMute);
+    throttledSetDeviceVolume(dev.id, value);
   });
   slider.addEventListener("change", () => {
     setTimeout(() => slider.blur(), 100);
@@ -454,8 +487,8 @@ function createAudioDeviceCard(device) {
   createSliderTooltip(slider);
 
   const muteBtn = document.createElement("button");
-  muteBtn.className = "mute-btn" + (device.is_muted ? " muted" : "");
-  muteBtn.innerHTML = device.is_muted ? getMuteIcon() : getVolumeIcon();
+  muteBtn.className = "mute-btn" + (device.is_muted && device.permanentMute ? " muted" : "");
+  muteBtn.innerHTML = device.is_muted ? getMuteIcon() : getVolumeIcon(device.volume);
   muteBtn.addEventListener("click", () => toggleDeviceMute(device.id));
   controls.appendChild(muteBtn);
 
@@ -502,7 +535,7 @@ function updateAudioDeviceCard(card, device) {
   }
 
   updateSliderValue(card.querySelector('.volume-slider'), device.volume);
-  updateMuteButton(card.querySelector('.mute-btn'), device.is_muted);
+  updateMuteButton(card.querySelector('.mute-btn'), device.is_muted, device.volume, device.permanentMute);
 }
 
 function selectDevice(deviceId) {
@@ -518,7 +551,7 @@ async function loadAudioSessions(deviceId) {
     return;
   }
   try {
-    audioSessions = await invoke("get_audio_sessions", { deviceId });
+    audioSessions = (await invoke("get_audio_sessions", { deviceId })).map(s => ({ ...s, permanentMute: muteLockEnabled && !!(s.is_muted && s.volume > 0) }));
     renderAudioSessions();
   } catch (e) {
     if (list.querySelectorAll('.card.session').length === 0) {
@@ -604,9 +637,19 @@ function createAudioSessionCard(session) {
   slider.addEventListener("input", async (e) => {
     const value = parseInt(e.target.value) / 100;
     const sess = audioSessions.find(s => s.id === card.dataset.sessionId);
-    if (sess) sess.volume = value;
+    if (!sess) return;
+    const wasMuted = sess.is_muted;
+    sess.volume = value;
     updateSliderGradient(e.target);
-    throttledSetSessionVolume(card.dataset.sessionId, value);
+    if (!sess.permanentMute) {
+      const targetMuted = value <= 0;
+      if (targetMuted !== wasMuted) {
+        sess.is_muted = targetMuted;
+        setSessionMute(sess.id, targetMuted);
+      }
+    }
+    updateMuteButton(muteBtn, sess.is_muted, sess.volume, sess.permanentMute);
+    throttledSetSessionVolume(sess.id, value);
   });
   slider.addEventListener("change", () => {
     setTimeout(() => slider.blur(), 100);
@@ -617,16 +660,20 @@ function createAudioSessionCard(session) {
   createSliderTooltip(slider);
 
   const muteBtn = document.createElement("button");
-  muteBtn.className = "mute-btn" + (session.is_muted ? " muted" : "");
-  muteBtn.innerHTML = session.is_muted ? getMuteIcon() : getVolumeIcon();
+  muteBtn.className = "mute-btn" + (session.is_muted && session.permanentMute ? " muted" : "");
+  muteBtn.innerHTML = session.is_muted ? getMuteIcon() : getVolumeIcon(session.volume);
   muteBtn.addEventListener("click", async () => {
     const sessionId = card.dataset.sessionId;
-    await toggleSessionMute(sessionId);
     const sess = audioSessions.find(s => s.id === sessionId);
-    if (sess) {
-      sess.is_muted = !sess.is_muted;
-      muteBtn.className = "mute-btn" + (sess.is_muted ? " muted" : "");
-      muteBtn.innerHTML = sess.is_muted ? getMuteIcon() : getVolumeIcon();
+    if (!sess) return;
+    const targetMuted = !sess.is_muted;
+    try {
+      await setSessionMute(sessionId, targetMuted);
+      sess.is_muted = targetMuted;
+      sess.permanentMute = muteLockEnabled && targetMuted;
+      updateMuteButton(muteBtn, sess.is_muted, sess.volume, sess.permanentMute);
+    } catch (e) {
+      console.error("Failed to set session mute:", e);
     }
   });
   controls.appendChild(muteBtn);
@@ -637,7 +684,7 @@ function createAudioSessionCard(session) {
 
 function updateAudioSessionCard(card, session) {
   updateSliderValue(card.querySelector('.volume-slider'), session.volume);
-  updateMuteButton(card.querySelector('.mute-btn'), session.is_muted);
+  updateMuteButton(card.querySelector('.mute-btn'), session.is_muted, session.volume, session.permanentMute);
 }
 
 async function setDeviceVolume(deviceId, volume) {
@@ -650,19 +697,47 @@ async function setDeviceVolume(deviceId, volume) {
   }
 }
 
+async function setDeviceMute(deviceId, muted) {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  try {
+    await invoke("set_device_mute", { deviceId, muted });
+    const devices = await invoke("get_audio_devices");
+    const fresh = devices.find(d => d.id === deviceId);
+    const cur = audioDevices.find(d => d.id === deviceId);
+    if (fresh && cur) {
+      cur.is_muted = fresh.is_muted;
+      cur.volume = fresh.volume;
+    }
+    renderAudioDevices();
+  } catch (e) {
+    console.error("Failed to set mute:", e);
+  }
+}
+
 async function toggleDeviceMute(deviceId) {
   const invoke = getInvoke();
   if (!invoke) return;
   try {
     await invoke("toggle_device_mute", { deviceId });
-    const device = audioDevices.find(d => d.id === deviceId);
-    if (device) {
-      device.is_muted = !device.is_muted;
-      renderAudioDevices();
+    const devices = await invoke("get_audio_devices");
+    const fresh = devices.find(d => d.id === deviceId);
+    const cur = audioDevices.find(d => d.id === deviceId);
+    if (fresh && cur) {
+      cur.is_muted = fresh.is_muted;
+      cur.volume = fresh.volume;
+      cur.permanentMute = muteLockEnabled && fresh.is_muted;
     }
+    renderAudioDevices();
   } catch (e) {
     console.error("Failed to toggle mute:", e);
   }
+}
+
+async function setSessionMute(sessionId, muted) {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  await invoke("set_session_mute", { sessionId, muted });
 }
 
 async function setSessionVolume(sessionId, volume) {
@@ -675,30 +750,20 @@ async function setSessionVolume(sessionId, volume) {
   }
 }
 
-async function toggleSessionMute(sessionId) {
-  const invoke = getInvoke();
-  if (!invoke) return;
-  try {
-    await invoke("toggle_session_mute", { sessionId });
-  } catch (e) {
-    console.error("Failed to toggle session mute:", e);
+function getVolumeIcon(volume) {
+  const pct = Math.round((volume || 0) * 100);
+  if (pct <= 0) return getMuteIcon();
+  if (pct <= 32) {
+    return `<svg width="16" height="16" viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true"><path d="M256 298.965333L341.162667 298.666667l199.466666-159.36q31.914667-20.906667 65.493334-2.730667 33.578667 18.133333 34.048 56.32v638.72q0 38.101333-33.536 56.234667-33.578667 18.176-65.536-2.730667L341.674667 726.186667l-85.162667 0.256q-35.370667 0-60.330667-25.002667-25.002667-25.002667-25.514666-60.330667v-256.853333q0-35.328 25.002666-60.288 25.002667-25.002667 60.330667-25.002667zM366.592 384L256 384.298667l0.512 256.810666 110.549333-0.256 187.733334 151.338667-0.426667-559.786667L366.549333 384z m361.386667-0.128a42.666667 42.666667 0 0 0 7.594666 24.32q32.042667 46.208 32.426667 102.442667 0.341333 56.234667-31.061333 102.869333l-1.706667 2.56a42.666667 42.666667 0 1 0 70.826667 47.658667l1.664-2.517334q22.826667-33.877333 34.474666-72.96 11.392-38.229333 11.136-78.165333-0.256-39.978667-12.16-78.037333-12.202667-38.912-35.456-72.490667a42.666667 42.666667 0 0 0-77.781333 24.32z"/></svg>`;
   }
-}
-
-function getVolumeIcon() {
-  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-  </svg>`;
+  if (pct <= 65) {
+    return `<svg width="16" height="16" viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true"><path d="M298.538667 298.666667l-85.12 0.298666q-35.370667 0-60.373334 25.002667-25.002667 24.96-25.002666 60.330667v256.810666q0.512 35.328 25.514666 60.330667t60.330667 25.002667l85.162667-0.256 199.466666 158.976q31.957333 20.906667 65.493334 2.730666 33.578667-18.133333 33.578666-56.277333V192.896q-0.512-38.144-34.048-56.277333-33.578667-18.133333-65.536 2.730666L298.538667 298.709333zM213.418667 384.341333L323.968 384l187.733333-151.68 0.512 559.786667-187.733333-151.296-110.592 0.256-0.469333-256.853334z m527.957333-57.770666a42.666667 42.666667 0 1 1 64.512-55.893334q44.373333 51.157333 67.541333 114.346667 22.528 61.354667 22.528 126.933333 0 65.536-22.528 126.933334-23.210667 63.189333-67.584 114.346666a42.666667 42.666667 0 0 1-64.426666-55.893333q34.048-39.338667 51.882666-87.850667 17.28-47.146667 17.28-97.536t-17.28-97.536q-17.834667-48.554667-51.925333-87.850666z m-92.117333 81.706666a42.666667 42.666667 0 1 1 70.144-48.64q23.253333 33.578667 35.413333 72.490667 11.946667 38.058667 12.202667 78.037333 0.256 39.936-11.093334 78.165334-11.690667 39.082667-34.56 72.96l-1.664 2.517333a42.666667 42.666667 0 0 1-70.784-47.701333l1.706667-2.517334q31.402667-46.634667 31.061333-102.826666-0.426667-56.277333-32.426666-102.485334z"/></svg>`;
+  }
+  return `<svg width="16" height="16" viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true"><path d="M255.829333 298.666667L170.666667 299.008q-35.328 0-60.330667 25.002667Q85.333333 348.928 85.333333 384.298667v256.810666q0.512 35.328 25.514667 60.330667t60.330667 25.002667l85.162666-0.256 199.466667 158.976q31.957333 20.906667 65.493333 2.730666 33.578667-18.133333 33.578667-56.277333V192.896q-0.512-38.144-34.090667-56.277333-33.578667-18.133333-65.493333 2.730666L255.829333 298.709333z m655.658667 43.946666q-27.733333-83.968-81.066667-154.965333a42.666667 42.666667 0 1 0-68.266666 51.2q44.928 59.818667 68.266666 130.56 22.784 68.992 22.912 141.866667 0.085333 72.874667-22.528 141.994666-23.125333 70.784-67.882666 130.688l-0.853334 1.066667a42.666667 42.666667 0 1 0 68.394667 51.072l0.853333-1.066667q53.12-71.168 80.64-155.264 26.837333-82.090667 26.709334-168.618666-0.128-86.485333-27.178667-168.533334zM170.666667 384.298667L281.258667 384l187.733333-151.68 0.512 559.786667-187.733333-151.296-110.592 0.256L170.666667 384.256z m490.666666-85.76a42.666667 42.666667 0 0 0 10.453334 27.989333q34.090667 39.296 51.882666 87.850667 17.322667 47.146667 17.322667 97.536t-17.322667 97.536q-17.792 48.512-51.882666 87.850666a42.666667 42.666667 0 1 0 64.426666 55.893334q44.373333-51.157333 67.584-114.346667 22.528-61.397333 22.528-126.933333 0-65.578667-22.528-126.933334-23.168-63.189333-67.498666-114.346666a42.666667 42.666667 0 0 0-74.965334 27.946666z m-66.218666 109.696a42.666667 42.666667 0 1 1 70.144-48.64q23.296 33.578667 35.413333 72.490666 11.946667 38.058667 12.202667 78.037334 0.298667 39.936-11.093334 78.165333-11.690667 39.082667-34.56 72.96l-1.664 2.517333a42.666667 42.666667 0 0 1-70.784-47.701333l1.706667-2.517333q31.445333-46.634667 31.061333-102.826667-0.384-56.277333-32.426666-102.485333z"/></svg>`;
 }
 
 function getMuteIcon() {
-  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-    <line x1="23" y1="9" x2="17" y2="15"/>
-    <line x1="17" y1="9" x2="23" y2="15"/>
-  </svg>`;
+  return `<svg width="16" height="16" viewBox="0 0 1024 1024" fill="currentColor" aria-hidden="true"><path d="M170.666667 298.666667l85.162666-0.213334L455.253333 139.093333q31.914667-20.906667 65.493334-2.730666 33.578667 18.133333 34.048 56.32v638.677333q0 38.144-33.536 56.32-33.578667 18.133333-65.493334-2.773333l-199.466666-158.976-85.162667 0.256q-35.370667 0-60.330667-25.002667-25.002667-25.002667-25.514666-60.330667V384q0-35.328 25.002666-60.330667Q135.338667 298.709333 170.666667 298.666667z m110.592 85.12L170.666667 384l0.512 256.853333 110.592-0.256 187.733333 151.338667-0.512-559.829333-187.733333 151.68z m403.541333-42.709334a42.666667 42.666667 0 1 0-60.330667 60.330667l90.496 90.496-90.453333 90.538667a42.666667 42.666667 0 0 0 60.288 60.330666l90.538667-90.538666 90.496 90.538666a42.666667 42.666667 0 0 0 60.330666-60.330666l-90.496-90.538667 90.496-90.496a42.666667 42.666667 0 0 0-60.330666-60.330667l-90.496 90.496-90.538667-90.496z"/></svg>`;
 }
 
 function stringToColor(str) {

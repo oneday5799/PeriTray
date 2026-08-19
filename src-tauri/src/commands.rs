@@ -240,6 +240,13 @@ pub async fn toggle_device_mute(device_id: String) -> Result<(), String> {
 }
 
 #[tauri::command(async)]
+pub async fn set_device_mute(device_id: String, muted: bool) -> Result<(), String> {
+    run_blocking(move || crate::audio::set_device_mute(&device_id, muted))
+        .await?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
 pub async fn get_audio_sessions(device_id: String) -> Result<Vec<crate::audio::AudioSession>, String> {
     run_blocking(move || crate::audio::enumerate_audio_sessions(&device_id))
         .await?
@@ -256,6 +263,13 @@ pub async fn set_session_volume(session_id: String, volume: f32) -> Result<(), S
 #[tauri::command(async)]
 pub async fn toggle_session_mute(session_id: String) -> Result<(), String> {
     run_blocking(move || crate::audio::toggle_session_mute(&session_id))
+        .await?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub async fn set_session_mute(session_id: String, muted: bool) -> Result<(), String> {
+    run_blocking(move || crate::audio::set_session_mute(&session_id, muted))
         .await?
         .map_err(|e| e.to_string())
 }

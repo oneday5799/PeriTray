@@ -190,6 +190,18 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn set_device_mute(device_id: &str, muted: bool) -> Result<()> {
+    unsafe {
+        with_enumerator(|enumerator| -> Result<()> {
+            let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
+            let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
+            endpoint.SetMute(muted, ptr::null())?;
+            Ok(())
+        })??;
+    }
+    Ok(())
+}
+
 pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
     unsafe {
         with_enumerator(|enumerator| -> Result<Vec<AudioSession>> {
@@ -281,6 +293,14 @@ pub fn toggle_session_mute(session_id: &str) -> Result<()> {
         let sv = find_session_volume(session_id)?;
         let current = sv.GetMute()?;
         sv.SetMute(!current.as_bool(), ptr::null())?;
+    }
+    Ok(())
+}
+
+pub fn set_session_mute(session_id: &str, muted: bool) -> Result<()> {
+    unsafe {
+        let sv = find_session_volume(session_id)?;
+        sv.SetMute(muted, ptr::null())?;
     }
     Ok(())
 }

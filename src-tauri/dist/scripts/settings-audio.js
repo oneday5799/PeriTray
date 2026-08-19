@@ -87,6 +87,13 @@ function initAudioCardToggle() {
   arrow.classList.toggle("expanded", audioExpanded);
 }
 
+function initMuteLockSettings() {
+  bindToggle("toggle-mute-lock", {
+    get: () => config.mute_lock || false,
+    set: (v) => { config.mute_lock = v; },
+  });
+}
+
 async function initShutdownVolumeSettings() {
   const toggle = document.getElementById("toggle-shutdown-volume");
   const items = document.getElementById("shutdown-device-items");
