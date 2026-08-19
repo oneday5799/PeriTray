@@ -13,7 +13,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_EXT
 pub struct AudioDevice { pub id: String, pub name: String, pub volume: f32, pub is_muted: bool, pub is_default: bool }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct VolumeChangeEvent { pub device_id: String, pub volume: f32, pub is_muted: bool }
+pub struct VolumeChangeEvent { pub device_id: Option<String>, pub session_id: Option<String>, pub volume: f32, pub is_muted: bool }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioSession { pub id: String, pub name: String, pub icon: Arc<str>, pub pid: u32, pub volume: f32, pub is_muted: bool, pub device_id: String, pub is_active: bool }
