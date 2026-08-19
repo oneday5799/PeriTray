@@ -118,6 +118,12 @@
   color: var(--danger-hover, #e81123);
 }
 
+.mute-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Slider tooltip（表面样式在 base.css 的 flyout 组） */
 .slider-tooltip {
   position: absolute;

@@ -91,12 +91,19 @@ function updateSliderValue(slider, volume) {
   }
 }
 
+function muteStateText(isMuted, volume) {
+  return (isMuted || !(volume > 0)) ? "已静音" : "未静音";
+}
+
 function updateMuteButton(muteBtn, isMuted, volume, permanent) {
   if (muteBtn) {
-    const cls = "mute-btn" + (isMuted && permanent ? " muted" : "");
+    muteBtn.classList.toggle('muted', !!(isMuted && permanent));
     const html = isMuted ? getMuteIcon() : getVolumeIcon(volume);
-    if (muteBtn.className !== cls) muteBtn.className = cls;
-    if (muteBtn.innerHTML !== html) muteBtn.innerHTML = html;
+    const iconEl = muteBtn.querySelector('.mute-icon');
+    if (iconEl && iconEl.innerHTML !== html) iconEl.innerHTML = html;
+    const tip = muteBtn.querySelector('.tooltip-content');
+    const tipText = muteStateText(isMuted, volume);
+    if (tip && tip.textContent !== tipText) tip.textContent = tipText;
   }
 }
 
@@ -488,9 +495,13 @@ function createAudioDeviceCard(device) {
 
   const muteBtn = document.createElement("button");
   muteBtn.className = "mute-btn" + (device.is_muted && device.permanentMute ? " muted" : "");
-  muteBtn.innerHTML = device.is_muted ? getMuteIcon() : getVolumeIcon(device.volume);
+  const muteIcon = document.createElement("span");
+  muteIcon.className = "mute-icon";
+  muteIcon.innerHTML = device.is_muted ? getMuteIcon() : getVolumeIcon(device.volume);
+  muteBtn.appendChild(muteIcon);
   muteBtn.addEventListener("click", () => toggleDeviceMute(device.id));
   controls.appendChild(muteBtn);
+  attachTooltip(muteBtn, muteStateText(device.is_muted, device.volume));
 
   card.appendChild(controls);
 
@@ -661,7 +672,10 @@ function createAudioSessionCard(session) {
 
   const muteBtn = document.createElement("button");
   muteBtn.className = "mute-btn" + (session.is_muted && session.permanentMute ? " muted" : "");
-  muteBtn.innerHTML = session.is_muted ? getMuteIcon() : getVolumeIcon(session.volume);
+  const muteIcon = document.createElement("span");
+  muteIcon.className = "mute-icon";
+  muteIcon.innerHTML = session.is_muted ? getMuteIcon() : getVolumeIcon(session.volume);
+  muteBtn.appendChild(muteIcon);
   muteBtn.addEventListener("click", async () => {
     const sessionId = card.dataset.sessionId;
     const sess = audioSessions.find(s => s.id === sessionId);
@@ -677,6 +691,7 @@ function createAudioSessionCard(session) {
     }
   });
   controls.appendChild(muteBtn);
+  attachTooltip(muteBtn, muteStateText(session.is_muted, session.volume));
 
   card.appendChild(controls);
   return card;
