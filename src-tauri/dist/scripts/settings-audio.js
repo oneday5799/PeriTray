@@ -254,6 +254,15 @@ async function initShutdownVolumeSettings() {
   });
 
   try {
+    await renderShutdownVolumeDevices();
+  } catch (e) {
+    console.error("Failed to load audio devices for shutdown volume:", e);
+  }
+}
+
+async function renderShutdownVolumeDevices() {
+  const items = document.getElementById("shutdown-device-items");
+  try {
     const audioDevices = await invoke("get_audio_devices");
     const savedDevices = config.shutdown_volume_devices || {};
 

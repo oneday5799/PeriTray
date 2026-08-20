@@ -843,6 +843,7 @@ window.__TAURI__.event.listen("config-changed", async () => {
   config = await invoke("get_config");
   await loadDevicesAsync();
   await loadAudioDevicesAsync();
+  await renderShutdownVolumeDevices();
   const listEl = document.getElementById("device-shortcut-list");
   if (listEl) initDeviceShortcutSettings();
 });
