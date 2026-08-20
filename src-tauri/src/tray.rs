@@ -370,6 +370,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         AUTO_START.store(new_auto, Ordering::Relaxed);
         update_auto_text();
         update_tray_icon();
+        update_audio_devices_menu();
     });
 
     app.listen("tray-devices-changed", move |_| {
@@ -413,6 +414,21 @@ fn update_tray_icon() {
     }
 }
 
+/// 简化设备名称：仅保留括号内内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
+fn simplify_device_name(name: &str) -> &str {
+    if let Some(open) = name.find('(') {
+        if let Some(close) = name.rfind(')') {
+            if close > open {
+                let inner = name[open + 1..close].trim();
+                if !inner.is_empty() {
+                    return inner;
+                }
+            }
+        }
+    }
+    name
+}
+
 /// 构建音频设备切换子菜单
 fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
     let submenu = Submenu::with_id(app, "audio_devices", "音频设备", true)?;
@@ -428,7 +444,8 @@ fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry
                 }
                 let check = if device.is_default { " ✓" } else { "" };
                 let display = c.device_names.get(&device.name).unwrap_or(&device.name);
-                let label = format!("{}{}", display, check);
+                let simplified = if c.simplify_device_names { simplify_device_name(display) } else { display };
+                let label = format!("{}{}", simplified, check);
                 let item = MenuItem::with_id(app, format!("audio_dev_{}", device.id), label, true, None::<&str>);
                 if let Ok(item) = item {
                     let _ = submenu.append(&item);
