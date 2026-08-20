@@ -1389,6 +1389,8 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   position: fixed;
   z-index: 1001;
   display: none;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 
 .context-menu-item .context-menu-leading {

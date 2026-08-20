@@ -10,6 +10,7 @@ let forceMuteDevices = [];
 const forceMuteHold = {};
 const forceMutePrevVolume = {};
 const buttonMutedDevices = new Set();
+let inputAudioDevices = [];
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -732,12 +733,202 @@ function createAudioSessionCard(session) {
   attachTooltip(muteBtn, muteStateText(session.is_muted, session.volume));
 
   card.appendChild(controls);
+
+  card.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showSessionContextMenu(e.clientX, e.clientY, session);
+  });
   return card;
 }
 
 function updateAudioSessionCard(card, session) {
   updateSliderValue(card.querySelector('.volume-slider'), session.volume);
   updateMuteButton(card.querySelector('.mute-btn'), session.is_muted, session.volume, session.permanentMute);
+}
+
+let sessionMenuToken = 0;
+
+async function showSessionContextMenu(x, y, session) {
+  const token = ++sessionMenuToken;
+  hideAllContextMenus();
+  const invoke = getInvoke();
+  if (!invoke) return;
+
+  const menu = document.createElement("div");
+  menu.className = "context-menu";
+
+  const [curOut, inDevices, curIn] = await Promise.all([
+    invoke("get_session_device", { pid: session.pid, direction: "output" }).catch(() => null),
+    invoke("get_input_devices").catch(() => []),
+    invoke("get_session_device", { pid: session.pid, direction: "input" }).catch(() => null),
+  ]);
+  if (token !== sessionMenuToken) return;
+  inputAudioDevices = inDevices;
+
+  const visibleOutDevices = audioDevices.filter(d => !hiddenAudioDevices.includes(d.name));
+  buildSessionSubmenu(menu, "输出设备", visibleOutDevices, curOut, (deviceId) => {
+    setSessionDevice(session, "output", deviceId);
+  });
+  const visibleInDevices = inDevices.filter(d => !hiddenAudioDevices.includes(d.name));
+  buildSessionSubmenu(menu, "输入设备", visibleInDevices, curIn, (deviceId) => {
+    setSessionDevice(session, "input", deviceId);
+  });
+
+  const restartItem = document.createElement("div");
+  restartItem.className = "context-menu-item";
+  restartItem.innerHTML = '<span>重启应用（立即生效）</span>';
+  restartItem.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    hideAllContextMenus();
+    try {
+      await invoke("restart_session_process", { pid: session.pid });
+      showToast(`已重启「${session.name}」，设备设置已生效`);
+      setTimeout(() => loadAudioSessions(selectedDeviceId), 1500);
+    } catch (err) {
+      showToast("重启应用失败：" + err, null, true);
+    }
+  });
+  menu.appendChild(restartItem);
+
+  document.body.appendChild(menu);
+  clampMenuPosition(menu, x, y);
+  activeAudioMenu = menu;
+}
+
+function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
+  const groupItem = document.createElement("div");
+  groupItem.className = "context-menu-item context-menu-subitem";
+  groupItem.innerHTML = "<span>" + label + "</span>" +
+    '<svg class="context-menu-chevron" width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  const submenu = document.createElement("div");
+  submenu.className = "context-menu context-submenu";
+  submenu.style.display = "none";
+
+  const defaultId = (devices.find(d => d.is_default) || {}).id;
+  const isDefault = !currentId || currentId === defaultId || !devices.some(d => d.id === currentId);
+
+  function addItem(text, checked, onClick) {
+    const item = document.createElement("div");
+    item.className = "context-menu-item" + (checked ? " selected" : "");
+
+    const leading = document.createElement("span");
+    leading.className = "context-menu-leading";
+    if (checked) {
+      const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      check.setAttribute("class", "context-menu-check");
+      check.setAttribute("width", "12");
+      check.setAttribute("height", "12");
+      check.setAttribute("viewBox", "0 0 12 12");
+      check.setAttribute("fill", "none");
+      check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+      leading.appendChild(check);
+    }
+    item.appendChild(leading);
+
+    const textEl = document.createElement("span");
+    textEl.textContent = text;
+    item.appendChild(textEl);
+
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideAllContextMenus();
+      onClick();
+    });
+    submenu.appendChild(item);
+  }
+
+  addItem("系统默认", isDefault, () => onSelect(""));
+
+  for (const dev of devices) {
+    const displayName = audioDeviceNames[dev.name] || dev.name;
+    addItem(displayName, !isDefault && dev.id === currentId, () => onSelect(dev.id));
+  }
+
+  function positionSubmenu() {
+    const sw = submenu.offsetWidth;
+    const sh = submenu.offsetHeight;
+    const rect = groupItem.getBoundingClientRect();
+    let left = rect.right - 2;
+    if (left + sw > window.innerWidth) left = rect.left - sw + 2;
+    if (left < 4) left = 4;
+    let top = rect.top;
+    if (top + sh > window.innerHeight) top = Math.max(4, rect.top - sh - 2);
+    submenu.style.left = left + "px";
+    submenu.style.top = top + "px";
+  }
+
+  let closeTimer = null;
+  let openSubmenuTimer = null;
+  function openSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    submenu.style.display = "block";
+    groupItem.classList.add("open");
+    positionSubmenu();
+  }
+  function closeSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    submenu.style.display = "none";
+    groupItem.classList.remove("open");
+  }
+  function queueCloseSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(closeSubmenu, 300);
+  }
+  function queueOpenSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    openSubmenuTimer = setTimeout(openSubmenu, 500);
+  }
+
+  groupItem.addEventListener("pointerenter", queueOpenSubmenu);
+  groupItem.addEventListener("pointerleave", () => {
+    clearTimeout(openSubmenuTimer);
+    queueCloseSubmenu();
+  });
+  groupItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (submenu.style.display === "none") openSubmenu();
+    else closeSubmenu();
+  });
+  submenu.addEventListener("pointerenter", () => {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+  });
+  submenu.addEventListener("pointerleave", queueCloseSubmenu);
+
+  menu.addEventListener("pointerover", (e) => {
+    if (!groupItem.contains(e.target) && !submenu.contains(e.target) && submenu.style.display !== "none") {
+      closeSubmenu();
+    }
+  });
+
+  menu.appendChild(groupItem);
+  menu.appendChild(submenu);
+}
+
+async function setSessionDevice(session, direction, deviceId) {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  try {
+    await invoke("set_session_device", { pid: session.pid, direction, deviceId });
+    const directionLabel = direction === "output" ? "输出设备" : "输入设备";
+    if (deviceId) {
+      const list = direction === "output" ? audioDevices : inputAudioDevices;
+      const dev = list.find(d => d.id === deviceId);
+      const deviceName = audioDeviceNames[(dev || {}).name] || (dev || {}).name || "未知设备";
+      showToast(`已将「${session.name}」的${directionLabel}设为「${deviceName}」，正在播放的音频需重启应用后生效，新播放会使用新设备`);
+    } else {
+      showToast(`已将「${session.name}」的${directionLabel}恢复为系统默认`);
+    }
+    loadAudioSessions(selectedDeviceId);
+  } catch (e) {
+    console.error("Failed to set session device:", e);
+    showToast("设置设备失败：" + e, null, true);
+  }
 }
 
 async function setDeviceVolume(deviceId, volume) {

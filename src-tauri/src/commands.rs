@@ -274,6 +274,33 @@ pub async fn set_session_mute(session_id: String, muted: bool) -> Result<(), Str
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command(async)]
+pub async fn get_input_devices() -> Result<Vec<crate::audio::AudioDevice>, String> {
+    run_blocking(crate::audio::enumerate_input_devices)
+        .await?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub async fn set_session_device(pid: u32, direction: String, device_id: String) -> Result<(), String> {
+    run_blocking(move || crate::audio::set_session_device(pid, &direction, &device_id))
+        .await?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub async fn get_session_device(pid: u32, direction: String) -> Result<Option<String>, String> {
+    run_blocking(move || crate::audio::get_session_device(pid, &direction))
+        .await?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub async fn restart_session_process(pid: u32) -> Result<u32, String> {
+    run_blocking(move || crate::app_icon::restart_process(pid))
+        .await?
+}
+
 #[tauri::command]
 pub fn adjust_volume_up() {
     crate::audio::adjust_default_volume_up();

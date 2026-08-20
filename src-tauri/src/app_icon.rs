@@ -76,6 +76,66 @@ fn resolve_process_name(pid: u32) -> Option<String> {
     }
 }
 
+/// 获取进程的可执行文件完整路径
+pub fn get_process_exe_path(pid: u32) -> Option<String> {
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let process_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut path_buf = [0u16; 1024];
+        let mut path_size = path_buf.len() as u32;
+        let result = QueryFullProcessImageNameW(
+            process_handle,
+            PROCESS_NAME_FORMAT(0),
+            windows::core::PWSTR(path_buf.as_mut_ptr()),
+            &mut path_size,
+        );
+        let _ = windows::Win32::Foundation::CloseHandle(process_handle);
+        if result.is_err() {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&path_buf[..path_size as usize]))
+    }
+}
+
+/// 结束进程并重新启动（用于让音频设备设置立即生效）
+pub fn restart_process(pid: u32) -> Result<u32, String> {
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let exe_path = get_process_exe_path(pid).ok_or_else(|| "无法获取进程路径".to_string())?;
+    let kill = std::process::Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .output()
+        .map_err(|e| format!("结束进程失败：{e}"))?;
+    if !kill.status.success() {
+        return Err(format!(
+            "结束进程失败：{}",
+            String::from_utf8_lossy(&kill.stderr)
+        ));
+    }
+    // 等待进程完全退出后再启动
+    for _ in 0..20 {
+        let exited = unsafe {
+            match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                Ok(handle) => {
+                    let _ = windows::Win32::Foundation::CloseHandle(handle);
+                    false
+                }
+                Err(_) => true,
+            }
+        };
+        if exited { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let child = std::process::Command::new(&exe_path)
+        .spawn()
+        .map_err(|e| format!("重启失败：{e}"))?;
+    Ok(child.id())
+}
+
 /// 从版本信息数据中查询 FileDescription
 unsafe fn query_file_description(data: &[u8]) -> Option<String> {
     use windows::Win32::Storage::FileSystem::VerQueryValueW;
