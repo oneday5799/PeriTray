@@ -13,11 +13,12 @@ const forceMutePrevVolume = {};
 const buttonMutedDevices = new Set();
 let activeAudioMenu = null;
 
-// 设备显示名：自定义名称优先，开启简化时仅保留括号内内容
+// 设备显示名：有重命名使用重命名，否则简化括号内名称
 function deviceDisplayName(name) {
-  const display = audioDeviceNames[name] || name;
-  if (simplifyDeviceNames) return window.simplifyDeviceName(display);
-  return display;
+  const custom = audioDeviceNames[name];
+  if (custom) return custom;
+  if (simplifyDeviceNames) return window.simplifyDeviceName(name);
+  return name;
 }
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 

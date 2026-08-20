@@ -108,8 +108,10 @@ function initSimplifyNamesSettings() {
   });
 }
 
-// 简化设备名称：开启时仅保留括号内内容
+// 设备显示名：有重命名使用重命名，否则简化括号内名称
 function fmtDevName(name) {
+  const custom = (config.device_names || {})[name];
+  if (custom) return custom;
   if (config.simplify_device_names !== false) return window.simplifyDeviceName(name);
   return name;
 }

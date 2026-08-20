@@ -443,9 +443,10 @@ fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry
                     continue;
                 }
                 let check = if device.is_default { " ✓" } else { "" };
-                let display = c.device_names.get(&device.name).unwrap_or(&device.name);
-                let simplified = if c.simplify_device_names { simplify_device_name(display) } else { display };
-                let label = format!("{}{}", simplified, check);
+                let display = c.device_names.get(&device.name)
+                    .cloned()
+                    .unwrap_or_else(|| if c.simplify_device_names { simplify_device_name(&device.name).to_string() } else { device.name.clone() });
+                let label = format!("{}{}", display, check);
                 let item = MenuItem::with_id(app, format!("audio_dev_{}", device.id), label, true, None::<&str>);
                 if let Ok(item) = item {
                     let _ = submenu.append(&item);
