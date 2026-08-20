@@ -189,7 +189,7 @@ function initForceMuteSettings() {
 
     document.body.appendChild(menu);
     const rect = btn.getBoundingClientRect();
-    clampMenuPosition(menu, rect.left, rect.bottom + 4);
+    clampMenuPosition(menu, rect.right - menu.offsetWidth, rect.bottom + 4);
     activeSettingsMenu = menu;
   });
 }
