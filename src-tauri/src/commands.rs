@@ -295,12 +295,6 @@ pub async fn get_session_device(pid: u32, direction: String) -> Result<Option<St
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command(async)]
-pub async fn restart_session_process(pid: u32) -> Result<u32, String> {
-    run_blocking(move || crate::app_icon::restart_process(pid))
-        .await?
-}
-
 #[tauri::command]
 pub fn adjust_volume_up() {
     crate::audio::adjust_default_volume_up();

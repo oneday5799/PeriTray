@@ -10,7 +10,6 @@ let forceMuteDevices = [];
 const forceMuteHold = {};
 const forceMutePrevVolume = {};
 const buttonMutedDevices = new Set();
-let inputAudioDevices = [];
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -763,7 +762,6 @@ async function showSessionContextMenu(x, y, session) {
     invoke("get_session_device", { pid: session.pid, direction: "input" }).catch(() => null),
   ]);
   if (token !== sessionMenuToken) return;
-  inputAudioDevices = inDevices;
 
   const visibleOutDevices = audioDevices.filter(d => !hiddenAudioDevices.includes(d.name));
   buildSessionSubmenu(menu, "输出设备", visibleOutDevices, curOut, (deviceId) => {
@@ -773,22 +771,6 @@ async function showSessionContextMenu(x, y, session) {
   buildSessionSubmenu(menu, "输入设备", visibleInDevices, curIn, (deviceId) => {
     setSessionDevice(session, "input", deviceId);
   });
-
-  const restartItem = document.createElement("div");
-  restartItem.className = "context-menu-item";
-  restartItem.innerHTML = '<span>重启应用（立即生效）</span>';
-  restartItem.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    hideAllContextMenus();
-    try {
-      await invoke("restart_session_process", { pid: session.pid });
-      showToast(`已重启「${session.name}」，设备设置已生效`);
-      setTimeout(() => loadAudioSessions(selectedDeviceId), 1500);
-    } catch (err) {
-      showToast("重启应用失败：" + err, null, true);
-    }
-  });
-  menu.appendChild(restartItem);
 
   document.body.appendChild(menu);
   clampMenuPosition(menu, x, y);
@@ -915,15 +897,6 @@ async function setSessionDevice(session, direction, deviceId) {
   if (!invoke) return;
   try {
     await invoke("set_session_device", { pid: session.pid, direction, deviceId });
-    const directionLabel = direction === "output" ? "输出设备" : "输入设备";
-    if (deviceId) {
-      const list = direction === "output" ? audioDevices : inputAudioDevices;
-      const dev = list.find(d => d.id === deviceId);
-      const deviceName = audioDeviceNames[(dev || {}).name] || (dev || {}).name || "未知设备";
-      showToast(`已将「${session.name}」的${directionLabel}设为「${deviceName}」，正在播放的音频需重启应用后生效，新播放会使用新设备`);
-    } else {
-      showToast(`已将「${session.name}」的${directionLabel}恢复为系统默认`);
-    }
     loadAudioSessions(selectedDeviceId);
   } catch (e) {
     console.error("Failed to set session device:", e);

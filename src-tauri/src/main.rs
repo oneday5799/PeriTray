@@ -133,7 +133,6 @@ fn main() {
             commands::get_input_devices,
             commands::set_session_device,
             commands::get_session_device,
-            commands::restart_session_process,
             commands::adjust_volume_up,
             commands::adjust_volume_down,
             commands::toggle_mute,
