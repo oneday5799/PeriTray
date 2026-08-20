@@ -33,7 +33,11 @@ if (window.__TAURI__ && window.__TAURI__.event) {
         if (device) {
           device.volume = change.volume;
           device.is_muted = change.is_muted;
-          if (!change.is_muted) device.permanentMute = false;
+          if (change.is_muted && muteLockEnabled) {
+            device.permanentMute = true;
+          } else if (!change.is_muted && !muteLockEnabled) {
+            device.permanentMute = false;
+          }
           updateDeviceCard(device);
         }
         if (change.session_id) {
@@ -495,7 +499,9 @@ function createAudioDeviceCard(device) {
       }
     }
     updateMuteButton(muteBtn, dev.is_muted, dev.volume, dev.permanentMute);
-    throttledSetDeviceVolume(dev.id, value);
+    if (!dev.permanentMute) {
+      throttledSetDeviceVolume(dev.id, value);
+    }
   });
   slider.addEventListener("change", () => {
     setTimeout(() => slider.blur(), 100);
@@ -747,10 +753,15 @@ async function toggleDeviceMute(deviceId) {
   const invoke = getInvoke();
   if (!invoke) return;
   try {
+    const cur = audioDevices.find(d => d.id === deviceId);
+    const wasLocked = !!(cur && cur.permanentMute);
+    const storedVolume = cur ? cur.volume : null;
     await invoke("toggle_device_mute", { deviceId });
+    if (wasLocked) {
+      await setDeviceVolume(deviceId, storedVolume != null ? storedVolume : 0);
+    }
     const devices = await invoke("get_audio_devices");
     const fresh = devices.find(d => d.id === deviceId);
-    const cur = audioDevices.find(d => d.id === deviceId);
     if (fresh && cur) {
       cur.is_muted = fresh.is_muted;
       cur.volume = fresh.volume;

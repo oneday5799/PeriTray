@@ -141,11 +141,18 @@ unsafe fn get_device_name(device: &IMMDevice) -> Result<String> {
 }
 
 pub fn set_device_volume(device_id: &str, volume: f32) -> Result<()> {
+    let mute_lock = crate::config::with_config(|c| c.mute_lock);
     unsafe {
         with_enumerator(|enumerator| -> Result<()> {
             let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
             let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
-            endpoint.SetMasterVolumeLevelScalar(volume.max(0.0).min(1.0), ptr::null())?;
+            let was_muted = endpoint.GetMute()?.as_bool();
+            let mut target = volume.max(0.0).min(1.0);
+            if mute_lock && was_muted {
+                let current = endpoint.GetMasterVolumeLevelScalar()?;
+                target = target.min(current);
+            }
+            endpoint.SetMasterVolumeLevelScalar(target, ptr::null())?;
             Ok(())
         })??;
     }
