@@ -9,6 +9,7 @@ let fineAdjustEnabled = false;
 let forceMuteDevices = [];
 const forceMuteHold = {};
 const forceMutePrevVolume = {};
+const buttonMutedDevices = new Set();
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -45,10 +46,9 @@ if (window.__TAURI__ && window.__TAURI__.event) {
             device.volume = change.volume;
             device.is_muted = change.is_muted;
           }
-          if (device.is_muted && muteLockEnabled) {
-            device.permanentMute = true;
-          } else if (!device.is_muted && !muteLockEnabled) {
+          if (!device.is_muted) {
             device.permanentMute = false;
+            buttonMutedDevices.delete(device.id);
           }
           updateDeviceCard(device);
         }
@@ -75,7 +75,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
       fineAdjustEnabled = !!cfg.volume_fine_adjust;
       forceMuteDevices = cfg.force_mute_devices || [];
       for (const d of audioDevices) {
-        d.permanentMute = muteLockEnabled && !!(d.is_muted && d.volume > 0);
+        d.permanentMute = muteLockEnabled && buttonMutedDevices.has(d.id);
       }
       for (const s of audioSessions) {
         s.permanentMute = muteLockEnabled && !!(s.is_muted && s.volume > 0);
@@ -387,7 +387,7 @@ async function loadAudioDevices() {
     muteLockEnabled = !!cfg.mute_lock;
     fineAdjustEnabled = !!cfg.volume_fine_adjust;
     forceMuteDevices = cfg.force_mute_devices || [];
-    audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && !!(d.is_muted && d.volume > 0) }));
+    audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && buttonMutedDevices.has(d.id) }));
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
     deviceShortcuts = cfg.device_shortcuts || {};
@@ -503,14 +503,12 @@ function createAudioDeviceCard(device) {
     const dev = audioDevices.find(d => d.id === card.dataset.deviceId);
     if (!dev) return;
     const wasMuted = dev.is_muted;
+    const targetMuted = value <= 0;
     dev.volume = value;
     updateSliderGradient(e.target);
-    if (!dev.permanentMute) {
-      const targetMuted = value <= 0;
-      if (targetMuted !== wasMuted) {
-        dev.is_muted = targetMuted;
-        setDeviceMute(dev.id, targetMuted);
-      }
+    if (!dev.permanentMute && wasMuted && !targetMuted) {
+      dev.is_muted = false;
+      setDeviceMute(dev.id, false);
     }
     updateMuteButton(muteBtn, dev.is_muted, dev.volume, dev.permanentMute);
     if (dev.permanentMute && forceMuteDevices.includes(dev.name)) {
@@ -521,7 +519,11 @@ function createAudioDeviceCard(device) {
     }
   });
   slider.addEventListener("change", () => {
-    setTimeout(() => slider.blur(), 100);
+    setTimeout(() => {
+      slider.blur();
+      const dev = audioDevices.find(d => d.id === card.dataset.deviceId);
+      if (dev) updateSliderValue(slider, dev.volume);
+    }, 100);
   });
   updateSliderGradient(slider);
   controls.appendChild(slider);
@@ -799,6 +801,7 @@ async function toggleDeviceMute(deviceId) {
       } else {
         cur.volume = fresh.volume;
       }
+      if (fresh.is_muted) buttonMutedDevices.add(deviceId); else buttonMutedDevices.delete(deviceId);
       cur.permanentMute = muteLockEnabled && fresh.is_muted;
       if (isForceMute && !fresh.is_muted) delete forceMutePrevVolume[devName];
     }
