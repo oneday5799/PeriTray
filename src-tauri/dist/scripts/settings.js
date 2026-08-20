@@ -406,8 +406,6 @@ function initUpdateSettings() {
     onChange: (enabled) => {
       if (!enabled) {
         hideUpdateErrorFlyout();
-        const bar = document.getElementById("about-update-infobar");
-        if (bar) bar.hidden = true;
       } else {
         invoke("get_update_status").then((status) => {
           renderUpdateInfobar(status);
