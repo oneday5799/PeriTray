@@ -81,6 +81,8 @@ pub struct Config {
     pub check_updates: bool,
     #[serde(default)]
     pub include_prerelease: bool,
+    #[serde(default = "default_true")]
+    pub simplify_device_names: bool,
     #[serde(default)]
     pub shortcut_devices: Option<String>,
     #[serde(default)]
@@ -131,6 +133,7 @@ impl Default for Config {
             force_mute_devices: vec![],
             check_updates: true,
             include_prerelease: false,
+            simplify_device_names: true,
             shortcut_devices: None,
             shortcut_volume: None,
             shortcut_volume_up: None,

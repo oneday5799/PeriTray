@@ -28,7 +28,7 @@ function renderAudioDeviceGroups(audioDevices) {
 
     const nameEl = document.createElement("div");
     nameEl.className = "card-item-name";
-    nameEl.textContent = dev.name;
+    nameEl.textContent = fmtDevName(dev.name);
     if (dev.is_default) {
       const badge = document.createElement("span");
       badge.style.cssText = "font-size:12px;color:#0078d7;margin-left:6px";
@@ -101,6 +101,19 @@ function initFineAdjustSettings() {
   });
 }
 
+function initSimplifyNamesSettings() {
+  bindToggle("toggle-simplify-names", {
+    get: () => config.simplify_device_names !== false,
+    set: (v) => { config.simplify_device_names = v; },
+  });
+}
+
+// 简化设备名称：开启时仅保留括号内内容
+function fmtDevName(name) {
+  if (config.simplify_device_names !== false) return window.simplifyDeviceName(name);
+  return name;
+}
+
 function initForceMuteSettings() {
   const btn = document.getElementById("btn-force-mute");
   if (!btn) return;
@@ -150,7 +163,7 @@ function initForceMuteSettings() {
       item.appendChild(leading);
 
       const label = document.createElement("span");
-      label.textContent = deviceNames[dev.name] || dev.name;
+      label.textContent = fmtDevName(deviceNames[dev.name] || dev.name);
       item.appendChild(label);
 
       item.addEventListener("click", async (ev) => {
@@ -256,7 +269,7 @@ async function initShutdownVolumeSettings() {
 
       const nameEl = document.createElement("div");
       nameEl.className = "card-item-name" + (isEnabled ? "" : " hidden");
-      nameEl.textContent = dev.name;
+      nameEl.textContent = fmtDevName(dev.name);
 
       const controls = document.createElement("div");
       controls.className = "card-item-controls";

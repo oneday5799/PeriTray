@@ -6,11 +6,19 @@ let audioDeviceNames = {};
 let deviceShortcuts = {};
 let muteLockEnabled = false;
 let fineAdjustEnabled = false;
+let simplifyDeviceNames = true;
 let forceMuteDevices = [];
 const forceMuteHold = {};
 const forceMutePrevVolume = {};
 const buttonMutedDevices = new Set();
 let activeAudioMenu = null;
+
+// 设备显示名：自定义名称优先，开启简化时仅保留括号内内容
+function deviceDisplayName(name) {
+  const display = audioDeviceNames[name] || name;
+  if (simplifyDeviceNames) return window.simplifyDeviceName(display);
+  return display;
+}
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
 document.addEventListener("mouseup", () => {
@@ -73,6 +81,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
       const cfg = await getInvoke()("get_config");
       muteLockEnabled = !!cfg.mute_lock;
       fineAdjustEnabled = !!cfg.volume_fine_adjust;
+      simplifyDeviceNames = cfg.simplify_device_names !== false;
       forceMuteDevices = cfg.force_mute_devices || [];
       for (const d of audioDevices) {
         d.permanentMute = muteLockEnabled && buttonMutedDevices.has(d.id);
@@ -284,7 +293,7 @@ function showDeviceShortcutDialog(device) {
 
   const deviceLabel = document.createElement("div");
   deviceLabel.className = "shortcut-dialog-device";
-  deviceLabel.textContent = audioDeviceNames[device.name] || device.name;
+  deviceLabel.textContent = deviceDisplayName(device.name);
   wrap.appendChild(deviceLabel);
 
   const DEFAULT_HINT = "点击输入框后按下键盘组合键，用于快速切换到此设备。在设置中开启共享开关后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换。";
@@ -386,6 +395,7 @@ async function loadAudioDevices() {
     const [devices, cfg] = await Promise.all([invoke("get_audio_devices"), invoke("get_config")]);
     muteLockEnabled = !!cfg.mute_lock;
     fineAdjustEnabled = !!cfg.volume_fine_adjust;
+    simplifyDeviceNames = cfg.simplify_device_names !== false;
     forceMuteDevices = cfg.force_mute_devices || [];
     audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && buttonMutedDevices.has(d.id) }));
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
@@ -451,7 +461,7 @@ function createAudioDeviceCard(device) {
 
   const nameEl = document.createElement("div");
   nameEl.className = "card-title audio-device-name" + (device.is_default ? " default" : "");
-  nameEl.textContent = audioDeviceNames[device.name] || device.name;
+  nameEl.textContent = deviceDisplayName(device.name);
   if (device.is_default) {
     const badge = document.createElement("span");
     badge.className = "default-badge";
@@ -560,7 +570,7 @@ function updateAudioDeviceCard(card, device) {
 
   const nameEl = card.querySelector('.audio-device-name');
   if (nameEl) {
-    const displayName = audioDeviceNames[device.name] || device.name;
+    const displayName = deviceDisplayName(device.name);
     const firstChild = nameEl.firstChild;
     if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
       if (firstChild.textContent !== displayName) {
@@ -823,7 +833,7 @@ function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
   addItem("系统默认", isDefault, () => onSelect(""));
 
   for (const dev of devices) {
-    const displayName = audioDeviceNames[dev.name] || dev.name;
+    const displayName = deviceDisplayName(dev.name);
     addItem(displayName, !isDefault && dev.id === currentId, () => onSelect(dev.id));
   }
 

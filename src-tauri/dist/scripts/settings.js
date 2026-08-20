@@ -828,6 +828,7 @@ async function init() {
     initMuteLockSettings();
     initFineAdjustSettings();
     initForceMuteSettings();
+    initSimplifyNamesSettings();
     initShutdownVolumeSettings();
     initShortcutSettings();
     initDeviceShortcutSettings();

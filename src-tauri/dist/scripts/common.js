@@ -89,6 +89,18 @@ window.getDisplayName = function (dev, deviceNames) {
   return deviceNames[dev.name] || dev.name;
 };
 
+// 简化设备名称：仅保留括号内的内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
+window.simplifyDeviceName = function (name) {
+  if (!name) return name;
+  const open = name.indexOf("(");
+  const close = name.lastIndexOf(")");
+  if (open >= 0 && close > open) {
+    const inner = name.slice(open + 1, close).trim();
+    if (inner) return inner;
+  }
+  return name;
+};
+
 // ── 应用名 tooltip（页面内，超出边界自动避让） ────────────
 let sessionTipTimer = null;
 let sessionTip = null;
