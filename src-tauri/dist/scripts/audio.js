@@ -842,11 +842,11 @@ function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
     const sw = submenu.offsetWidth;
     const sh = submenu.offsetHeight;
     const rect = groupItem.getBoundingClientRect();
-    let left = rect.right - 2;
-    if (left + sw > window.innerWidth) left = rect.left - sw + 2;
+    let left = rect.right - 7;
+    if (left + sw > window.innerWidth) left = rect.left - sw + 7;
     if (left < 4) left = 4;
     let top = rect.top;
-    if (top + sh > window.innerHeight) top = Math.max(4, rect.top - sh - 2);
+    if (top + sh > window.innerHeight) top = rect.top - sh + 7;
     submenu.style.left = left + "px";
     submenu.style.top = top + "px";
   }
