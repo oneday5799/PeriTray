@@ -101,6 +101,99 @@ function initFineAdjustSettings() {
   });
 }
 
+function initForceMuteSettings() {
+  const btn = document.getElementById("btn-force-mute");
+  if (!btn) return;
+
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (activeSettingsMenu) {
+      hideAllContextMenus();
+      return;
+    }
+    let audioDevices = [];
+    try {
+      audioDevices = await invoke("get_audio_devices");
+    } catch (err) {
+      console.error("Failed to load audio devices for force mute:", err);
+      return;
+    }
+    const hidden = config.hidden_audio_devices || [];
+    const selected = new Set(config.force_mute_devices || []);
+    const deviceNames = config.device_names || {};
+
+    const menu = document.createElement("div");
+    menu.className = "context-menu";
+    menu.style.maxHeight = "360px";
+    menu.style.overflowY = "auto";
+
+    for (const dev of audioDevices) {
+      if (hidden.includes(dev.name)) continue;
+      const item = document.createElement("div");
+      item.className = "context-menu-item";
+      item.style.display = "flex";
+      item.style.alignItems = "center";
+
+      const leading = document.createElement("span");
+      leading.className = "context-menu-leading";
+      const isChecked = selected.has(dev.name);
+      if (isChecked) {
+        const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        check.setAttribute("class", "context-menu-check");
+        check.setAttribute("width", "12");
+        check.setAttribute("height", "12");
+        check.setAttribute("viewBox", "0 0 12 12");
+        check.setAttribute("fill", "none");
+        check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+        leading.appendChild(check);
+      }
+      item.appendChild(leading);
+
+      const label = document.createElement("span");
+      label.textContent = deviceNames[dev.name] || dev.name;
+      item.appendChild(label);
+
+      item.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const list = config.force_mute_devices || [];
+        const idx = list.indexOf(dev.name);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+        } else {
+          list.push(dev.name);
+        }
+        config.force_mute_devices = list;
+        await saveConfig();
+        leading.innerHTML = "";
+        if (list.indexOf(dev.name) >= 0) {
+          const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          check.setAttribute("class", "context-menu-check");
+          check.setAttribute("width", "12");
+          check.setAttribute("height", "12");
+          check.setAttribute("viewBox", "0 0 12 12");
+          check.setAttribute("fill", "none");
+          check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+          leading.appendChild(check);
+        }
+      });
+
+      menu.appendChild(item);
+    }
+
+    if (menu.childElementCount === 0) {
+      const empty = document.createElement("div");
+      empty.className = "context-menu-item";
+      empty.textContent = "没有可用的音频设备";
+      menu.appendChild(empty);
+    }
+
+    document.body.appendChild(menu);
+    const rect = btn.getBoundingClientRect();
+    clampMenuPosition(menu, rect.left, rect.bottom + 4);
+    activeSettingsMenu = menu;
+  });
+}
+
 async function initShutdownVolumeSettings() {
   const toggle = document.getElementById("toggle-shutdown-volume");
   const items = document.getElementById("shutdown-device-items");

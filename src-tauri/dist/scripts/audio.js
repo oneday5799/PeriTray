@@ -6,6 +6,9 @@ let audioDeviceNames = {};
 let deviceShortcuts = {};
 let muteLockEnabled = false;
 let fineAdjustEnabled = false;
+let forceMuteDevices = [];
+const forceMuteHold = {};
+const forceMutePrevVolume = {};
 let activeAudioMenu = null;
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -31,11 +34,20 @@ if (window.__TAURI__ && window.__TAURI__.event) {
       for (const change of changes) {
         const device = audioDevices.find(d => d.id === change.device_id);
         if (device) {
-          device.volume = change.volume;
-          device.is_muted = change.is_muted;
-          if (change.is_muted && muteLockEnabled) {
+          const isFM = forceMuteDevices.includes(device.name);
+          const hold = isFM ? forceMuteHold[device.name] : null;
+          if (hold) {
+            device.is_muted = hold.muted;
+            device.volume = hold.volume;
+          } else if (isFM && change.is_muted) {
+            device.is_muted = true;
+          } else {
+            device.volume = change.volume;
+            device.is_muted = change.is_muted;
+          }
+          if (device.is_muted && muteLockEnabled) {
             device.permanentMute = true;
-          } else if (!change.is_muted && !muteLockEnabled) {
+          } else if (!device.is_muted && !muteLockEnabled) {
             device.permanentMute = false;
           }
           updateDeviceCard(device);
@@ -61,6 +73,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
       const cfg = await getInvoke()("get_config");
       muteLockEnabled = !!cfg.mute_lock;
       fineAdjustEnabled = !!cfg.volume_fine_adjust;
+      forceMuteDevices = cfg.force_mute_devices || [];
       for (const d of audioDevices) {
         d.permanentMute = muteLockEnabled && !!(d.is_muted && d.volume > 0);
       }
@@ -373,6 +386,7 @@ async function loadAudioDevices() {
     const [devices, cfg] = await Promise.all([invoke("get_audio_devices"), invoke("get_config")]);
     muteLockEnabled = !!cfg.mute_lock;
     fineAdjustEnabled = !!cfg.volume_fine_adjust;
+    forceMuteDevices = cfg.force_mute_devices || [];
     audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && !!(d.is_muted && d.volume > 0) }));
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
@@ -499,6 +513,9 @@ function createAudioDeviceCard(device) {
       }
     }
     updateMuteButton(muteBtn, dev.is_muted, dev.volume, dev.permanentMute);
+    if (dev.permanentMute && forceMuteDevices.includes(dev.name)) {
+      forceMutePrevVolume[dev.name] = value;
+    }
     if (!dev.permanentMute) {
       throttledSetDeviceVolume(dev.id, value);
     }
@@ -754,19 +771,38 @@ async function toggleDeviceMute(deviceId) {
   if (!invoke) return;
   try {
     const cur = audioDevices.find(d => d.id === deviceId);
+    const prevVolume = cur ? cur.volume : null;
+    const devName = cur ? cur.name : "";
+    const isForceMute = forceMuteDevices.includes(devName);
     const wasLocked = !!(cur && cur.permanentMute);
-    const storedVolume = cur ? cur.volume : null;
+    if (isForceMute) {
+      forceMuteHold[devName] = { muted: !(cur && cur.is_muted), volume: prevVolume };
+    }
     await invoke("toggle_device_mute", { deviceId });
     if (wasLocked) {
-      await setDeviceVolume(deviceId, storedVolume != null ? storedVolume : 0);
+      if (isForceMute) {
+        const intended = forceMutePrevVolume[devName];
+        if (intended != null) {
+          await setDeviceVolume(deviceId, intended);
+        }
+      } else {
+        await setDeviceVolume(deviceId, prevVolume != null ? prevVolume : 0);
+      }
     }
     const devices = await invoke("get_audio_devices");
     const fresh = devices.find(d => d.id === deviceId);
     if (fresh && cur) {
       cur.is_muted = fresh.is_muted;
-      cur.volume = fresh.volume;
+      if (isForceMute && fresh.is_muted) {
+        cur.volume = prevVolume != null ? prevVolume : fresh.volume;
+        if (prevVolume != null) forceMutePrevVolume[devName] = prevVolume;
+      } else {
+        cur.volume = fresh.volume;
+      }
       cur.permanentMute = muteLockEnabled && fresh.is_muted;
+      if (isForceMute && !fresh.is_muted) delete forceMutePrevVolume[devName];
     }
+    if (isForceMute) delete forceMuteHold[devName];
     renderAudioDevices();
   } catch (e) {
     console.error("Failed to toggle mute:", e);

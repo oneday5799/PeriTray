@@ -190,11 +190,38 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
             let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
             let current = endpoint.GetMute()?;
             new_muted = !current.as_bool();
-            endpoint.SetMute(new_muted, ptr::null())?;
+            let name = get_device_name(&device).unwrap_or_default();
+            let force_mute = crate::config::with_config(|c| c.force_mute_devices.iter().any(|n| n == &name));
+            if new_muted {
+                if force_mute {
+                    // 强制静音：记录静音前音量，模拟两次静音（设备在最低音量下才真正静音）
+                    let pre = endpoint.GetMasterVolumeLevelScalar()?;
+                    force_mute_prev_volume().lock().unwrap_or_else(|e| e.into_inner()).insert(name, pre);
+                    endpoint.SetMute(true, ptr::null())?;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    endpoint.SetMute(true, ptr::null())?;
+                } else {
+                    endpoint.SetMute(true, ptr::null())?;
+                }
+            } else {
+                endpoint.SetMute(false, ptr::null())?;
+                if force_mute {
+                    // 恢复静音前的音量
+                    let mut guard = force_mute_prev_volume().lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(prev) = guard.remove(&name) {
+                        let _ = endpoint.SetMasterVolumeLevelScalar(prev.max(0.0).min(1.0), ptr::null());
+                    }
+                }
+            }
             Ok(())
         })??;
     }
     Ok(())
+}
+
+fn force_mute_prev_volume() -> &'static std::sync::Mutex<std::collections::HashMap<String, f32>> {
+    static FORCE_MUTE_PREV_VOLUME: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, f32>>> = std::sync::OnceLock::new();
+    FORCE_MUTE_PREV_VOLUME.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 pub fn set_device_mute(device_id: &str, muted: bool) -> Result<()> {

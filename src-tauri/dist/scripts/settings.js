@@ -1,4 +1,6 @@
 let config = null;
+let activeSettingsMenu = null;
+registerContextMenu({ get menu() { return activeSettingsMenu; }, set menu(v) { activeSettingsMenu = v; } });
 
 async function saveConfig() {
   try {
@@ -796,6 +798,7 @@ async function init() {
     initAudioCardToggle();
     initMuteLockSettings();
     initFineAdjustSettings();
+    initForceMuteSettings();
     initShutdownVolumeSettings();
     initShortcutSettings();
     initDeviceShortcutSettings();
