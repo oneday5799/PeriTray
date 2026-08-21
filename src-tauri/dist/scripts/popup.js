@@ -499,15 +499,6 @@ window.addEventListener("focus", async () => {
 if (window.__TAURI__) {
   initTheme();
   loadDevices();
-  window.__TAURI__.event.listen("material-changed", (e) => {
-    const material = e.payload;
-    const html = document.documentElement;
-    if (material && material !== "default") {
-      html.setAttribute("data-material", material);
-    } else {
-      html.removeAttribute("data-material");
-    }
-  });
 } else {
   window.addEventListener("DOMContentLoaded", () => {
     setTimeout(loadDevices, 100);

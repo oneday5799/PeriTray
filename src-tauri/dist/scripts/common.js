@@ -85,6 +85,25 @@ window.__TAURI__.event.listen("config-changed", () => {
   initTheme();
 });
 
+// ── 窗口材质（共享：设置页 + 主窗口） ─────────────────
+window.applyMaterialMode = function (material) {
+  const html = document.documentElement;
+  if (material && material !== "default") html.setAttribute("data-material", material);
+  else html.removeAttribute("data-material");
+};
+
+(async () => {
+  try {
+    const cfg = await invoke("get_config");
+    applyMaterialMode(cfg.window_material);
+  } catch (e) {}
+})();
+
+// 材质变更时由 Rust 发出 material-changed；设置页切换过程中跳过（防闪烁时序由 settings.js 控制）
+window.__TAURI__.event.listen("material-changed", (e) => {
+  if (!window.__materialChangeInProgress) applyMaterialMode(e.payload);
+});
+
 window.getDisplayName = function (dev, deviceNames) {
   return deviceNames[dev.name] || dev.name;
 };

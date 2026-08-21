@@ -68,6 +68,9 @@
   --tooltip-icon-bg: #d0d0d0;
   --tooltip-icon-hover: #999999;
   --slider-track: #e0e0e0;
+  --material-card: rgba(255, 255, 255, 0.88);
+  --material-card-hover: rgba(255, 255, 255, 0.68);
+  --material-border: rgba(255, 255, 255, 0.3);
 }
 
 html[data-theme="dark"] {
@@ -133,6 +136,9 @@ html[data-theme="dark"] {
   --tooltip-icon-bg: #404040;
   --tooltip-icon-hover: #555555;
   --slider-track: rgba(255, 255, 255, 0.25);
+  --material-card: rgba(0, 0, 0, 0.55);
+  --material-card-hover: rgba(0, 0, 0, 0.45);
+  --material-border: rgba(255, 255, 255, 0.15);
 }
 
 html, body {
@@ -148,24 +154,40 @@ body {
   border: none;
 }
 
-/* ── 窗口材质：非默认时背景透明 ──────────────────────── */
-html[data-material="mica"],
-html[data-material="acrylic"],
-html[data-material="recommended"] {
+/* ── 窗口材质（统一：主窗口 + 设置页，data-material 非 default 时存在） ── */
+html[data-material],
+html[data-material] body {
   background: transparent !important;
 }
 
-html[data-material="mica"] body,
-html[data-material="acrylic"] body,
-html[data-material="recommended"] body {
-  background: transparent;
+/* 页面容器与内容层透明 */
+html[data-material] .popup-container,
+html[data-material] .settings-container,
+html[data-material] .tab-viewport,
+html[data-material] .tab-content,
+html[data-material] .device-list,
+html[data-material] .volume-control,
+html[data-material] .section-title,
+html[data-material] .win-nav-page-header {
+  background: transparent !important;
 }
 
-html[data-material="mica"] .popup-container,
-html[data-material="acrylic"] .popup-container,
-html[data-material="recommended"] .popup-container {
-  background: transparent;
+/* 导航面板透明（左面板基础态无边框，材质下补一条分隔线） */
+html[data-material] .win-nav-left-panel {
+  background: transparent !important;
+  border-right: 1px solid var(--material-border) !important;
 }
+
+html[data-material] .win-nav-top-bar {
+  background: transparent !important;
+  border-bottom-color: var(--material-border) !important;
+}
+
+/* 卡片为半透明玻璃 */
+html[data-material] .card { background: var(--material-card) !important; }
+html[data-material] .card:hover { background: var(--material-card-hover) !important; }
+html[data-material] .card.expandable.no-hover:hover { background: var(--material-card) !important; }
+html[data-material] .card.expandable .card-items { background: var(--material-card) !important; }
 
 /* Windows 11 native scrollbar */
 ::-webkit-scrollbar {

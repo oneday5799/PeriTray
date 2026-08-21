@@ -1,6 +1,5 @@
 let config = null;
 let activeSettingsMenu = null;
-let _materialChangeInProgress = false;
 registerContextMenu({ get menu() { return activeSettingsMenu; }, set menu(v) { activeSettingsMenu = v; } });
 
 let settingsTip = null;
@@ -390,7 +389,7 @@ function initGeneralTab() {
       }
     }
     config.window_material = val;
-    _materialChangeInProgress = true;
+    window.__materialChangeInProgress = true;
     await saveConfig();
     updateFlyoutBackdrop(val);
     if (val === "default") {
@@ -403,7 +402,7 @@ function initGeneralTab() {
       await new Promise(r => setTimeout(r, 200));
       updateMaterialAttribute(val);
     }
-    _materialChangeInProgress = false;
+    window.__materialChangeInProgress = false;
   });
 }
 
@@ -880,7 +879,7 @@ window.__TAURI__.event.listen("config-changed", async () => {
   const listEl = document.getElementById("device-shortcut-list");
   if (listEl) initDeviceShortcutSettings();
   // 材质切换进行中时跳过 initMaterialEffects，避免 data-material 被提前设置
-  if (!_materialChangeInProgress) {
+  if (!window.__materialChangeInProgress) {
     initMaterialEffects();
   }
 });
@@ -976,7 +975,7 @@ function updateFlyoutBackdrop(material) {
 
 /// 设置 <html> 的 data-material 属性（用于 CSS 透明背景规则）
 function updateMaterialAttribute(material) {
-  document.documentElement.setAttribute('data-material', material);
+  applyMaterialMode(material);
 }
 
 /// 初始化时应用当前材质的 CSS 效果
