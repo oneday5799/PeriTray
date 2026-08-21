@@ -377,6 +377,7 @@ function initGeneralTab() {
     config.theme_mode = val;
     await saveConfig();
     applyThemeMode(val);
+    updateFlyoutBackdrop(config.window_material || "default");
   });
 
   initComboBox("combo-window-material", config.window_material || "default", async (val) => {
@@ -850,6 +851,10 @@ async function init() {
     initAboutTab();
     initMaterialEffects();
 
+    // 跟随系统时，实时响应系统主题切换 → 刷新 flyout 背景颜色
+    new MutationObserver(() => updateFlyoutBackdrop(config?.window_material || "default"))
+      .observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
     loadDevicesAsync();
     loadAudioDevicesAsync();
     initAudioCardToggle();
@@ -961,7 +966,8 @@ function updateFlyoutBackdrop(material) {
   const root = document.documentElement;
   if (material === "recommended" || material === "acrylic") {
     root.style.setProperty('--flyout-backdrop', 'blur(30px) saturate(125%)');
-    root.style.setProperty('--flyout-bg', 'rgba(252, 252, 252, 0.85)');
+    const isDark = root.getAttribute('data-theme') === 'dark';
+    root.style.setProperty('--flyout-bg', isDark ? 'rgba(44, 44, 44, 0.85)' : 'rgba(252, 252, 252, 0.85)');
   } else {
     root.style.removeProperty('--flyout-backdrop');
     root.style.removeProperty('--flyout-bg');
