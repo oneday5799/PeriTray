@@ -10,7 +10,6 @@
   --card-bg: #ffffff;
   --card-bg-solid: #ffffff;
   --card-border: #e0e0e0;
-  --card-hover: rgba(0, 0, 0, 0.10);
   --card-item-border: rgba(0, 0, 0, 0.06);
   --text-primary: #1a1a1a;
   --text-secondary: #666666;
@@ -69,7 +68,7 @@
   --tooltip-icon-hover: #999999;
   --slider-track: #e0e0e0;
   --material-card: rgba(255, 255, 255, 0.88);
-  --material-card-hover: rgba(255, 255, 255, 0.68);
+  --material-card-hover: rgba(255, 255, 255, 0.5);
   --material-border: rgba(255, 255, 255, 0.3);
 }
 
@@ -78,7 +77,6 @@ html[data-theme="dark"] {
   --card-bg: rgba(255, 255, 255, 0.10);
   --card-bg-solid: #2d2d2d;
   --card-border: rgb(0 0 0 / 30%);
-  --card-hover: rgba(255, 255, 255, 0.12);
   --card-item-border: rgb(0 0 0 / 30%);
   --text-primary: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.62);
@@ -137,7 +135,7 @@ html[data-theme="dark"] {
   --tooltip-icon-hover: #555555;
   --slider-track: rgba(255, 255, 255, 0.25);
   --material-card: rgba(0, 0, 0, 0.55);
-  --material-card-hover: rgba(0, 0, 0, 0.45);
+  --material-card-hover: rgba(0, 0, 0, 0.3);
   --material-border: rgba(255, 255, 255, 0.15);
 }
 
@@ -250,7 +248,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 }
 
 .card:hover {
-  background: var(--card-hover, rgba(0, 0, 0, 0.03));
+  background: var(--material-card-hover);
 }
 
 /* 可折叠卡：鼠标在 card-items 区域时抑制 hover */
