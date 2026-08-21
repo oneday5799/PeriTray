@@ -519,7 +519,10 @@ function createAudioDeviceCard(device) {
     updateSliderGradient(e.target);
     if (!dev.permanentMute && wasMuted && !targetMuted) {
       dev.is_muted = false;
-      setDeviceMute(dev.id, false);
+      // 保序锚点：解除静音落地后再补发最终值，规避静音锁开启时后端"只许降"钳制竞态
+      setDeviceMute(dev.id, false).then(() => {
+        setDeviceVolume(dev.id, value);
+      });
     }
     updateMuteButton(muteBtn, dev.is_muted, dev.volume, dev.permanentMute);
     if (dev.permanentMute && forceMuteDevices.includes(dev.name)) {
