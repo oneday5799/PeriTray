@@ -1,5 +1,6 @@
 let config = null;
 let activeSettingsMenu = null;
+let _materialChangeInProgress = false;
 registerContextMenu({ get menu() { return activeSettingsMenu; }, set menu(v) { activeSettingsMenu = v; } });
 
 let settingsTip = null;
@@ -388,10 +389,20 @@ function initGeneralTab() {
       }
     }
     config.window_material = val;
+    _materialChangeInProgress = true;
     await saveConfig();
-    await invoke("set_window_material", { material: val });
     updateFlyoutBackdrop(val);
-    updateMaterialAttribute(val);
+    if (val === "default") {
+      // 先移除 CSS 透明规则，再移除 DWM 材质，避免闪烁
+      updateMaterialAttribute(val);
+      await invoke("set_window_material", { material: val });
+    } else {
+      await invoke("set_window_material", { material: val });
+      // 等待 DWM 材质生效 + webview 背景透明化后再设置 CSS 属性
+      await new Promise(r => setTimeout(r, 200));
+      updateMaterialAttribute(val);
+    }
+    _materialChangeInProgress = false;
   });
 }
 
@@ -863,8 +874,10 @@ window.__TAURI__.event.listen("config-changed", async () => {
   await renderShutdownVolumeDevices();
   const listEl = document.getElementById("device-shortcut-list");
   if (listEl) initDeviceShortcutSettings();
-  // 同步窗口材质 CSS
-  initMaterialEffects();
+  // 材质切换进行中时跳过 initMaterialEffects，避免 data-material 被提前设置
+  if (!_materialChangeInProgress) {
+    initMaterialEffects();
+  }
 });
 
 // 托盘「关于」指向设置页关于标签（窗口已存在时）

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>设置 - 外设监控</title>
   <style>
-    /* 内联材质透明规则，确保 CSS 在异步 JS 设置 data-material 前就生效 */
     html[data-material="mica"] body,
     html[data-material="acrylic"] body,
     html[data-material="recommended"] body {
@@ -18,7 +17,6 @@
     }
   </style>
   <script>
-    // 尽早读取配置设置 data-material
     (async () => {
       try {
         const { invoke } = window.__TAURI__.core;

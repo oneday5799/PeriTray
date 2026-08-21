@@ -159,6 +159,15 @@ fn main() {
                 popup::open_popup(app.handle(), "devices");
             }
 
+            // 开发调试：设置此环境变量时自动打开设置窗口（用于自动化检测）
+            if std::env::var("PM_DEV_OPEN_SETTINGS").is_ok() {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    crate::windows::open_settings(&handle);
+                });
+            }
+
             // 启动时检测更新（仅非 autostart 模式）
             if !is_autostart && config::with_config(|c| c.check_updates) {
                 let app_handle = app.handle().clone();
@@ -204,13 +213,15 @@ fn main() {
         })
         .on_window_event(|window, event| {
             match event {
-                tauri::WindowEvent::Focused(false) => {
-                    if window.label() == "popup"
-                        && !state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
-                        && window.is_visible().unwrap_or(false)
-                    {
-                        let app = window.app_handle();
-                        popup::close_popup(app);
+                tauri::WindowEvent::Focused(focused) => {
+                    if window.label() == "popup" {
+                        if !focused
+                            && !state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
+                            && window.is_visible().unwrap_or(false)
+                        {
+                            let app = window.app_handle();
+                            popup::close_popup(app);
+                        }
                     }
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {

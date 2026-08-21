@@ -90,40 +90,7 @@ fn start_device_watcher() {
 
 /// 读取系统深色模式（仅跟随系统主题，与应用内主题设置无关）
 fn system_dark_mode() -> bool {
-    use windows_sys::core::w;
-    use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
-    };
-
-    unsafe {
-        let mut hkey = std::ptr::null_mut();
-        let status = RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            0,
-            KEY_READ,
-            &mut hkey,
-        );
-        if status != 0 {
-            return false;
-        }
-        let mut value: u32 = 1;
-        let mut size = std::mem::size_of::<u32>() as u32;
-        let mut data_type: u32 = REG_DWORD;
-        let status = RegQueryValueExW(
-            hkey,
-            w!("AppsUseLightTheme"),
-            std::ptr::null_mut(),
-            &mut data_type,
-            &mut value as *mut u32 as *mut u8,
-            &mut size,
-        );
-        RegCloseKey(hkey);
-        if status != 0 {
-            return false;
-        }
-        value == 0
-    }
+    crate::windows::system_dark_mode()
 }
 
 /// 根据默认打开页面与系统深色模式选择托盘图标

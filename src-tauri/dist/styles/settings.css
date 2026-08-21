@@ -7,7 +7,10 @@
 
 html[data-material] body { background: transparent !important; }
 html[data-material] .settings-container { background: transparent !important; }
-html[data-material] .card { background: transparent !important; border: 1px solid rgba(255,255,255,0.3) !important; }
+html[data-material] .settings-container .card { background: rgba(255,255,255,0.88) !important; }
+html[data-material] .settings-container .card:hover { background: rgba(255,255,255,0.68) !important; }
+html[data-theme="dark"][data-material] .settings-container .card { background: rgba(0,0,0,0.55) !important; }
+html[data-theme="dark"][data-material] .settings-container .card:hover { background: rgba(0,0,0,0.45) !important; }
 html[data-material] .win-nav-left-panel { background: transparent !important; border-right: 1px solid rgba(255,255,255,0.3) !important; }
 html[data-material] .win-nav-page-header { background: transparent !important; }
 html[data-material] .tab-content { background: transparent !important; }

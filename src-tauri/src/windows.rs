@@ -1,5 +1,6 @@
 use tauri::{Emitter, Manager};
 use crate::config;
+use crate::process;
 
 #[cfg(target_os = "windows")]
 pub(crate) fn browser_args() -> String {
@@ -26,8 +27,14 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
         #[cfg(target_os = "windows")]
         if let Ok(hwnd) = win.hwnd() {
             let material = config::with_config(|c| c.window_material.clone());
-            apply_window_material(hwnd.0 as isize, &material);
-            if material != "default" {
+            process::append_log(&format!("[material] reopen settings, material={}", material));
+            if material == "default" {
+                // 先设不透明背景再移除材质，避免闪烁
+                set_webview_bg_solid(win.as_ref(), 243, 243, 243);
+                apply_window_material(hwnd.0 as isize, "default");
+            } else {
+                let ok = apply_window_material(hwnd.0 as isize, &material);
+                process::append_log(&format!("[material] reopen apply {} -> {}", material, ok));
                 set_webview_bg_transparent(win.as_ref());
             }
         }
@@ -95,6 +102,48 @@ pub fn scale_factor(app: &tauri::AppHandle) -> f64 {
 }
 
 #[cfg(target_os = "windows")]
+pub fn system_dark_mode() -> bool {
+    use windows_sys::core::w;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+    };
+    unsafe {
+        let mut hkey = std::ptr::null_mut();
+        let status = RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            0,
+            KEY_READ,
+            &mut hkey,
+        );
+        if status != 0 {
+            return false;
+        }
+        let mut value: u32 = 1;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let mut data_type: u32 = REG_DWORD;
+        let status = RegQueryValueExW(
+            hkey,
+            w!("AppsUseLightTheme"),
+            std::ptr::null_mut(),
+            &mut data_type,
+            &mut value as *mut u32 as *mut u8,
+            &mut size,
+        );
+        RegCloseKey(hkey);
+        if status != 0 {
+            return false;
+        }
+        value == 0
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn system_dark_mode() -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
 pub fn set_rounded_corners(hwnd: isize) {
     unsafe {
         const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
@@ -113,31 +162,18 @@ pub fn set_rounded_corners(hwnd: isize) {
 // 窗口材质（Window Material）
 // ═══════════════════════════════════════════════════════════════
 
-/// 通过 Tauri with_webview API 设置 WebView2 背景透明
+/// 通过 Tauri with_webview API 设置 WebView2 背景颜色
 /// 使用 ICoreWebView2Controller2::SetDefaultBackgroundColor
-pub fn set_webview_bg_transparent(webview: &tauri::Webview) {
-    use std::io::Write;
-    let log_path = std::env::temp_dir().join("webview_bg_test.log");
-    let mut log = std::fs::File::create(&log_path).unwrap();
-    writeln!(log, "=== set_webview_bg_transparent called ===").unwrap();
-    drop(log);
-
-    let log_path_clone = log_path.clone();
+fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
     let _ = webview.with_webview(move |wv| {
         #[cfg(target_os = "windows")]
         unsafe {
-            let mut log = std::fs::File::options().append(true).create(true).open(&log_path_clone).unwrap();
-
             let controller = wv.controller();
             let raw: *mut core::ffi::c_void = std::mem::transmute(controller);
-            writeln!(log, "controller raw: {:?}", raw).unwrap();
-            if raw.is_null() { writeln!(log, "controller is null!").unwrap(); return; }
+            if raw.is_null() { return; }
 
             let vtable = *(raw as *const *const usize);
-            writeln!(log, "vtable: {:?}", vtable).unwrap();
-
             let iid = windows::core::GUID::from_u128(0xc979903e_d4ca_4228_92eb_47ee3fa96eab);
-            writeln!(log, "IID: {:?}", iid).unwrap();
 
             type QIFn = unsafe extern "system" fn(
                 *mut core::ffi::c_void,
@@ -147,27 +183,27 @@ pub fn set_webview_bg_transparent(webview: &tauri::Webview) {
             let qi: QIFn = std::mem::transmute(*vtable.add(0));
             let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
             let hr = qi(raw, &iid, &mut ptr);
-            writeln!(log, "QI hr: {:#x}, ptr: {:?}", hr, ptr).unwrap();
-            if hr != 0 || ptr.is_null() {
-                writeln!(log, "QI failed!").unwrap();
-                return;
-            }
+            if hr != 0 || ptr.is_null() { return; }
 
             let vt2 = *(ptr as *const *const usize);
-            writeln!(log, "Controller2 vtable: {:?}", vt2).unwrap();
 
             type SetBgFn = unsafe extern "system" fn(*mut core::ffi::c_void, [u8; 4]) -> i32;
             let set_bg: SetBgFn = std::mem::transmute(*vt2.add(16));
-            let transparent = [0u8, 0, 0, 0];
-            let hr = set_bg(ptr, transparent);
-            writeln!(log, "SetDefaultBackgroundColor hr: {:#x}", hr).unwrap();
+            let _ = set_bg(ptr, color);
 
             type RelFn = unsafe extern "system" fn(*mut core::ffi::c_void) -> u32;
             let rel: RelFn = std::mem::transmute(*vt2.add(2));
             rel(ptr);
-            writeln!(log, "=== Done ===").unwrap();
         }
     });
+}
+
+pub fn set_webview_bg_transparent(webview: &tauri::Webview) {
+    set_webview_bg_color(webview, [0, 0, 0, 0]);
+}
+
+pub fn set_webview_bg_solid(webview: &tauri::Webview, r: u8, g: u8, b: u8) {
+    set_webview_bg_color(webview, [r, g, b, 255]);
 }
 
 #[cfg(target_os = "windows")]
@@ -419,6 +455,7 @@ pub fn check_material_support(_material: &str) -> bool {
 // ═══════════════════════════════════════════════════════════════
 
 pub fn set_window_material(app: &tauri::AppHandle, material: String) -> Result<bool, String> {
+    process::append_log(&format!("[material] set_window_material: {}", material));
     config::with_config_mut(|c| c.window_material = material.clone());
 
     let mut any_success = false;
@@ -426,16 +463,30 @@ pub fn set_window_material(app: &tauri::AppHandle, material: String) -> Result<b
         if let Some(win) = app.get_webview_window(label) {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {
-                if apply_window_material(hwnd.0 as isize, &material) {
-                    any_success = true;
+                if material == "default" {
+                    // 先将 webview 背景设为不透明，再延迟移除 DWM 材质，
+                    // 避免移除瞬间窗口表面短暂失去内容而出现透明闪烁
+                    set_webview_bg_solid(win.as_ref(), 243, 243, 243);
+                    let h = hwnd.0 as isize;
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        apply_window_material(h, "default");
+                        process::append_log("[material] delayed DWM removal done");
+                    });
+                } else {
+                    let ok = apply_window_material(hwnd.0 as isize, &material);
+                    process::append_log(&format!(
+                        "[material] apply {} to {} -> {}",
+                        material, label, ok
+                    ));
+                    if ok {
+                        any_success = true;
+                    }
+                    set_webview_bg_transparent(win.as_ref());
                 }
-            }
-            if material != "default" {
-                set_webview_bg_transparent(win.as_ref());
             }
         }
     }
 
-    let _ = app.emit("config-changed", ());
     Ok(any_success)
 }

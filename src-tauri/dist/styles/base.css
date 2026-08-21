@@ -10,7 +10,7 @@
   --card-bg: #ffffff;
   --card-bg-solid: #ffffff;
   --card-border: #e0e0e0;
-  --card-hover: rgba(0, 0, 0, 0.03);
+  --card-hover: rgba(0, 0, 0, 0.10);
   --card-item-border: rgba(0, 0, 0, 0.06);
   --text-primary: #1a1a1a;
   --text-secondary: #666666;
@@ -72,10 +72,10 @@
 
 html[data-theme="dark"] {
   --page-bg: #202020;
-  --card-bg: rgba(255, 255, 255, 0.0605);
+  --card-bg: rgba(255, 255, 255, 0.10);
   --card-bg-solid: #2d2d2d;
   --card-border: rgb(0 0 0 / 30%);
-  --card-hover: rgba(255, 255, 255, 0.0837);
+  --card-hover: rgba(255, 255, 255, 0.12);
   --card-item-border: rgb(0 0 0 / 30%);
   --text-primary: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.62);
