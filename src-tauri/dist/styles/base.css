@@ -242,9 +242,9 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   overflow: hidden;
 }
 
-/* 展开的列表用不透明背景覆盖自身，使 hover 效果只显示在卡片标题区 */
+/* 展开的列表覆盖自身，使 hover 效果只显示在卡片标题区 */
 .card.expandable .card-items {
-  background: var(--card-bg-solid, var(--card-bg, #fff));
+  background: var(--card-bg, #fff);
 }
 
 /* 两行布局（popup 音频设备卡） */

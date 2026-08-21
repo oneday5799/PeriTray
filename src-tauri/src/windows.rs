@@ -35,7 +35,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             } else {
                 let ok = apply_window_material(hwnd.0 as isize, &material);
                 process::append_log(&format!("[material] reopen apply {} -> {}", material, ok));
-                set_webview_bg_transparent(win.as_ref());
+                ensure_webview_bg_transparent(win.as_ref());
             }
         }
         let _ = win.unminimize();
@@ -79,14 +79,10 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
                 let material = config::with_config(|c| c.window_material.clone());
                 apply_window_material(hwnd.0 as isize, &material);
                 if material != "default" {
-                    let win_clone = win.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        set_webview_bg_transparent(win_clone.as_ref());
-                    });
+                    ensure_webview_bg_transparent(win.as_ref());
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(200));
             let _ = win.show();
             let _ = win.set_focus();
         }
@@ -165,12 +161,15 @@ pub fn set_rounded_corners(hwnd: isize) {
 /// 通过 Tauri with_webview API 设置 WebView2 背景颜色
 /// 使用 ICoreWebView2Controller2::SetDefaultBackgroundColor
 fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
-    let _ = webview.with_webview(move |wv| {
+    let r = webview.with_webview(move |wv| {
         #[cfg(target_os = "windows")]
         unsafe {
             let controller = wv.controller();
             let raw: *mut core::ffi::c_void = std::mem::transmute(controller);
-            if raw.is_null() { return; }
+            if raw.is_null() {
+                process::append_log("[webview_bg] controller is null");
+                return;
+            }
 
             let vtable = *(raw as *const *const usize);
             let iid = windows::core::GUID::from_u128(0xc979903e_d4ca_4228_92eb_47ee3fa96eab);
@@ -183,19 +182,31 @@ fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
             let qi: QIFn = std::mem::transmute(*vtable.add(0));
             let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
             let hr = qi(raw, &iid, &mut ptr);
-            if hr != 0 || ptr.is_null() { return; }
+            if hr != 0 || ptr.is_null() {
+                process::append_log(&format!("[webview_bg] QI failed, hr={}", hr));
+                return;
+            }
 
             let vt2 = *(ptr as *const *const usize);
 
             type SetBgFn = unsafe extern "system" fn(*mut core::ffi::c_void, [u8; 4]) -> i32;
             let set_bg: SetBgFn = std::mem::transmute(*vt2.add(16));
-            let _ = set_bg(ptr, color);
+            let hr2 = set_bg(ptr, color);
 
             type RelFn = unsafe extern "system" fn(*mut core::ffi::c_void) -> u32;
             let rel: RelFn = std::mem::transmute(*vt2.add(2));
             rel(ptr);
+
+            if hr2 != 0 {
+                process::append_log(&format!("[webview_bg] SetDefaultBackgroundColor failed, hr={}", hr2));
+            } else {
+                process::append_log(&format!("[webview_bg] set to {:?}", color));
+            }
         }
     });
+    if r.is_err() {
+        process::append_log("[webview_bg] with_webview dispatch failed");
+    }
 }
 
 pub fn set_webview_bg_transparent(webview: &tauri::Webview) {
@@ -204,6 +215,18 @@ pub fn set_webview_bg_transparent(webview: &tauri::Webview) {
 
 pub fn set_webview_bg_solid(webview: &tauri::Webview, r: u8, g: u8, b: u8) {
     set_webview_bg_color(webview, [r, g, b, 255]);
+}
+
+/// 带重试的 webview 背景透明设置，用于窗口创建后异步调用
+pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
+    let wb = webview.clone();
+    std::thread::spawn(move || {
+        for attempt in 1..=4 {
+            std::thread::sleep(std::time::Duration::from_millis(300 * attempt));
+            set_webview_bg_transparent(&wb);
+            process::append_log(&format!("[webview_bg] transparent attempt {}", attempt));
+        }
+    });
 }
 
 #[cfg(target_os = "windows")]
