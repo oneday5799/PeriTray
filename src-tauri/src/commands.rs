@@ -544,4 +544,20 @@ pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str, key
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 窗口材质
+// ═══════════════════════════════════════════════════════════════
+
+/// 设置窗口材质并应用到所有窗口
+#[tauri::command]
+pub fn set_window_material(app: tauri::AppHandle, material: String) -> Result<bool, String> {
+    crate::windows::set_window_material(&app, material)
+}
+
+/// 检查系统是否支持指定材质
+#[tauri::command]
+pub fn check_material_support(material: String) -> Result<bool, String> {
+    Ok(crate::windows::check_material_support(&material))
+}
+
 

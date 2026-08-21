@@ -148,6 +148,25 @@ body {
   border: none;
 }
 
+/* ── 窗口材质：非默认时背景透明 ──────────────────────── */
+html[data-material="mica"],
+html[data-material="acrylic"],
+html[data-material="recommended"] {
+  background: transparent !important;
+}
+
+html[data-material="mica"] body,
+html[data-material="acrylic"] body,
+html[data-material="recommended"] body {
+  background: transparent;
+}
+
+html[data-material="mica"] .popup-container,
+html[data-material="acrylic"] .popup-container,
+html[data-material="recommended"] .popup-container {
+  background: transparent;
+}
+
 /* Windows 11 native scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

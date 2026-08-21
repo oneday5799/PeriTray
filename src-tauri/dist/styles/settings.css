@@ -2,8 +2,16 @@
   height: 100%;
   display: flex;
   overflow: hidden;
-  background: var(--page-bg, #f3f3f3);
+  background: transparent;
 }
+
+html[data-material] body { background: transparent !important; }
+html[data-material] .settings-container { background: transparent !important; }
+html[data-material] .card { background: transparent !important; border: 1px solid rgba(255,255,255,0.3) !important; }
+html[data-material] .win-nav-left-panel { background: transparent !important; border-right: 1px solid rgba(255,255,255,0.3) !important; }
+html[data-material] .win-nav-page-header { background: transparent !important; }
+html[data-material] .tab-content { background: transparent !important; }
+html[data-material] .section-title { background: transparent !important; }
 
 /* ── Left Sidebar (NavigationView Pane) ──────── */
 .win-nav-left-panel {

@@ -137,18 +137,28 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
         "popup.html".to_string()
     };
 
+    // 判断是否需要透明背景（非默认材质时需要）
+    let needs_transparent = crate::config::with_config(|c| c.window_material != "default");
+
     #[cfg(target_os = "windows")]
-    let builder = tauri::WebviewWindowBuilder::new(
-        app, "popup", tauri::WebviewUrl::App(url.into()),
-    )
-    .additional_browser_args(&crate::windows::browser_args())
-    .title("外设信息")
-    .inner_size(POPUP_W, POPUP_H)
-    .decorations(false)
-    .resizable(false)
-    .skip_taskbar(true)
-    .always_on_top(true)
-    .position(target_x, target_y);
+    let builder = {
+        let mut b = tauri::WebviewWindowBuilder::new(
+            app, "popup", tauri::WebviewUrl::App(url.into()),
+        )
+        .additional_browser_args(&crate::windows::browser_args())
+        .title("外设信息")
+        .inner_size(POPUP_W, POPUP_H)
+        .decorations(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .position(target_x, target_y);
+        if needs_transparent {
+            b = b.transparent(true)
+                .background_color(tauri::utils::config::Color(0, 0, 0, 0));
+        }
+        b
+    };
 
     #[cfg(not(target_os = "windows"))]
     let builder = tauri::WebviewWindowBuilder::new(
@@ -167,6 +177,14 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {
                 windows::set_rounded_corners(hwnd.0 as isize);
+                // 应用窗口材质
+                let material = crate::config::with_config(|c| c.window_material.clone());
+                windows::apply_window_material(hwnd.0 as isize, &material);
+                // 设置 WebView2 背景透明
+                if material != "default" {
+                    let wv: &tauri::Webview = win.as_ref();
+                    windows::set_webview_bg_transparent(wv);
+                }
             }
             let _ = win.show();
             let _ = win.set_focus();

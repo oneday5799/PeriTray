@@ -379,8 +379,19 @@ function initGeneralTab() {
   });
 
   initComboBox("combo-window-material", config.window_material || "default", async (val) => {
+    // 云母在不支持的系统上需提示
+    if (val === "mica") {
+      const supported = await invoke("check_material_support", { material: "mica" });
+      if (!supported) {
+        showToast("当前系统不支持云母材质", null, true);
+        return;
+      }
+    }
     config.window_material = val;
     await saveConfig();
+    await invoke("set_window_material", { material: val });
+    updateFlyoutBackdrop(val);
+    updateMaterialAttribute(val);
   });
 }
 
@@ -826,6 +837,7 @@ async function init() {
     initLogSettings();
     initDeviceFilterTab();
     initAboutTab();
+    initMaterialEffects();
 
     loadDevicesAsync();
     loadAudioDevicesAsync();
@@ -851,6 +863,8 @@ window.__TAURI__.event.listen("config-changed", async () => {
   await renderShutdownVolumeDevices();
   const listEl = document.getElementById("device-shortcut-list");
   if (listEl) initDeviceShortcutSettings();
+  // 同步窗口材质 CSS
+  initMaterialEffects();
 });
 
 // 托盘「关于」指向设置页关于标签（窗口已存在时）
@@ -923,6 +937,34 @@ function setupInputFocus() {
     if (!items) return;
     card.classList.toggle("no-hover", items.contains(e.target));
   });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 窗口材质辅助函数
+// ═══════════════════════════════════════════════════════════════
+
+/// 更新 flyout 背景模糊效果（Acrylic backdrop-filter）
+function updateFlyoutBackdrop(material) {
+  const root = document.documentElement;
+  if (material === "recommended" || material === "acrylic") {
+    root.style.setProperty('--flyout-backdrop', 'blur(30px) saturate(125%)');
+    root.style.setProperty('--flyout-bg', 'rgba(252, 252, 252, 0.85)');
+  } else {
+    root.style.removeProperty('--flyout-backdrop');
+    root.style.removeProperty('--flyout-bg');
+  }
+}
+
+/// 设置 <html> 的 data-material 属性（用于 CSS 透明背景规则）
+function updateMaterialAttribute(material) {
+  document.documentElement.setAttribute('data-material', material);
+}
+
+/// 初始化时应用当前材质的 CSS 效果
+function initMaterialEffects() {
+  const material = config?.window_material || "default";
+  updateFlyoutBackdrop(material);
+  updateMaterialAttribute(material);
 }
 
 init();

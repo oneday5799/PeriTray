@@ -4,6 +4,29 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>外设信息</title>
+  <style>
+    html[data-material="mica"] body,
+    html[data-material="acrylic"] body,
+    html[data-material="recommended"] body {
+      background: transparent !important;
+    }
+    html[data-material="mica"] .popup-container,
+    html[data-material="acrylic"] .popup-container,
+    html[data-material="recommended"] .popup-container {
+      background: transparent !important;
+    }
+  </style>
+  <script>
+    (async () => {
+      try {
+        const { invoke } = window.__TAURI__.core;
+        const config = await invoke('get_config');
+        if (config.window_material && config.window_material !== 'default') {
+          document.documentElement.setAttribute('data-material', config.window_material);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/popup.css">
   <link rel="stylesheet" href="styles/audio.css">

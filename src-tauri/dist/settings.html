@@ -4,6 +4,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>设置 - 外设监控</title>
+  <style>
+    /* 内联材质透明规则，确保 CSS 在异步 JS 设置 data-material 前就生效 */
+    html[data-material="mica"] body,
+    html[data-material="acrylic"] body,
+    html[data-material="recommended"] body {
+      background: transparent !important;
+    }
+    html[data-material="mica"] .settings-container,
+    html[data-material="acrylic"] .settings-container,
+    html[data-material="recommended"] .settings-container {
+      background: transparent !important;
+    }
+  </style>
+  <script>
+    // 尽早读取配置设置 data-material
+    (async () => {
+      try {
+        const { invoke } = window.__TAURI__.core;
+        const config = await invoke('get_config');
+        if (config.window_material && config.window_material !== 'default') {
+          document.documentElement.setAttribute('data-material', config.window_material);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/settings.css">
 </head>
@@ -185,10 +210,10 @@
                   <span class="win-combo-item-content">默认</span>
                 </span>
               </button>
-              <button class="win-combo-item" data-value="blur">
+              <button class="win-combo-item" data-value="recommended">
                 <span class="win-combo-item-layout">
                   <span class="win-combo-item-pill"></span>
-                  <span class="win-combo-item-content">模糊（Blur）</span>
+                  <span class="win-combo-item-content">推荐</span>
                 </span>
               </button>
               <button class="win-combo-item" data-value="acrylic">

@@ -144,6 +144,8 @@ fn main() {
             commands::set_device_shortcut,
             commands::remove_device_shortcut,
             commands::set_shortcut_recording,
+            commands::set_window_material,
+            commands::check_material_support,
         ])
         .setup(move |app| {
             if let Err(e) = tray::setup_tray(app) {
