@@ -377,6 +377,11 @@ function initGeneralTab() {
     await saveConfig();
     applyThemeMode(val);
   });
+
+  initComboBox("combo-window-material", config.window_material || "default", async (val) => {
+    config.window_material = val;
+    await saveConfig();
+  });
 }
 
 function initLogSettings() {

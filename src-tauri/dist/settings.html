@@ -127,7 +127,7 @@
       <div class="card">
         <div class="card-left">
           <span class="card-title">主题模式</span>
-          <div class="card-desc">切换设置页的显示主题，修改后立即生效</div>
+          <div class="card-desc">切换主窗口和设置页的显示主题，修改后立即生效</div>
         </div>
         <div class="win-combo-box" id="combo-theme-mode">
           <button class="win-combo-btn" role="combobox" aria-expanded="false">
@@ -156,6 +156,51 @@
                 <span class="win-combo-item-layout">
                   <span class="win-combo-item-pill"></span>
                   <span class="win-combo-item-content">深色模式</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">窗口材质</span>
+          <div class="card-desc">设置窗口背景材质效果</div>
+        </div>
+        <div class="win-combo-box" id="combo-window-material">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">默认</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout" style="display:none;">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="default">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">默认</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="blur">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">模糊（Blur）</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="acrylic">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">亚克力（Acrylic）</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="mica">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">云母（Mica）</span>
                 </span>
               </button>
             </div>
