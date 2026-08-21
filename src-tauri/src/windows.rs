@@ -511,5 +511,7 @@ pub fn set_window_material(app: &tauri::AppHandle, material: String) -> Result<b
         }
     }
 
+    let _ = app.emit("material-changed", &material);
+
     Ok(any_success)
 }
