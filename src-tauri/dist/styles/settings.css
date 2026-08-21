@@ -43,7 +43,8 @@
   white-space: nowrap;
 }
 
-.win-nav-menu {
+/* Pane 形态导航（共享基类在 base.css，此处为 pane 变体） */
+.win-nav-left-panel .win-nav-menu {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -53,14 +54,13 @@
   overflow: hidden;
 }
 
-/* Pane 形态的导航项（共享基类在 base.css） */
-.win-nav-item {
+.win-nav-left-panel .win-nav-item {
   height: 36px;
   min-height: 36px;
 }
 
 /* ── Navigation Indicator (single element, WinUI NavigationView style) ──────── */
-.win-nav-indicator {
+.win-nav-left-panel .win-nav-indicator {
   left: 8px;
   top: 0;
   width: 3px;
@@ -75,7 +75,7 @@
   flex-direction: column;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 20px 20px;
+  padding: var(--page-padding);
   scrollbar-gutter: stable;
   min-width: 0;
 }
@@ -90,37 +90,37 @@
   border-bottom: 1px solid transparent;
 }
 
-.tab-content {
+.settings-container .tab-content {
   display: none;
 }
 
-.tab-content.active {
+.settings-container .tab-content.active {
   display: block;
 }
 
 /* ── Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, vertical) ─── */
-.tab-content.slide-active {
+.settings-container .tab-content.slide-active {
   display: block;
   will-change: opacity, transform;
 }
 
 /* Enter from bottom (forward navigation — going down the list) */
-.tab-content.slide-enter-down {
+.settings-container .tab-content.slide-enter-down {
   animation: SlideFromBottom_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
 }
 
 /* Leave to top (forward navigation) */
-.tab-content.slide-leave-up {
+.settings-container .tab-content.slide-leave-up {
   animation: SlideFromBottom_Leave 167ms cubic-bezier(0.7, 0, 1, 0.5) both;
 }
 
 /* Enter from top (backward navigation — going up the list) */
-.tab-content.slide-enter-up {
+.settings-container .tab-content.slide-enter-up {
   animation: SlideFromTop_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
 }
 
 /* Leave to bottom (backward navigation) */
-.tab-content.slide-leave-down {
+.settings-container .tab-content.slide-leave-down {
   animation: SlideFromTop_Leave 167ms cubic-bezier(0.7, 0, 1, 0.5) both;
 }
 
@@ -149,10 +149,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tab-content.slide-enter-down,
-  .tab-content.slide-leave-up,
-  .tab-content.slide-enter-up,
-  .tab-content.slide-leave-down {
+  .settings-container .tab-content.slide-enter-down,
+  .settings-container .tab-content.slide-leave-up,
+  .settings-container .tab-content.slide-enter-up,
+  .settings-container .tab-content.slide-leave-down {
     animation: none !important;
   }
 }

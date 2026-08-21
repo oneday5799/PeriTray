@@ -70,6 +70,7 @@
   --material-card: rgba(255, 255, 255, 0.88);
   --material-card-hover: rgba(255, 255, 255, 0.5);
   --material-border: rgba(255, 255, 255, 0.3);
+  --page-padding: 0 20px 20px;
 }
 
 html[data-theme="dark"] {
@@ -230,6 +231,14 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   margin-top: 20px;
   margin-bottom: 6px;
   padding: 0;
+}
+
+/* ── Loading placeholder (shared) ───────────────────── */
+.loading {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-tertiary, #888);
+  font-size: 14px;
 }
 
 /* ── Card component (shared: settings page + main window) ───── */
@@ -463,24 +472,19 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   object-fit: contain;
 }
 
-/* 卡片尺寸（popup 设备/音频/会话卡与设置页卡片统一：60px 头部行） */
-.card.device,
-.card.column.audio-device,
-.card.session,
-.settings-container .card {
+/* 卡片尺寸（所有卡片统一：60px 卡体；非 column 卡为 60px 头部行） */
+.card {
   min-height: 60px;
 }
 
-.card.device .card-left,
-.settings-container .card-left {
+.card:not(.column) .card-left {
   height: 60px;
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
 
-.card.device .card-actions,
-.settings-container .card-actions {
+.card:not(.column) .card-actions {
   height: 60px;
 }
 

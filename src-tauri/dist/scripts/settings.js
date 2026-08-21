@@ -2,35 +2,14 @@ let config = null;
 let activeSettingsMenu = null;
 registerContextMenu({ get menu() { return activeSettingsMenu; }, set menu(v) { activeSettingsMenu = v; } });
 
-let settingsTip = null;
-function showSettingsTip(el) {
-  if (!settingsTip) {
-    settingsTip = document.createElement("div");
-    settingsTip.className = "session-tip";
-    document.body.appendChild(settingsTip);
-  }
-  settingsTip.textContent = el.dataset.tip;
-  settingsTip.style.visibility = "hidden";
-  settingsTip.style.display = "block";
-  const tw = settingsTip.offsetWidth;
-  const th = settingsTip.offsetHeight;
-  const r = el.getBoundingClientRect();
-  let left = r.left + r.width / 2 - tw / 2;
-  left = Math.max(4, Math.min(left, window.innerWidth - tw - 4));
-  let top = r.top - th - 8;
-  if (top < 4) top = r.bottom + 8;
-  if (top + th > window.innerHeight - 4) top = window.innerHeight - th - 4;
-  settingsTip.style.left = left + "px";
-  settingsTip.style.top = top + "px";
-  settingsTip.style.visibility = "visible";
-}
+// [data-tip] 提示：定位与 DOM 复用 common.js 的边界避让实现
 document.addEventListener("pointerenter", (e) => {
   const el = e.target.closest?.("[data-tip]");
-  if (el) showSettingsTip(el);
+  if (el) showSessionTip(el, el.dataset.tip);
 }, true);
 document.addEventListener("pointerleave", (e) => {
   const el = e.target.closest?.("[data-tip]");
-  if (el && settingsTip) settingsTip.style.display = "none";
+  if (el) hideSessionTip();
 }, true);
 
 async function saveConfig() {

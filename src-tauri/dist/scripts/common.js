@@ -156,14 +156,17 @@ window.attachSessionTooltip = function (el, text) {
     if (sessionTipTimer) clearTimeout(sessionTipTimer);
     sessionTipTimer = setTimeout(() => showSessionTip(el, text), 800);
   });
-  el.addEventListener("pointerleave", () => {
-    if (sessionTipTimer) {
-      clearTimeout(sessionTipTimer);
-      sessionTipTimer = null;
-    }
-    const tip = getSessionTip();
-    tip.style.display = "none";
-  });
+  el.addEventListener("pointerleave", () => hideSessionTip());
+};
+
+// 供页面级事件委托复用（如设置页 [data-tip] 提示）
+window.showSessionTip = showSessionTip;
+window.hideSessionTip = function () {
+  if (sessionTipTimer) {
+    clearTimeout(sessionTipTimer);
+    sessionTipTimer = null;
+  }
+  if (sessionTip) sessionTip.style.display = "none";
 };
 
 // ── 右键菜单共享工具 ─────────────────────────────────────
