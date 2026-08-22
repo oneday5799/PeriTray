@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickelpack/tauri-v2-docs/main/tauri.conf.schema.json",
   "productName": "PeriphMonitor",
-  "version": "1.0.0",
+  "version": "1.2.8-beta.1",
   "identifier": "com.periph.monitor",
   "mainBinaryName": "PeriphMonitor",
   "build": {
