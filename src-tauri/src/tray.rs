@@ -303,9 +303,12 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     std::thread::spawn(move || {
                         if let Some(pos) = TRAY_POS.get() {
                             let sf = windows::scale_factor(&app);
-                            // 保持既有换算行为：物理坐标仅 x 除以缩放
+                            // 物理坐标需整体转逻辑：仅除 x 会让 y 携带物理值，
+                            // 在缩放屏上把弹出窗底边推出屏幕外
                             let (px, py) = match rect.position {
-                                tauri::Position::Physical(p) => (p.x as f64 / sf, p.y as f64),
+                                tauri::Position::Physical(p) => {
+                                    (p.x as f64 / sf, p.y as f64 / sf)
+                                }
                                 tauri::Position::Logical(p) => (p.x, p.y),
                             };
                             *pos.lock().unwrap_or_else(|e| e.into_inner()) = (px, py);
