@@ -1,164 +1,99 @@
-function initShortcutSettings() {
-  bindToggle("toggle-device-shortcut-cycle", {
-    get: () => config.enable_device_shortcut_cycle,
-    set: (v) => { config.enable_device_shortcut_cycle = v; }
+/* settings-general.js — 设置页·通用设置 tab：主题模式/窗口材质/默认打开页/硬件加速/
+ *                        开机自启动/日志设置/更新开关（更新检测流程在 settings.js 横切共享）
+ * 加载序 2/7 · 提供：initGeneralTab() / initLogSettings() / initUpdateSettings()
+ * 依赖：common.js(initTheme/applyThemeMode/showToast) /
+ *       settings.js(config/bindToggle/createToggle/initComboBox/saveConfig) */
+function initGeneralTab() {
+  bindToggle("toggle-autostart", {
+    get: () => config.auto_start,
+    set: (v) => { config.auto_start = v; }
   });
 
-  const actions = [
-    { id: "devices", inputId: "shortcut-devices", clearId: "clear-shortcut-devices", configKey: "shortcut_devices" },
-    { id: "volume", inputId: "shortcut-volume", clearId: "clear-shortcut-volume", configKey: "shortcut_volume" },
-    { id: "volume_up", inputId: "shortcut-volume-up", clearId: "clear-shortcut-volume-up", configKey: "shortcut_volume_up" },
-    { id: "volume_down", inputId: "shortcut-volume-down", clearId: "clear-shortcut-volume-down", configKey: "shortcut_volume_down" },
-    { id: "volume_mute", inputId: "shortcut-volume-mute", clearId: "clear-shortcut-volume-mute", configKey: "shortcut_volume_mute" },
-  ];
+  initComboBox("combo-default-popup-tab", config.default_popup_tab || "devices", async (val) => {
+    config.default_popup_tab = val;
+    await saveConfig();
+  });
 
-  for (const action of actions) {
-    const input = document.getElementById(action.inputId);
-    const clearBtn = document.getElementById(action.clearId);
-    const keyField = action.configKey;
+  bindToggle("toggle-hardware-acceleration", {
+    get: () => config.hardware_acceleration || false,
+    set: (v) => { config.hardware_acceleration = v; }
+  });
 
-    bindShortcutRecorder(
-      input,
-      clearBtn,
-      () => config[keyField],
-      (display, shortcut) => {
-        if (shortcut === "") {
-          invoke("set_hotkey_config", { action: action.id, key: null }).catch(() => {});
-          config[keyField] = null;
-          input.value = "";
-          clearBtn.style.display = "none";
-          input.placeholder = "点击录制快捷键";
-          return;
-        }
-        invoke("set_hotkey_config", { action: action.id, key: shortcut })
-          .then(async () => {
-            config[keyField] = shortcut;
-            clearBtn.style.display = "";
-            await saveConfig();
-            showToast(`快捷键 "${display}" 已保存`);
-          })
-          .catch((err) => {
-            const msg = String(err);
-            config[keyField] = null;
-            input.value = "";
-            clearBtn.style.display = "none";
-            if (msg.includes("已被占用")) {
-              showToast(`"${display}" 已被其他功能占用，请选择其他快捷键。`, null, true);
-            } else {
-              showToast("暂不支持该快捷键。", null, true);
-            }
-          });
+  initComboBox("combo-theme-mode", config.theme_mode || "follow_system", async (val) => {
+    config.theme_mode = val;
+    await saveConfig();
+    applyThemeMode(val);
+    updateFlyoutBackdrop(config.window_material || "default");
+  });
+
+  initComboBox("combo-window-material", config.window_material || "default", async (val) => {
+    // 云母在不支持的系统上需提示
+    if (val === "mica") {
+      const supported = await invoke("check_material_support", { material: "mica" });
+      if (!supported) {
+        showToast("当前系统不支持云母材质", null, true);
+        return;
       }
-    );
-  }
+    }
+    config.window_material = val;
+    window.__materialChangeInProgress = true;
+    await saveConfig();
+    updateFlyoutBackdrop(val);
+    if (val === "default") {
+      // 先移除 CSS 透明规则，再移除 DWM 材质，避免闪烁
+      updateMaterialAttribute(val);
+      await invoke("set_window_material", { material: val });
+    } else {
+      await invoke("set_window_material", { material: val });
+      // 等待 DWM 材质生效 + webview 背景透明化后再设置 CSS 属性
+      await new Promise(r => setTimeout(r, 200));
+      updateMaterialAttribute(val);
+    }
+    window.__materialChangeInProgress = false;
+  });
 }
 
-function initDeviceShortcutSettings() {
-  const listEl = document.getElementById("device-shortcut-list");
+function initLogSettings() {
+  bindToggle("toggle-log", {
+    get: () => config.log_enabled,
+    set: (v) => { config.log_enabled = v; }
+  });
 
-  function render() {
-    const shortcuts = config.device_shortcuts || {};
-    const ids = Object.keys(shortcuts);
-    listEl.innerHTML = "";
+  initComboBox("combo-log-retention", config.log_retention || "one_day", async (val) => {
+    config.log_retention = val;
+    await saveConfig();
+  });
 
-    if (ids.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "shortcut-hint";
-      empty.textContent = "暂无设备切换快捷键。可在「音量控制」页右键设备选择「快捷键」进行设置。";
-      listEl.appendChild(empty);
-      return;
+  document.getElementById("btn-log-dir").addEventListener("click", async () => {
+    try {
+      await invoke("open_log_dir");
+    } catch (e) {
+      console.error("Failed to open log dir:", e);
     }
+  });
+}
 
-    for (const id of ids) {
-      const entry = shortcuts[id];
-      const item = document.createElement("div");
-      item.className = "card";
-
-      const left = document.createElement("div");
-      left.className = "card-left";
-
-      const label = document.createElement("span");
-      label.className = "card-title device-shortcut-label";
-      label.textContent = entry.name;
-      window.attachTooltip(label, entry.name, "start");
-      left.appendChild(label);
-      item.appendChild(left);
-
-      const actions = document.createElement("div");
-      actions.className = "card-actions";
-
-      const wrap = document.createElement("div");
-      wrap.className = "shortcut-input-wrap";
-
-      const input = document.createElement("input");
-      input.type = "text";
-      input.className = "shortcut-key-input";
-      input.placeholder = "点击录制快捷键";
-      input.readOnly = true;
-
-      const clearBtn = document.createElement("button");
-      clearBtn.className = "shortcut-clear-btn";
-      clearBtn.textContent = "×";
-      window.attachTooltip(clearBtn, "清除快捷键", "end");
-
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "shortcut-delete-btn";
-      deleteBtn.textContent = "删除";
-      window.attachTooltip(deleteBtn, "删除此设备快捷键", "end");
-      deleteBtn.addEventListener("click", async () => {
-        try {
-          await invoke("remove_device_shortcut", { deviceId: id });
-          config = await invoke("get_config");
-          render();
-        } catch (e) {
-          console.error("Failed to remove device shortcut:", e);
-        }
-      });
-
-      const box = document.createElement("div");
-      box.className = "shortcut-key-box";
-      box.appendChild(input);
-      box.appendChild(clearBtn);
-
-      wrap.appendChild(box);
-      wrap.appendChild(deleteBtn);
-      actions.appendChild(wrap);
-      item.appendChild(actions);
-      listEl.appendChild(item);
-
-      bindShortcutRecorder(
-        input,
-        clearBtn,
-        () => (config.device_shortcuts[id] || {}).shortcut || null,
-        (display, shortcut) => {
-          if (shortcut === "") {
-            invoke("set_device_shortcut", { deviceId: id, name: entry.name, key: null }).catch(() => {});
-            config = { ...config };
-            config.device_shortcuts = { ...config.device_shortcuts };
-            config.device_shortcuts[id] = { ...config.device_shortcuts[id], shortcut: null };
-            input.value = "";
-            clearBtn.style.display = "none";
-            input.placeholder = "点击录制快捷键";
-            return;
-          }
-          invoke("set_device_shortcut", { deviceId: id, name: entry.name, key: shortcut })
-            .then(async () => {
-              config = await invoke("get_config");
-              render();
-            })
-            .catch((err) => {
-              const msg = String(err);
-              if (msg.includes("已被占用")) {
-                showToast(`"${display}" 已被其他功能占用，请选择其他快捷键。`, null, true);
-              } else {
-                showToast("暂不支持该快捷键。", null, true);
-              }
-              render();
-            });
-        }
-      );
+function initUpdateSettings() {
+  bindToggle("toggle-check-updates", {
+    get: () => config.check_updates !== false,
+    set: (v) => { config.check_updates = v; },
+    onChange: (enabled) => {
+      if (!enabled) {
+        hideUpdateErrorFlyout();
+      } else {
+        invoke("get_update_status").then((status) => {
+          renderUpdateInfobar(status);
+        }).catch(() => {});
+      }
     }
-  }
+  });
 
-  render();
+  bindToggle("toggle-include-prerelease", {
+    get: () => config.include_prerelease || false,
+    set: (v) => { config.include_prerelease = v; }
+  });
+
+  document.getElementById("btn-check-update").addEventListener("click", () => {
+    runUpdateCheck("btn-check-update");
+  });
 }

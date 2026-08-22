@@ -1,3 +1,9 @@
+/* settings.js — 设置页·入口框架：init 装配/导航与 tab 切换/ComboBox 工厂/更新检测横切流程/
+ *            NumberBox 焦点装配/材质浮层背景/config-changed 与 settings-tab 监听
+ * 加载序 7/7（最后执行，调用各分区脚本提供的 init 系列与刷新函数）
+ * 提供：saveConfig/bindToggle/createToggle/initComboBox/runUpdateCheck/copyToClipboard/
+ *       showUpdateErrorFlyout/renderUpdateInfobar/updateFlyoutBackdrop 等框架级共享函数
+ * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/about) */
 let config = null;
 let activeSettingsMenu = null;
 registerContextMenu({ get menu() { return activeSettingsMenu; }, set menu(v) { activeSettingsMenu = v; } });
@@ -335,101 +341,6 @@ function initNavigation() {
   requestAnimationFrame(() => requestAnimationFrame(initIndicator));
 }
 
-function initGeneralTab() {
-  bindToggle("toggle-autostart", {
-    get: () => config.auto_start,
-    set: (v) => { config.auto_start = v; }
-  });
-
-  initComboBox("combo-default-popup-tab", config.default_popup_tab || "devices", async (val) => {
-    config.default_popup_tab = val;
-    await saveConfig();
-  });
-
-  bindToggle("toggle-hardware-acceleration", {
-    get: () => config.hardware_acceleration || false,
-    set: (v) => { config.hardware_acceleration = v; }
-  });
-
-  initComboBox("combo-theme-mode", config.theme_mode || "follow_system", async (val) => {
-    config.theme_mode = val;
-    await saveConfig();
-    applyThemeMode(val);
-    updateFlyoutBackdrop(config.window_material || "default");
-  });
-
-  initComboBox("combo-window-material", config.window_material || "default", async (val) => {
-    // 云母在不支持的系统上需提示
-    if (val === "mica") {
-      const supported = await invoke("check_material_support", { material: "mica" });
-      if (!supported) {
-        showToast("当前系统不支持云母材质", null, true);
-        return;
-      }
-    }
-    config.window_material = val;
-    window.__materialChangeInProgress = true;
-    await saveConfig();
-    updateFlyoutBackdrop(val);
-    if (val === "default") {
-      // 先移除 CSS 透明规则，再移除 DWM 材质，避免闪烁
-      updateMaterialAttribute(val);
-      await invoke("set_window_material", { material: val });
-    } else {
-      await invoke("set_window_material", { material: val });
-      // 等待 DWM 材质生效 + webview 背景透明化后再设置 CSS 属性
-      await new Promise(r => setTimeout(r, 200));
-      updateMaterialAttribute(val);
-    }
-    window.__materialChangeInProgress = false;
-  });
-}
-
-function initLogSettings() {
-  bindToggle("toggle-log", {
-    get: () => config.log_enabled,
-    set: (v) => { config.log_enabled = v; }
-  });
-
-  initComboBox("combo-log-retention", config.log_retention || "one_day", async (val) => {
-    config.log_retention = val;
-    await saveConfig();
-  });
-
-  document.getElementById("btn-log-dir").addEventListener("click", async () => {
-    try {
-      await invoke("open_log_dir");
-    } catch (e) {
-      console.error("Failed to open log dir:", e);
-    }
-  });
-}
-
-function initUpdateSettings() {
-  bindToggle("toggle-check-updates", {
-    get: () => config.check_updates !== false,
-    set: (v) => { config.check_updates = v; },
-    onChange: (enabled) => {
-      if (!enabled) {
-        hideUpdateErrorFlyout();
-      } else {
-        invoke("get_update_status").then((status) => {
-          renderUpdateInfobar(status);
-        }).catch(() => {});
-      }
-    }
-  });
-
-  bindToggle("toggle-include-prerelease", {
-    get: () => config.include_prerelease || false,
-    set: (v) => { config.include_prerelease = v; }
-  });
-
-  document.getElementById("btn-check-update").addEventListener("click", () => {
-    runUpdateCheck("btn-check-update");
-  });
-}
-
 async function runUpdateCheck(btnId) {
   const btn = document.getElementById(btnId);
   if (!btn) return;
@@ -489,114 +400,6 @@ async function runUpdateCheck(btnId) {
     btn.textContent = originalText;
     btn.disabled = false;
   }
-}
-
-function initDeviceFilterTab() {
-  const filterWrap = document.getElementById("filter-regex-wrap");
-  const filterArrow = document.getElementById("arrow-filter");
-  const filterCard = document.getElementById("filter-card");
-
-  // Filter regex input
-  const regexInput = document.getElementById("filter-regex");
-  regexInput.value = config.filter_regex || "";
-
-  function resizeRegexInput() {
-    regexInput.style.height = "auto";
-    regexInput.style.minHeight = "80px";
-    regexInput.style.height = Math.max(regexInput.scrollHeight, 80) + "px";
-  }
-  resizeRegexInput();
-
-  function setFilterExpanded(expanded) {
-    if (expanded) {
-      filterWrap.classList.add("show");
-      filterWrap.style.maxHeight = "999px";
-    } else {
-      filterWrap.classList.remove("show");
-      filterWrap.style.maxHeight = "0px";
-    }
-    regexInput.style.height = "auto";
-    regexInput.style.minHeight = "80px";
-    if (filterArrow) filterArrow.classList.toggle("expanded", expanded);
-  }
-
-  bindToggle("toggle-filter", {
-    get: () => config.filter_enabled,
-    set: (v) => { config.filter_enabled = v; },
-    onChange: async (checked) => {
-      setFilterExpanded(checked);
-      await loadDevicesAsync();
-    }
-  });
-
-  if (config.filter_enabled) {
-    filterWrap.classList.add("show");
-    filterWrap.style.transition = "none";
-    filterWrap.style.maxHeight = "999px";
-    regexInput.style.height = "auto";
-    regexInput.style.minHeight = "80px";
-    requestAnimationFrame(() => {
-      filterWrap.style.transition = "";
-    });
-  } else {
-    filterWrap.style.maxHeight = "0px";
-  }
-  if (filterArrow) filterArrow.classList.toggle("expanded", config.filter_enabled);
-
-  if (filterCard) {
-    filterCard.addEventListener("click", (e) => {
-      if (e.target.closest('.card-items')) return;
-      if (e.target.closest('.toggle')) return;
-      const isOpen = filterWrap.classList.contains("show");
-      setFilterExpanded(!isOpen);
-    });
-  }
-
-  let debounceTimer = null;
-  regexInput.addEventListener("input", () => {
-    resizeRegexInput();
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(async () => {
-      config.filter_regex = regexInput.value;
-      await saveConfig();
-      await loadDevicesAsync();
-    }, 500);
-  });
-
-  bindToggle("toggle-dedup", {
-    get: () => config.dedup_devices,
-    set: (v) => { config.dedup_devices = v; },
-    onChange: async () => { await loadDevicesAsync(); }
-  });
-
-  bindToggle("toggle-unnamed-bt", {
-    get: () => config.show_unnamed_bt,
-    set: (v) => { config.show_unnamed_bt = v; },
-    onChange: async () => { await loadDevicesAsync(); }
-  });
-
-  bindToggle("toggle-use-system-bt", {
-    get: () => config.use_system_bt,
-    set: (v) => { config.use_system_bt = v; }
-  });
-
-  // Open 2.4G device list button
-  document.getElementById("btn-add-24g").addEventListener("click", async () => {
-    try {
-      await invoke("open_24g_device_file");
-    } catch (e) {
-      console.error("Failed to open file:", e);
-    }
-  });
-
-  // Help link for 2.4G device
-  document.getElementById("help-24g").addEventListener("click", async () => {
-    try {
-      await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor#24g-%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81" });
-    } catch (e) {
-      console.error("Failed to open URL:", e);
-    }
-  });
 }
 
 function selectTab(tab) {
@@ -737,78 +540,6 @@ function renderUpdateInfobar(status) {
     action.textContent = "查看详细信息";
     action.onclick = () => showUpdateErrorFlyout(status.error, action);
   }
-}
-
-function initAboutTab() {
-  const card = document.getElementById("about-info-card");
-  const items = document.getElementById("about-info-items");
-  const arrow = document.getElementById("arrow-about");
-  if (card && items) {
-    card.addEventListener("click", (e) => {
-      if (e.target.closest('.card-items')) return;
-      if (e.target.closest("button") || e.target.closest("a")) return;
-      const expanded = items.style.maxHeight !== "0px";
-      items.style.maxHeight = expanded ? "0px" : "999px";
-      if (arrow) arrow.classList.toggle("expanded", !expanded);
-    });
-  }
-
-  const versionBtn = document.getElementById("about-version-btn");
-  if (versionBtn) {
-    versionBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      runUpdateCheck("about-version-btn");
-    });
-  }
-
-  const infobarClose = document.getElementById("infobar-close");
-  if (infobarClose) {
-    infobarClose.addEventListener("click", () => {
-      const bar = document.getElementById("about-infobar");
-      if (bar) bar.style.display = "none";
-    });
-  }
-
-  const updateInfobarClose = document.getElementById("about-update-close");
-  if (updateInfobarClose) {
-    updateInfobarClose.addEventListener("click", () => {
-      hideUpdateErrorFlyout();
-      const bar = document.getElementById("about-update-infobar");
-      if (bar) bar.hidden = true;
-    });
-  }
-
-  // 恢复上次更新检测结果（仅当确实检测过时 get_update_status 才有值）
-  invoke("get_update_status").then((status) => {
-    renderUpdateInfobar(status);
-  }).catch(() => {});
-
-  // 启动时自动检测完成后实时更新 infobar
-  window.__TAURI__.event.listen("update-status", (event) => {
-    renderUpdateInfobar(event.payload);
-  });
-
-  const links = {
-    "about-dev": "https://github.com/oneday5799",
-    "about-license": "https://github.com/oneday5799/PeriphMonitor/blob/main/LICENSE",
-    "about-homepage": "https://github.com/oneday5799/PeriphMonitor",
-    "about-help": "https://github.com/oneday5799/PeriphMonitor/issues",
-    "about-feedback": "https://github.com/oneday5799/PeriphMonitor/issues",
-    "about-pr": "https://github.com/oneday5799/PeriphMonitor/pulls"
-  };
-  Object.entries(links).forEach(([id, url]) => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.addEventListener("click", async (e) => {
-        e.preventDefault();
-        try {
-          await invoke("open_url", { url });
-        } catch (err) {
-          console.error("Failed to open URL:", err);
-        }
-      });
-    }
-  });
 }
 
 async function init() {

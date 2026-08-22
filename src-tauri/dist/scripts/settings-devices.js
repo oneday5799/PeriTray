@@ -1,3 +1,8 @@
+/* settings-devices.js — 设置页·设备信息 tab：分组设备列表渲染/过滤正则卡
+ * 加载序 4/7 · 提供：loadDevicesAsync() / renderGroups() / initDeviceFilterTab()
+ * 依赖：common.js(getInvoke/getDisplayName/CATEGORIES/simplifyDeviceName) /
+ *       settings.js(config/createToggle/bindToggle/showToast) */
+
 let devices = [];
 let expandedGroups = new Set();
 let deviceGroups = {};
@@ -124,4 +129,111 @@ function renderGroups() {
       });
     }
   }
+}
+function initDeviceFilterTab() {
+  const filterWrap = document.getElementById("filter-regex-wrap");
+  const filterArrow = document.getElementById("arrow-filter");
+  const filterCard = document.getElementById("filter-card");
+
+  // Filter regex input
+  const regexInput = document.getElementById("filter-regex");
+  regexInput.value = config.filter_regex || "";
+
+  function resizeRegexInput() {
+    regexInput.style.height = "auto";
+    regexInput.style.minHeight = "80px";
+    regexInput.style.height = Math.max(regexInput.scrollHeight, 80) + "px";
+  }
+  resizeRegexInput();
+
+  function setFilterExpanded(expanded) {
+    if (expanded) {
+      filterWrap.classList.add("show");
+      filterWrap.style.maxHeight = "999px";
+    } else {
+      filterWrap.classList.remove("show");
+      filterWrap.style.maxHeight = "0px";
+    }
+    regexInput.style.height = "auto";
+    regexInput.style.minHeight = "80px";
+    if (filterArrow) filterArrow.classList.toggle("expanded", expanded);
+  }
+
+  bindToggle("toggle-filter", {
+    get: () => config.filter_enabled,
+    set: (v) => { config.filter_enabled = v; },
+    onChange: async (checked) => {
+      setFilterExpanded(checked);
+      await loadDevicesAsync();
+    }
+  });
+
+  if (config.filter_enabled) {
+    filterWrap.classList.add("show");
+    filterWrap.style.transition = "none";
+    filterWrap.style.maxHeight = "999px";
+    regexInput.style.height = "auto";
+    regexInput.style.minHeight = "80px";
+    requestAnimationFrame(() => {
+      filterWrap.style.transition = "";
+    });
+  } else {
+    filterWrap.style.maxHeight = "0px";
+  }
+  if (filterArrow) filterArrow.classList.toggle("expanded", config.filter_enabled);
+
+  if (filterCard) {
+    filterCard.addEventListener("click", (e) => {
+      if (e.target.closest('.card-items')) return;
+      if (e.target.closest('.toggle')) return;
+      const isOpen = filterWrap.classList.contains("show");
+      setFilterExpanded(!isOpen);
+    });
+  }
+
+  let debounceTimer = null;
+  regexInput.addEventListener("input", () => {
+    resizeRegexInput();
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      config.filter_regex = regexInput.value;
+      await saveConfig();
+      await loadDevicesAsync();
+    }, 500);
+  });
+
+  bindToggle("toggle-dedup", {
+    get: () => config.dedup_devices,
+    set: (v) => { config.dedup_devices = v; },
+    onChange: async () => { await loadDevicesAsync(); }
+  });
+
+  bindToggle("toggle-unnamed-bt", {
+    get: () => config.show_unnamed_bt,
+    set: (v) => { config.show_unnamed_bt = v; },
+    onChange: async () => { await loadDevicesAsync(); }
+  });
+
+  bindToggle("toggle-use-system-bt", {
+    get: () => config.use_system_bt,
+    set: (v) => { config.use_system_bt = v; }
+  });
+
+  // Open 2.4G device list button
+  document.getElementById("btn-add-24g").addEventListener("click", async () => {
+    try {
+      await invoke("open_24g_device_file");
+    } catch (e) {
+      console.error("Failed to open file:", e);
+    }
+  });
+
+  // Help link for 2.4G device
+  document.getElementById("help-24g").addEventListener("click", async () => {
+    try {
+      await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor#24g-%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81" });
+    } catch (e) {
+      console.error("Failed to open URL:", e);
+    }
+  });
 }

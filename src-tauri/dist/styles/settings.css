@@ -1,3 +1,7 @@
+/* settings.css 目录：容器/左栏 → 导航指示条 → 右内容区 → 滑动动画 → 卡片尺寸 →
+ *       过滤正则 → 快捷键 → About → 设置页专属组件五件套(过滤文本域/NumberBox/
+ *       ComboBox/Infobar/版本infobar/更新错误浮层)
+ * 共享基类在 base.css；本文件仅设置页布局与专属组件 */
 ﻿.settings-container {
   height: 100%;
   display: flex;
@@ -326,7 +330,7 @@
 }
 
 
-/* ── NumberBox（设置页专属） *─────────────────────────── */
+/* ── NumberBox（设置页专属） ────────────────────── */
 .win-numberbox {
   display: flex;
   align-items: stretch;
@@ -608,7 +612,7 @@
 }
 
 
-/* ── Infobar（设置页专属） *───────────────────────────── */
+/* ── Infobar（设置页专属） ─────────────────────── */
 .win-infobar {
   box-sizing: border-box;
   width: 100%;
