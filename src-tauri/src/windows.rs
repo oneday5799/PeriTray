@@ -76,11 +76,13 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
 }
 
 pub fn scale_factor(app: &tauri::AppHandle) -> f64 {
-    app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0)
+    match app.primary_monitor() {
+        Ok(Some(m)) => m.scale_factor(),
+        _ => {
+            crate::process::append_log("[monitor] primary_monitor unavailable, fallback 1.0");
+            1.0
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]

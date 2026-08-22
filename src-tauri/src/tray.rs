@@ -292,21 +292,27 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             if let tauri::tray::TrayIconEvent::Click {
                 button, button_state, rect, ..
             } = event {
-                if let Some(pos) = TRAY_POS.get() {
-                    let sf = windows::scale_factor(app);
-                    let (px, py) = match rect.position {
-                        tauri::Position::Physical(p) => (p.x as f64 / sf, p.y as f64 / sf),
-                        tauri::Position::Logical(p) => (p.x, p.y),
-                    };
-                    *pos.lock().unwrap() = (px, py);
-                }
-
                 if button_state != tauri::tray::MouseButtonState::Up {
                     return;
                 }
                 if button == tauri::tray::MouseButton::Left {
-                    let tab = config::with_config(|c| c.default_popup_tab.clone());
-                    popup::toggle(app, &tab);
+                    // 事件线程仅做分发：显示器枚举/配置读取/窗口操作全部移出，
+                    // 防止唤醒后子窗口消息队列卡死拖垮整个事件循环
+                    let app = app.clone();
+                    let physical = match rect.position {
+                        tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+                        _ => (0.0, 0.0),
+                    };
+                    std::thread::spawn(move || {
+                        if let Some(pos) = TRAY_POS.get() {
+                            let sf = windows::scale_factor(&app);
+                            // 保持既有换算行为：物理坐标仅 x 除以缩放
+                            *pos.lock().unwrap_or_else(|e| e.into_inner()) =
+                                (physical.0 / sf, physical.1);
+                        }
+                        let tab = config::with_config(|c| c.default_popup_tab.clone());
+                        popup::toggle(&app, &tab);
+                    });
                 }
             }
         })
@@ -374,10 +380,9 @@ fn update_auto_text() {
 /// 根据默认打开页面与系统深色模式更新托盘图标
 fn update_tray_icon() {
     let icon = pick_tray_icon();
-    if let Ok(guard) = TRAY_ICON.get().unwrap().lock() {
-        if let Some(ref tray) = *guard {
-            let _ = tray.set_icon(Some(icon));
-        }
+    let guard = TRAY_ICON.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ref tray) = *guard {
+        let _ = tray.set_icon(Some(icon));
     }
 }
 
@@ -426,7 +431,7 @@ fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry
 
 /// 更新音频设备切换子菜单（在设备列表变化时调用）
 pub fn update_audio_devices_menu() {
-    let Ok(tray_guard) = TRAY_ICON.get().unwrap().lock() else { return };
+    let tray_guard = TRAY_ICON.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
     let Some(ref tray) = *tray_guard else { return };
     let app = tray.app_handle().clone();
 

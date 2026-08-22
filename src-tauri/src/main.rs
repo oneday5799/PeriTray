@@ -42,6 +42,7 @@ fn install_panic_hook() {
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "unknown location".to_string());
         let full = format!("{}\n\nLocation: {}", msg, location);
+        process::append_log(&format!("[panic] {} @ {}", msg.replace('\n', " | "), location));
         show_error_box(&full);
         default_hook(info);
     }));
@@ -96,8 +97,15 @@ fn main() {
             Some(vec!["--autostart"]),
         ))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            process::append_log("[single-instance] second instance forwarded");
             if app.get_webview_window("popup").is_some() {
-                popup::open_popup(app, "devices");
+                let tab = config::with_config(|c| c.default_popup_tab.clone());
+                process::append_log(&format!("[single-instance] popup exists, open tab={}", tab));
+                popup::open_popup(app, &tab);
+            } else {
+                let tab = config::with_config(|c| c.default_popup_tab.clone());
+                process::append_log("[single-instance] no popup, create via toggle");
+                popup::toggle(app, &tab);
             }
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())

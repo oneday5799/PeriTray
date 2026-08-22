@@ -37,7 +37,7 @@ fn compute_position(app: &tauri::AppHandle) -> (f64, f64, f64) {
         .map(|m| m.size().height as f64 / sf)
         .unwrap_or(1080.0);
     let (tray_x, tray_y) = TRAY_POS.get()
-        .map(|m| *m.lock().unwrap())
+        .map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()))
         .unwrap_or((100.0, screen_h - 50.0));
     let target_x = tray_x - POPUP_W / 2.0;
     let target_y = tray_y - POPUP_H - 15.0;
@@ -50,17 +50,24 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
         return;
     }
 
+    crate::process::append_log(&format!("[tray] toggle enter tab={}", tab));
     let (target_x, target_y, start_y) = compute_position(app);
+    crate::process::append_log("[tray] compute_position done");
 
     if let Some(window) = app.get_webview_window("popup") {
-        if window.is_visible().unwrap_or(false) {
+        let visible = window.is_visible().unwrap_or(false);
+        crate::process::append_log(&format!("[tray] is_visible -> {}", visible));
+        if visible {
             close(&window, target_x, target_y, start_y);
+            crate::process::append_log("[tray] close dispatched");
         } else {
             let _ = app.emit("switch-tab", tab);
             show(&window, target_x, start_y, target_y);
+            crate::process::append_log("[tray] show dispatched");
         }
     } else {
         create(app, target_x, target_y, tab);
+        crate::process::append_log("[tray] create dispatched");
     }
 }
 
@@ -70,6 +77,7 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
     }
 
     let (target_x, target_y, start_y) = compute_position(app);
+    crate::process::append_log("[tray] open_popup dispatched");
 
     if let Some(window) = app.get_webview_window("popup") {
         let _ = app.emit("switch-tab", tab);
@@ -90,7 +98,7 @@ fn close(
     ANIMATING.store(true, Ordering::Relaxed);
     let _ = window.set_always_on_top(false);
     let (cx, cy) = POPUP_POS.get()
-        .map(|m| *m.lock().unwrap())
+        .map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()))
         .unwrap_or((target_x, target_y));
     let win = window.clone();
     std::thread::spawn(move || {
@@ -182,7 +190,7 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
             let _ = win.show();
             let _ = win.set_focus();
             if let Some(pos) = POPUP_POS.get() {
-                *pos.lock().unwrap() = (target_x, target_y);
+                *pos.lock().unwrap_or_else(|e| e.into_inner()) = (target_x, target_y);
             }
         }
         Err(e) => {
@@ -205,7 +213,7 @@ fn animate_slide(window: &tauri::WebviewWindow, x: f64, from_y: f64, to_y: f64, 
 fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {
     animate_slide(window, x, start_y, end_y, 250, 20);
     if let Some(pos) = POPUP_POS.get() {
-        *pos.lock().unwrap() = (x, end_y);
+        *pos.lock().unwrap_or_else(|e| e.into_inner()) = (x, end_y);
     }
     let _ = window.set_always_on_top(true);
     let _ = window.set_focus();
