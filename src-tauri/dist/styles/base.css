@@ -28,6 +28,7 @@
   --page-bg: #f3f3f3;
   --card-bg: #ffffff;
   --card-border: #e0e0e0;
+  --card-border-hover: rgba(0, 0, 0, 0.07);
   --card-item-border: rgba(0, 0, 0, 0.06);
   --text-primary: #1a1a1a;
   --text-secondary: #666666;
@@ -99,6 +100,7 @@ html[data-theme="dark"] {
   --page-bg: #202020;
   --card-bg: rgba(255, 255, 255, 0.10);
   --card-border: rgb(0 0 0 / 30%);
+  --card-border-hover: rgb(0 0 0 / 9%);
   --card-item-border: rgb(0 0 0 / 30%);
   --text-primary: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.62);
@@ -274,16 +276,18 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   border: 1px solid var(--card-border, #e0e0e0);
   border-radius: 6px;
   cursor: default;
-  transition: background 0.12s;
+  transition: background 0.12s, border-color 0.12s;
 }
 
 .card:hover {
   background: var(--material-card-hover);
+  border-color: var(--card-border-hover, var(--card-border, #e0e0e0));
 }
 
 /* 可折叠卡：鼠标在 card-items 区域时抑制 hover */
 .card.expandable.no-hover:hover {
   background: var(--card-bg, #fff);
+  border-color: var(--card-border, #e0e0e0);
 }
 
 /* 可折叠卡：flex-wrap 实现两行布局，overflow:hidden 裁剪圆角 */
