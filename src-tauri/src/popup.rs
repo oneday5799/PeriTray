@@ -137,9 +137,7 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
         "popup.html".to_string()
     };
 
-    // 判断是否需要透明背景（非默认材质时需要）
-    let needs_transparent = crate::config::with_config(|c| c.window_material != "default");
-
+    // 恒透明创建：透明能力在窗口诞生时固化，「默认」材质的不透明观感由 CSS 承担
     #[cfg(target_os = "windows")]
     let builder = {
         let mut b = tauri::WebviewWindowBuilder::new(
@@ -153,10 +151,8 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
         .skip_taskbar(true)
         .always_on_top(true)
         .position(target_x, target_y);
-        if needs_transparent {
-            b = b.transparent(true)
-                .background_color(tauri::utils::config::Color(0, 0, 0, 0));
-        }
+        b = b.transparent(true)
+            .background_color(tauri::utils::config::Color(0, 0, 0, 0));
         b
     };
 
@@ -177,14 +173,11 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {
                 windows::set_rounded_corners(hwnd.0 as isize);
-                // 应用窗口材质
+                // 应用窗口材质（DWM 层；webview 表面恒透明，COM 一次性设定与材质无关）
                 let material = crate::config::with_config(|c| c.window_material.clone());
                 windows::apply_window_material(hwnd.0 as isize, &material);
-                // 设置 WebView2 背景透明
-                if material != "default" {
-                    let wv: &tauri::Webview = win.as_ref();
-                    windows::set_webview_bg_transparent(wv);
-                }
+                let wv: &tauri::Webview = win.as_ref();
+                windows::ensure_webview_bg_transparent(wv);
             }
             let _ = win.show();
             let _ = win.set_focus();

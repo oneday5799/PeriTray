@@ -28,15 +28,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
         if let Ok(hwnd) = win.hwnd() {
             let material = config::with_config(|c| c.window_material.clone());
             process::append_log(&format!("[material] reopen settings, material={}", material));
-            if material == "default" {
-                // 先设不透明背景再移除材质，避免闪烁
-                set_webview_bg_solid(win.as_ref(), 243, 243, 243);
-                apply_window_material(hwnd.0 as isize, "default");
-            } else {
-                let ok = apply_window_material(hwnd.0 as isize, &material);
-                process::append_log(&format!("[material] reopen apply {} -> {}", material, ok));
-                ensure_webview_bg_transparent(win.as_ref());
-            }
+            apply_window_material(hwnd.0 as isize, &material);
         }
         let _ = win.unminimize();
         let _ = win.show();
@@ -48,7 +40,6 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
         Some(t) => format!("settings.html#{}", t),
         None => "settings.html".to_string(),
     };
-    let needs_transparent = config::with_config(|c| c.window_material != "default");
     tauri::async_runtime::spawn(async move {
         let mut builder = tauri::WebviewWindowBuilder::new(
             &app,
@@ -61,12 +52,9 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
         .visible(false)
         .min_inner_size(400.0, 300.0);
 
-        if needs_transparent {
-            builder = builder.transparent(true)
-                .background_color(tauri::utils::config::Color(0, 0, 0, 0));
-        } else {
-            builder = builder.background_color(tauri::utils::config::Color(243, 243, 243, 255));
-        }
+        // 恒透明创建：透明能力在窗口诞生时固化，「默认」材质的不透明观感由 CSS 承担
+        builder = builder.transparent(true)
+            .background_color(tauri::utils::config::Color(0, 0, 0, 0));
 
         #[cfg(target_os = "windows")]
         {
@@ -78,9 +66,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             if let Ok(hwnd) = win.hwnd() {
                 let material = config::with_config(|c| c.window_material.clone());
                 apply_window_material(hwnd.0 as isize, &material);
-                if material != "default" {
-                    ensure_webview_bg_transparent(win.as_ref());
-                }
+                ensure_webview_bg_transparent(win.as_ref());
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
             let _ = win.show();
@@ -211,10 +197,6 @@ fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
 
 pub fn set_webview_bg_transparent(webview: &tauri::Webview) {
     set_webview_bg_color(webview, [0, 0, 0, 0]);
-}
-
-pub fn set_webview_bg_solid(webview: &tauri::Webview, r: u8, g: u8, b: u8) {
-    set_webview_bg_color(webview, [r, g, b, 255]);
 }
 
 /// 带重试的 webview 背景透明设置，用于窗口创建后异步调用
@@ -481,20 +463,29 @@ pub fn set_window_material(app: &tauri::AppHandle, material: String) -> Result<b
     process::append_log(&format!("[material] set_window_material: {}", material));
     config::with_config_mut(|c| c.window_material = material.clone());
 
+    // 恒透明架构：webview 表面在创建时已一次性设为透明，运行时只切换两层——
+    // DWM 背景板（同步可靠）+ 前端 data-material CSS（经 material-changed 事件）。
+    // 「默认」材质的不透明观感由 CSS --page-bg 实色承担。
+    // 先广播事件：两窗前端立即铺 CSS（默认材质=实色 / 非默认=半透明），
+    // 再切换 DWM 背景板。恒透明表面下若先摘背景板后铺实色，会闪现一瞬桌面。
+    let _ = app.emit("material-changed", &material);
+
     let mut any_success = false;
     for label in ["popup", "settings"] {
         if let Some(win) = app.get_webview_window(label) {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {
                 if material == "default" {
-                    // 先将 webview 背景设为不透明，再延迟移除 DWM 材质，
-                    // 避免移除瞬间窗口表面短暂失去内容而出现透明闪烁
-                    set_webview_bg_solid(win.as_ref(), 243, 243, 243);
+                    // 延迟摘除背景板，给前端 CSS 留出渲染帧；执行前复核配置，
+                    // 防止快速往返切换时过期任务覆盖新材质
                     let h = hwnd.0 as isize;
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        apply_window_material(h, "default");
-                        process::append_log("[material] delayed DWM removal done");
+                        std::thread::sleep(std::time::Duration::from_millis(120));
+                        let cur = config::with_config(|c| c.window_material.clone());
+                        if cur == "default" {
+                            apply_window_material(h, "default");
+                            process::append_log("[material] delayed backdrop removal done");
+                        }
                     });
                 } else {
                     let ok = apply_window_material(hwnd.0 as isize, &material);
@@ -505,13 +496,10 @@ pub fn set_window_material(app: &tauri::AppHandle, material: String) -> Result<b
                     if ok {
                         any_success = true;
                     }
-                    set_webview_bg_transparent(win.as_ref());
                 }
             }
         }
     }
-
-    let _ = app.emit("material-changed", &material);
 
     Ok(any_success)
 }
