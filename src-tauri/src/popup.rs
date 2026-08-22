@@ -52,7 +52,16 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
 
     crate::process::append_log(&format!("[tray] toggle enter tab={}", tab));
     let (target_x, target_y, start_y) = compute_position(app);
-    crate::process::append_log("[tray] compute_position done");
+    {
+        let tray = TRAY_POS.get().map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()));
+        let sf = windows::scale_factor(app);
+        let screen_h = app.primary_monitor().ok().flatten()
+            .map(|m| m.size().height as f64 / sf).unwrap_or(0.0);
+        crate::process::append_log(&format!(
+            "[tray] coords tray={:?} sf={} screen_h={} target=({}, {}) start_y={}",
+            tray, sf, screen_h, target_x, target_y, start_y
+        ));
+    }
 
     if let Some(window) = app.get_webview_window("popup") {
         let visible = window.is_visible().unwrap_or(false);
@@ -205,9 +214,15 @@ fn animate_slide(window: &tauri::WebviewWindow, x: f64, from_y: f64, to_y: f64, 
     for i in 0..=frames {
         let t = i as f64 / frames as f64;
         let y = from_y + (to_y - from_y) * cubic_bezier(t);
-        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+        if let Err(e) = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y })) {
+            crate::process::append_log(&format!("[tray] set_position FAILED frame={}: {}", i, e));
+        }
         std::thread::sleep(std::time::Duration::from_millis(step_ms));
     }
+    crate::process::append_log(&format!(
+        "[tray] slide done x={} from_y={} to_y={}",
+        x, from_y, to_y
+    ));
 }
 
 fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {

@@ -299,16 +299,16 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     // 事件线程仅做分发：显示器枚举/配置读取/窗口操作全部移出，
                     // 防止唤醒后子窗口消息队列卡死拖垮整个事件循环
                     let app = app.clone();
-                    let physical = match rect.position {
-                        tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
-                        _ => (0.0, 0.0),
-                    };
+                    let rect = rect;
                     std::thread::spawn(move || {
                         if let Some(pos) = TRAY_POS.get() {
                             let sf = windows::scale_factor(&app);
                             // 保持既有换算行为：物理坐标仅 x 除以缩放
-                            *pos.lock().unwrap_or_else(|e| e.into_inner()) =
-                                (physical.0 / sf, physical.1);
+                            let (px, py) = match rect.position {
+                                tauri::Position::Physical(p) => (p.x as f64 / sf, p.y as f64),
+                                tauri::Position::Logical(p) => (p.x, p.y),
+                            };
+                            *pos.lock().unwrap_or_else(|e| e.into_inner()) = (px, py);
                         }
                         let tab = config::with_config(|c| c.default_popup_tab.clone());
                         popup::toggle(&app, &tab);
