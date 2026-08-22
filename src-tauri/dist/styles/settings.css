@@ -106,22 +106,22 @@
 
 /* Enter from bottom (forward navigation — going down the list) */
 .settings-container .tab-content.slide-enter-down {
-  animation: SlideFromBottom_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
+  animation: SlideFromBottom_Enter 450ms var(--ease-decel) both;
 }
 
 /* Leave to top (forward navigation) */
 .settings-container .tab-content.slide-leave-up {
-  animation: SlideFromBottom_Leave 167ms cubic-bezier(0.7, 0, 1, 0.5) both;
+  animation: SlideFromBottom_Leave 167ms var(--ease-accel) both;
 }
 
 /* Enter from top (backward navigation — going up the list) */
 .settings-container .tab-content.slide-enter-up {
-  animation: SlideFromTop_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
+  animation: SlideFromTop_Enter 450ms var(--ease-decel) both;
 }
 
 /* Leave to bottom (backward navigation) */
 .settings-container .tab-content.slide-leave-down {
-  animation: SlideFromTop_Leave 167ms cubic-bezier(0.7, 0, 1, 0.5) both;
+  animation: SlideFromTop_Leave 167ms var(--ease-accel) both;
 }
 
 @keyframes SlideFromBottom_Enter {
@@ -253,4 +253,562 @@
   font-size: 14px;
   color: var(--text-primary, #1a1a1a);
   flex-shrink: 0;
+}
+/* ═══ 设置页专属组件（自 base.css 归位：过滤文本域 / NumberBox / ComboBox / Infobar / 更新浮层） ═══ */
+
+/* Multiline variant（过滤正则文本域） */
+.filter-textarea {
+  width: 100%;
+  min-height: 80px;
+  height: auto;
+  padding: 5px 6px 10px 10px;
+  border: 0;
+  border-radius: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--field-text);
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+  box-sizing: border-box;
+  outline: none;
+}
+
+/* Field border wrapper（过滤框 / NumberBox 共用） */
+.filter-textarea-border,
+.win-numberbox-border {
+  position: relative;
+  border-radius: 4px;
+  background: var(--field-bg);
+  overflow: hidden;
+  border: 1px solid var(--field-border);
+  border-bottom-color: var(--field-border-strong);
+  transition: background 0.167s var(--ease-standard), border-color 0.167s ease;
+}
+
+.filter-textarea-border:hover,
+.win-numberbox-border:hover {
+  background: var(--field-bg-hover);
+}
+
+.filter-textarea-border:focus-within,
+.win-numberbox:focus-within .win-numberbox-border {
+  background: var(--field-bg-focus);
+  border-color: var(--field-border-focus);
+  border-bottom-color: var(--field-border-focus);
+}
+
+.filter-textarea-focus-border,
+.win-numberbox-focus-border {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.filter-textarea-focus-border::after,
+.win-numberbox-focus-border::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.5px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.filter-textarea-border:focus-within .filter-textarea-focus-border::after,
+.win-numberbox:focus-within .win-numberbox-focus-border::after {
+  background: var(--accent);
+}
+
+
+/* ── NumberBox（设置页专属） *─────────────────────────── */
+.win-numberbox {
+  display: flex;
+  align-items: stretch;
+  min-height: 32px;
+  width: 120px;
+  position: relative;
+}
+
+.win-numberbox-border {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-height: 32px;
+}
+
+.win-numberbox-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px 5px 10px;
+  font-size: 14px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 20px;
+  color: var(--field-text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.win-numberbox-input::-webkit-outer-spin-button,
+.win-numberbox-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.win-numberbox-spin {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: stretch;
+}
+
+.win-numberbox-spin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  min-width: 0;
+  flex: 0 0 22px;
+  color: var(--text-secondary);
+  font-size: 16px;
+}
+
+.win-numberbox-spin-btn:hover,
+.win-numberbox-spin-btn.is-hovered {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
+}
+
+.win-numberbox-spin-btn:active {
+  background: var(--active-overlay);
+}
+
+.win-numberbox-spin-btn:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.win-numberbox-spin-btn svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+
+/* ── ComboBox（设置页专属） ─────────────────────── */
+.win-combo-box {
+  position: relative;
+  display: inline-block;
+  min-width: 64px;
+  vertical-align: top;
+  color: var(--field-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.win-combo-btn {
+  width: 100%;
+  min-width: 120px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 0;
+  align-items: stretch;
+  text-align: left;
+  appearance: none;
+  border-left: 1px solid var(--control-border);
+  border-top: 1px solid var(--control-border);
+  border-right: 1px solid var(--control-border);
+  border-bottom: 1px solid var(--control-border-strong);
+  border-radius: 4px;
+  background: var(--control-bg);
+  color: var(--field-text);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.167s var(--ease-standard);
+}
+
+.win-combo-btn:hover {
+  background: var(--control-bg-hover);
+}
+
+.win-combo-btn:active {
+  background: var(--control-bg-pressed);
+}
+
+.win-combo-content {
+  min-width: 0;
+  padding: 5px 0 7px 12px;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.win-combo-chevron {
+  grid-row: 1;
+  grid-column: 2;
+  width: 12px;
+  height: 12px;
+  margin: 0 14px 0 0;
+  place-self: center end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--pressed-text);
+  transition: transform 0.2s var(--ease-standard);
+}
+
+.win-combo-box.is-open .win-combo-chevron {
+  transform: rotate(180deg);
+}
+
+.win-combo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+}
+
+.win-combo-flyout {
+  position: fixed;
+  z-index: 1000;
+  width: max-content;
+  min-width: 80px;
+  box-sizing: border-box;
+  overflow: hidden;
+  visibility: hidden;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+}
+
+.win-combo-flyout::-webkit-scrollbar {
+  display: none;
+}
+
+.win-combo-items-presenter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 0;
+}
+
+.win-combo-item {
+  appearance: none;
+  position: relative;
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  box-sizing: border-box;
+  color: var(--flyout-text);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* 菜单项行模式（ComboBox 项） */
+.win-combo-item-layout {
+  min-height: 32px;
+  margin: 2px 5px;
+  box-sizing: border-box;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+}
+
+.win-combo-item-layout {
+  position: relative;
+  width: calc(100% - 10px);
+}
+
+.win-combo-item-content {
+  padding: 5px 11px 7px;
+  box-sizing: border-box;
+}
+
+.win-combo-item-content {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.win-combo-item:hover .win-combo-item-layout {
+  background: var(--hover-overlay);
+}
+
+.win-combo-item:active .win-combo-item-layout {
+  color: var(--pressed-text);
+  background: var(--pressed-overlay);
+}
+
+.win-combo-item.selected .win-combo-item-layout {
+  background: var(--hover-overlay);
+}
+
+.win-combo-item.selected:hover .win-combo-item-layout {
+  background: var(--pressed-overlay);
+}
+
+.win-combo-item-pill {
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 1.5px;
+  background: var(--accent);
+  transform: translateY(-50%);
+  transition: height 167ms var(--ease-standard);
+  display: none;
+}
+
+.win-combo-item.selected .win-combo-item-pill {
+  display: block;
+}
+
+.win-combo-item.selected:active .win-combo-item-pill {
+  height: 10px;
+}
+
+
+/* ── Infobar（设置页专属） *───────────────────────────── */
+.win-infobar {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.win-infobar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.win-infobar-content {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.win-infobar-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-right: -6px;
+  color: inherit;
+  transition: background 83ms var(--ease-decel);
+}
+
+.win-infobar-close-button:hover {
+  background: var(--hover-overlay);
+}
+
+.win-infobar-close-button:active {
+  background: var(--pressed-overlay);
+}
+
+/* ── Infobar severity (版本更新) ─────────────────── */
+.win-infobar.win-infobar-success {
+  --infobar-bg: #dff6dd;
+  --infobar-border: #c5e8c0;
+  --infobar-icon-color: #0f7b0f;
+}
+
+.win-infobar.win-infobar-warning {
+  --infobar-bg: #fff4ce;
+  --infobar-border: #f0e0a8;
+  --infobar-icon-color: #9d5d00;
+}
+
+.win-infobar.win-infobar-error {
+  --infobar-bg: #fde7e9;
+  --infobar-border: #f6c2c7;
+  --infobar-icon-color: #c42b1c;
+}
+
+html[data-theme="dark"] .win-infobar.win-infobar-success {
+  --infobar-bg: #393d1b;
+  --infobar-border: #4d5230;
+  --infobar-icon-color: #6ccb5f;
+}
+
+html[data-theme="dark"] .win-infobar.win-infobar-warning {
+  --infobar-bg: #433519;
+  --infobar-border: #5a4826;
+  --infobar-icon-color: #fce100;
+}
+
+html[data-theme="dark"] .win-infobar.win-infobar-error {
+  --infobar-bg: #442726;
+  --infobar-border: #5a3534;
+  --infobar-icon-color: #ff99a4;
+}
+
+.win-infobar.win-infobar-success,
+.win-infobar.win-infobar-warning,
+.win-infobar.win-infobar-error {
+  background: var(--infobar-bg);
+  border-color: var(--infobar-border);
+}
+
+.win-infobar.win-infobar-success .win-infobar-icon,
+.win-infobar.win-infobar-warning .win-infobar-icon,
+.win-infobar.win-infobar-error .win-infobar-icon {
+  color: var(--infobar-icon-color);
+}
+
+/* ── 版本更新 infobar：卡片式布局（与其他卡片一致） ── */
+.win-infobar.win-infobar-card[hidden] {
+  display: none;
+}
+
+.win-infobar.win-infobar-card {
+  display: flex;
+  align-items: center;
+  min-height: 60px;
+  padding: 0 14px;
+  margin-bottom: 3px;
+}
+
+.win-infobar.win-infobar-card .card-left {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.win-infobar.win-infobar-card #about-update-action {
+  min-width: 120px;
+  height: 32px;
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.win-infobar.win-infobar-card .win-infobar-close-button {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  margin: 0 0 0 8px;
+}
+
+
+/* ── 更新错误详细信息浮出面板 ───────────────────── */
+.update-error-flyout {
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+  position: fixed;
+  z-index: 1200;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  padding: 12px 14px 14px;
+  animation: update-flyout-open 167ms var(--ease-decel) both;
+}
+
+.update-error-flyout-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  margin-bottom: 8px;
+}
+
+.update-error-flyout-summary {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--status-error, #d32f2f);
+  margin-bottom: 8px;
+}
+
+.update-error-flyout-body {
+  box-sizing: border-box;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--card-border);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-body, #444);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.update-error-flyout-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+@keyframes update-flyout-open {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

@@ -91,20 +91,20 @@
 /* ── Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, horizontal) ─── */
 /* Forward: old leaves to left, new enters from right */
 .tab-viewport .tab-content.slide-leave-left {
-  animation: SlideRight_Leave 150ms cubic-bezier(0.7, 0, 1, 0.5) both;
+  animation: SlideRight_Leave 150ms var(--ease-accel) both;
 }
 
 .tab-viewport .tab-content.slide-enter-right {
-  animation: SlideRight_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
+  animation: SlideRight_Enter 450ms var(--ease-decel) both;
 }
 
 /* Backward: old leaves to right, new enters from left */
 .tab-viewport .tab-content.slide-leave-right {
-  animation: SlideLeft_Leave 150ms cubic-bezier(0.7, 0, 1, 0.5) both;
+  animation: SlideLeft_Leave 150ms var(--ease-accel) both;
 }
 
 .tab-viewport .tab-content.slide-enter-left {
-  animation: SlideLeft_Enter 450ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
+  animation: SlideLeft_Enter 450ms var(--ease-decel) both;
 }
 
 @keyframes SlideRight_Enter {
