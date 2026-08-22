@@ -2,7 +2,7 @@
  *       过滤正则 → 快捷键 → About → 设置页专属组件五件套(过滤文本域/NumberBox/
  *       ComboBox/Infobar/版本infobar/更新错误浮层)
  * 共享基类在 base.css；本文件仅设置页布局与专属组件 */
-﻿.settings-container {
+.settings-container {
   height: 100%;
   display: flex;
   overflow: hidden;
