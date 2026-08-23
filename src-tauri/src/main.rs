@@ -3,6 +3,7 @@
 
 mod audio;
 mod audio_notify;
+mod audio_spatial;
 mod app_icon;
 mod bluetooth;
 mod classify;
