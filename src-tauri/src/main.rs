@@ -114,6 +114,7 @@ fn main() {
             // 设备列表与配置
             commands::get_devices,
             commands::get_config,
+            commands::get_app_version,
             commands::set_window_theme,
             commands::update_config,
             commands::toggle_device_hidden,

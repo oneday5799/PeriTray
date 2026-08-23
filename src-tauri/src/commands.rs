@@ -48,6 +48,12 @@ pub fn get_config() -> Config {
     config::with_config(|c| c.clone())
 }
 
+/// 应用版本号（来自 tauri.conf.json 的真实包版本，供关于页动态显示，消除静态文案漂移）
+#[tauri::command]
+pub fn get_app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 /// 设置当前窗口的系统标题栏主题（仅影响系统窗口标题栏，不影响页面内容）
 #[tauri::command]
 pub fn set_window_theme(window: tauri::Window, theme: String) {

@@ -22,6 +22,10 @@ function initAboutTab() {
       e.stopPropagation();
       runUpdateCheck("about-version-btn");
     });
+    // 静态文案仅作首帧占位，加载后以真实包版本覆盖（版本号唯一事实来源是 tauri.conf.json）
+    invoke("get_app_version").then((v) => {
+      versionBtn.textContent = `版本 v${v}`;
+    }).catch(() => {});
   }
 
   const infobarClose = document.getElementById("infobar-close");
