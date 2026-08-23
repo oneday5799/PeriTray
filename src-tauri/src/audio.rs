@@ -661,24 +661,28 @@ pub fn set_spatial_sound(device_id: &str, format_guid: Option<&str>) -> std::res
 
         match client.query(wide.as_ptr()) {
             Ok((cur_state, fmt_ptr)) => {
-                // 常规路径：布局自检 → 复用设备格式指针写入 → 读回校验
+                // 常规路径：复用设备格式指针写入 → 读回校验
+                // 状态编码校验仅作记录不作硬闸门：激活中的格式被卸载后端点会停留在
+                // 非标准过渡态，但系统设置器在此状态下同样接受写入并归一化；
+                // 槽位漂移的真正防线是写后读回（错位调用必然读回不匹配）
                 CoTaskMemFree(Some(fmt_ptr as *const c_void));
-                if !validate_state_encoding(&cur_state) {
-                    return Err("当前系统版本的空间音效接口布局不受支持".to_string());
+                let layout_trusted = validate_state_encoding(&cur_state);
+                if !layout_trusted {
+                    crate::process::append_log(
+                        "[audio] set_spatial_sound: endpoint state encoding abnormal (provider uninstalled?), writing anyway",
+                    );
                 }
                 let hr = client.try_set_state(wide.as_ptr(), &new_state, fmt_ptr);
                 if hr < 0 {
                     return Err(format!("设置空间音效失败（hr={:#010x}）", hr as u32));
                 }
-                let (after, fmt_ptr2) = client.query(wide.as_ptr())?;
-                CoTaskMemFree(Some(fmt_ptr2 as *const c_void));
-                if !state_matches(&after, guid_hex.is_some(), guid_hex.as_ref()) {
+                if !verify_after_write(&client, wide.as_ptr(), guid_hex.is_some(), guid_hex.as_ref()) {
                     return Err("设置未生效（接口布局可能已变化）".to_string());
                 }
             }
             Err(query_err) => {
                 // 降级路径：读取失败（如激活中的格式提供应用被卸载导致端点状态不可读）
-                // 跳过布局自检，fmt=null 直接写入；写后尽力读回，仍不可读则信任 HRESULT
+                // fmt=null 直接写入；写后尽力读回，仍不可读则信任 HRESULT
                 crate::process::append_log(&format!(
                     "[audio] set_spatial_sound degraded path (query err: {})", query_err
                 ));
@@ -686,18 +690,46 @@ pub fn set_spatial_sound(device_id: &str, format_guid: Option<&str>) -> std::res
                 if hr < 0 {
                     return Err(format!("设置空间音效失败（hr={:#010x}）", hr as u32));
                 }
-                if let Ok((after, fmt_ptr2)) = client.query(wide.as_ptr()) {
-                    CoTaskMemFree(Some(fmt_ptr2 as *const c_void));
-                    if !state_matches(&after, guid_hex.is_some(), guid_hex.as_ref()) {
-                        return Err("设置未生效（接口布局可能已变化）".to_string());
-                    }
-                } else {
-                    crate::process::append_log("[audio] set_spatial_sound degraded write ok, read-back unavailable");
+                if !verify_after_write(&client, wide.as_ptr(), guid_hex.is_some(), guid_hex.as_ref()) {
+                    return Err("设置未生效（接口布局可能已变化）".to_string());
                 }
             }
         }
         Ok(())
     }
+}
+
+/// 写后校验：核对语义字段；首次不匹配时延迟重试一次（音频引擎可能异步归一化），
+/// 读取失败视为暂时不可验证（由调用方按 hr 信任），返回 true=已确认生效或无法验证
+fn verify_after_write(
+    client: &PolicySpatialClient,
+    wide_ptr: *const u16,
+    enabled: bool,
+    guid: Option<&[u8; 16]>,
+) -> bool {
+    let check = |state: &[u8; SPATIAL_STATE_LEN], fmt_ptr: *mut u16| -> Option<bool> {
+        unsafe { CoTaskMemFree(Some(fmt_ptr as *const c_void)) };
+        if !validate_state_encoding(state) {
+            return None; // 仍处于过渡态，等待归一化
+        }
+        Some(state_matches(state, enabled, guid))
+    };
+    for wait in [0u64, 200] {
+        if wait > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(wait));
+        }
+        match unsafe { client.query(wide_ptr) } {
+            Ok((after, fmt_ptr)) => match check(&after, fmt_ptr) {
+                Some(ok) => return ok,
+                None => continue,
+            },
+            Err(_) => {
+                crate::process::append_log("[audio] spatial verify: read-back unavailable, trusting HRESULT");
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// CPolicyConfigClient 扩展接口封装。IID 随 Windows 构建漂移，按候选顺序 QI 命中即用。
