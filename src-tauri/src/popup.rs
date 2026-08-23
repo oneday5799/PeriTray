@@ -113,7 +113,6 @@ fn close(
     start_y: f64,
 ) {
     ANIMATING.store(true, Ordering::Relaxed);
-    let _ = window.set_always_on_top(false);
     let (cx, cy) = POPUP_POS.get()
         .map(|m| *crate::state::lock_unpoisoned(m))
         .unwrap_or((target_x, target_y));
@@ -143,10 +142,12 @@ fn show(
     target_y: f64,
 ) {
     ANIMATING.store(true, Ordering::Relaxed);
-    let _ = window.set_always_on_top(false);
+    // 先移到屏幕外，再置顶，最后显示：滑动全程位于其他窗口之上，
+    // 避免非置顶状态下被前台窗口遮挡（表现为动画"丢失"或部分不可见）
     let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
         x: target_x, y: start_y,
     }));
+    let _ = window.set_always_on_top(true);
     let _ = window.show();
     let win = window.clone();
     std::thread::spawn(move || {
@@ -238,7 +239,6 @@ fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64)
     if let Some(pos) = POPUP_POS.get() {
         *crate::state::lock_unpoisoned(pos) = (x, end_y);
     }
-    let _ = window.set_always_on_top(true);
     let _ = window.set_focus();
 }
 
