@@ -10,24 +10,6 @@
  * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖 */
 const { invoke } = window.__TAURI__.core;
 
-function throttle(fn, delay) {
-  let lastCall = 0;
-  let timer = null;
-  return function(...args) {
-    const now = Date.now();
-    if (now - lastCall >= delay) {
-      lastCall = now;
-      fn.apply(this, args);
-    } else {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        lastCall = Date.now();
-        fn.apply(this, args);
-      }, delay - (now - lastCall));
-    }
-  };
-}
-
 window.CATEGORIES = [
   { key: "Audio", label: "音频设备", subtitle: "扬声器、耳机等音频设备", icon: "🔊" },
   { key: "Usb", label: "输入设备", subtitle: "键盘、鼠标等USB设备", icon: "⌨️" },
@@ -403,12 +385,6 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
     if (e.key === "Enter") overlay.querySelector(".dialog-btn.confirm")?.click();
   });
 };
-
-function updateSliderGradient(slider) {
-  const value = slider.value;
-  const percentage = ((value - slider.min) / (slider.max - slider.min)) * 100;
-  slider.style.setProperty('--track-color', `linear-gradient(to right, #0078d7 0%, #0078d7 ${percentage}%, var(--slider-track, #e0e0e0) ${percentage}%, var(--slider-track, #e0e0e0) 100%)`);
-}
 
 // ── 快捷键录制（共享工具） ────────────────────────────────
 

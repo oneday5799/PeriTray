@@ -1,7 +1,7 @@
 /* popup-audio.js — 主窗口·音量控制 tab：设备/会话音量滑块渲染与调节/mute 切换/
  *            滚轮微调与 tooltip/强制静音记账/volume-changed 监听
  * 加载序 2/4 · 提供：loadAudioDevices()/loadAudioSessions()/renderAudioDevices()/renderAudioSessions()
- * 依赖：common.js(getInvoke/throttle/attachSessionTooltip/showToast/createSubmenuShell/
+ * 依赖：common.js(getInvoke/attachSessionTooltip/showToast/createSubmenuShell/
  *       formatDeviceName/registerContextMenu/clampMenuPosition/hideAllContextMenus/
  *       showRenameDialog/createDialog/closeDialog/bindShortcutRecorder/attachTooltip) */
 let audioDevices = [];
@@ -34,6 +34,34 @@ function applyAudioRuntimeConfig(cfg) {
   forceMuteDevices = cfg.force_mute_devices || [];
 }
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
+
+// ── 音量滑块工具（本页专属，自 common.js 迁入） ──────────────
+
+// 节流：首次立即执行，后续在 delay 窗口内合并且窗口末补发最后一次
+function throttle(fn, delay) {
+  let lastCall = 0;
+  let timer = null;
+  return function(...args) {
+    const now = Date.now();
+    if (now - lastCall >= delay) {
+      lastCall = now;
+      fn.apply(this, args);
+    } else {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        lastCall = Date.now();
+        fn.apply(this, args);
+      }, delay - (now - lastCall));
+    }
+  };
+}
+
+// 按当前值渲染滑轨填充渐变
+function updateSliderGradient(slider) {
+  const value = slider.value;
+  const percentage = ((value - slider.min) / (slider.max - slider.min)) * 100;
+  slider.style.setProperty('--track-color', `linear-gradient(to right, #0078d7 0%, #0078d7 ${percentage}%, var(--slider-track, #e0e0e0) ${percentage}%, var(--slider-track, #e0e0e0) 100%)`);
+}
 
 document.addEventListener("mouseup", () => {
   document.querySelectorAll('input[type="range"]').forEach(s => { s._isDragging = false; });
@@ -444,6 +472,32 @@ async function loadAudioDevices() {
   }
 }
 
+// 对账式渲染骨架：按 id 差集移除失效卡，已有卡走 update，新增项建卡后追加
+function reconcileCards(list, cardSelector, idProp, items, createCard, updateCard) {
+  const existingCards = new Map();
+  list.querySelectorAll(cardSelector).forEach(card => {
+    existingCards.set(card.dataset[idProp], card);
+  });
+
+  const newIds = new Set(items.map(item => item.id));
+
+  existingCards.forEach((card, id) => {
+    if (!newIds.has(id)) {
+      card.remove();
+    }
+  });
+
+  for (const item of items) {
+    let card = existingCards.get(item.id);
+
+    if (card) {
+      updateCard(card, item);
+    } else {
+      list.appendChild(createCard(item));
+    }
+  }
+}
+
 function renderAudioDevices() {
   const list = document.getElementById("audio-device-list");
   const visibleDevices = audioDevices.filter(d => !hiddenAudioDevices.includes(d.name));
@@ -456,28 +510,17 @@ function renderAudioDevices() {
 
   list.querySelectorAll('.loading').forEach(el => el.remove());
 
-  const existingCards = new Map();
-  list.querySelectorAll('.card.audio-device').forEach(card => {
-    existingCards.set(card.dataset.deviceId, card);
-  });
+  reconcileCards(list, '.card.audio-device', "deviceId", visibleDevices,
+    createAudioDeviceCard, updateAudioDeviceCard);
+}
 
-  const newIds = new Set(visibleDevices.map(d => d.id));
-
-  existingCards.forEach((card, id) => {
-    if (!newIds.has(id)) {
-      card.remove();
-    }
-  });
-
-  for (const device of visibleDevices) {
-    let card = existingCards.get(device.id);
-
-    if (card) {
-      updateAudioDeviceCard(card, device);
-    } else {
-      card = createAudioDeviceCard(device);
-      list.appendChild(card);
-    }
+// 确保"(默认)"角标存在（幂等，已存在则跳过）
+function ensureDefaultBadge(nameEl) {
+  if (!nameEl.querySelector('.default-badge')) {
+    const badge = document.createElement("span");
+    badge.className = "default-badge";
+    badge.textContent = "(默认)";
+    nameEl.appendChild(badge);
   }
 }
 
@@ -492,12 +535,7 @@ function createAudioDeviceCard(device) {
   const nameEl = document.createElement("div");
   nameEl.className = "card-title audio-device-name" + (device.is_default ? " default" : "");
   nameEl.textContent = deviceDisplayName(device.name);
-  if (device.is_default) {
-    const badge = document.createElement("span");
-    badge.className = "default-badge";
-    badge.textContent = "(默认)";
-    nameEl.appendChild(badge);
-  }
+  if (device.is_default) ensureDefaultBadge(nameEl);
   nameEl.addEventListener("click", async (e) => {
     e.stopPropagation();
     if (nameEl.classList.contains("default")) return;
@@ -505,12 +543,7 @@ function createAudioDeviceCard(device) {
     if (!invoke) return;
     try {
       nameEl.classList.add("default");
-      if (!nameEl.querySelector('.default-badge')) {
-        const badge = document.createElement("span");
-        badge.className = "default-badge";
-        badge.textContent = "(默认)";
-        nameEl.appendChild(badge);
-      }
+      ensureDefaultBadge(nameEl);
       await invoke("set_default_device", { deviceId: device.id });
       await new Promise(r => setTimeout(r, 500));
       await loadAudioDevices();
@@ -612,12 +645,7 @@ function updateAudioDeviceCard(card, device) {
     }
     if (device.is_default) {
       nameEl.classList.add("default");
-      if (!nameEl.querySelector('.default-badge')) {
-        const badge = document.createElement("span");
-        badge.className = "default-badge";
-        badge.textContent = "(默认)";
-        nameEl.appendChild(badge);
-      }
+      ensureDefaultBadge(nameEl);
     } else {
       nameEl.classList.remove("default");
       const badge = nameEl.querySelector('.default-badge');
@@ -660,29 +688,8 @@ function renderAudioSessions() {
 
   list.querySelectorAll('.loading').forEach(el => el.remove());
 
-  const existingCards = new Map();
-  list.querySelectorAll('.card.session').forEach(card => {
-    existingCards.set(card.dataset.sessionId, card);
-  });
-
-  const newIds = new Set(audioSessions.map(s => s.id));
-
-  existingCards.forEach((card, id) => {
-    if (!newIds.has(id)) {
-      card.remove();
-    }
-  });
-
-  for (const session of audioSessions) {
-    let card = existingCards.get(session.id);
-
-    if (card) {
-      updateAudioSessionCard(card, session);
-    } else {
-      card = createAudioSessionCard(session);
-      list.appendChild(card);
-    }
-  }
+  reconcileCards(list, '.card.session', "sessionId", audioSessions,
+    createAudioSessionCard, updateAudioSessionCard);
 }
 
 function createAudioSessionCard(session) {
