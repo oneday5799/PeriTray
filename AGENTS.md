@@ -2,7 +2,72 @@
 
 ## Commit 规范
 
-- 标题精简（一句话概括，不带过细细节），具体的改动说明放到 commit body 中。
+### 标题格式
+
+```
+<type>(<scope>): <中文一句话概括>
+```
+
+- **type**（九选一，与仓库既有用法一致）：
+  - `feat` 新功能　`fix` 缺陷修复　`refactor` 重构（无行为变化）
+  - `perf` 性能优化　`style` 界面样式调整　`docs` 文档
+  - `ci` 构建/发布流程　`chore` 杂项（依赖/工具链/版本号等）　`revert` 回退
+- **scope** 可选，标注影响域：`frontend` / `core` / `popup` / `tools` / `release` 等；
+  影响面广或跨域时省略
+- 概括用中文，一行说清"做了什么"；过细的改动说明放 body，不放标题
+
+### Body
+
+- 写清「为什么改 + 怎么改的 + 影响边界」；有根因的必须写根因
+- **commit body 是 Release Notes 的信息源，宁详勿略**
+- 无行为变化的重构需显式声明「纯等价重构 / 行为零变化」；有回归风险的列出回归点
+
+### 其他
+
+- 发版的版本号 bump 单独成提交：`chore(release): vX.Y.Z`
+- 涉及 `src-tauri/dist/` 的提交会被 pre-commit 钩子自动校验（见下节）
+
+## Release Notes 风格规范（每次发版必循）
+
+面向普通用户写作：只写用户可感知的结果，不写实现机制。
+
+### 分节（按实际内容取用）
+
+```markdown
+## ✨ 新功能
+## 🐛 问题修复
+## 🧹 内部优化        ← 重构/清理/性能等一切用户无感知的变化归此节
+```
+
+### 条目写法
+
+- 一条一句话，动词开头直给结果：「修复…的问题」「新增…」「不再…」
+- **禁止实现术语**：API 名、函数名、commit 号、「架构/波段/接口层」类词汇一律不出现；
+  必要的产品名词保留（空间音效、2.4G、快捷键等）
+- 关键限定必须保留在条目内：实验性功能、默认关闭、需重启生效等
+- 性能类用户可感知的（如"内存占用降低"）可入 🧹 或单列 ⚡ 节
+
+### 结构约定
+
+- 条目末尾以 `**完整变更列表**：<compare 链接>` 收尾
+- beta 测试版注明承接关系（如「包含自上一测试版以来的全部改进」）
+- 纯晋级发布（tag 与前一 tag 无代码差异）写简短宣告 + 主要能力回顾
+- 首个版本无 compare 链接，写功能总览
+- 信息源取自本版全部 commits 的 body
+
+### 发布流程
+
+1. 版本号同步五处：tauri.conf.json、Cargo.toml `[package]`、package.json、
+   Cargo.lock（`cargo check` 自动刷新）、settings.html 占位文案——
+   单独 `chore(release)` 提交并 push
+2. 创建发布：
+   ```bash
+   gh release create v<ver> --target <完整SHA> --title "PeriphMonitor v<ver>" \
+     --notes-file <notes文件> --latest
+   ```
+   （--target 必须传完整 SHA，短 SHA 会 422）；CI 构建后自动向该 Release 追加安装包产物
+3. CI 使用 softprops/action-gh-release@v3 + generate_release_notes，
+   对已存在的 Release 是更新追加而非报错，手工先建 Release 不冲突
 
 ## 前端完整性守护（强制）
 
