@@ -570,6 +570,7 @@ async function init() {
     initMuteLockSettings();
     initFineAdjustSettings();
     initForceMuteSettings();
+    initSpatialSoundSettings();
     initSimplifyNamesSettings();
     initShutdownVolumeSettings();
     initShortcutSettings();

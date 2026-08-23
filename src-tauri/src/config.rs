@@ -77,6 +77,8 @@ pub struct Config {
     pub volume_fine_adjust: bool,
     #[serde(default)]
     pub force_mute_devices: Vec<String>,
+    #[serde(default)]
+    pub enable_spatial_sound: bool,
     #[serde(default = "default_true")]
     pub check_updates: bool,
     #[serde(default)]
@@ -134,6 +136,7 @@ impl Default for Config {
             mute_lock: false,
             volume_fine_adjust: false,
             force_mute_devices: vec![],
+            enable_spatial_sound: false,
             check_updates: true,
             include_prerelease: false,
             simplify_device_names: true,

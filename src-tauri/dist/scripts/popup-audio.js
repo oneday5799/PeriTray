@@ -12,6 +12,7 @@ let muteLockEnabled = false;
 let fineAdjustEnabled = false;
 let simplifyDeviceNames = true;
 let forceMuteDevices = [];
+let spatialSoundEnabled = false;
 const forceMuteHold = {};
 const forceMutePrevVolume = {};
 const buttonMutedDevices = new Set();
@@ -86,6 +87,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
       const cfg = await getInvoke()("get_config");
       muteLockEnabled = !!cfg.mute_lock;
       fineAdjustEnabled = !!cfg.volume_fine_adjust;
+      spatialSoundEnabled = !!cfg.enable_spatial_sound;
       simplifyDeviceNames = cfg.simplify_device_names !== false;
       forceMuteDevices = cfg.force_mute_devices || [];
       for (const d of audioDevices) {
@@ -287,20 +289,22 @@ async function showAudioContextMenu(x, y, device) {
   });
   menu.appendChild(shortcutItem);
 
-  // 空间音效：查询当前格式后追加子菜单；接口不可用时降级为系统设置入口
-  const spatialState = await invoke("get_spatial_sound", { deviceId: device.id }).catch(() => null);
-  if (token !== audioMenuToken) return;
-  if (spatialState && Array.isArray(spatialState.supported) && spatialState.supported.length > 0) {
-    buildSpatialSoundSubmenu(menu, device, spatialState);
-  } else {
-    const fallbackItem = document.createElement("div");
-    fallbackItem.className = "context-menu-item";
-    fallbackItem.textContent = "空间音效（系统设置）";
-    fallbackItem.addEventListener("click", () => {
-      hideAllContextMenus();
-      invoke("open_url", { url: "ms-settings:sound" }).catch(() => {});
-    });
-    menu.appendChild(fallbackItem);
+  // 空间音效（实验性，设置页开关控制）：查询当前格式后追加子菜单；接口不可用时降级为系统设置入口
+  if (spatialSoundEnabled) {
+    const spatialState = await invoke("get_spatial_sound", { deviceId: device.id }).catch(() => null);
+    if (token !== audioMenuToken) return;
+    if (spatialState && Array.isArray(spatialState.supported) && spatialState.supported.length > 0) {
+      buildSpatialSoundSubmenu(menu, device, spatialState);
+    } else {
+      const fallbackItem = document.createElement("div");
+      fallbackItem.className = "context-menu-item";
+      fallbackItem.textContent = "空间音效（系统设置）";
+      fallbackItem.addEventListener("click", () => {
+        hideAllContextMenus();
+        invoke("open_url", { url: "ms-settings:sound" }).catch(() => {});
+      });
+      menu.appendChild(fallbackItem);
+    }
   }
 
   document.body.appendChild(menu);
@@ -419,6 +423,7 @@ async function loadAudioDevices() {
     const [devices, cfg] = await Promise.all([invoke("get_audio_devices"), invoke("get_config")]);
     muteLockEnabled = !!cfg.mute_lock;
     fineAdjustEnabled = !!cfg.volume_fine_adjust;
+    spatialSoundEnabled = !!cfg.enable_spatial_sound;
     simplifyDeviceNames = cfg.simplify_device_names !== false;
     forceMuteDevices = cfg.force_mute_devices || [];
     audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && buttonMutedDevices.has(d.id) }));
