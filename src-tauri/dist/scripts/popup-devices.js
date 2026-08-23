@@ -293,15 +293,6 @@ function showContextMenu(x, y, dev) {
 
   const currentGroup = getDeviceGroup(dev);
 
-  const groupItem = document.createElement("div");
-  groupItem.className = "context-menu-item context-menu-subitem";
-  groupItem.innerHTML = "<span>更改分组</span>" +
-    '<svg class="context-menu-chevron" width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
-  const submenu = document.createElement("div");
-  submenu.className = "context-menu context-submenu";
-  submenu.style.display = "none";
-
   function applyGroup(newGroup) {
     hideAllContextMenus();
     const invoke = getInvoke();
@@ -315,97 +306,23 @@ function showContextMenu(x, y, dev) {
       .catch((e) => showToast(e));
   }
 
-  for (const cat of CATEGORIES) {
-    const item = document.createElement("div");
-    const isCurrent = cat.key === currentGroup;
-    item.className = "context-menu-item" + (isCurrent ? " selected" : "");
-
-    const leading = document.createElement("span");
-    leading.className = "context-menu-leading";
-    if (isCurrent) {
-      const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      check.setAttribute("class", "context-menu-check");
-      check.setAttribute("width", "12");
-      check.setAttribute("height", "12");
-      check.setAttribute("viewBox", "0 0 12 12");
-      check.setAttribute("fill", "none");
-      check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-      leading.appendChild(check);
-    }
-    item.appendChild(leading);
-
-    const label = document.createElement("span");
-    label.textContent = cat.label;
-    item.appendChild(label);
-    item.dataset.group = cat.key;
-    item.addEventListener("click", (e) => {
-      e.stopPropagation();
-      applyGroup(cat.key);
-    });
-    submenu.appendChild(item);
-  }
-
-  function positionSubmenu() {
-    const sw = submenu.offsetWidth;
-    const sh = submenu.offsetHeight;
+  // 定位策略：沿用本页原实现——锚定父菜单 offset，与 common 缺省的视口矩形策略不同，勿混用
+  function positionGroupSubmenu(submenuEl, groupItemEl) {
+    const sw = submenuEl.offsetWidth;
+    const sh = submenuEl.offsetHeight;
     let left = menu.offsetLeft + menu.offsetWidth - 7;
-    let top = menu.offsetTop + groupItem.offsetTop;
+    let top = menu.offsetTop + groupItemEl.offsetTop;
     if (left + sw > window.innerWidth) left = menu.offsetLeft - sw + 7;
     if (top + sh > window.innerHeight) top = Math.max(0, window.innerHeight - sh - 4);
-    submenu.style.left = left + "px";
-    submenu.style.top = top + "px";
+    submenuEl.style.left = left + "px";
+    submenuEl.style.top = top + "px";
   }
 
-  let closeTimer = null;
-  let openSubmenuTimer = null;
-  function openSubmenu() {
-    clearTimeout(openSubmenuTimer);
-    clearTimeout(closeTimer);
-    submenu.style.display = "block";
-    groupItem.classList.add("open");
-    positionSubmenu();
+  const shell = createSubmenuShell(menu, "更改分组", positionGroupSubmenu);
+  for (const cat of CATEGORIES) {
+    shell.addItem(cat.label, cat.key === currentGroup, () => applyGroup(cat.key));
   }
-  function closeSubmenu() {
-    clearTimeout(openSubmenuTimer);
-    clearTimeout(closeTimer);
-    submenu.style.display = "none";
-    groupItem.classList.remove("open");
-  }
-  function queueCloseSubmenu() {
-    clearTimeout(openSubmenuTimer);
-    clearTimeout(closeTimer);
-    closeTimer = setTimeout(closeSubmenu, 300);
-  }
-  function queueOpenSubmenu() {
-    clearTimeout(openSubmenuTimer);
-    clearTimeout(closeTimer);
-    openSubmenuTimer = setTimeout(openSubmenu, 500);
-  }
-
-  groupItem.addEventListener("pointerenter", queueOpenSubmenu);
-  groupItem.addEventListener("pointerleave", () => {
-    clearTimeout(openSubmenuTimer);
-    queueCloseSubmenu();
-  });
-  groupItem.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (submenu.style.display === "none") openSubmenu();
-    else closeSubmenu();
-  });
-  submenu.addEventListener("pointerenter", () => {
-    clearTimeout(openSubmenuTimer);
-    clearTimeout(closeTimer);
-  });
-  submenu.addEventListener("pointerleave", queueCloseSubmenu);
-
-  menu.addEventListener("pointerover", (e) => {
-    if (!groupItem.contains(e.target) && !submenu.contains(e.target) && submenu.style.display !== "none") {
-      closeSubmenu();
-    }
-  });
-
-  menu.appendChild(groupItem);
-  menu.appendChild(submenu);
+  shell.finish();
 
   const hideItem = document.createElement("div");
   hideItem.className = "context-menu-item";

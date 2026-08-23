@@ -201,6 +201,119 @@ window.hideAllContextMenus = function () {
 
 document.addEventListener("click", hideAllContextMenus);
 
+// 子菜单外壳：悬停展开的二级菜单（分组/输出设备/会话路由/空间音效共用）。
+// positionFn(submenu, groupItem, menu) 可注入自定义定位策略；缺省为锚定 groupItem 视口矩形。
+window.createSubmenuShell = function (menu, label, positionFn) {
+  const groupItem = document.createElement("div");
+  groupItem.className = "context-menu-item context-menu-subitem";
+  groupItem.innerHTML = "<span>" + label + "</span>" +
+    '<svg class="context-menu-chevron" width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  const submenu = document.createElement("div");
+  submenu.className = "context-menu context-submenu";
+  submenu.style.display = "none";
+
+  function addItem(text, checked, onClick) {
+    const item = document.createElement("div");
+    item.className = "context-menu-item" + (checked ? " selected" : "");
+
+    const leading = document.createElement("span");
+    leading.className = "context-menu-leading";
+    if (checked) {
+      const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      check.setAttribute("class", "context-menu-check");
+      check.setAttribute("width", "12");
+      check.setAttribute("height", "12");
+      check.setAttribute("viewBox", "0 0 12 12");
+      check.setAttribute("fill", "none");
+      check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+      leading.appendChild(check);
+    }
+    item.appendChild(leading);
+
+    const textEl = document.createElement("span");
+    textEl.textContent = text;
+    item.appendChild(textEl);
+
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideAllContextMenus();
+      onClick();
+    });
+    submenu.appendChild(item);
+  }
+
+  function positionSubmenu() {
+    if (positionFn) { positionFn(submenu, groupItem, menu); return; }
+    const sw = submenu.offsetWidth;
+    const sh = submenu.offsetHeight;
+    const rect = groupItem.getBoundingClientRect();
+    let left = rect.right - 7;
+    if (left + sw > window.innerWidth) left = rect.left - sw + 7;
+    if (left < 4) left = 4;
+    let top = rect.top;
+    if (top + sh > window.innerHeight) top = rect.top - sh + 7;
+    submenu.style.left = left + "px";
+    submenu.style.top = top + "px";
+  }
+
+  let closeTimer = null;
+  let openSubmenuTimer = null;
+  function openSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    submenu.style.display = "block";
+    groupItem.classList.add("open");
+    positionSubmenu();
+  }
+  function closeSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    submenu.style.display = "none";
+    groupItem.classList.remove("open");
+  }
+  function queueCloseSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(closeSubmenu, 300);
+  }
+  function queueOpenSubmenu() {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+    openSubmenuTimer = setTimeout(openSubmenu, 500);
+  }
+
+  groupItem.addEventListener("pointerenter", queueOpenSubmenu);
+  groupItem.addEventListener("pointerleave", () => {
+    clearTimeout(openSubmenuTimer);
+    queueCloseSubmenu();
+  });
+  groupItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (submenu.style.display === "none") openSubmenu();
+    else closeSubmenu();
+  });
+  submenu.addEventListener("pointerenter", () => {
+    clearTimeout(openSubmenuTimer);
+    clearTimeout(closeTimer);
+  });
+  submenu.addEventListener("pointerleave", queueCloseSubmenu);
+
+  menu.addEventListener("pointerover", (e) => {
+    if (!groupItem.contains(e.target) && !submenu.contains(e.target) && submenu.style.display !== "none") {
+      closeSubmenu();
+    }
+  });
+
+  function finish() {
+    menu.appendChild(groupItem);
+    menu.appendChild(submenu);
+  }
+
+  return { addItem, finish };
+}
+
+
 // ── 重命名对话框 ─────────────────────────────────────────
 
 window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpdate, onRender }) {
