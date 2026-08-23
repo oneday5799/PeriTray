@@ -145,6 +145,8 @@ fn main() {
             commands::adjust_volume_down,
             commands::toggle_mute,
             commands::set_default_device,
+            commands::get_spatial_sound,
+            commands::set_spatial_sound,
             commands::open_log_dir,
             commands::check_for_update,
             commands::get_update_status,

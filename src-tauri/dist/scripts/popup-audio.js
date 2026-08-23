@@ -240,10 +240,13 @@ function createSliderTooltip(slider) {
   return tooltip;
 }
 
-function showAudioContextMenu(x, y, device) {
+let audioMenuToken = 0;
+
+async function showAudioContextMenu(x, y, device) {
   hideAllContextMenus();
   const invoke = getInvoke();
   if (!invoke) return;
+  const token = ++audioMenuToken;
 
   const menu = document.createElement("div");
   menu.className = "context-menu";
@@ -283,6 +286,22 @@ function showAudioContextMenu(x, y, device) {
     showDeviceShortcutDialog(device);
   });
   menu.appendChild(shortcutItem);
+
+  // 空间音效：查询当前格式后追加子菜单；接口不可用时降级为系统设置入口
+  const spatialState = await invoke("get_spatial_sound", { deviceId: device.id }).catch(() => null);
+  if (token !== audioMenuToken) return;
+  if (spatialState && Array.isArray(spatialState.supported) && spatialState.supported.length > 0) {
+    buildSpatialSoundSubmenu(menu, device, spatialState);
+  } else {
+    const fallbackItem = document.createElement("div");
+    fallbackItem.className = "context-menu-item";
+    fallbackItem.textContent = "空间音效（系统设置）";
+    fallbackItem.addEventListener("click", () => {
+      hideAllContextMenus();
+      invoke("open_url", { url: "ms-settings:sound" }).catch(() => {});
+    });
+    menu.appendChild(fallbackItem);
+  }
 
   document.body.appendChild(menu);
   clampMenuPosition(menu, x, y);
@@ -795,7 +814,7 @@ async function showSessionContextMenu(x, y, session) {
   activeAudioMenu = menu;
 }
 
-function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
+function createSubmenuShell(menu, label) {
   const groupItem = document.createElement("div");
   groupItem.className = "context-menu-item context-menu-subitem";
   groupItem.innerHTML = "<span>" + label + "</span>" +
@@ -804,9 +823,6 @@ function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
   const submenu = document.createElement("div");
   submenu.className = "context-menu context-submenu";
   submenu.style.display = "none";
-
-  const defaultId = (devices.find(d => d.is_default) || {}).id;
-  const isDefault = !currentId || currentId === defaultId || !devices.some(d => d.id === currentId);
 
   function addItem(text, checked, onClick) {
     const item = document.createElement("div");
@@ -836,13 +852,6 @@ function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
       onClick();
     });
     submenu.appendChild(item);
-  }
-
-  addItem("系统默认", isDefault, () => onSelect(""));
-
-  for (const dev of devices) {
-    const displayName = deviceDisplayName(dev.name);
-    addItem(displayName, !isDefault && dev.id === currentId, () => onSelect(dev.id));
   }
 
   function positionSubmenu() {
@@ -906,8 +915,46 @@ function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
     }
   });
 
-  menu.appendChild(groupItem);
-  menu.appendChild(submenu);
+  function finish() {
+    menu.appendChild(groupItem);
+    menu.appendChild(submenu);
+  }
+
+  return { addItem, finish };
+}
+
+function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
+  const shell = createSubmenuShell(menu, label);
+
+  const defaultId = (devices.find(d => d.is_default) || {}).id;
+  const isDefault = !currentId || currentId === defaultId || !devices.some(d => d.id === currentId);
+
+  shell.addItem("系统默认", isDefault, () => onSelect(""));
+  for (const dev of devices) {
+    shell.addItem(deviceDisplayName(dev.name), !isDefault && dev.id === currentId, () => onSelect(dev.id));
+  }
+
+  shell.finish();
+}
+
+function buildSpatialSoundSubmenu(menu, device, state) {
+  const shell = createSubmenuShell(menu, "空间音效");
+
+  const entries = [{ guid: "", name: "关" }].concat(state.supported);
+  for (const format of entries) {
+    const checked = (state.current || "") === format.guid;
+    shell.addItem(format.name, checked, async () => {
+      const invoke = getInvoke();
+      if (!invoke) return;
+      try {
+        await invoke("set_spatial_sound", { deviceId: device.id, formatGuid: format.guid || null });
+      } catch (e) {
+        showToast("设置空间音效失败：" + e, null, true);
+      }
+    });
+  }
+
+  shell.finish();
 }
 
 async function setSessionDevice(session, direction, deviceId) {

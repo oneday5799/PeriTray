@@ -318,6 +318,16 @@ pub fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<()
     Ok(())
 }
 
+#[tauri::command(async)]
+pub async fn get_spatial_sound(device_id: String) -> Result<crate::audio::SpatialSoundState, String> {
+    run_blocking(move || crate::audio::get_spatial_sound(&device_id)).await?
+}
+
+#[tauri::command(async)]
+pub async fn set_spatial_sound(device_id: String, format_guid: Option<String>) -> Result<(), String> {
+    run_blocking(move || crate::audio::set_spatial_sound(&device_id, format_guid.as_deref())).await?
+}
+
 #[tauri::command]
 pub fn open_log_dir() -> Result<(), String> {
     let dir = crate::process::exe_dir();
