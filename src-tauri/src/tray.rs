@@ -43,7 +43,7 @@ pub fn build_tooltip_text() -> String {
         for tray_name in &c.tray_devices {
             if let Some(dev) = devices.iter().find(|d| &d.name == tray_name) {
                 let display_name = c.device_names.get(&dev.name).unwrap_or(&dev.name);
-                let dot = if dev.status == "已连接" { "🟢" } else { "⚪" };
+                let dot = if dev.status == crate::wmi_query::BT_STATUS_CONNECTED { "🟢" } else { "⚪" };
                 match dev.battery {
                     Some(battery) => lines.push(format!("{} {} - {}%", dot, display_name, battery)),
                     None => lines.push(format!("{} {}", dot, display_name)),

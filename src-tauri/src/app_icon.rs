@@ -53,7 +53,7 @@ fn resolve_process_name(pid: u32) -> Option<String> {
         let exe_path = String::from_utf16_lossy(&path_buf[..path_size as usize]);
 
         // 读取文件版本信息中的 FileDescription（如 "Google Chrome"）
-        let wide_path: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide_path: Vec<u16> = crate::process::to_wide(&exe_path);
         let size = GetFileVersionInfoSizeW(windows::core::PCWSTR(wide_path.as_ptr()), None);
         if size > 0 {
             let mut data = vec![0u8; size as usize];
@@ -94,7 +94,7 @@ unsafe fn query_file_description(data: &[u8]) -> Option<String> {
     let lang = (buf as *const u16).read();
     let codepage = (buf as *const u16).add(1).read();
     let key = format!("\\StringFileInfo\\{:04X}{:04X}\\FileDescription", lang, codepage);
-    let key_wide: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+    let key_wide: Vec<u16> = crate::process::to_wide(&key);
     let mut buf2: *mut core::ffi::c_void = std::ptr::null_mut();
     let mut len2: u32 = 0;
     let ok2 = VerQueryValueW(
@@ -153,7 +153,7 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
 fn get_icon_from_path(path: &str) -> Option<Arc<str>> {
     unsafe {
         let mut path_buf = [0u16; 260];
-        let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+        let path_wide: Vec<u16> = crate::process::to_wide(path);
         let copy_len = path_wide.len().min(259);
         path_buf[..copy_len].copy_from_slice(&path_wide[..copy_len]);
 

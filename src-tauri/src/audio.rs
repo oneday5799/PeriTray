@@ -34,7 +34,7 @@ pub fn set_default_device(device_id: &str) -> Result<()> {
     crate::process::append_log(&format!("[audio] set_default_device: {}", device_id));
     unsafe {
         ensure_com_initialized();
-        let wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide: Vec<u16> = crate::process::to_wide(device_id);
         set_default_device_raw(wide.as_ptr())?;
         Ok(())
     }
@@ -92,16 +92,17 @@ unsafe fn set_default_device_raw(wide_ptr: *const u16) -> Result<()> {
     Ok(())
 }
 
-pub fn enumerate_output_devices() -> Result<Vec<AudioDevice>> {
+/// 枚举指定方向的音频设备（output=eRender / input=eCapture），并标记系统默认
+fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
     unsafe {
         with_enumerator(|enumerator| {
             let default_id = enumerator
-                .GetDefaultAudioEndpoint(eRender, eMultimedia)
+                .GetDefaultAudioEndpoint(flow, eMultimedia)
                 .ok()
                 .and_then(|d| d.GetId().ok())
                 .map(|id| id.to_string().unwrap_or_default())
                 .unwrap_or_default();
-            let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+            let collection = enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)?;
             let count = collection.GetCount()?;
             let mut devices = Vec::new();
             for i in 0..count {
@@ -119,6 +120,13 @@ pub fn enumerate_output_devices() -> Result<Vec<AudioDevice>> {
     }
 }
 
+pub fn enumerate_output_devices() -> Result<Vec<AudioDevice>> {
+    enumerate_devices(eRender)
+}
+
+pub fn enumerate_input_devices() -> Result<Vec<AudioDevice>> {
+    enumerate_devices(eCapture)
+}
 unsafe fn get_device_volume_state(device: &IMMDevice) -> Result<(f32, bool)> {
     let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
     let mute = endpoint.GetMute()?;
@@ -339,33 +347,6 @@ pub fn set_session_mute(session_id: &str, muted: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn enumerate_input_devices() -> Result<Vec<AudioDevice>> {
-    unsafe {
-        with_enumerator(|enumerator| {
-            let default_id = enumerator
-                .GetDefaultAudioEndpoint(eCapture, eMultimedia)
-                .ok()
-                .and_then(|d| d.GetId().ok())
-                .map(|id| id.to_string().unwrap_or_default())
-                .unwrap_or_default();
-            let collection = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)?;
-            let count = collection.GetCount()?;
-            let mut devices = Vec::new();
-            for i in 0..count {
-                if let Ok(device) = collection.Item(i) {
-                    if let Ok(id) = device.GetId() {
-                        let id_str = id.to_string()?;
-                        let name = get_device_name(&device).unwrap_or_else(|_| "Unknown Device".to_string());
-                        let (volume, is_muted) = get_device_volume_state(&device).unwrap_or((0.0, false));
-                        devices.push(AudioDevice { id: id_str.clone(), name, volume, is_muted, is_default: id_str == default_id });
-                    }
-                }
-            }
-            Ok(devices)
-        })?
-    }
-}
-
 #[link(name = "kernel32")]
 extern "system" {
     fn LoadLibraryA(name: *const u8) -> *mut c_void;
@@ -487,12 +468,11 @@ pub fn set_session_device(pid: u32, direction: &str, device_id: &str) -> Result<
         let raw = hstring.as_ref().map_or(ptr::null(), |h| {
             std::mem::transmute_copy::<HSTRING, *const c_void>(h)
         });
-        let mut last_hr = 0;
         for role in 0..=2 {
-            last_hr = set_fn(factory, pid, flow.0, role, raw);
-            if last_hr < 0 && !policy_not_found(last_hr) {
+            let hr = set_fn(factory, pid, flow.0, role, raw);
+            if hr < 0 && !policy_not_found(hr) {
                 release_com_pointer(factory);
-                return Err(Error::from_hresult(HRESULT(last_hr)));
+                return Err(Error::from_hresult(HRESULT(hr)));
             }
         }
         release_com_pointer(factory);

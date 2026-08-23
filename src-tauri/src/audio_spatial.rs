@@ -40,7 +40,7 @@ const SPATIAL_SOUND_FORMATS: &[(&str, &str, Option<&[&str]>)] = &[
 const SPATIAL_STATE_LEN: usize = 0x48;
 
 pub fn get_spatial_sound(device_id: &str) -> std::result::Result<SpatialSoundState, String> {
-    let wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = crate::process::to_wide(device_id);
     unsafe {
         // 仅接口本身缺失（系统不支持）才返回 Err 让前端降级为跳转入口；
         // 设备级读取失败（如激活中的格式被卸载）降级为无勾选状态，保留切换其他格式的自救能力
@@ -104,7 +104,7 @@ pub fn set_spatial_sound(device_id: &str, format_guid: Option<&str>) -> std::res
         _ => "自定义格式",
     };
     crate::process::append_log(&format!("[audio] set_spatial_sound: {} -> {}", device_id, target_name));
-    let wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = crate::process::to_wide(device_id);
     unsafe {
         let client = PolicySpatialClient::acquire()?;
         let mut new_state = [0u8; SPATIAL_STATE_LEN];

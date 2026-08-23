@@ -11,6 +11,9 @@ use crate::device_data;
 use crate::bluetooth::find_paired_bluetooth_devices;
 use crate::dedup::{core_name, try_insert};
 
+/// 蓝牙设备状态字符串：WMI 查询构造与托盘图标判断共用，避免字面量散落
+pub const BT_STATUS_CONNECTED: &str = "已连接";
+pub const BT_STATUS_PAIRED: &str = "已配对";
 static CACHED_REGEX: OnceLock<Mutex<Option<(String, Arc<Regex>)>>> = OnceLock::new();
 
 fn get_cached_regex(pattern: &str) -> Option<Arc<Regex>> {
@@ -134,7 +137,7 @@ fn query_pnp_devices(
             Some(code) => code == 0,
             None => status_str == "OK",
         };
-        let s = if connected { "已连接" } else { "已配对" };
+        let s = if connected { BT_STATUS_CONNECTED } else { BT_STATUS_PAIRED };
         if n.is_empty() { continue; }
 
         if pnp.eq_ignore_ascii_case("Bluetooth") && is_bt_service(&u) {
@@ -177,7 +180,7 @@ fn query_bt_devices(
             Some(dt) => dt,
             None => continue,
         };
-        let s = if connected { "已连接" } else { "已配对" };
+        let s = if connected { BT_STATUS_CONNECTED } else { BT_STATUS_PAIRED };
         let cn = core_name(&name);
         bt_names.insert(cn.clone());
         if let Some(existing) = all.iter_mut().find(|d| core_name(&d.name) == cn && d.is_bluetooth) {
