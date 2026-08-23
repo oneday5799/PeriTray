@@ -1,6 +1,7 @@
 /* settings-shortcut.js — 设置页·快捷键 tab：基础快捷键录制绑定/设备快捷键共享切换/设备快捷键列表
  * 加载序 3/7 · 提供：initShortcutSettings() / initDeviceShortcutSettings()
- * 依赖：common.js / settings.js(config/bindToggle/saveConfig/createToggle/showToast) */
+ * 依赖：common.js(invoke/bindShortcutRecorder/attachTooltip) /
+ *       settings.js(config/bindToggle/saveConfig/showToast) */
 function initShortcutSettings() {
   bindToggle("toggle-device-shortcut-cycle", {
     get: () => config.enable_device_shortcut_cycle,

@@ -1,7 +1,8 @@
 /* popup-devices.js — 主窗口·设备信息 tab：设备列表渲染/右键菜单/连接与托盘项
  * 加载序 3/4（common → popup-audio → 本文件 → popup.js）
  * 提供：loadDevices()（供 popup.js 的刷新按钮/focus 刷新调用）
- * 依赖：common.js（getInvoke/attachTooltip/registerContextMenu/clampMenuPosition/hideAllContextMenus）
+ * 依赖：common.js（getInvoke/CATEGORIES/getDisplayName/showToast/registerContextMenu/
+ *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell）
  */
 let allDevices = [];
 let hiddenDevices = [];

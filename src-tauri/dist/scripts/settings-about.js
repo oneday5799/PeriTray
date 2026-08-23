@@ -1,7 +1,7 @@
 /* settings-about.js — 设置页·关于 tab：版本按钮触发更新检测/infobar 与链接交互
  * 加载序 6/7 · 提供：initAboutTab()
- * 依赖：common.js(showToast/openWithSystem 类工具) /
- *       settings.js(runUpdateCheck/copyToClipboard/hideUpdateErrorFlyout/showUpdateErrorFlyout/config) */
+ * 依赖：common.js(invoke) /
+ *       settings.js(runUpdateCheck/hideUpdateErrorFlyout/renderUpdateInfobar) */
 function initAboutTab() {
   const card = document.getElementById("about-info-card");
   const items = document.getElementById("about-info-items");

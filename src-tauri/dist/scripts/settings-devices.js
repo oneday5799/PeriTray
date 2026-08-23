@@ -1,7 +1,7 @@
 /* settings-devices.js — 设置页·设备信息 tab：分组设备列表渲染/过滤正则卡
  * 加载序 4/7 · 提供：loadDevicesAsync() / renderGroups() / initDeviceFilterTab()
- * 依赖：common.js(getInvoke/getDisplayName/CATEGORIES/simplifyDeviceName) /
- *       settings.js(config/createToggle/bindToggle/showToast) */
+ * 依赖：common.js(invoke/CATEGORIES) /
+ *       settings.js(config/createToggle/bindToggle/saveConfig) */
 
 let devices = [];
 let expandedGroups = new Set();

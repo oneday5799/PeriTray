@@ -1,7 +1,9 @@
 /* popup-audio.js — 主窗口·音量控制 tab：设备/会话音量滑块渲染与调节/mute 切换/
  *            滚轮微调与 tooltip/强制静音记账/volume-changed 监听
  * 加载序 2/4 · 提供：loadAudioDevices()/loadAudioSessions()/renderAudioDevices()/renderAudioSessions()
- * 依赖：common.js(getInvoke/throttle/attachSessionTooltip/showToast/applyThemeMode) */
+ * 依赖：common.js(getInvoke/throttle/attachSessionTooltip/showToast/createSubmenuShell/
+ *       formatDeviceName/registerContextMenu/clampMenuPosition/hideAllContextMenus/
+ *       showRenameDialog/createDialog/closeDialog/bindShortcutRecorder/attachTooltip) */
 let audioDevices = [];
 let audioSessions = [];
 let selectedDeviceId = null;

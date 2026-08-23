@@ -1,4 +1,13 @@
-// Shared constants and utilities for popup and settings pages
+/* common.js — 共享基础层（popup/settings 两页最先加载）：Tauri invoke/主题与材质应用/
+ *            右键菜单族（注册/钳位/关闭/子菜单外壳 createSubmenuShell/勾选图标 createCheckIcon）/
+ *            设备显示名解析（simplifyDeviceName/formatDeviceName/getDisplayName）/
+ *            对话框与 toast/快捷键录制器（码表为本文件内部实现细节，不对外）
+ * 加载序 1/N · 提供：window 全局 API —— CATEGORIES/initTheme/applyThemeMode/applyMaterialMode/
+ *             getInvoke/getDisplayName/simplifyDeviceName/formatDeviceName/attachTooltip/
+ *             attachSessionTooltip/showSessionTip/hideSessionTip/registerContextMenu/
+ *             clampMenuPosition/hideAllContextMenus/createSubmenuShell/createCheckIcon/
+ *             showRenameDialog/createDialog/closeDialog/showToast/bindShortcutRecorder
+ * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖 */
 const { invoke } = window.__TAURI__.core;
 
 function throttle(fn, delay) {
@@ -403,7 +412,8 @@ function updateSliderGradient(slider) {
 
 // ── 快捷键录制（共享工具） ────────────────────────────────
 
-window.shortcutCodeMap = {
+// 快捷键码表：本文件录制器内部实现细节，不挂载到 window（外部无消费者）
+const shortcutCodeMap = {
   "Space": { display: "Space", key: "Space" },
   "Backspace": { display: "Backspace", key: "Backspace" },
   "Delete": { display: "Delete", key: "Delete" },
@@ -460,15 +470,15 @@ window.shortcutCodeMap = {
   "Enter": { display: "Enter", key: "Enter" },
 };
 
-window.shortcutReverseCodeMap = {};
-for (const v of Object.values(window.shortcutCodeMap)) {
-  window.shortcutReverseCodeMap[v.key] = v.display;
+const shortcutReverseCodeMap = {};
+for (const v of Object.values(shortcutCodeMap)) {
+  shortcutReverseCodeMap[v.key] = v.display;
 }
 
-window.shortcutJoinSaved = function (saved) {
+function shortcutJoinSaved(saved) {
   if (!saved) return "";
   return saved.split("+").map(p => {
-    if (window.shortcutReverseCodeMap[p]) return window.shortcutReverseCodeMap[p];
+    if (shortcutReverseCodeMap[p]) return shortcutReverseCodeMap[p];
     if (p.length === 4 && p.startsWith("Key")) return p[3];
     if (p.length === 6 && p.startsWith("Digit")) return p[5];
     return p;
@@ -512,7 +522,7 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
   function restoreSaved() {
     resetRecording();
     const savedKey = getSavedKey();
-    input.value = savedKey ? window.shortcutJoinSaved(savedKey).replace("Super", "Win") : "";
+    input.value = savedKey ? shortcutJoinSaved(savedKey).replace("Super", "Win") : "";
     if (clearBtn) clearBtn.style.display = savedKey ? "" : "none";
   }
 
@@ -558,8 +568,8 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
 
     if (code.startsWith("Numpad") && /\d/.test(code[6]) && code.length === 7) {
       keys.add({ display: "Num" + code[6], key: code });
-    } else if (window.shortcutCodeMap[code]) {
-      const entry = window.shortcutCodeMap[code];
+    } else if (shortcutCodeMap[code]) {
+      const entry = shortcutCodeMap[code];
       keys.add({ display: entry.display, key: entry.key });
     } else if (code.startsWith("F") && code.length >= 2 && code.length <= 3) {
       keys.add({ display: code, key: code });
@@ -596,7 +606,7 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
   function recordFromBackend(canonicalKey) {
     if (!recording) return;
     if (!canonicalKey) return;
-    const display = window.shortcutJoinSaved(canonicalKey);
+    const display = shortcutJoinSaved(canonicalKey);
     if (!display) return;
     recording = false;
     keys.clear();

@@ -1,8 +1,8 @@
 /* settings-general.js — 设置页·通用设置 tab：主题模式/窗口材质/默认打开页/硬件加速/
  *                        开机自启动/日志设置/更新开关（更新检测流程在 settings.js 横切共享）
  * 加载序 2/7 · 提供：initGeneralTab() / initLogSettings() / initUpdateSettings()
- * 依赖：common.js(initTheme/applyThemeMode/showToast) /
- *       settings.js(config/bindToggle/createToggle/initComboBox/saveConfig) */
+ * 依赖：common.js(applyThemeMode/showToast) /
+ *       settings.js(config/bindToggle/initComboBox/saveConfig) */
 function initGeneralTab() {
   bindToggle("toggle-autostart", {
     get: () => config.auto_start,
