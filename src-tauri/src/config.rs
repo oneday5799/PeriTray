@@ -201,7 +201,7 @@ pub fn init_config() {
             }
         }
     };
-    let mut guard = CONFIG.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = crate::state::lock_unpoisoned(CONFIG.get().unwrap());
     *guard = config;
     sync_log_cache(&guard);
 }
@@ -210,7 +210,7 @@ pub fn with_config<F, R>(f: F) -> R
 where
     F: FnOnce(&Config) -> R,
 {
-    let guard = CONFIG.get().expect("Config not initialized").lock().unwrap_or_else(|e| e.into_inner());
+    let guard = crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
     f(&guard)
 }
 
@@ -218,7 +218,7 @@ pub fn with_config_mut<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Config) -> R,
 {
-    let mut guard = CONFIG.get().expect("Config not initialized").lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
     let result = f(&mut guard);
     if let Ok(content) = toml::to_string_pretty(&*guard) {
         use std::io::Write;

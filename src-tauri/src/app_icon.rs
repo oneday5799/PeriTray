@@ -15,14 +15,14 @@ pub fn get_process_name_by_pid(pid: u32) -> Option<Arc<str>> {
         Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))
     });
     {
-        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = crate::state::lock_unpoisoned(cache);
         if let Some(name) = guard.get(&pid) {
             return Some(Arc::clone(name));
         }
     }
     let name: Option<Arc<str>> = resolve_process_name(pid).map(|s| Arc::from(s.as_str()));
     if let Some(name) = &name {
-        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = crate::state::lock_unpoisoned(cache);
         guard.put(pid, Arc::clone(name));
     }
     name
@@ -117,7 +117,7 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
         Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))
     });
     {
-        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = crate::state::lock_unpoisoned(cache);
         if let Some(icon) = guard.get(&pid) {
             return Some(Arc::clone(icon));
         }
@@ -144,7 +144,7 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
         }
     })();
     icon.as_ref()?;
-    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = crate::state::lock_unpoisoned(cache);
     guard.put(pid, Arc::clone(icon.as_ref().unwrap()));
     icon
 }

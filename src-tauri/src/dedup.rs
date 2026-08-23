@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use crate::device::{Device, DevType};
 
+/// 取设备名括号内核心名并剥离蓝牙协议后缀（Hands-Free/Stereo/LE/Audio 等），用于重名合并。
+/// 注意：与 tray::simplify_device_name 语义不同——本函数会剥后缀返回 String，两者勿互相替换。
 pub fn core_name(n: &str) -> String {
     let base = if let Some(i) = n.find(" (") {
         if let Some(j) = n.rfind(')') {

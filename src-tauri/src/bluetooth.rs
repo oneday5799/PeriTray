@@ -276,7 +276,7 @@ fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
 
 /// 执行蓝牙连接/断开操作
 pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
-    let _guard = BT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::state::lock_unpoisoned(&BT_LOCK);
 
     let header = format!("[bt] {} device='{}'", action.to_uppercase(), name);
     crate::process::append_log(&header);

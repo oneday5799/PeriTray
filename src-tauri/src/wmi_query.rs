@@ -18,7 +18,7 @@ static CACHED_REGEX: OnceLock<Mutex<Option<(String, Arc<Regex>)>>> = OnceLock::n
 
 fn get_cached_regex(pattern: &str) -> Option<Arc<Regex>> {
     let cache = CACHED_REGEX.get_or_init(|| Mutex::new(None));
-    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = crate::state::lock_unpoisoned(cache);
     if let Some((ref cached_pat, ref re)) = *guard {
         if cached_pat == pattern {
             return Some(Arc::clone(re));

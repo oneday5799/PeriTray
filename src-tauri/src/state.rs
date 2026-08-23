@@ -1,5 +1,5 @@
 use std::sync::atomic::AtomicBool;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tauri::menu::MenuItem;
 
 use crate::device::Device;
@@ -21,6 +21,12 @@ pub static SHORTCUT_RECORDING: AtomicBool = AtomicBool::new(false);
 
 /// 开机自启菜单项引用
 pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceLock::new();
+
+/// 容忍 Mutex 中毒的加锁：锁中毒时直接接管内部数据继续使用
+/// （本项目各静态量在 panic 后仅需"可用"而非"严格一致"，统一在此表达该语义）
+pub fn lock_unpoisoned<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// 设备缓存，用于托盘 tooltip 显示，避免重复 WMI 查询
 static DEVICES_CACHE: OnceLock<Mutex<Vec<Device>>> = OnceLock::new();

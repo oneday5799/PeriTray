@@ -1,3 +1,7 @@
+//! 进程级基础工具集（模块名沿用历史）：日志子系统（append_log/clean_old_logs）、
+//! 手写历法时间戳 chrono_str、exe 路径、Win32 互操作（to_wide/shell_open）与各类系统面板/文件打开器。
+//! 为全仓约三分之二模块提供公共依赖，新增跨模块基础工具优先落于此处。
+
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::process::Command;

@@ -36,7 +36,7 @@ fn refresh_devices_cache() -> bool {
 /// 根据缓存的设备信息构建 tooltip 文本
 pub fn build_tooltip_text() -> String {
     let cache = get_devices_cache();
-    let devices = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let devices = crate::state::lock_unpoisoned(cache);
 
     let mut lines = Vec::new();
     config::with_config(|c| {
@@ -88,15 +88,10 @@ fn start_device_watcher() {
     });
 }
 
-/// 读取系统深色模式（仅跟随系统主题，与应用内主题设置无关）
-fn system_dark_mode() -> bool {
-    crate::windows::system_dark_mode()
-}
-
 /// 根据默认打开页面与系统深色模式选择托盘图标
 fn pick_tray_icon() -> Image<'static> {
     let is_volume = config::with_config(|c| c.default_popup_tab == "volume");
-    let dark = system_dark_mode();
+    let dark = crate::windows::system_dark_mode();
     if is_volume {
         let bytes = if dark {
             include_bytes!("../icons/tray-volume-icon-dark.png").to_vec()
@@ -143,7 +138,7 @@ fn start_theme_watcher() {
                 return;
             }
 
-            let mut last = system_dark_mode();
+            let mut last = crate::windows::system_dark_mode();
             loop {
                 let status = RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1);
                 if status != 0 {
@@ -152,7 +147,7 @@ fn start_theme_watcher() {
                     continue;
                 }
                 WaitForSingleObject(event, INFINITE);
-                let current = system_dark_mode();
+                let current = crate::windows::system_dark_mode();
                 if current != last {
                     last = current;
                     std::thread::spawn(move || update_tray_icon());
@@ -311,7 +306,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 tauri::Position::Logical(p) => (p.x, p.y),
                             };
-                            *pos.lock().unwrap_or_else(|e| e.into_inner()) = (px, py);
+                            *crate::state::lock_unpoisoned(pos) = (px, py);
                         }
                         let tab = config::with_config(|c| c.default_popup_tab.clone());
                         popup::toggle(&app, &tab);
@@ -383,13 +378,14 @@ fn update_auto_text() {
 /// 根据默认打开页面与系统深色模式更新托盘图标
 fn update_tray_icon() {
     let icon = pick_tray_icon();
-    let guard = TRAY_ICON.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    let guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
     if let Some(ref tray) = *guard {
         let _ = tray.set_icon(Some(icon));
     }
 }
 
 /// 简化设备名称：仅保留括号内内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
+/// 注意：与 dedup::core_name 语义不同——本函数不剥协议后缀、返回 &str，两者勿互相替换。
 fn simplify_device_name(name: &str) -> &str {
     if let Some(open) = name.find('(') {
         if let Some(close) = name.rfind(')') {
@@ -434,7 +430,7 @@ fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry
 
 /// 更新音频设备切换子菜单（在设备列表变化时调用）
 pub fn update_audio_devices_menu() {
-    let tray_guard = TRAY_ICON.get().unwrap().lock().unwrap_or_else(|e| e.into_inner());
+    let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
     let Some(ref tray) = *tray_guard else { return };
     let app = tray.app_handle().clone();
 

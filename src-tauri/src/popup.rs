@@ -47,7 +47,7 @@ fn compute_position(app: &tauri::AppHandle) -> Placement {
         .map(|m| m.size().height as f64 / sf)
         .unwrap_or(1080.0);
     let tray = TRAY_POS.get()
-        .map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()));
+        .map(|m| *crate::state::lock_unpoisoned(m));
     let (tray_x, tray_y) = tray.unwrap_or((100.0, screen_h - 50.0));
     Placement {
         target_x: tray_x - POPUP_W / 2.0,
@@ -115,7 +115,7 @@ fn close(
     ANIMATING.store(true, Ordering::Relaxed);
     let _ = window.set_always_on_top(false);
     let (cx, cy) = POPUP_POS.get()
-        .map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()))
+        .map(|m| *crate::state::lock_unpoisoned(m))
         .unwrap_or((target_x, target_y));
     let win = window.clone();
     std::thread::spawn(move || {
@@ -207,7 +207,7 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
             let _ = win.show();
             let _ = win.set_focus();
             if let Some(pos) = POPUP_POS.get() {
-                *pos.lock().unwrap_or_else(|e| e.into_inner()) = (target_x, target_y);
+                *crate::state::lock_unpoisoned(pos) = (target_x, target_y);
             }
         }
         Err(e) => {
@@ -236,7 +236,7 @@ fn animate_slide(window: &tauri::WebviewWindow, x: f64, from_y: f64, to_y: f64, 
 fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {
     animate_slide(window, x, start_y, end_y, 250, 20);
     if let Some(pos) = POPUP_POS.get() {
-        *pos.lock().unwrap_or_else(|e| e.into_inner()) = (x, end_y);
+        *crate::state::lock_unpoisoned(pos) = (x, end_y);
     }
     let _ = window.set_always_on_top(true);
     let _ = window.set_focus();

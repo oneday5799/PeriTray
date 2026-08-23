@@ -204,7 +204,7 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
                 if force_mute {
                     // 强制静音：记录静音前音量，模拟两次静音（设备在最低音量下才真正静音）
                     let pre = endpoint.GetMasterVolumeLevelScalar()?;
-                    force_mute_prev_volume().lock().unwrap_or_else(|e| e.into_inner()).insert(name, pre);
+                    crate::state::lock_unpoisoned(force_mute_prev_volume()).insert(name, pre);
                     endpoint.SetMute(true, ptr::null())?;
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     endpoint.SetMute(true, ptr::null())?;
@@ -215,7 +215,7 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
                 endpoint.SetMute(false, ptr::null())?;
                 if force_mute {
                     // 恢复静音前的音量
-                    let mut guard = force_mute_prev_volume().lock().unwrap_or_else(|e| e.into_inner());
+                    let mut guard = crate::state::lock_unpoisoned(force_mute_prev_volume());
                     if let Some(prev) = guard.remove(&name) {
                         let _ = endpoint.SetMasterVolumeLevelScalar(prev.max(0.0).min(1.0), ptr::null());
                     }
