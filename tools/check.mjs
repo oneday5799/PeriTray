@@ -99,6 +99,13 @@ function declaredNames(cleanSrc) {
       /(?:^|\n)\s*(?:let|const|var)\s+([A-Za-z_$][\w$]*)/g,
     )
   ) names.add(m[1]);
+  // 解构声明（const { invoke } = ...）：绑定名计入声明池，
+  // 否则 settings 各脚本裸调 invoke 只能靠 common 内部局部变量意外通过审计
+  for (
+    const m of cleanSrc.matchAll(
+      /(?:^|\n)\s*(?:let|const|var)\s*\{([^}]*)\}\s*=/g,
+    )
+  ) collectParams(m[1], names);
   for (const m of cleanSrc.matchAll(/\bfunction\s*[A-Za-z_$]?[\w$]*\s*\(([^()]*)\)/g)) {
     collectParams(m[1], names);
   }
