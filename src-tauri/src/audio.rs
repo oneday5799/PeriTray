@@ -583,19 +583,25 @@ const SPATIAL_STATE_LEN: usize = 0x48;
 pub fn get_spatial_sound(device_id: &str) -> std::result::Result<SpatialSoundState, String> {
     let wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
+        // 仅接口本身缺失（系统不支持）才返回 Err 让前端降级为跳转入口；
+        // 设备级读取失败（如激活中的格式被卸载）降级为无勾选状态，保留切换其他格式的自救能力
         let client = PolicySpatialClient::acquire()?;
-        let (state, fmt_ptr) = client.query(wide.as_ptr())?;
-        CoTaskMemFree(Some(fmt_ptr as *const c_void));
-        if !validate_state_encoding(&state) {
-            return Err("当前系统版本的空间音效接口布局不受支持".to_string());
-        }
-        Ok(SpatialSoundState {
-            current: state_current_guid(&state),
-            supported: SPATIAL_SOUND_FORMATS.iter()
-                .filter(|(_, _, pkgs)| spatial_format_available(pkgs))
-                .map(|(g, n, _)| SpatialSoundFormat { guid: g.to_string(), name: n.to_string() })
-                .collect(),
-        })
+        let supported: std::vec::Vec<SpatialSoundFormat> = SPATIAL_SOUND_FORMATS.iter()
+            .filter(|(_, _, pkgs)| spatial_format_available(pkgs))
+            .map(|(g, n, _)| SpatialSoundFormat { guid: g.to_string(), name: n.to_string() })
+            .collect();
+        let (current, supported) = match client.query(wide.as_ptr()) {
+            Ok((state, fmt_ptr)) => {
+                CoTaskMemFree(Some(fmt_ptr as *const c_void));
+                if validate_state_encoding(&state) {
+                    (state_current_guid(&state), supported)
+                } else {
+                    (None, supported)
+                }
+            }
+            Err(_) => (None, supported),
+        };
+        Ok(SpatialSoundState { current, supported })
     }
 }
 
@@ -642,11 +648,6 @@ pub fn set_spatial_sound(device_id: &str, format_guid: Option<&str>) -> std::res
     let wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let client = PolicySpatialClient::acquire()?;
-        let (cur_state, fmt_ptr) = client.query(wide.as_ptr())?;
-        if !validate_state_encoding(&cur_state) {
-            CoTaskMemFree(Some(fmt_ptr as *const c_void));
-            return Err("当前系统版本的空间音效接口布局不受支持".to_string());
-        }
         let mut new_state = [0u8; SPATIAL_STATE_LEN];
         if let Some(bytes) = &guid_hex {
             new_state[0] = 1;
@@ -657,16 +658,43 @@ pub fn set_spatial_sound(device_id: &str, format_guid: Option<&str>) -> std::res
             new_state[0x3C] = 1;
             new_state[0x44] = 1;
         } // 关 = 全零
-        if let Err(e) = client.set_state(wide.as_ptr(), &new_state, fmt_ptr) {
-            CoTaskMemFree(Some(fmt_ptr as *const c_void));
-            return Err(e);
-        }
-        CoTaskMemFree(Some(fmt_ptr as *const c_void));
-        // 读回校验：核对语义字段，防止未来构建槽位漂移导致误写
-        let (after, fmt_ptr2) = client.query(wide.as_ptr())?;
-        CoTaskMemFree(Some(fmt_ptr2 as *const c_void));
-        if !state_matches(&after, guid_hex.is_some(), guid_hex.as_ref()) {
-            return Err("设置未生效（接口布局可能已变化）".to_string());
+
+        match client.query(wide.as_ptr()) {
+            Ok((cur_state, fmt_ptr)) => {
+                // 常规路径：布局自检 → 复用设备格式指针写入 → 读回校验
+                CoTaskMemFree(Some(fmt_ptr as *const c_void));
+                if !validate_state_encoding(&cur_state) {
+                    return Err("当前系统版本的空间音效接口布局不受支持".to_string());
+                }
+                let hr = client.try_set_state(wide.as_ptr(), &new_state, fmt_ptr);
+                if hr < 0 {
+                    return Err(format!("设置空间音效失败（hr={:#010x}）", hr as u32));
+                }
+                let (after, fmt_ptr2) = client.query(wide.as_ptr())?;
+                CoTaskMemFree(Some(fmt_ptr2 as *const c_void));
+                if !state_matches(&after, guid_hex.is_some(), guid_hex.as_ref()) {
+                    return Err("设置未生效（接口布局可能已变化）".to_string());
+                }
+            }
+            Err(query_err) => {
+                // 降级路径：读取失败（如激活中的格式提供应用被卸载导致端点状态不可读）
+                // 跳过布局自检，fmt=null 直接写入；写后尽力读回，仍不可读则信任 HRESULT
+                crate::process::append_log(&format!(
+                    "[audio] set_spatial_sound degraded path (query err: {})", query_err
+                ));
+                let hr = client.try_set_state(wide.as_ptr(), &new_state, ptr::null());
+                if hr < 0 {
+                    return Err(format!("设置空间音效失败（hr={:#010x}）", hr as u32));
+                }
+                if let Ok((after, fmt_ptr2)) = client.query(wide.as_ptr()) {
+                    CoTaskMemFree(Some(fmt_ptr2 as *const c_void));
+                    if !state_matches(&after, guid_hex.is_some(), guid_hex.as_ref()) {
+                        return Err("设置未生效（接口布局可能已变化）".to_string());
+                    }
+                } else {
+                    crate::process::append_log("[audio] set_spatial_sound degraded write ok, read-back unavailable");
+                }
+            }
         }
         Ok(())
     }
@@ -765,16 +793,12 @@ impl PolicySpatialClient {
         Ok((state, fmt))
     }
 
-    /// slot35：SetDeviceSpatialSettings
-    unsafe fn set_state(&self, wide_ptr: *const u16, state: &[u8; SPATIAL_STATE_LEN], fmt: *const u16) -> std::result::Result<(), String> {
+    /// slot35：SetDeviceSpatialSettings，返回原始 HRESULT
+    unsafe fn try_set_state(&self, wide_ptr: *const u16, state: &[u8; SPATIAL_STATE_LEN], fmt: *const u16) -> i32 {
         let vt = *(self.ptr as *const *const usize);
         let set_fn: unsafe extern "system" fn(*mut c_void, *const u16, *const u8, *const u16) -> i32 =
             std::mem::transmute(*vt.add(35));
-        let hr = set_fn(self.ptr, wide_ptr, state.as_ptr(), fmt);
-        if hr < 0 {
-            return Err(format!("设置空间音效失败（hr={:#010x}）", hr as u32));
-        }
-        Ok(())
+        set_fn(self.ptr, wide_ptr, state.as_ptr(), fmt)
     }
 }
 

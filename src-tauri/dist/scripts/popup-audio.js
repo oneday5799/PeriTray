@@ -301,7 +301,9 @@ async function showAudioContextMenu(x, y, device) {
       fallbackItem.textContent = "空间音效（系统设置）";
       fallbackItem.addEventListener("click", () => {
         hideAllContextMenus();
-        invoke("open_url", { url: "ms-settings:sound" }).catch(() => {});
+        const isDefault = audioDevices.find(d => d.id === device.id)?.is_default;
+        const url = isDefault ? "ms-settings:sound-defaultoutputproperties" : "ms-settings:sound-devices";
+        invoke("open_url", { url }).catch(() => {});
       });
       menu.appendChild(fallbackItem);
     }
