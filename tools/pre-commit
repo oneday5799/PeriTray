@@ -1,2 +1,18 @@
 #!/bin/sh
-node tools/check.mjs
+node tools/check.mjs || exit 1
+
+# Rust 源有暂存改动时增量运行 cargo check（强制零警告，约定见 AGENTS.md Commit 规范）
+if git diff --cached --name-only -- src-tauri/src src-tauri/Cargo.toml src-tauri/Cargo.lock | grep -q .; then
+  echo "[pre-commit] Rust 改动，运行 cargo check..."
+  out=$(cd src-tauri && cargo check 2>&1) || {
+    printf '%s\n' "$out"
+    echo "[pre-commit] cargo check 失败，提交被拦截"
+    exit 1
+  }
+  if printf '%s\n' "$out" | grep -q "^warning"; then
+    printf '%s\n' "$out"
+    echo "[pre-commit] cargo check 存在 warning（要求零警告），提交被拦截"
+    exit 1
+  fi
+  printf '%s\n' "$out" | tail -1
+fi

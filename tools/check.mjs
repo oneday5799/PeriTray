@@ -234,6 +234,35 @@ for (const dirName of ["scripts"]) {
   }
 }
 
+// ── 版本号一致性：五处须为同一版本 ─────────────────────────
+// tauri.conf.json / Cargo.toml [package] / Cargo.lock(PeriphMonitor) /
+// package.json / settings.html 关于页占位文案
+{
+  const versions = {
+    "tauri.conf.json": (() => {
+      try { return JSON.parse(read(path.join(ROOT, "src-tauri", "tauri.conf.json"))).version; }
+      catch { return undefined; }
+    })(),
+    "Cargo.toml": read(path.join(ROOT, "src-tauri", "Cargo.toml"))
+      .match(/^version\s*=\s*"([^"]+)"/m)?.[1],
+    "Cargo.lock": read(path.join(ROOT, "src-tauri", "Cargo.lock"))
+      .match(/name = "PeriphMonitor"\s*\nversion = "([^"]+)"/)?.[1],
+    "package.json": (() => {
+      try { return JSON.parse(read(path.join(ROOT, "package.json"))).version; }
+      catch { return undefined; }
+    })(),
+    "settings.html": read(path.join(DIST, "settings.html"))
+      .match(/版本 v([\d.]+)/)?.[1],
+  };
+  const bad = Object.values(versions).some((v) => !v);
+  if (new Set(Object.values(versions)).size > 1 || bad) {
+    const detail = Object.entries(versions)
+      .map(([k, v]) => `${k}=${v ?? "?"}`)
+      .join(", ");
+    errors.push(`版本号不一致（五处需同步）: ${detail}`);
+  }
+}
+
 if (errors.length) {
   console.error("检查失败:");
   for (const e of errors) console.error("  ✗ " + e);
