@@ -1,5 +1,7 @@
 # AGENTS.md
 
+本文件按「提交 / 写码 / 发版 / 质量 / 架构」五块组织开发约定，改动涉及对应环节时先查相关节。
+
 ## Commit 规范
 
 ### 标题格式
@@ -28,6 +30,19 @@
 - 涉及 `src-tauri/dist/` 的提交会被 pre-commit 钩子自动校验（见下节）
 - **Rust 改动提交前必须 `cargo check` 零警告**（main.rs 有 `#![warn(unused_imports, dead_code)]`，
   出现 warning 即视为未完成）；无自动闸门，靠自觉执行
+
+## 代码与注释风格
+
+- **字符串引号**：JS 统一双引号；字符串内容本身含双引号时允许单引号包裹（免转义）
+- **缩进**：JS / CSS 两空格，Rust 四空格，一律空格禁 Tab
+- **命名**：JS 函数/变量 camelCase、CSS 类名 kebab-case（变体用 `--` 后缀）、
+  Rust 与配置键 snake_case
+- **异步**：以 async/await 为主；fire-and-forget 场景可用 `.then().catch()` 链
+- **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
+- **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
+- **Rust 文档注释与日志**：`///` 用于 pub 项；日志统一走 `process::append_log` 并带
+  `[模块]` 前缀（[popup] [tray] [audio] [bt] [update] 等，新增模块先定标签）
+- **JS 头注释**：四要素（文件职责 / 加载序 N/N · 提供：… / 依赖：…）见「前端架构备忘」
 
 ## Release Notes 风格规范（每次发版必循）
 
@@ -73,19 +88,6 @@
    时 CI 自动标记为预发布；CI 构建后自动向该 Release 追加安装包产物
 4. CI 使用 softprops/action-gh-release@v3 + generate_release_notes，
    对已存在的 Release 是更新追加而非报错，手工先建 Release 不冲突
-
-## 代码与注释风格
-
-- **字符串引号**：JS 统一双引号；字符串内容本身含双引号时允许单引号包裹（免转义）
-- **缩进**：JS / CSS 两空格，Rust 四空格，一律空格禁 Tab
-- **命名**：JS 函数/变量 camelCase、CSS 类名 kebab-case（变体用 `--` 后缀）、
-  Rust 与配置键 snake_case
-- **异步**：以 async/await 为主；fire-and-forget 场景可用 `.then().catch()` 链
-- **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
-- **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
-- Rust 用 `///` 为 pub 项写文档注释；日志统一走 `process::append_log` 并带 `[模块]` 前缀
-  （[popup] [tray] [audio] [bt] [update] 等，新增模块先定标签）
-- JS 文件头注释四要素见「前端架构备忘」
 
 ## 前端完整性守护（强制）
 
