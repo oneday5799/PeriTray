@@ -1,6 +1,6 @@
-use image::RgbaImage;
 use image::codecs::png::PngEncoder;
 use image::ImageEncoder;
+use image::RgbaImage;
 use lru::LruCache;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
@@ -11,9 +11,8 @@ static NAME_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new();
 
 /// 从进程PID获取应用名称（优先读取 exe 文件版本信息的 FileDescription，回退到 exe 文件名）
 pub fn get_process_name_by_pid(pid: u32) -> Option<Arc<str>> {
-    let cache = NAME_CACHE.get_or_init(|| {
-        Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))
-    });
+    let cache =
+        NAME_CACHE.get_or_init(|| Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())));
     {
         let mut guard = crate::state::lock_unpoisoned(cache);
         if let Some(name) = guard.get(&pid) {
@@ -62,7 +61,9 @@ fn resolve_process_name(pid: u32) -> Option<String> {
                 None,
                 size,
                 data.as_mut_ptr() as *mut _,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 if let Some(name) = query_file_description(&data) {
                     return Some(name);
                 }
@@ -93,7 +94,10 @@ unsafe fn query_file_description(data: &[u8]) -> Option<String> {
     }
     let lang = (buf as *const u16).read();
     let codepage = (buf as *const u16).add(1).read();
-    let key = format!("\\StringFileInfo\\{:04X}{:04X}\\FileDescription", lang, codepage);
+    let key = format!(
+        "\\StringFileInfo\\{:04X}{:04X}\\FileDescription",
+        lang, codepage
+    );
     let key_wide: Vec<u16> = crate::process::to_wide(&key);
     let mut buf2: *mut core::ffi::c_void = std::ptr::null_mut();
     let mut len2: u32 = 0;
@@ -106,16 +110,22 @@ unsafe fn query_file_description(data: &[u8]) -> Option<String> {
     if !ok2.as_bool() || buf2.is_null() {
         return None;
     }
-    let name = String::from_utf16_lossy(std::slice::from_raw_parts(buf2 as *const u16, len2 as usize));
+    let name = String::from_utf16_lossy(std::slice::from_raw_parts(
+        buf2 as *const u16,
+        len2 as usize,
+    ));
     let name = name.split('\0').next().unwrap_or("").trim().to_string();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 /// 从进程PID获取应用图标（返回base64编码的PNG）
 pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
-    let cache = ICON_CACHE.get_or_init(|| {
-        Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap()))
-    });
+    let cache =
+        ICON_CACHE.get_or_init(|| Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())));
     {
         let mut guard = crate::state::lock_unpoisoned(cache);
         if let Some(icon) = guard.get(&pid) {
@@ -125,10 +135,12 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
     let icon: Option<Arc<str>> = (|| -> Option<Arc<str>> {
         unsafe {
             let process_handle = windows::Win32::System::Threading::OpenProcess(
-                windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION | windows::Win32::System::Threading::PROCESS_VM_READ,
+                windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION
+                    | windows::Win32::System::Threading::PROCESS_VM_READ,
                 false,
                 pid,
-            ).ok()?;
+            )
+            .ok()?;
             let mut path_buf = [0u16; 260];
             let mut path_size = path_buf.len() as u32;
             let result = windows::Win32::System::Threading::QueryFullProcessImageNameW(
@@ -138,7 +150,9 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
                 &mut path_size,
             );
             let _ = windows::Win32::Foundation::CloseHandle(process_handle);
-            if result.is_err() { return None; }
+            if result.is_err() {
+                return None;
+            }
             let exe_path = String::from_utf16_lossy(&path_buf[..path_size as usize]);
             get_icon_from_path(&exe_path)
         }
@@ -183,7 +197,9 @@ fn get_icon_from_path(path: &str) -> Option<Arc<str>> {
 }
 
 /// 获取图标位图数据
-unsafe fn get_icon_bitmap(hicon: windows::Win32::UI::WindowsAndMessaging::HICON) -> Option<RgbaImage> {
+unsafe fn get_icon_bitmap(
+    hicon: windows::Win32::UI::WindowsAndMessaging::HICON,
+) -> Option<RgbaImage> {
     use windows::Win32::Graphics::Gdi::*;
 
     let width = 64i32;
@@ -198,7 +214,10 @@ unsafe fn get_icon_bitmap(hicon: windows::Win32::UI::WindowsAndMessaging::HICON)
     // 创建兼容的内存DC
     let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
     if hdc_mem.is_invalid() {
-        ReleaseDC(Some(windows::Win32::Foundation::HWND(std::ptr::null_mut())), hdc_screen);
+        ReleaseDC(
+            Some(windows::Win32::Foundation::HWND(std::ptr::null_mut())),
+            hdc_screen,
+        );
         return None;
     }
 
@@ -226,10 +245,14 @@ unsafe fn get_icon_bitmap(hicon: windows::Win32::UI::WindowsAndMessaging::HICON)
         pixels.as_mut_ptr() as *mut _,
         None,
         0,
-    ).ok()?;
+    )
+    .ok()?;
     if hbitmap.is_invalid() {
         let _ = DeleteDC(hdc_mem);
-        let _ = ReleaseDC(Some(windows::Win32::Foundation::HWND(std::ptr::null_mut())), hdc_screen);
+        let _ = ReleaseDC(
+            Some(windows::Win32::Foundation::HWND(std::ptr::null_mut())),
+            hdc_screen,
+        );
         return None;
     }
 
@@ -264,7 +287,10 @@ unsafe fn get_icon_bitmap(hicon: windows::Win32::UI::WindowsAndMessaging::HICON)
     SelectObject(hdc_mem, old_bitmap);
     let _ = DeleteObject(HGDIOBJ(hbitmap.0));
     let _ = DeleteDC(hdc_mem);
-    let _ = ReleaseDC(Some(windows::Win32::Foundation::HWND(std::ptr::null_mut())), hdc_screen);
+    let _ = ReleaseDC(
+        Some(windows::Win32::Foundation::HWND(std::ptr::null_mut())),
+        hdc_screen,
+    );
 
     if bits == 0 {
         return None;
@@ -282,13 +308,19 @@ unsafe fn get_icon_bitmap(hicon: windows::Win32::UI::WindowsAndMessaging::HICON)
 fn bitmap_to_base64(img: &RgbaImage) -> Option<Arc<str>> {
     let mut buffer = Cursor::new(Vec::with_capacity(16384));
     let encoder = PngEncoder::new(&mut buffer);
-    encoder.write_image(
-        img.as_raw(),
-        img.width(),
-        img.height(),
-        image::ExtendedColorType::Rgba8,
-    ).ok()?;
+    encoder
+        .write_image(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .ok()?;
 
     use base64::Engine;
-    Some(base64::engine::general_purpose::STANDARD.encode(buffer.into_inner()).into())
+    Some(
+        base64::engine::general_purpose::STANDARD
+            .encode(buffer.into_inner())
+            .into(),
+    )
 }

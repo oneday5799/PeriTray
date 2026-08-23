@@ -129,7 +129,10 @@ pub fn open_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) {
-    crate::process::append_log(&format!("[cmd] rename_device: '{}' -> '{}'", original, new_name));
+    crate::process::append_log(&format!(
+        "[cmd] rename_device: '{}' -> '{}'",
+        original, new_name
+    ));
     config::with_config_mut(|c| {
         if new_name.is_empty() || new_name == original {
             c.device_names.remove(&original);
@@ -181,7 +184,9 @@ pub async fn check_bt_connection(name: String) -> Result<Option<bool>, String> {
 
 #[tauri::command]
 pub fn open_24g_device_file() -> Result<(), String> {
-    let path = crate::process::exe_dir().join("data").join("wireless_24g_devices_user.json");
+    let path = crate::process::exe_dir()
+        .join("data")
+        .join("wireless_24g_devices_user.json");
     if !path.exists() {
         std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
     }
@@ -192,9 +197,8 @@ const TRAY_DEVICE_LIMIT: usize = 4;
 
 #[tauri::command(async)]
 pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(), String> {
-    let (already_added, count) = config::with_config(|c| {
-        (c.tray_devices.contains(&name), c.tray_devices.len())
-    });
+    let (already_added, count) =
+        config::with_config(|c| (c.tray_devices.contains(&name), c.tray_devices.len()));
     if !already_added && count >= TRAY_DEVICE_LIMIT {
         return Err(format!("托盘最多添加 {} 个设备", TRAY_DEVICE_LIMIT));
     }
@@ -238,7 +242,9 @@ pub async fn set_device_mute(device_id: String, muted: bool) -> Result<(), Strin
 }
 
 #[tauri::command(async)]
-pub async fn get_audio_sessions(device_id: String) -> Result<Vec<crate::audio::AudioSession>, String> {
+pub async fn get_audio_sessions(
+    device_id: String,
+) -> Result<Vec<crate::audio::AudioSession>, String> {
     run_blocking(move || crate::audio::enumerate_audio_sessions(&device_id))
         .await?
         .map_err(|e| e.to_string())
@@ -266,7 +272,11 @@ pub async fn get_input_devices() -> Result<Vec<crate::audio::AudioDevice>, Strin
 }
 
 #[tauri::command(async)]
-pub async fn set_session_device(pid: u32, direction: String, device_id: String) -> Result<(), String> {
+pub async fn set_session_device(
+    pid: u32,
+    direction: String,
+    device_id: String,
+) -> Result<(), String> {
     run_blocking(move || crate::audio::set_session_device(pid, &direction, &device_id))
         .await?
         .map_err(|e| e.to_string())
@@ -288,13 +298,21 @@ pub fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<()
 }
 
 #[tauri::command(async)]
-pub async fn get_spatial_sound(device_id: String) -> Result<crate::audio_spatial::SpatialSoundState, String> {
+pub async fn get_spatial_sound(
+    device_id: String,
+) -> Result<crate::audio_spatial::SpatialSoundState, String> {
     run_blocking(move || crate::audio_spatial::get_spatial_sound(&device_id)).await?
 }
 
 #[tauri::command(async)]
-pub async fn set_spatial_sound(device_id: String, format_guid: Option<String>) -> Result<(), String> {
-    run_blocking(move || crate::audio_spatial::set_spatial_sound(&device_id, format_guid.as_deref())).await?
+pub async fn set_spatial_sound(
+    device_id: String,
+    format_guid: Option<String>,
+) -> Result<(), String> {
+    run_blocking(move || {
+        crate::audio_spatial::set_spatial_sound(&device_id, format_guid.as_deref())
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -310,8 +328,7 @@ pub async fn check_for_update(
     include_prerelease: bool,
 ) -> Result<crate::update::UpdateInfo, String> {
     let current_version = app.package_info().version.to_string();
-    let (result, _) =
-        crate::update::check_and_store("", current_version, include_prerelease).await;
+    let (result, _) = crate::update::check_and_store("", current_version, include_prerelease).await;
     result
 }
 
@@ -325,21 +342,26 @@ fn parse_shortcut(s: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, Str
 }
 
 #[tauri::command]
-pub fn set_hotkey_config(app: tauri::AppHandle, action: String, key: Option<String>) -> Result<(), String> {
-    let prev_key = config::with_config(|c| {
-        match action.as_str() {
-            "devices" => c.shortcut_devices.clone(),
-            "volume" => c.shortcut_volume.clone(),
-            "volume_up" => c.shortcut_volume_up.clone(),
-            "volume_down" => c.shortcut_volume_down.clone(),
-            "volume_mute" => c.shortcut_volume_mute.clone(),
-            _ => None,
-        }
+pub fn set_hotkey_config(
+    app: tauri::AppHandle,
+    action: String,
+    key: Option<String>,
+) -> Result<(), String> {
+    let prev_key = config::with_config(|c| match action.as_str() {
+        "devices" => c.shortcut_devices.clone(),
+        "volume" => c.shortcut_volume.clone(),
+        "volume_up" => c.shortcut_volume_up.clone(),
+        "volume_down" => c.shortcut_volume_down.clone(),
+        "volume_mute" => c.shortcut_volume_mute.clone(),
+        _ => None,
     });
     if let Some(ref pk) = prev_key {
         if let Ok(sc) = parse_shortcut(pk) {
             let _ = app.global_shortcut().unregister(sc);
-            crate::process::append_log(&format!("[hotkey] unregistered old key {} for {}", pk, action));
+            crate::process::append_log(&format!(
+                "[hotkey] unregistered old key {} for {}",
+                pk, action
+            ));
         }
     }
     if let Some(ref new_key_str) = key {
@@ -365,15 +387,13 @@ pub fn set_hotkey_config(app: tauri::AppHandle, action: String, key: Option<Stri
 }
 
 fn set_config_key(action: &str, key: Option<String>) {
-    config::with_config_mut(|c| {
-        match action {
-            "devices" => c.shortcut_devices = key,
-            "volume" => c.shortcut_volume = key,
-            "volume_up" => c.shortcut_volume_up = key,
-            "volume_down" => c.shortcut_volume_down = key,
-            "volume_mute" => c.shortcut_volume_mute = key,
-            _ => {}
-        }
+    config::with_config_mut(|c| match action {
+        "devices" => c.shortcut_devices = key,
+        "volume" => c.shortcut_volume = key,
+        "volume_up" => c.shortcut_volume_up = key,
+        "volume_down" => c.shortcut_volume_down = key,
+        "volume_mute" => c.shortcut_volume_mute = key,
+        _ => {}
     });
 }
 
@@ -390,13 +410,23 @@ pub fn set_device_shortcut(
         if app.global_shortcut().is_registered(sc.clone()) {
             let share_enabled = crate::config::with_config(|c| c.enable_device_shortcut_cycle);
             let (used_by_any_device, used_by_other_device) = crate::config::with_config(|c| {
-                let any = c.device_shortcuts.values().any(|d| d.shortcut.as_deref() == Some(new_key_str));
-                let other = c.device_shortcuts.iter().any(|(id, d)| id != &device_id && d.shortcut.as_deref() == Some(new_key_str));
+                let any = c
+                    .device_shortcuts
+                    .values()
+                    .any(|d| d.shortcut.as_deref() == Some(new_key_str));
+                let other = c
+                    .device_shortcuts
+                    .iter()
+                    .any(|(id, d)| id != &device_id && d.shortcut.as_deref() == Some(new_key_str));
                 (any, other)
             });
             // 关闭共享：被其他设备或非设备功能占用都拒绝（本设备自身占用允许）
             // 开启共享：仅拒绝非设备功能占用
-            let conflict = if share_enabled { !used_by_any_device } else { used_by_other_device || !used_by_any_device };
+            let conflict = if share_enabled {
+                !used_by_any_device
+            } else {
+                used_by_other_device || !used_by_any_device
+            };
             if conflict {
                 return Err("快捷键已被占用".to_string());
             }
@@ -413,7 +443,10 @@ fn set_device_shortcut_key(device_id: &str, name: &str, key: Option<String>) {
         if let Some(k) = key {
             c.device_shortcuts.insert(
                 device_id.to_string(),
-                crate::config::DeviceShortcut { name: name.to_string(), shortcut: Some(k) },
+                crate::config::DeviceShortcut {
+                    name: name.to_string(),
+                    shortcut: Some(k),
+                },
             );
         } else if let Some(entry) = c.device_shortcuts.get_mut(device_id) {
             entry.shortcut = None;
@@ -446,5 +479,3 @@ pub fn set_window_material(app: tauri::AppHandle, material: String) -> Result<bo
 pub fn check_material_support(material: String) -> Result<bool, String> {
     Ok(crate::windows::check_material_support(&material))
 }
-
-

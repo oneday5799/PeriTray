@@ -1,5 +1,5 @@
-use crate::device::DevType;
 use crate::config;
+use crate::device::DevType;
 use crate::device_data;
 
 pub(crate) fn classify_device(name: &str, pnp_class: &str, pnp_id: &str, caption: &str) -> DevType {
@@ -31,13 +31,21 @@ pub(crate) fn classify_device(name: &str, pnp_class: &str, pnp_id: &str, caption
         || pnp_id.starts_with("BTHENUM\\")
         || pnp_id.starts_with("SWD\\")
     {
-        if is_audio(&lower_combined) { return DevType::Audio; }
-        if match_usb_keyword(&lower_combined) { return DevType::Usb; }
+        if is_audio(&lower_combined) {
+            return DevType::Audio;
+        }
+        if match_usb_keyword(&lower_combined) {
+            return DevType::Usb;
+        }
         return DevType::Other;
     }
     if pnp_class.eq_ignore_ascii_case("HIDClass") {
-        if is_audio(&lower_combined) { return DevType::Audio; }
-        if match_usb_keyword(&lower_combined) { return DevType::Usb; }
+        if is_audio(&lower_combined) {
+            return DevType::Audio;
+        }
+        if match_usb_keyword(&lower_combined) {
+            return DevType::Usb;
+        }
         return DevType::Other;
     }
     if pnp_id.starts_with("USB\\") && match_usb_keyword(&lower_combined) {
@@ -55,8 +63,12 @@ pub(crate) fn classify_bluetooth(name: &str) -> Option<DevType> {
         return None;
     }
     let lower = name.to_lowercase();
-    if is_audio(&lower) { return Some(DevType::Audio); }
-    if match_usb_keyword(&lower) { return Some(DevType::Usb); }
+    if is_audio(&lower) {
+        return Some(DevType::Audio);
+    }
+    if match_usb_keyword(&lower) {
+        return Some(DevType::Usb);
+    }
     Some(DevType::Other)
 }
 
@@ -69,8 +81,21 @@ pub(crate) fn is_wireless_24g_by_vid_pid(pnp_id: &str) -> bool {
 
 fn is_audio(lower: &str) -> bool {
     [
-        "headphone", "headset", "earphone", "earbuds", "speaker", "耳机", "音箱", "扬声器",
-        "音响", "airpods", "hifi", "dac", "amp", "glasses", "眼镜",
+        "headphone",
+        "headset",
+        "earphone",
+        "earbuds",
+        "speaker",
+        "耳机",
+        "音箱",
+        "扬声器",
+        "音响",
+        "airpods",
+        "hifi",
+        "dac",
+        "amp",
+        "glasses",
+        "眼镜",
     ]
     .iter()
     .any(|k| lower.contains(k))
@@ -78,10 +103,36 @@ fn is_audio(lower: &str) -> bool {
 
 fn match_usb_keyword(lower: &str) -> bool {
     [
-        "mouse", "keyboard", "controller", "gamepad", "鼠标", "键盘", "手柄", "xbox", "webcam",
-        "logitech", "razer", "corsair", "keychron", "orochi", "deathadder", "viper",
-        "gpro", "g pro", "basilisk", "naga", "blackwidow", "hunters", "kaira",
-        "steelseries", "hyperx", "coolermaster", "roccat", "zte", "雷蛇", "罗技",
+        "mouse",
+        "keyboard",
+        "controller",
+        "gamepad",
+        "鼠标",
+        "键盘",
+        "手柄",
+        "xbox",
+        "webcam",
+        "logitech",
+        "razer",
+        "corsair",
+        "keychron",
+        "orochi",
+        "deathadder",
+        "viper",
+        "gpro",
+        "g pro",
+        "basilisk",
+        "naga",
+        "blackwidow",
+        "hunters",
+        "kaira",
+        "steelseries",
+        "hyperx",
+        "coolermaster",
+        "roccat",
+        "zte",
+        "雷蛇",
+        "罗技",
     ]
     .iter()
     .any(|k| lower.contains(k))

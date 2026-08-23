@@ -1,12 +1,14 @@
-use tauri::{Emitter, Manager};
 use crate::config;
 use crate::process;
+use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
 pub(crate) fn browser_args() -> String {
     let mut args = String::from("--renderer-process-limit=1 --disable-breakpad --disable-features=AudioServiceOutOfProcess,TranslateUI,msWebOOUI,msPdfOOUI,msSmartScreenProtection");
     if !config::with_config(|c| c.hardware_acceleration) {
-        args.push_str(" --disable-gpu --disable-gpu-compositing --disable-features=GpuProcessPerClient");
+        args.push_str(
+            " --disable-gpu --disable-gpu-compositing --disable-features=GpuProcessPerClient",
+        );
     }
     args
 }
@@ -27,7 +29,10 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
         #[cfg(target_os = "windows")]
         if let Ok(hwnd) = win.hwnd() {
             let material = config::with_config(|c| c.window_material.clone());
-            process::append_log(&format!("[material] reopen settings, material={}", material));
+            process::append_log(&format!(
+                "[material] reopen settings, material={}",
+                material
+            ));
             apply_window_material(hwnd.0 as isize, &material);
         }
         let _ = win.unminimize();
@@ -41,19 +46,17 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
         None => "settings.html".to_string(),
     };
     tauri::async_runtime::spawn(async move {
-        let mut builder = tauri::WebviewWindowBuilder::new(
-            &app,
-            "settings",
-            tauri::WebviewUrl::App(url.into()),
-        )
-        .title("设置 - 外设监控")
-        .inner_size(960.0, 720.0)
-        .resizable(true)
-        .visible(false)
-        .min_inner_size(400.0, 300.0);
+        let mut builder =
+            tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App(url.into()))
+                .title("设置 - 外设监控")
+                .inner_size(960.0, 720.0)
+                .resizable(true)
+                .visible(false)
+                .min_inner_size(400.0, 300.0);
 
         // 恒透明创建：透明能力在窗口诞生时固化，「默认」材质的不透明观感由 CSS 承担
-        builder = builder.transparent(true)
+        builder = builder
+            .transparent(true)
             .background_color(tauri::utils::config::Color(0, 0, 0, 0));
 
         #[cfg(target_os = "windows")]
@@ -213,7 +216,10 @@ fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
             rel(ptr);
 
             if hr2 != 0 {
-                process::append_log(&format!("[webview_bg] SetDefaultBackgroundColor failed, hr={}", hr2));
+                process::append_log(&format!(
+                    "[webview_bg] SetDefaultBackgroundColor failed, hr={}",
+                    hr2
+                ));
             } else {
                 process::append_log(&format!("[webview_bg] set to {:?}", color));
             }
@@ -269,9 +275,8 @@ mod material {
 
     fn get_set_window_composition() -> Option<SetWindowCompositionAttrFn> {
         *SET_WINDOW_COMPOSITION.get_or_init(|| unsafe {
-            let user32 = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(
-                b"user32.dll\0".as_ptr(),
-            );
+            let user32 =
+                windows_sys::Win32::System::LibraryLoader::LoadLibraryA(b"user32.dll\0".as_ptr());
             if user32.is_null() {
                 return None;
             }
@@ -333,7 +338,11 @@ mod material {
             &margins as *const _ as *const _,
         );
 
-        let effective = if material == "recommended" { "mica" } else { material };
+        let effective = if material == "recommended" {
+            "mica"
+        } else {
+            material
+        };
 
         let backdrop_type = match effective {
             "mica" => DWMSBT_MAINWINDOW,
@@ -424,7 +433,11 @@ pub fn check_material_support(material: &str) -> bool {
     if material == "default" {
         return true;
     }
-    let effective = if material == "recommended" { "mica" } else { material };
+    let effective = if material == "recommended" {
+        "mica"
+    } else {
+        material
+    };
 
     #[repr(C)]
     struct RtlOsVersionInfoEx {
@@ -444,12 +457,15 @@ pub fn check_material_support(material: &str) -> bool {
     type RtlGetVersionFn = unsafe extern "system" fn(*mut RtlOsVersionInfoEx) -> i32;
 
     let build = unsafe {
-        let ntdll = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(b"ntdll.dll\0".as_ptr());
+        let ntdll =
+            windows_sys::Win32::System::LibraryLoader::LoadLibraryA(b"ntdll.dll\0".as_ptr());
         if ntdll.is_null() {
             return false;
         }
-        let proc =
-            windows_sys::Win32::System::LibraryLoader::GetProcAddress(ntdll, b"RtlGetVersion\0".as_ptr());
+        let proc = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
+            ntdll,
+            b"RtlGetVersion\0".as_ptr(),
+        );
         let Some(f): Option<RtlGetVersionFn> = proc.map(|f| std::mem::transmute(f)) else {
             return false;
         };

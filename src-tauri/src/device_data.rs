@@ -17,37 +17,55 @@ struct RawDeviceEntry {
     r#type: String,
 }
 
-static DEVICE_DATA: OnceLock<RwLock<HashMap<String, HashMap<String, DeviceInfo>>>> = OnceLock::new();
-static LAST_MTIME: OnceLock<Mutex<Option<(Option<SystemTime>, Option<SystemTime>)>>> = OnceLock::new();
+static DEVICE_DATA: OnceLock<RwLock<HashMap<String, HashMap<String, DeviceInfo>>>> =
+    OnceLock::new();
+static LAST_MTIME: OnceLock<Mutex<Option<(Option<SystemTime>, Option<SystemTime>)>>> =
+    OnceLock::new();
 
 fn default_data_path() -> std::path::PathBuf {
-    crate::process::exe_dir().join("data").join("wireless_24g_devices.json")
+    crate::process::exe_dir()
+        .join("data")
+        .join("wireless_24g_devices.json")
 }
 
 fn user_data_path() -> std::path::PathBuf {
-    crate::process::exe_dir().join("data").join("wireless_24g_devices_user.json")
+    crate::process::exe_dir()
+        .join("data")
+        .join("wireless_24g_devices_user.json")
 }
 
 fn load_data_from_path(path: &std::path::Path) -> HashMap<String, HashMap<String, DeviceInfo>> {
     match std::fs::read_to_string(path) {
         Ok(content) => {
-            match serde_json::from_str::<HashMap<String, HashMap<String, RawDeviceEntry>>>(&content) {
+            match serde_json::from_str::<HashMap<String, HashMap<String, RawDeviceEntry>>>(&content)
+            {
                 Ok(raw) => {
                     let mut result = HashMap::new();
                     for (vid, pids) in raw {
                         let mut pids_map = HashMap::new();
                         for (pid, entry) in pids {
-                            pids_map.insert(pid, DeviceInfo {
-                                name: entry.name,
-                                device_type: if entry.r#type.is_empty() { "other".to_string() } else { entry.r#type },
-                            });
+                            pids_map.insert(
+                                pid,
+                                DeviceInfo {
+                                    name: entry.name,
+                                    device_type: if entry.r#type.is_empty() {
+                                        "other".to_string()
+                                    } else {
+                                        entry.r#type
+                                    },
+                                },
+                            );
                         }
                         result.insert(vid, pids_map);
                     }
                     result
                 }
                 Err(e) => {
-                    crate::process::append_log(&format!("[device_data] JSON parse error ({}): {}", path.display(), e));
+                    crate::process::append_log(&format!(
+                        "[device_data] JSON parse error ({}): {}",
+                        path.display(),
+                        e
+                    ));
                     HashMap::new()
                 }
             }
@@ -67,7 +85,9 @@ fn load_all_data() -> HashMap<String, HashMap<String, DeviceInfo>> {
         }
     }
     crate::process::append_log(&format!(
-        "[device_data] loaded {} VIDs ({} user)", result.len(), user_count
+        "[device_data] loaded {} VIDs ({} user)",
+        result.len(),
+        user_count
     ));
     result
 }

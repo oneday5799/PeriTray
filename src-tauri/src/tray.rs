@@ -7,11 +7,11 @@ use tauri::{
     Listener,
 };
 
+use crate::audio;
 use crate::config;
 use crate::popup;
+use crate::state::{get_devices_cache, AUTO_MENU_ITEM, AUTO_START, TRAY_POS};
 use crate::windows;
-use crate::state::{TRAY_POS, AUTO_START, AUTO_MENU_ITEM, get_devices_cache};
-use crate::audio;
 
 static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new();
 static AUDIO_DEVICES_SUBMENU: OnceLock<Mutex<Option<Submenu<tauri::Wry>>>> = OnceLock::new();
@@ -43,7 +43,11 @@ pub fn build_tooltip_text() -> String {
         for tray_name in &c.tray_devices {
             if let Some(dev) = devices.iter().find(|d| &d.name == tray_name) {
                 let display_name = c.device_names.get(&dev.name).unwrap_or(&dev.name);
-                let dot = if dev.status == crate::wmi_query::BT_STATUS_CONNECTED { "🟢" } else { "⚪" };
+                let dot = if dev.status == crate::wmi_query::BT_STATUS_CONNECTED {
+                    "🟢"
+                } else {
+                    "⚪"
+                };
                 match dev.battery {
                     Some(battery) => lines.push(format!("{} {} - {}%", dot, display_name, battery)),
                     None => lines.push(format!("{} {}", dot, display_name)),
@@ -72,18 +76,16 @@ fn update_tooltip() {
 
 /// 后台刷新线程：定期查询设备并更新缓存，状态变化时自动更新 tooltip
 fn start_device_watcher() {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(10));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
 
-            if !config::with_config(|c| !c.tray_devices.is_empty()) {
-                continue;
-            }
+        if !config::with_config(|c| !c.tray_devices.is_empty()) {
+            continue;
+        }
 
-            let changed = refresh_devices_cache();
-            if changed {
-                std::thread::spawn(move || update_tooltip());
-            }
+        let changed = refresh_devices_cache();
+        if changed {
+            std::thread::spawn(move || update_tooltip());
         }
     });
 }
@@ -123,7 +125,9 @@ fn start_theme_watcher() {
             let mut hkey = std::ptr::null_mut();
             let status = RegOpenKeyExW(
                 HKEY_CURRENT_USER,
-                windows_sys::core::w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+                windows_sys::core::w!(
+                    "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+                ),
                 0,
                 KEY_READ,
                 &mut hkey,
@@ -217,7 +221,11 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let current = autostart.is_enabled().unwrap_or(false);
     let wanted = AUTO_START.load(Ordering::Relaxed);
     if wanted != current {
-        let _ = if wanted { autostart.enable() } else { autostart.disable() };
+        let _ = if wanted {
+            autostart.enable()
+        } else {
+            autostart.disable()
+        };
     }
 
     // 构建音频设备切换子菜单
@@ -233,59 +241,78 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .tooltip("外设监控")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(move |app, event| {
-            match event.id.as_ref() {
-                "show" => { crate::popup::open_popup(app, "devices"); }
-                "volume" => { crate::popup::open_popup(app, "volume"); }
-                "settings" => { windows::open_settings(app); }
-                "about" => { windows::open_settings_tab(app, "about"); }
-                "auto_start" => {
-                    let old = AUTO_START.load(Ordering::Relaxed);
-                    let new_val = !old;
-                    AUTO_START.store(new_val, Ordering::Relaxed);
-                    config::with_config_mut(|c| c.auto_start = new_val);
-                    let autostart = app.autolaunch();
-                    let _ = if new_val { autostart.enable() } else { autostart.disable() };
-                    update_auto_text();
-                    crate::process::append_log(&format!("[tray] auto_start toggled: {}", new_val));
-                }
-                "exit" => { app.exit(0); }
-                id if id.starts_with("audio_dev_") => {
-                    let device_id = id[10..].to_owned();
-                    if !device_id.is_empty() {
-                        crate::process::append_log(&format!("[tray] set_default_device: {}", device_id));
-                        std::thread::spawn(move || {
-                            let _ = audio::set_default_device(&device_id);
-                            update_audio_devices_menu();
-                        });
-                    }
-                }
-                "win_sound_volume_mixer" => {
-                    let _ = crate::process::open_with_system("sndvol.exe");
-                }
-                "win_sound_playback" => {
-                    crate::process::open_sound_panel("playback");
-                }
-                "win_sound_recording" => {
-                    crate::process::open_sound_panel("recording");
-                }
-                "win_sound_sounds" => {
-                    crate::process::open_sound_panel("sounds");
-                }
-                "win_sound_settings" => {
-                    crate::process::open_settings_page("sound");
-                }
-                "win_sound_app_volume" => {
-                    crate::process::open_settings_page("apps-volume");
-                }
-                _ => {}
+        .on_menu_event(move |app, event| match event.id.as_ref() {
+            "show" => {
+                crate::popup::open_popup(app, "devices");
             }
+            "volume" => {
+                crate::popup::open_popup(app, "volume");
+            }
+            "settings" => {
+                windows::open_settings(app);
+            }
+            "about" => {
+                windows::open_settings_tab(app, "about");
+            }
+            "auto_start" => {
+                let old = AUTO_START.load(Ordering::Relaxed);
+                let new_val = !old;
+                AUTO_START.store(new_val, Ordering::Relaxed);
+                config::with_config_mut(|c| c.auto_start = new_val);
+                let autostart = app.autolaunch();
+                let _ = if new_val {
+                    autostart.enable()
+                } else {
+                    autostart.disable()
+                };
+                update_auto_text();
+                crate::process::append_log(&format!("[tray] auto_start toggled: {}", new_val));
+            }
+            "exit" => {
+                app.exit(0);
+            }
+            id if id.starts_with("audio_dev_") => {
+                let device_id = id[10..].to_owned();
+                if !device_id.is_empty() {
+                    crate::process::append_log(&format!(
+                        "[tray] set_default_device: {}",
+                        device_id
+                    ));
+                    std::thread::spawn(move || {
+                        let _ = audio::set_default_device(&device_id);
+                        update_audio_devices_menu();
+                    });
+                }
+            }
+            "win_sound_volume_mixer" => {
+                let _ = crate::process::open_with_system("sndvol.exe");
+            }
+            "win_sound_playback" => {
+                crate::process::open_sound_panel("playback");
+            }
+            "win_sound_recording" => {
+                crate::process::open_sound_panel("recording");
+            }
+            "win_sound_sounds" => {
+                crate::process::open_sound_panel("sounds");
+            }
+            "win_sound_settings" => {
+                crate::process::open_settings_page("sound");
+            }
+            "win_sound_app_volume" => {
+                crate::process::open_settings_page("apps-volume");
+            }
+            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             let app = tray.app_handle();
             if let tauri::tray::TrayIconEvent::Click {
-                button, button_state, rect, ..
-            } = event {
+                button,
+                button_state,
+                rect,
+                ..
+            } = event
+            {
                 if button_state != tauri::tray::MouseButtonState::Up {
                     return;
                 }
@@ -300,9 +327,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                             // 物理坐标需整体转逻辑：仅除 x 会让 y 携带物理值，
                             // 在缩放屏上把弹出窗底边推出屏幕外
                             let (px, py) = match rect.position {
-                                tauri::Position::Physical(p) => {
-                                    (p.x as f64 / sf, p.y as f64 / sf)
-                                }
+                                tauri::Position::Physical(p) => (p.x as f64 / sf, p.y as f64 / sf),
                                 tauri::Position::Logical(p) => (p.x, p.y),
                             };
                             *crate::state::lock_unpoisoned(pos) = (px, py);
@@ -322,12 +347,14 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let _ = TRAY_POS.get_or_init(|| {
         let handle = app.handle();
         let sf = windows::scale_factor(handle);
-        let screen_w = handle.primary_monitor()
+        let screen_w = handle
+            .primary_monitor()
             .ok()
             .flatten()
             .map(|m| m.size().width as f64 / sf)
             .unwrap_or(1920.0);
-        let screen_h = handle.primary_monitor()
+        let screen_h = handle
+            .primary_monitor()
             .ok()
             .flatten()
             .map(|m| m.size().height as f64 / sf)
@@ -400,7 +427,9 @@ fn simplify_device_name(name: &str) -> &str {
 }
 
 /// 构建音频设备切换子菜单
-fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
+fn build_audio_devices_menu(
+    app: &tauri::AppHandle,
+) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
     let submenu = Submenu::with_id(app, "audio_devices", "音频设备", true)?;
     let devices = audio::enumerate_output_devices().unwrap_or_default();
     if devices.is_empty() {
@@ -413,11 +442,25 @@ fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry
                     continue;
                 }
                 let check = if device.is_default { " ✓" } else { "" };
-                let display = c.device_names.get(&device.name)
+                let display = c
+                    .device_names
+                    .get(&device.name)
                     .cloned()
-                    .unwrap_or_else(|| if c.simplify_device_names { simplify_device_name(&device.name).to_string() } else { device.name.clone() });
+                    .unwrap_or_else(|| {
+                        if c.simplify_device_names {
+                            simplify_device_name(&device.name).to_string()
+                        } else {
+                            device.name.clone()
+                        }
+                    });
                 let label = format!("{}{}", display, check);
-                let item = MenuItem::with_id(app, format!("audio_dev_{}", device.id), label, true, None::<&str>);
+                let item = MenuItem::with_id(
+                    app,
+                    format!("audio_dev_{}", device.id),
+                    label,
+                    true,
+                    None::<&str>,
+                );
                 if let Ok(item) = item {
                     let _ = submenu.append(&item);
                 }
@@ -451,7 +494,9 @@ pub fn update_audio_devices_menu() {
 }
 
 /// 构建 Windows 声音设置子菜单
-fn build_windows_sound_settings_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
+fn build_windows_sound_settings_menu(
+    app: &tauri::AppHandle,
+) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
     let submenu = Submenu::with_id(app, "win_sound", "声音设置", true)?;
     let items = [
         ("win_sound_volume_mixer", "音量合成器 (Classic)"),

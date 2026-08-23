@@ -51,7 +51,11 @@ struct SessionVolumeCallback {
 }
 
 impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
-    fn OnDisplayNameChanged(&self, _newdisplayname: &PCWSTR, _eventcontext: *const GUID) -> Result<()> {
+    fn OnDisplayNameChanged(
+        &self,
+        _newdisplayname: &PCWSTR,
+        _eventcontext: *const GUID,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -59,7 +63,12 @@ impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
         Ok(())
     }
 
-    fn OnSimpleVolumeChanged(&self, newvolume: f32, newmute: BOOL, _eventcontext: *const GUID) -> Result<()> {
+    fn OnSimpleVolumeChanged(
+        &self,
+        newvolume: f32,
+        newmute: BOOL,
+        _eventcontext: *const GUID,
+    ) -> Result<()> {
         let _ = self.app_handle.emit(
             "volume-changed",
             vec![VolumeChangeEvent {
@@ -72,11 +81,21 @@ impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
         Ok(())
     }
 
-    fn OnChannelVolumeChanged(&self, _channelcount: u32, _newchannelvolumearray: *const f32, _changedchannel: u32, _eventcontext: *const GUID) -> Result<()> {
+    fn OnChannelVolumeChanged(
+        &self,
+        _channelcount: u32,
+        _newchannelvolumearray: *const f32,
+        _changedchannel: u32,
+        _eventcontext: *const GUID,
+    ) -> Result<()> {
         Ok(())
     }
 
-    fn OnGroupingParamChanged(&self, _newgroupingparam: *const GUID, _eventcontext: *const GUID) -> Result<()> {
+    fn OnGroupingParamChanged(
+        &self,
+        _newgroupingparam: *const GUID,
+        _eventcontext: *const GUID,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -97,18 +116,28 @@ struct DeviceNotification {
 }
 
 impl IMMNotificationClient_Impl for DeviceNotification_Impl {
-    fn OnDeviceStateChanged(&self, _pwstrdeviceid: &PCWSTR, _dwnewstate: DEVICE_STATE) -> Result<()> {
-        unsafe { let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0)); }
+    fn OnDeviceStateChanged(
+        &self,
+        _pwstrdeviceid: &PCWSTR,
+        _dwnewstate: DEVICE_STATE,
+    ) -> Result<()> {
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+        }
         Ok(())
     }
 
     fn OnDeviceAdded(&self, _pwstrdeviceid: &PCWSTR) -> Result<()> {
-        unsafe { let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+        }
         Ok(())
     }
 
     fn OnDeviceRemoved(&self, _pwstrdeviceid: &PCWSTR) -> Result<()> {
-        unsafe { let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0)); }
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+        }
         Ok(())
     }
 
@@ -231,10 +260,11 @@ impl AudioMonitor {
 
             for i in 0..count {
                 if let Ok(device) = collection.Item(i) {
-                    let session_manager: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) {
-                        Ok(m) => m,
-                        Err(_) => continue,
-                    };
+                    let session_manager: IAudioSessionManager2 =
+                        match device.Activate(CLSCTX_ALL, None) {
+                            Ok(m) => m,
+                            Err(_) => continue,
+                        };
                     let session_enumerator = match session_manager.GetSessionEnumerator() {
                         Ok(e) => e,
                         Err(_) => continue,
@@ -242,10 +272,11 @@ impl AudioMonitor {
                     let s_count = session_enumerator.GetCount().unwrap_or(0);
                     for j in 0..s_count {
                         if let Ok(session_control) = session_enumerator.GetSession(j) {
-                            let session_control2: IAudioSessionControl2 = match session_control.cast() {
-                                Ok(s) => s,
-                                Err(_) => continue,
-                            };
+                            let session_control2: IAudioSessionControl2 =
+                                match session_control.cast() {
+                                    Ok(s) => s,
+                                    Err(_) => continue,
+                                };
                             let state = session_control2.GetState().unwrap_or(AudioSessionState(0));
                             if state.0 > 2 {
                                 continue;
@@ -315,8 +346,7 @@ impl AudioMonitor {
         .into();
 
         if endpoint.RegisterControlChangeNotify(&callback).is_ok() {
-            self.callbacks
-                .insert(id.to_string(), (endpoint, callback));
+            self.callbacks.insert(id.to_string(), (endpoint, callback));
         }
     }
 }
@@ -375,7 +405,11 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
         monitor.sync_callbacks();
 
         let monitor_ptr = Box::leak(Box::new(monitor));
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, monitor_ptr as *mut AudioMonitor as isize);
+        SetWindowLongPtrW(
+            hwnd,
+            GWLP_USERDATA,
+            monitor_ptr as *mut AudioMonitor as isize,
+        );
 
         SetTimer(Some(hwnd), SESSION_TIMER_ID, SESSION_TIMER_MS, None);
 
@@ -419,7 +453,8 @@ extern "system" fn audio_msg_wnd_proc(
             }
             WM_ENDSESSION => {
                 crate::process::append_log(&format!(
-                    "[audio_notify] WM_ENDSESSION received, wparam={}", wparam.0
+                    "[audio_notify] WM_ENDSESSION received, wparam={}",
+                    wparam.0
                 ));
                 if wparam.0 != 0 {
                     let (enabled, devices) = crate::config::with_config(|c| {

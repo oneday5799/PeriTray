@@ -47,7 +47,8 @@ fn write_log(msg: &str) {
     let line = format!("[{}]{}\n", timestamp, msg);
     let path = log_path();
     if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true).append(true)
+        .create(true)
+        .append(true)
         .open(&path)
     {
         let _ = file.write_all(line.as_bytes());
@@ -56,8 +57,8 @@ fn write_log(msg: &str) {
 
 /// 清理旧日志文件（根据保留时长设置）
 pub fn clean_old_logs() {
-    use std::time::{SystemTime, Duration};
     use crate::config::LogRetention;
+    use std::time::{Duration, SystemTime};
 
     let (enabled, retention) = crate::config::with_config(|c| (c.log_enabled, c.log_retention));
     if !enabled {
@@ -132,12 +133,13 @@ fn chrono_str() -> String {
 /// 使用系统默认程序打开文件/URL
 pub fn open_with_system(path: &str) -> Result<(), String> {
     let mut cmd = new_hidden_cmd("cmd");
-    cmd.args(["/c", "start", "", path])
-        .spawn()
-        .map_err(|e| {
-            crate::process::append_log(&format!("[process] open_with_system failed: {} -> {}", path, e));
-            e.to_string()
-        })?;
+    cmd.args(["/c", "start", "", path]).spawn().map_err(|e| {
+        crate::process::append_log(&format!(
+            "[process] open_with_system failed: {} -> {}",
+            path, e
+        ));
+        e.to_string()
+    })?;
     Ok(())
 }
 
@@ -159,7 +161,9 @@ fn shell_open(file: &str, params: Option<&str>) {
             std::ptr::null_mut(),
             wide_verb.as_ptr(),
             wide_file.as_ptr(),
-            wide_params.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
+            wide_params
+                .as_ref()
+                .map_or(std::ptr::null(), |v| v.as_ptr()),
             std::ptr::null(),
             windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
         );
@@ -168,7 +172,10 @@ fn shell_open(file: &str, params: Option<&str>) {
 
 /// 打开旧版声音控制面板 (mmsys.cpl)
 pub fn open_sound_panel(panel: &str) {
-    shell_open("rundll32.exe", Some(&format!("shell32.dll,Control_RunDLL mmsys.cpl,,{}", panel)));
+    shell_open(
+        "rundll32.exe",
+        Some(&format!("shell32.dll,Control_RunDLL mmsys.cpl,,{}", panel)),
+    );
 }
 
 /// 打开现代 Windows 设置页面 (ms-settings:)

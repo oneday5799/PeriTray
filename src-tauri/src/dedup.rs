@@ -1,14 +1,22 @@
+use crate::device::{DevType, Device};
 use std::collections::{HashMap, HashSet};
-use crate::device::{Device, DevType};
 
 /// 取设备名括号内核心名并剥离蓝牙协议后缀（Hands-Free/Stereo/LE/Audio 等），用于重名合并。
 /// 注意：与 tray::simplify_device_name 语义不同——本函数会剥后缀返回 String，两者勿互相替换。
 pub fn core_name(n: &str) -> String {
     let base = if let Some(i) = n.find(" (") {
         if let Some(j) = n.rfind(')') {
-            if j > i + 2 { &n[i + 2..j] } else { n }
-        } else { n }
-    } else { n };
+            if j > i + 2 {
+                &n[i + 2..j]
+            } else {
+                n
+            }
+        } else {
+            n
+        }
+    } else {
+        n
+    };
     for suffix in &[
         " Hands-Free AG",
         " Hands-Free HF",
@@ -81,14 +89,26 @@ pub fn try_insert(
         }
     }
 
-    let conn_tag = if is_bluetooth { "bt" } else if is_wireless_24g { "24g" } else { "usb" };
+    let conn_tag = if is_bluetooth {
+        "bt"
+    } else if is_wireless_24g {
+        "24g"
+    } else {
+        "usb"
+    };
     let dedup_key = format!("{}:{}", cn, conn_tag);
     if dedup && !seen.insert(dedup_key) {
         if let Some(indices) = cn_index.get(&cn) {
             if let Some(&pos) = indices.iter().find(|&&i| {
                 let d = &devices[i];
                 let d_cn = core_name(&d.name);
-                let econn = if d.is_bluetooth { "bt" } else if d.is_wireless_24g { "24g" } else { "usb" };
+                let econn = if d.is_bluetooth {
+                    "bt"
+                } else if d.is_wireless_24g {
+                    "24g"
+                } else {
+                    "usb"
+                };
                 d_cn == cn && econn == conn_tag
             }) {
                 let existing = &mut devices[pos];

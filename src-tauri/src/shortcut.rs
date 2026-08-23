@@ -1,6 +1,6 @@
 use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::Ordering;
+use std::sync::{LazyLock, Mutex};
 use tauri::Emitter;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -9,9 +9,16 @@ static DEVICE_REGISTERED_KEYS: LazyLock<Mutex<HashSet<String>>> =
 
 pub fn register_shortcuts(app: &tauri::AppHandle) {
     let app = app.clone();
-    let (device_key, volume_key, vol_up_key, vol_down_key, vol_mute_key) = crate::config::with_config(|c| {
-        (c.shortcut_devices.clone(), c.shortcut_volume.clone(), c.shortcut_volume_up.clone(), c.shortcut_volume_down.clone(), c.shortcut_volume_mute.clone())
-    });
+    let (device_key, volume_key, vol_up_key, vol_down_key, vol_mute_key) =
+        crate::config::with_config(|c| {
+            (
+                c.shortcut_devices.clone(),
+                c.shortcut_volume.clone(),
+                c.shortcut_volume_up.clone(),
+                c.shortcut_volume_down.clone(),
+                c.shortcut_volume_mute.clone(),
+            )
+        });
 
     if let Some(ref key) = device_key {
         register_single(&app, key, "devices");
@@ -71,12 +78,14 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
         let action: &'static str = Box::leak(action.into_boxed_str());
         let key_str: &'static str = Box::leak(key.clone().into_boxed_str());
         crate::process::append_log(&format!("[shortcut] registered {} -> {}", key, action));
-        let _ = app.global_shortcut().on_shortcut(sc, move |_app, _shortcut, event| {
-            if event.state != ShortcutState::Pressed {
-                return;
-            }
-            dispatch_shortcut_action(_app, action, key_str);
-        });
+        let _ = app
+            .global_shortcut()
+            .on_shortcut(sc, move |_app, _shortcut, event| {
+                if event.state != ShortcutState::Pressed {
+                    return;
+                }
+                dispatch_shortcut_action(_app, action, key_str);
+            });
         registered.insert(key.clone());
     }
 }
@@ -92,12 +101,14 @@ fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {
     let action_str = action.to_string();
     let key_str = key.to_string();
     let app = app.clone();
-    let _ = app.global_shortcut().on_shortcut(sc, move |_app, _shortcut, event| {
-        if event.state != ShortcutState::Pressed {
-            return;
-        }
-        dispatch_shortcut_action(_app, &action_str, &key_str);
-    });
+    let _ = app
+        .global_shortcut()
+        .on_shortcut(sc, move |_app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            dispatch_shortcut_action(_app, &action_str, &key_str);
+        });
     crate::process::append_log(&format!("[shortcut] registered {} -> {}", key, action));
 }
 
@@ -115,10 +126,15 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
     }
 
     let devices = crate::audio::enumerate_output_devices().unwrap_or_default();
-    let connected: Vec<&crate::audio::AudioDevice> =
-        devices.iter().filter(|d| group.iter().any(|id| id == &d.id)).collect();
+    let connected: Vec<&crate::audio::AudioDevice> = devices
+        .iter()
+        .filter(|d| group.iter().any(|id| id == &d.id))
+        .collect();
     if connected.is_empty() {
-        crate::process::append_log(&format!("[hotkey] no connected devices for shared key {}", key));
+        crate::process::append_log(&format!(
+            "[hotkey] no connected devices for shared key {}",
+            key
+        ));
         return;
     }
 

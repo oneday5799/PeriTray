@@ -66,12 +66,15 @@ pub async fn check_and_store(
     current_version: String,
     include_prerelease: bool,
 ) -> (Result<UpdateInfo, String>, bool) {
-    let prefix = if tag.is_empty() { String::new() } else { format!(" {}", tag) };
+    let prefix = if tag.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", tag)
+    };
     let ver_for_task = current_version.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        check_for_update(&ver_for_task, include_prerelease)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || check_for_update(&ver_for_task, include_prerelease))
+            .await;
 
     match result {
         Ok(Ok(info)) => {
@@ -201,7 +204,13 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
 
         loop {
             bytes_read = 0;
-            if WinHttpReadData(request, buffer.as_mut_ptr() as *mut c_void, buffer.len() as u32, &mut bytes_read) == 0 {
+            if WinHttpReadData(
+                request,
+                buffer.as_mut_ptr() as *mut c_void,
+                buffer.len() as u32,
+                &mut bytes_read,
+            ) == 0
+            {
                 let err = GetLastError();
                 WinHttpCloseHandle(request);
                 WinHttpCloseHandle(connect);

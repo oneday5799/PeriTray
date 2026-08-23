@@ -1,10 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![warn(unused_imports, dead_code)]
 
+mod app_icon;
 mod audio;
 mod audio_notify;
 mod audio_spatial;
-mod app_icon;
 mod bluetooth;
 mod classify;
 mod commands;
@@ -23,8 +23,8 @@ mod wmi_query;
 
 use std::panic;
 
-use tauri::Manager;
 use tauri::Emitter;
+use tauri::Manager;
 
 /// 安装 panic hook：捕获 panic 后弹 MessageBox 再退出（避免 release 模式静默闪退）
 fn install_panic_hook() {
@@ -43,14 +43,18 @@ fn install_panic_hook() {
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "unknown location".to_string());
         let full = format!("{}\n\nLocation: {}", msg, location);
-        process::append_log(&format!("[panic] {} @ {}", msg.replace('\n', " | "), location));
+        process::append_log(&format!(
+            "[panic] {} @ {}",
+            msg.replace('\n', " | "),
+            location
+        ));
         show_error_box(&full);
         default_hook(info);
     }));
 }
 
 fn show_error_box(msg: &str) {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_OK, MB_ICONERROR};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
     let title = crate::process::to_wide("外设监控 - 启动失败");
     let message = crate::process::to_wide(msg);
     unsafe {
@@ -187,12 +191,8 @@ fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     let include = config::with_config(|c| c.include_prerelease);
                     let current_version = app_handle.package_info().version.to_string();
-                    let (result, stored) = crate::update::check_and_store(
-                        "startup",
-                        current_version,
-                        include,
-                    )
-                    .await;
+                    let (result, stored) =
+                        crate::update::check_and_store("startup", current_version, include).await;
                     match result {
                         Ok(info) => {
                             let status = if info.has_update { "update" } else { "latest" };
@@ -217,31 +217,29 @@ fn main() {
             process::append_log("[main] startup complete");
             Ok(())
         })
-        .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::Focused(focused) => {
-                    if window.label() == "popup" {
-                        if !focused
-                            && !state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
-                            && window.is_visible().unwrap_or(false)
-                        {
-                            let app = window.app_handle();
-                            popup::close_popup(app);
-                        }
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Focused(focused) => {
+                if window.label() == "popup" {
+                    if !focused
+                        && !state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
+                        && window.is_visible().unwrap_or(false)
+                    {
+                        let app = window.app_handle();
+                        popup::close_popup(app);
                     }
                 }
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    let label = window.label();
-                    if label == "settings" {
-                        api.prevent_close();
-                        let _ = window.destroy();
-                    } else if label == "popup" {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    }
-                }
-                _ => {}
             }
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                let label = window.label();
+                if label == "settings" {
+                    api.prevent_close();
+                    let _ = window.destroy();
+                } else if label == "popup" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

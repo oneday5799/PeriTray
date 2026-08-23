@@ -1,15 +1,18 @@
-use std::collections::{HashMap, HashSet};
-use serde::Deserialize;
 use regex::Regex;
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use wmi::WMIConnection;
 
-use crate::device::{Device, DevType};
-use crate::config;
-use crate::classify::{classify_device, classify_bluetooth, is_wireless_24g_by_vid_pid, is_bt_service, is_generic_hid, is_system_device};
-use crate::device_data;
 use crate::bluetooth::find_paired_bluetooth_devices;
+use crate::classify::{
+    classify_bluetooth, classify_device, is_bt_service, is_generic_hid, is_system_device,
+    is_wireless_24g_by_vid_pid,
+};
+use crate::config;
 use crate::dedup::{core_name, try_insert};
+use crate::device::{DevType, Device};
+use crate::device_data;
 
 /// 蓝牙设备状态字符串：WMI 查询构造与托盘图标判断共用，避免字面量散落
 pub const BT_STATUS_CONNECTED: &str = "已连接";
@@ -52,9 +55,8 @@ pub fn query_devices() -> Vec<Device> {
 
     crate::device_data::reload_device_data();
 
-    let (filter_enabled, dedup_enabled, filter_regex_str) = config::with_config(|c| {
-        (c.filter_enabled, c.dedup_devices, c.filter_regex.clone())
-    });
+    let (filter_enabled, dedup_enabled, filter_regex_str) =
+        config::with_config(|c| (c.filter_enabled, c.dedup_devices, c.filter_regex.clone()));
 
     let com = unsafe { wmi::COMLibrary::assume_initialized() };
     let con = match WMIConnection::new(com) {
@@ -68,7 +70,13 @@ pub fn query_devices() -> Vec<Device> {
     let mut bt_names = HashSet::new();
 
     query_pnp_devices(&con, dedup_enabled, &mut seen, &mut all, &mut cn_index);
-    query_bt_devices(dedup_enabled, &mut seen, &mut all, &mut bt_names, &mut cn_index);
+    query_bt_devices(
+        dedup_enabled,
+        &mut seen,
+        &mut all,
+        &mut bt_names,
+        &mut cn_index,
+    );
     query_battery_devices(&con, dedup_enabled, &mut seen, &mut all, &mut cn_index);
 
     // Apply user-defined regex filter
@@ -96,7 +104,15 @@ fn query_pnp_devices(
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
 ) {
-    const PNPCLASS_WHITELIST: &[&str] = &["AudioEndpoint", "Bluetooth", "HIDClass", "Keyboard", "MEDIA", "Mouse", "Monitor"];
+    const PNPCLASS_WHITELIST: &[&str] = &[
+        "AudioEndpoint",
+        "Bluetooth",
+        "HIDClass",
+        "Keyboard",
+        "MEDIA",
+        "Mouse",
+        "Monitor",
+    ];
 
     let rows = match con.raw_query::<HashMap<String, wmi::Variant>>(
         "SELECT Name, Status, PNPDeviceID, Caption, PNPClass, ConfigManagerErrorCode FROM Win32_PnPEntity",
@@ -118,7 +134,10 @@ fn query_pnp_devices(
         let pnp = wmi_str(&row, "PNPClass");
         let status_str = wmi_str(&row, "Status");
 
-        if !PNPCLASS_WHITELIST.iter().any(|c| pnp.eq_ignore_ascii_case(c)) {
+        if !PNPCLASS_WHITELIST
+            .iter()
+            .any(|c| pnp.eq_ignore_ascii_case(c))
+        {
             continue;
         }
 
@@ -137,8 +156,14 @@ fn query_pnp_devices(
             Some(code) => code == 0,
             None => status_str == "OK",
         };
-        let s = if connected { BT_STATUS_CONNECTED } else { BT_STATUS_PAIRED };
-        if n.is_empty() { continue; }
+        let s = if connected {
+            BT_STATUS_CONNECTED
+        } else {
+            BT_STATUS_PAIRED
+        };
+        if n.is_empty() {
+            continue;
+        }
 
         if pnp.eq_ignore_ascii_case("Bluetooth") && is_bt_service(&u) {
             continue;
@@ -158,7 +183,20 @@ fn query_pnp_devices(
         } else {
             None
         };
-        try_insert(&n, display_name.as_deref(), dt, s, None, None, false, is_24g, dedup, seen, all, cn_index);
+        try_insert(
+            &n,
+            display_name.as_deref(),
+            dt,
+            s,
+            None,
+            None,
+            false,
+            is_24g,
+            dedup,
+            seen,
+            all,
+            cn_index,
+        );
     }
 }
 
@@ -175,15 +213,24 @@ fn query_bt_devices(
     };
 
     for (name, connected, battery, device_id) in btc_devices {
-        if name.is_empty() { continue; }
+        if name.is_empty() {
+            continue;
+        }
         let dt = match classify_bluetooth(&name) {
             Some(dt) => dt,
             None => continue,
         };
-        let s = if connected { BT_STATUS_CONNECTED } else { BT_STATUS_PAIRED };
+        let s = if connected {
+            BT_STATUS_CONNECTED
+        } else {
+            BT_STATUS_PAIRED
+        };
         let cn = core_name(&name);
         bt_names.insert(cn.clone());
-        if let Some(existing) = all.iter_mut().find(|d| core_name(&d.name) == cn && d.is_bluetooth) {
+        if let Some(existing) = all
+            .iter_mut()
+            .find(|d| core_name(&d.name) == cn && d.is_bluetooth)
+        {
             existing.status = s.to_string();
             if battery.is_some() {
                 existing.battery = battery.map(|b| b as i32);
@@ -192,7 +239,20 @@ fn query_bt_devices(
                 existing.device_id = Some(device_id);
             }
         } else {
-            try_insert(&name, None, dt, s, battery.map(|b| b as i32), Some(device_id), true, false, dedup, seen, all, cn_index);
+            try_insert(
+                &name,
+                None,
+                dt,
+                s,
+                battery.map(|b| b as i32),
+                Some(device_id),
+                true,
+                false,
+                dedup,
+                seen,
+                all,
+                cn_index,
+            );
         }
     }
 }
@@ -206,13 +266,14 @@ fn query_battery_devices(
 ) {
     if let Ok(r) = con.query::<BatteryDevice>() {
         for d in r {
-            let (n, s) = (
-                d.name.unwrap_or_default(),
-                d.status.unwrap_or_default(),
-            );
-            if n.is_empty() { continue; }
+            let (n, s) = (d.name.unwrap_or_default(), d.status.unwrap_or_default());
+            if n.is_empty() {
+                continue;
+            }
             let cn = core_name(&n);
-            if dedup && seen.contains(&format!("{}:usb", cn)) { continue; }
+            if dedup && seen.contains(&format!("{}:usb", cn)) {
+                continue;
+            }
             seen.insert(format!("{}:usb", cn));
             let idx = all.len();
             all.push(Device {

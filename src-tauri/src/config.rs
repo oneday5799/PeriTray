@@ -32,13 +32,18 @@ impl<'de> Deserialize<'de> for LogRetention {
             "three_days" | "threedays" => Ok(Self::ThreeDays),
             "one_week" | "oneweek" => Ok(Self::OneWeek),
             "one_month" | "onemonth" => Ok(Self::OneMonth),
-            _ => Err(serde::de::Error::custom(format!("unknown log_retention: {}", s))),
+            _ => Err(serde::de::Error::custom(format!(
+                "unknown log_retention: {}",
+                s
+            ))),
         }
     }
 }
 
 impl Default for LogRetention {
-    fn default() -> Self { Self::OneDay }
+    fn default() -> Self {
+        Self::OneDay
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,10 +114,18 @@ pub struct Config {
     pub window_material: String,
 }
 
-fn default_true() -> bool { true }
-fn default_popup_tab() -> String { "devices".to_string() }
-fn default_theme_mode() -> String { "follow_system".to_string() }
-fn default_window_material() -> String { "default".to_string() }
+fn default_true() -> bool {
+    true
+}
+fn default_popup_tab() -> String {
+    "devices".to_string()
+}
+fn default_theme_mode() -> String {
+    "follow_system".to_string()
+}
+fn default_window_material() -> String {
+    "default".to_string()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -158,7 +171,8 @@ impl Default for Config {
 impl Config {
     /// Combined regex for all device exclusion filters (case-insensitive)
     fn default_filter_regex() -> String {
-        "Virtual|虚拟|^HID|Audio Device|Audio 设备|Hands-Free|A2DP|gvinput Device|英特尔\\(R\\)".to_string()
+        "Virtual|虚拟|^HID|Audio Device|Audio 设备|Hands-Free|A2DP|gvinput Device|英特尔\\(R\\)"
+            .to_string()
     }
 }
 
@@ -176,7 +190,10 @@ pub fn log_once() -> bool {
 
 fn sync_log_cache(config: &Config) {
     LOG_ENABLED.store(config.log_enabled, Ordering::Relaxed);
-    LOG_ONCE.store(config.log_retention == LogRetention::Once, Ordering::Relaxed);
+    LOG_ONCE.store(
+        config.log_retention == LogRetention::Once,
+        Ordering::Relaxed,
+    );
 }
 
 fn config_path() -> std::path::PathBuf {
@@ -196,7 +213,10 @@ pub fn init_config() {
                 }
             },
             Err(e) => {
-                crate::process::append_log(&format!("[config] load failed (using defaults): {}", e));
+                crate::process::append_log(&format!(
+                    "[config] load failed (using defaults): {}",
+                    e
+                ));
                 Config::default()
             }
         }
@@ -222,8 +242,8 @@ where
     let result = f(&mut guard);
     if let Ok(content) = toml::to_string_pretty(&*guard) {
         use std::io::Write;
-        if let Err(e) = std::fs::File::create(&config_path())
-            .and_then(|mut f| f.write_all(content.as_bytes()))
+        if let Err(e) =
+            std::fs::File::create(&config_path()).and_then(|mut f| f.write_all(content.as_bytes()))
         {
             crate::process::append_log(&format!("[config] save failed: {}", e));
         }
