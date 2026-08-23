@@ -1,9 +1,15 @@
 #!/bin/sh
 node tools/check.mjs || exit 1
 
-# Rust 源有暂存改动时增量运行 cargo check（强制零警告，约定见 AGENTS.md Commit 规范）
+# Rust 源有暂存改动时增量运行 rustfmt 与 cargo check（约定见 AGENTS.md Commit 规范）
 if git diff --cached --name-only -- src-tauri/src src-tauri/Cargo.toml src-tauri/Cargo.lock | grep -q .; then
-  echo "[pre-commit] Rust 改动，运行 cargo check..."
+  echo "[pre-commit] Rust 改动，运行 cargo fmt --check..."
+  if ! (cd src-tauri && cargo fmt --check) > /dev/null 2>&1; then
+    echo "[pre-commit] 存在不符合 rustfmt 的格式，提交被拦截"
+    echo "[pre-commit] 请执行: cd src-tauri && cargo fmt 后重新暂存"
+    exit 1
+  fi
+  echo "[pre-commit] 运行 cargo check..."
   out=$(cd src-tauri && cargo check 2>&1) || {
     printf '%s\n' "$out"
     echo "[pre-commit] cargo check 失败，提交被拦截"

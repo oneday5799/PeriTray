@@ -28,8 +28,9 @@
 
 - 发版的版本号 bump 单独成提交：`chore(release): vX.Y.Z`
 - 涉及 `src-tauri/dist/` 的提交会被 pre-commit 钩子自动校验（见下节）
-- **Rust 改动提交前必须 `cargo check` 零警告**（main.rs 有 `#![warn(unused_imports, dead_code)]`）；
-  由 pre-commit 钩子自动执行——Rust 文件有暂存改动时增量运行（热增量约 2s），有 warning 即拦截
+- **Rust 改动提交前必须过 `cargo fmt --check` 与 `cargo check` 零警告**
+  （main.rs 有 `#![warn(unused_imports, dead_code)]`）；由 pre-commit 钩子自动执行——
+  Rust 文件有暂存改动时增量运行（合计热增量约 3s），格式不符或有 warning 即拦截
 
 ## 代码与注释风格
 
@@ -92,7 +93,8 @@
 ## 提交自动闸门（强制）
 
 每次提交全量运行 `.git/hooks/pre-commit` → `node tools/check.mjs`（<1s）；
-Rust 文件有暂存改动时增量追加 `cargo check` 零警告校验（热增量约 2s）。
+Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` 零警告校验
+（合计热增量约 3s）。
 
 **五类校验**：
 1. HTML 引用与磁盘文件双向一致（含孤立文件检测）
@@ -103,7 +105,7 @@ Rust 文件有暂存改动时增量追加 `cargo check` 零警告校验（热增
    settings.html 占位 五处须为同一版本（防发版间隙漂移）
 
 **防护边界**：结构完整性闸门。能拦引用缺失/孤立文件/未定义调用/语法错误/BOM/
-版本漂移/Rust 编译警告；拦不住 CSS 语义错误、合法语法下的逻辑 bug、
+版本漂移/Rust 格式不符/编译警告；拦不住 CSS 语义错误、合法语法下的逻辑 bug、
 运行时行为问题——这些仍需构建后人工回归。
 
 **例外通道**：
