@@ -109,25 +109,40 @@ pub fn clean_old_logs() {
 }
 
 fn chrono_str() -> String {
-    use std::time::SystemTime;
-    let Ok(dur) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
-        return "????.??.?? ??:??:??".into();
-    };
-    let secs = dur.as_secs();
-    let h = (secs / 3600) % 24;
-    let min = (secs / 60) % 60;
-    let s = secs % 60;
-    let days = secs / 86400 + 719468;
-    let era = days / 146097;
-    let doe = days - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mon = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mon <= 2 { y + 1 } else { y };
-    format!("{:04}.{:02}.{:02} {:02}:{:02}:{:02}", y, mon, d, h, min, s)
+    // 直接使用系统本地时间，避免手动 UTC 偏移计算的边界问题
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::SYSTEMTIME;
+        use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+        let mut st: SYSTEMTIME = unsafe { std::mem::zeroed() };
+        unsafe { GetLocalTime(&mut st) };
+        return format!(
+            "{:04}.{:02}.{:02} {:02}:{:02}:{:02}",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::time::SystemTime;
+        let Ok(dur) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) else {
+            return "????.??.?? ??:??:??".into();
+        };
+        let secs = dur.as_secs();
+        let h = (secs / 3600) % 24;
+        let min = (secs / 60) % 60;
+        let s = secs % 60;
+        let days = secs / 86400 + 719468;
+        let era = days / 146097;
+        let doe = days - era * 146097;
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let mon = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = if mon <= 2 { y + 1 } else { y };
+        format!("{:04}.{:02}.{:02} {:02}:{:02}:{:02}", y, mon, d, h, min, s)
+    }
 }
 
 /// 使用系统默认程序打开文件/URL

@@ -241,68 +241,71 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .tooltip("外设监控")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(move |app, event| match event.id.as_ref() {
-            "show" => {
-                crate::popup::open_popup(app, "devices");
-            }
-            "volume" => {
-                crate::popup::open_popup(app, "volume");
-            }
-            "settings" => {
-                windows::open_settings(app);
-            }
-            "about" => {
-                windows::open_settings_tab(app, "about");
-            }
-            "auto_start" => {
-                let old = AUTO_START.load(Ordering::Relaxed);
-                let new_val = !old;
-                AUTO_START.store(new_val, Ordering::Relaxed);
-                config::with_config_mut(|c| c.auto_start = new_val);
-                let autostart = app.autolaunch();
-                let _ = if new_val {
-                    autostart.enable()
-                } else {
-                    autostart.disable()
-                };
-                update_auto_text();
-                crate::process::append_log(&format!("[tray] auto_start toggled: {}", new_val));
-            }
-            "exit" => {
-                app.exit(0);
-            }
-            id if id.starts_with("audio_dev_") => {
-                let device_id = id[10..].to_owned();
-                if !device_id.is_empty() {
-                    crate::process::append_log(&format!(
-                        "[tray] set_default_device: {}",
-                        device_id
-                    ));
-                    std::thread::spawn(move || {
-                        let _ = audio::set_default_device(&device_id);
-                        update_audio_devices_menu();
-                    });
+        .on_menu_event(move |app, event| {
+            crate::process::append_log(&format!("[tray] menu: {}", event.id.as_ref()));
+            match event.id.as_ref() {
+                "show" => {
+                    crate::popup::open_popup(app, "devices");
                 }
+                "volume" => {
+                    crate::popup::open_popup(app, "volume");
+                }
+                "settings" => {
+                    windows::open_settings(app);
+                }
+                "about" => {
+                    windows::open_settings_tab(app, "about");
+                }
+                "auto_start" => {
+                    let old = AUTO_START.load(Ordering::Relaxed);
+                    let new_val = !old;
+                    AUTO_START.store(new_val, Ordering::Relaxed);
+                    config::with_config_mut(|c| c.auto_start = new_val);
+                    let autostart = app.autolaunch();
+                    let _ = if new_val {
+                        autostart.enable()
+                    } else {
+                        autostart.disable()
+                    };
+                    update_auto_text();
+                    crate::process::append_log(&format!("[tray] auto_start toggled: {}", new_val));
+                }
+                "exit" => {
+                    app.exit(0);
+                }
+                id if id.starts_with("audio_dev_") => {
+                    let device_id = id[10..].to_owned();
+                    if !device_id.is_empty() {
+                        crate::process::append_log(&format!(
+                            "[tray] set_default_device: {}",
+                            device_id
+                        ));
+                        std::thread::spawn(move || {
+                            let _ = audio::set_default_device(&device_id);
+                            update_audio_devices_menu();
+                        });
+                    }
+                }
+                "win_sound_volume_mixer" => {
+                    let _ = crate::process::open_with_system("sndvol.exe");
+                }
+                "win_sound_playback" => {
+                    crate::process::open_sound_panel("playback");
+                }
+                "win_sound_recording" => {
+                    crate::process::open_sound_panel("recording");
+                }
+                "win_sound_sounds" => {
+                    crate::process::open_sound_panel("sounds");
+                }
+                "win_sound_settings" => {
+                    crate::process::open_settings_page("sound");
+                }
+                "win_sound_app_volume" => {
+                    crate::process::open_settings_page("apps-volume");
+                }
+                _ => {}
             }
-            "win_sound_volume_mixer" => {
-                let _ = crate::process::open_with_system("sndvol.exe");
-            }
-            "win_sound_playback" => {
-                crate::process::open_sound_panel("playback");
-            }
-            "win_sound_recording" => {
-                crate::process::open_sound_panel("recording");
-            }
-            "win_sound_sounds" => {
-                crate::process::open_sound_panel("sounds");
-            }
-            "win_sound_settings" => {
-                crate::process::open_settings_page("sound");
-            }
-            "win_sound_app_volume" => {
-                crate::process::open_settings_page("apps-volume");
-            }
-            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             let app = tray.app_handle();
@@ -317,6 +320,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
                 if button == tauri::tray::MouseButton::Left {
+                    crate::process::append_log("[tray] click → spawn");
                     // 事件线程仅做分发：显示器枚举/配置读取/窗口操作全部移出，
                     // 防止唤醒后子窗口消息队列卡死拖垮整个事件循环
                     let app = app.clone();

@@ -214,32 +214,60 @@ fn main() {
                 });
             }
 
+            // 心跳线程：事件线程若阻塞则日志同步停滞，可据此判断死点时刻
+            {
+                let h = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    crate::process::append_log("[heartbeat]");
+                    let _ = &h;
+                });
+            }
+
             process::append_log("[main] startup complete");
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::Focused(focused) => {
-                if window.label() == "popup" {
-                    if !focused
-                        && !state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
-                        && window.is_visible().unwrap_or(false)
-                    {
-                        let app = window.app_handle();
-                        popup::close_popup(app);
+        .on_window_event(|window, event| {
+            let label = window.label().to_string();
+            match event {
+                tauri::WindowEvent::Focused(focused) => {
+                    crate::process::append_log(&format!(
+                        "[event] Focused({}) label={} anim={} vis={}",
+                        focused,
+                        label,
+                        state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed),
+                        window.is_visible().unwrap_or(false)
+                    ));
+                }
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    crate::process::append_log(&format!("[event] CloseRequested label={}", label));
+                }
+                _ => {}
+            }
+            match event {
+                tauri::WindowEvent::Focused(focused) => {
+                    if window.label() == "popup" {
+                        if !focused
+                            && !state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
+                            && window.is_visible().unwrap_or(false)
+                        {
+                            let app = window.app_handle();
+                            popup::close_popup(app);
+                        }
                     }
                 }
-            }
-            tauri::WindowEvent::CloseRequested { api, .. } => {
-                let label = window.label();
-                if label == "settings" {
-                    api.prevent_close();
-                    let _ = window.destroy();
-                } else if label == "popup" {
-                    api.prevent_close();
-                    let _ = window.hide();
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let label = window.label();
+                    if label == "settings" {
+                        api.prevent_close();
+                        let _ = window.destroy();
+                    } else if label == "popup" {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         })
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
