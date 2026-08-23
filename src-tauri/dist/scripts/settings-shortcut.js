@@ -1,6 +1,6 @@
 /* settings-shortcut.js — 设置页·快捷键 tab：基础快捷键录制绑定/设备快捷键共享切换/设备快捷键列表
  * 加载序 3/7 · 提供：initShortcutSettings() / initDeviceShortcutSettings()
- * 依赖：common.js(invoke/bindShortcutRecorder/attachTooltip) /
+ * 依赖：common.js(invoke/bindShortcutRecorder/describeShortcutError/attachTooltip) /
  *       settings.js(config/bindToggle/saveConfig/showToast) */
 function initShortcutSettings() {
   bindToggle("toggle-device-shortcut-cycle", {
@@ -42,15 +42,10 @@ function initShortcutSettings() {
             showToast(`快捷键 "${display}" 已保存`);
           })
           .catch((err) => {
-            const msg = String(err);
             config[keyField] = null;
             input.value = "";
             clearBtn.style.display = "none";
-            if (msg.includes("已被占用")) {
-              showToast(`"${display}" 已被其他功能占用，请选择其他快捷键。`, null, true);
-            } else {
-              showToast("暂不支持该快捷键。", null, true);
-            }
+            showToast(describeShortcutError(err, display), null, true);
           });
       }
     );
@@ -151,12 +146,7 @@ function initDeviceShortcutSettings() {
               render();
             })
             .catch((err) => {
-              const msg = String(err);
-              if (msg.includes("已被占用")) {
-                showToast(`"${display}" 已被其他功能占用，请选择其他快捷键。`, null, true);
-              } else {
-                showToast("暂不支持该快捷键。", null, true);
-              }
+              showToast(describeShortcutError(err, display), null, true);
               render();
             });
         }

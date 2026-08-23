@@ -6,7 +6,8 @@
  *             getInvoke/getDisplayName/simplifyDeviceName/formatDeviceName/attachTooltip/
  *             attachSessionTooltip/showSessionTip/hideSessionTip/registerContextMenu/
  *             clampMenuPosition/hideAllContextMenus/createSubmenuShell/createCheckIcon/
- *             showRenameDialog/createDialog/closeDialog/showToast/bindShortcutRecorder
+ *             showRenameDialog/createDialog/closeDialog/showToast/describeShortcutError/
+ *             bindShortcutRecorder
  * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖 */
 const { invoke } = window.__TAURI__.core;
 
@@ -384,6 +385,16 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") overlay.querySelector(".dialog-btn.confirm")?.click();
   });
+};
+
+// ── 快捷键（共享工具） ───────────────────────────────────
+
+// 快捷键保存失败文案归一：后端错误串 -> 用户可读提示（toast/hint 呈现方式由调用方决定）
+window.describeShortcutError = function (err, display) {
+  const msg = String(err);
+  return msg.includes("已被占用")
+    ? `"${display}" 已被其他功能占用，请选择其他快捷键。`
+    : "暂不支持该快捷键。";
 };
 
 // ── 快捷键录制（共享工具） ────────────────────────────────

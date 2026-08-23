@@ -1,7 +1,7 @@
 /* popup-audio.js — 主窗口·音量控制 tab：设备/会话音量滑块渲染与调节/mute 切换/
  *            滚轮微调与 tooltip/强制静音记账/volume-changed 监听
  * 加载序 2/4 · 提供：loadAudioDevices()/loadAudioSessions()/renderAudioDevices()/renderAudioSessions()
- * 依赖：common.js(getInvoke/attachSessionTooltip/showToast/createSubmenuShell/
+ * 依赖：common.js(getInvoke/describeShortcutError/attachSessionTooltip/showToast/createSubmenuShell/
  *       formatDeviceName/registerContextMenu/clampMenuPosition/hideAllContextMenus/
  *       showRenameDialog/createDialog/closeDialog/bindShortcutRecorder/attachTooltip) */
 let audioDevices = [];
@@ -435,12 +435,7 @@ function showDeviceShortcutDialog(device) {
           }, 2500);
         })
         .catch((err) => {
-          const msg = String(err);
-          if (msg.includes("已被占用")) {
-            hint.textContent = `"${display}" 已被其他功能占用，请选择其他快捷键。`;
-          } else {
-            hint.textContent = "暂不支持该快捷键。";
-          }
+          hint.textContent = describeShortcutError(err, display);
           hint.style.color = "#e81123";
         });
     }
