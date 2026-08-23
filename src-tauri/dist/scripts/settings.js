@@ -1,8 +1,9 @@
 /* settings.js — 设置页·入口框架：init 装配/导航与 tab 切换/ComboBox 工厂/更新检测横切流程/
  *            NumberBox 焦点装配/材质浮层背景/config-changed 与 settings-tab 监听
  * 加载序 7/7（最后执行，调用各分区脚本提供的 init 系列与刷新函数）
- * 提供：saveConfig/bindToggle/createToggle/initComboBox/runUpdateCheck/copyToClipboard/
- *       showUpdateErrorFlyout/renderUpdateInfobar/updateFlyoutBackdrop 等框架级共享函数
+ * 提供：saveConfig/bindToggle/createToggle/createExpandableCard/initComboBox/runUpdateCheck/
+ *       copyToClipboard/showUpdateErrorFlyout/renderUpdateInfobar/updateFlyoutBackdrop
+ *       等框架级共享函数
  * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/about) */
 let config = null;
 let activeSettingsMenu = null;
@@ -49,6 +50,49 @@ function createToggle(checked, onChange, extraClass) {
   toggle.appendChild(slider);
   if (onChange) input.addEventListener("change", () => onChange(input));
   return { toggle, input };
+}
+
+// ── 折叠卡骨架（设置页各折叠卡共享的展开/收起机制） ─────────
+// 展开 = .show 类 + arrow 旋转 + inline max-height；CSS 基础态为收起（.card-items{max-height:0}）。
+// expandHeight 取值："content"=按内容实测（scrollHeight，适合内容动态的卡）；
+//                    "999px" 等固定值=高度上限（适合内容受控的卡），与既有行为一一对应。
+function createExpandableCard(items, arrow) {
+  function apply(expanded, expandHeight) {
+    items.classList.toggle("show", expanded);
+    if (arrow) arrow.classList.toggle("expanded", expanded);
+    items.style.maxHeight = expanded
+      ? (expandHeight === "content" ? items.scrollHeight + "px" : expandHeight)
+      : "0px";
+  }
+
+  return {
+    // 常规切换：带 max-height 过渡动画
+    set(expanded, expandHeight = "999px") { apply(expanded, expandHeight); },
+
+    // 初始化恢复：展开分支抑制过渡（避免页面加载时播放收展动画）；收起分支与常规等价
+    setInstant(expanded, expandHeight = "999px") {
+      if (!expanded) { apply(false); return; }
+      items.style.transition = "none";
+      apply(true, expandHeight);
+      requestAnimationFrame(() => { items.style.transition = ""; });
+    },
+
+    isExpanded() { return items.classList.contains("show"); },
+
+    // 绑定"点击卡片头部切换"。extraGuards：额外点击排除选择器（如 .toggle/button/a/input）。
+    // onChanged(newExpanded)：切换后的附加动作（状态记忆、联动刷新等）。
+    bindHeaderClick(card, { extraGuards = [], expandHeight = "999px", onChanged } = {}) {
+      card.addEventListener("click", (e) => {
+        if (e.target.closest('.card-items')) return;
+        for (const sel of extraGuards) {
+          if (e.target.closest(sel)) return;
+        }
+        const expanded = !items.classList.contains("show");
+        apply(expanded, expandHeight);
+        if (onChanged) onChanged(expanded);
+      });
+    },
+  };
 }
 
 function initComboBox(comboId, selectedValue, onChange) {

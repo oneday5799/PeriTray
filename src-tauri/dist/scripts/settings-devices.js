@@ -1,7 +1,7 @@
 /* settings-devices.js — 设置页·设备信息 tab：分组设备列表渲染/过滤正则卡
  * 加载序 4/7 · 提供：loadDevicesAsync() / renderGroups() / initDeviceFilterTab()
  * 依赖：common.js(invoke/CATEGORIES) /
- *       settings.js(config/createToggle/bindToggle/saveConfig) */
+ *       settings.js(config/createToggle/bindToggle/createExpandableCard/saveConfig) */
 
 let devices = [];
 let expandedGroups = new Set();
@@ -80,17 +80,13 @@ function renderGroups() {
     const items = document.createElement("div");
     items.className = "card-items";
 
-    card.addEventListener("click", (e) => {
-      if (e.target.closest('.card-items')) return;
-      const isExpanded = items.classList.toggle("show");
-      arrow.classList.toggle("expanded", isExpanded);
-      if (isExpanded) {
-        expandedGroups.add(group.key);
-        items.style.maxHeight = items.scrollHeight + "px";
-      } else {
-        expandedGroups.delete(group.key);
-        items.style.maxHeight = "0px";
-      }
+    // 展开态记忆经 onChanged 注入；高度用实测值（分组内容高度不受控，固定上限会截断）
+    createExpandableCard(items, arrow).bindHeaderClick(card, {
+      expandHeight: "content",
+      onChanged: (expanded) => {
+        if (expanded) expandedGroups.add(group.key);
+        else expandedGroups.delete(group.key);
+      },
     });
 
     if (expandedGroups.has(group.key)) {
@@ -146,17 +142,17 @@ function initDeviceFilterTab() {
   }
   resizeRegexInput();
 
-  function setFilterExpanded(expanded) {
-    if (expanded) {
-      filterWrap.classList.add("show");
-      filterWrap.style.maxHeight = "999px";
-    } else {
-      filterWrap.classList.remove("show");
-      filterWrap.style.maxHeight = "0px";
-    }
+  // 过滤卡展开机制（开关 onChange 与卡片点击双触发共用）
+  const filterExpandable = createExpandableCard(filterWrap, filterArrow);
+
+  function resetRegexSize() {
     regexInput.style.height = "auto";
     regexInput.style.minHeight = "80px";
-    if (filterArrow) filterArrow.classList.toggle("expanded", expanded);
+  }
+
+  function setFilterExpanded(expanded) {
+    filterExpandable.set(expanded, "999px");
+    resetRegexSize();
   }
 
   bindToggle("toggle-filter", {
@@ -168,26 +164,13 @@ function initDeviceFilterTab() {
     }
   });
 
-  if (config.filter_enabled) {
-    filterWrap.classList.add("show");
-    filterWrap.style.transition = "none";
-    filterWrap.style.maxHeight = "999px";
-    regexInput.style.height = "auto";
-    regexInput.style.minHeight = "80px";
-    requestAnimationFrame(() => {
-      filterWrap.style.transition = "";
-    });
-  } else {
-    filterWrap.style.maxHeight = "0px";
-  }
-  if (filterArrow) filterArrow.classList.toggle("expanded", config.filter_enabled);
+  // 初始化恢复：展开分支免过渡，避免加载时播放收展动画
+  filterExpandable.setInstant(config.filter_enabled, "999px");
 
   if (filterCard) {
-    filterCard.addEventListener("click", (e) => {
-      if (e.target.closest('.card-items')) return;
-      if (e.target.closest('.toggle')) return;
-      const isOpen = filterWrap.classList.contains("show");
-      setFilterExpanded(!isOpen);
+    filterExpandable.bindHeaderClick(filterCard, {
+      extraGuards: ['.toggle'],
+      onChanged: resetRegexSize,
     });
   }
 

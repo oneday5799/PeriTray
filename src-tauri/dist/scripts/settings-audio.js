@@ -3,7 +3,8 @@
  * 加载序 5/7 · 提供：loadAudioDevicesAsync()/initAudioCardToggle()/initMuteLockSettings()/
  *            initFineAdjustSettings()/initSimplifyNamesSettings()/initForceMuteSettings()/
  *            initSpatialSoundSettings()/initShutdownVolumeSettings()/renderShutdownVolumeDevices()
- * 依赖：common.js(getInvoke/showToast) / settings.js(config/bindToggle/saveConfig) */
+ * 依赖：common.js(getInvoke/showToast) /
+ *       settings.js(config/bindToggle/createExpandableCard/saveConfig) */
 async function loadAudioDevicesAsync() {
   try {
     config = await invoke("get_config");
@@ -56,19 +57,8 @@ function renderAudioDeviceGroups(audioDevices) {
     container.appendChild(item);
   }
 
-  if (audioExpanded) {
-    container.classList.add("show");
-    container.style.transition = "none";
-    container.style.maxHeight = "999px";
-    if (arrow) arrow.classList.add("expanded");
-    requestAnimationFrame(() => {
-      container.style.transition = "";
-    });
-  } else {
-    container.classList.remove("show");
-    container.style.maxHeight = "0px";
-    if (arrow) arrow.classList.remove("expanded");
-  }
+  // 重建后按记忆态恢复（展开分支免过渡，避免重载时播放收展动画）
+  createExpandableCard(container, arrow).setInstant(audioExpanded, "999px");
 }
 
 function initAudioCardToggle() {
@@ -78,18 +68,12 @@ function initAudioCardToggle() {
 
   if (!card || !items || !arrow) return;
 
-  card.addEventListener("click", (e) => {
-    if (e.target.closest('.card-items')) return;
-    const isExpanded = items.classList.toggle("show");
-    arrow.classList.toggle("expanded", isExpanded);
-    audioExpanded = isExpanded;
-    if (isExpanded) {
-      items.style.maxHeight = items.scrollHeight + "px";
-    } else {
-      items.style.maxHeight = "0px";
-    }
+  createExpandableCard(items, arrow).bindHeaderClick(card, {
+    expandHeight: "content",
+    onChanged: (expanded) => { audioExpanded = expanded; },
   });
 
+  // 数据异步加载完成前先同步箭头初始态（与 audioExpanded 一致）
   arrow.classList.toggle("expanded", audioExpanded);
 }
 
@@ -212,14 +196,11 @@ async function initShutdownVolumeSettings() {
   const arrow = document.getElementById("arrow-shutdown");
   const card = document.getElementById("shutdown-card");
 
+  const shutdownExpandable = createExpandableCard(items, arrow);
+
+  // 开关联动展开（内容高度动态，用实测值）
   function setShutdownExpanded(expanded) {
-    if (expanded) {
-      items.classList.add("show");
-      items.style.maxHeight = items.scrollHeight + "px";
-    } else {
-      items.style.maxHeight = "0px";
-    }
-    if (arrow) arrow.classList.toggle("expanded", expanded);
+    shutdownExpandable.set(expanded, "content");
   }
 
   bindToggle("toggle-shutdown-volume", {
@@ -228,28 +209,12 @@ async function initShutdownVolumeSettings() {
     onChange: async (checked) => { setShutdownExpanded(checked); }
   });
 
-  if (toggle.checked) {
-    items.classList.add("show");
-    items.style.transition = "none";
-    items.style.maxHeight = "999px";
-    if (arrow) arrow.classList.add("expanded");
-    requestAnimationFrame(() => {
-      items.style.transition = "";
-    });
-  } else {
-    items.style.maxHeight = "0px";
-  }
+  // 初始化恢复：按开关当前态免过渡落位（展开分支固定上限，与既有行为一致）
+  shutdownExpandable.setInstant(toggle.checked, "999px");
 
-  card.addEventListener("click", (e) => {
-    if (e.target.closest('.card-items')) return;
-    if (e.target.closest(".toggle") || e.target.closest("input")) return;
-    const isExpanded = items.classList.toggle("show");
-    if (isExpanded) {
-      items.style.maxHeight = items.scrollHeight + "px";
-    } else {
-      items.style.maxHeight = "0px";
-    }
-    if (arrow) arrow.classList.toggle("expanded", isExpanded);
+  shutdownExpandable.bindHeaderClick(card, {
+    extraGuards: [".toggle", "input"],
+    expandHeight: "content",
   });
 
   try {

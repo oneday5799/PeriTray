@@ -1,18 +1,15 @@
 /* settings-about.js — 设置页·关于 tab：版本按钮触发更新检测/infobar 与链接交互
  * 加载序 6/7 · 提供：initAboutTab()
  * 依赖：common.js(invoke) /
- *       settings.js(runUpdateCheck/hideUpdateErrorFlyout/renderUpdateInfobar) */
+ *       settings.js(runUpdateCheck/hideUpdateErrorFlyout/renderUpdateInfobar/createExpandableCard) */
 function initAboutTab() {
   const card = document.getElementById("about-info-card");
   const items = document.getElementById("about-info-items");
   const arrow = document.getElementById("arrow-about");
   if (card && items) {
-    card.addEventListener("click", (e) => {
-      if (e.target.closest('.card-items')) return;
-      if (e.target.closest("button") || e.target.closest("a")) return;
-      const expanded = items.style.maxHeight !== "0px";
-      items.style.maxHeight = expanded ? "0px" : "999px";
-      if (arrow) arrow.classList.toggle("expanded", !expanded);
+    // HTML 初始即带 .show + inline 999px；此后展开态由骨架经 .show 类跟踪
+    createExpandableCard(items, arrow).bindHeaderClick(card, {
+      extraGuards: ["button", "a"],
     });
   }
 

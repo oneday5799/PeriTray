@@ -118,12 +118,25 @@ function declaredNames(cleanSrc) {
       /[,{]\s*([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{/g,
     )
   ) names.add(m[1]);
+  // 方法简写的形参计入声明池（含解构与默认值，如 bindHeaderClick(card, { onChanged } = {})），
+  // 锚点与方法名规则一致（前置 , 或 {），不会误吞 if/for 等控制结构
+  for (
+    const m of cleanSrc.matchAll(
+      /[,{]\s*[A-Za-z_$][\w$]*\s*\(([^()]*)\)\s*\{/g,
+    )
+  ) collectParams(m[1], names);
   return names;
 }
 
 function collectParams(raw, into) {
   for (const p of raw.split(",")) {
-    const id = p.trim().split(/[=\s]/)[0];
+    let t = p.trim();
+    // 浅剥外层包裹（解构花括号/数组字面量等），不做嵌套递归
+    t = t.replace(/^[{[(]+/, "").replace(/[}\])]$/, "");
+    if (!t) continue;
+    // 解构重命名 { a: b } 的绑定名是 b；默认值 { a = 1 } 的绑定名是 a
+    const renamed = t.includes(":") ? t.split(":").pop() : t;
+    const id = renamed.trim().split(/[=\s]/)[0].trim();
     if (/^[A-Za-z_$][\w$]*$/.test(id)) into.add(id);
   }
 }
