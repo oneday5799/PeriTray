@@ -366,8 +366,7 @@
   font-size: 16px;
 }
 
-.win-numberbox-spin-btn:hover,
-.win-numberbox-spin-btn.is-hovered {
+.win-numberbox-spin-btn:hover {
   background: var(--hover-overlay);
   color: var(--text-primary);
 }
