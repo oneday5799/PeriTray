@@ -207,7 +207,7 @@ pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(
     Ok(())
 }
 
-// Audio commands
+// ── 音频命令 ─────────────────────────────────────────────
 
 #[tauri::command(async)]
 pub async fn get_audio_devices() -> Result<Vec<crate::audio::AudioDevice>, String> {

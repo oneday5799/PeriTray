@@ -167,7 +167,7 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
             };
         }
 
-        // Check HTTP status code
+        // 检查 HTTP 状态码
         let mut status_code: u32 = 0;
         let mut size = std::mem::size_of::<u32>() as u32;
         let mut index: u32 = 0;

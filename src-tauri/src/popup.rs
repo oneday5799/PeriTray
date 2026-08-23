@@ -12,7 +12,7 @@ const POPUP_H: f64 = 520.0;
 fn cubic_bezier(t: f64) -> f64 {
     let p1x = 0.62;
     let p2x = 0.32;
-    // solve x(t) = progress for t using Newton-Raphson
+    // 以牛顿迭代法求解贝塞尔方程 x(t) = progress
     let mut t_param = t;
     for _ in 0..8 {
         let x = 3.0 * p1x * t_param * (1.0 - t_param).powi(2)

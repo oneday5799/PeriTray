@@ -83,7 +83,7 @@ function createExpandableCard(items, arrow) {
     // onChanged(newExpanded)：切换后的附加动作（状态记忆、联动刷新等）。
     bindHeaderClick(card, { extraGuards = [], expandHeight = "999px", onChanged } = {}) {
       card.addEventListener("click", (e) => {
-        if (e.target.closest('.card-items')) return;
+        if (e.target.closest(".card-items")) return;
         for (const sel of extraGuards) {
           if (e.target.closest(sel)) return;
         }
@@ -98,10 +98,10 @@ function createExpandableCard(items, arrow) {
 function initComboBox(comboId, selectedValue, onChange) {
   const combo = document.getElementById(comboId);
   if (!combo) return;
-  const btn = combo.querySelector('.win-combo-btn');
-  const flyout = combo.querySelector('.win-combo-flyout');
-  const content = btn.querySelector('.win-combo-content');
-  const items = combo.querySelectorAll('.win-combo-item');
+  const btn = combo.querySelector(".win-combo-btn");
+  const flyout = combo.querySelector(".win-combo-flyout");
+  const content = btn.querySelector(".win-combo-content");
+  const items = combo.querySelectorAll(".win-combo-item");
   const ITEM_HEIGHT = 36;
 
   let currentValue = selectedValue;
@@ -120,9 +120,9 @@ function initComboBox(comboId, selectedValue, onChange) {
     currentValue = value;
     items.forEach(item => {
       const isSelected = item.dataset.value === value;
-      item.classList.toggle('selected', isSelected);
+      item.classList.toggle("selected", isSelected);
       if (isSelected) {
-        content.textContent = item.querySelector('.win-combo-item-content').textContent;
+        content.textContent = item.querySelector(".win-combo-item-content").textContent;
       }
     });
   }
@@ -139,13 +139,13 @@ function initComboBox(comboId, selectedValue, onChange) {
       flyoutAnimation.cancel();
       flyoutAnimation = null;
     }
-    flyout.style.clipPath = '';
+    flyout.style.clipPath = "";
   }
 
   function playFlyoutAnimation() {
     cancelFlyoutAnimation();
 
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (prefersReducedMotion) return;
 
     const rect = flyout.getBoundingClientRect();
@@ -164,12 +164,12 @@ function initComboBox(comboId, selectedValue, onChange) {
         { clipPath: toPolygon(startRect) },
         { clipPath: toPolygon(endRect) }
       ],
-      { duration: 800, easing: 'cubic-bezier(0.092, 1.003, 0.028, 0.997)', fill: 'none' }
+      { duration: 800, easing: "cubic-bezier(0.092, 1.003, 0.028, 0.997)", fill: "none" }
     );
 
     flyoutAnimation.onfinish = () => {
       flyoutAnimation = null;
-      flyout.style.clipPath = '';
+      flyout.style.clipPath = "";
     };
     flyoutAnimation.oncancel = () => {
       flyoutAnimation = null;
@@ -177,15 +177,15 @@ function initComboBox(comboId, selectedValue, onChange) {
   }
 
   function closeFlyout() {
-    flyout.style.display = 'none';
-    flyout.style.visibility = 'hidden';
-    btn.setAttribute('aria-expanded', 'false');
-    combo.classList.remove('is-open');
+    flyout.style.display = "none";
+    flyout.style.visibility = "hidden";
+    btn.setAttribute("aria-expanded", "false");
+    combo.classList.remove("is-open");
     cancelFlyoutAnimation();
     removeOverlay();
-    document.removeEventListener('pointerdown', onDocPointerDown);
-    window.removeEventListener('scroll', onScroll, true);
-    window.removeEventListener('resize', onScroll);
+    document.removeEventListener("pointerdown", onDocPointerDown);
+    window.removeEventListener("scroll", onScroll, true);
+    window.removeEventListener("resize", onScroll);
   }
 
   function positionFlyout() {
@@ -195,12 +195,12 @@ function initComboBox(comboId, selectedValue, onChange) {
     const itemCount = items.length;
     const selectedIndex = getSelectedIndex();
 
-    flyout.style.visibility = 'hidden';
-    flyout.style.display = 'block';
-    flyout.style.top = '0px';
-    flyout.style.left = '0px';
-    flyout.style.width = 'auto';
-    flyout.style.maxWidth = viewportW + 'px';
+    flyout.style.visibility = "hidden";
+    flyout.style.display = "block";
+    flyout.style.top = "0px";
+    flyout.style.left = "0px";
+    flyout.style.width = "auto";
+    flyout.style.maxWidth = viewportW + "px";
 
     const flyoutRect = flyout.getBoundingClientRect();
     const flyoutW = Math.max(btnRect.width, flyoutRect.width);
@@ -217,11 +217,11 @@ function initComboBox(comboId, selectedValue, onChange) {
     let popupLeft = btnRect.left;
     if (popupLeft + flyoutW > viewportW - 4) popupLeft = Math.max(4, viewportW - flyoutW - 4);
 
-    flyout.style.top = Math.round(popupTop) + 'px';
-    flyout.style.left = Math.round(popupLeft) + 'px';
-    flyout.style.width = Math.round(flyoutW) + 'px';
-    flyout.style.maxHeight = flyoutH + 'px';
-    flyout.style.visibility = 'visible';
+    flyout.style.top = Math.round(popupTop) + "px";
+    flyout.style.left = Math.round(popupLeft) + "px";
+    flyout.style.width = Math.round(flyoutW) + "px";
+    flyout.style.maxHeight = flyoutH + "px";
+    flyout.style.visibility = "visible";
 
     const scrollTop = Math.max(0, selectedItemCenter - btnCenter + popupTop);
     flyout.scrollTop = scrollTop;
@@ -232,36 +232,36 @@ function initComboBox(comboId, selectedValue, onChange) {
   }
 
   function onScroll() {
-    if (flyout.style.display !== 'none') positionFlyout();
+    if (flyout.style.display !== "none") positionFlyout();
   }
 
-  btn.addEventListener('click', (e) => {
+  btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const isOpen = flyout.style.display !== 'none' && flyout.style.visibility !== 'hidden';
+    const isOpen = flyout.style.display !== "none" && flyout.style.visibility !== "hidden";
     if (isOpen) {
       closeFlyout();
     } else {
       removeOverlay();
-      overlay = document.createElement('div');
-      overlay.className = 'win-combo-overlay';
+      overlay = document.createElement("div");
+      overlay.className = "win-combo-overlay";
       document.body.appendChild(overlay);
 
       document.body.appendChild(flyout);
 
-      btn.setAttribute('aria-expanded', 'true');
-      combo.classList.add('is-open');
+      btn.setAttribute("aria-expanded", "true");
+      combo.classList.add("is-open");
       selectItem(currentValue);
       positionFlyout();
       playFlyoutAnimation();
 
-      window.addEventListener('scroll', onScroll, true);
-      window.addEventListener('resize', onScroll);
-      setTimeout(() => document.addEventListener('pointerdown', onDocPointerDown), 0);
+      window.addEventListener("scroll", onScroll, true);
+      window.addEventListener("resize", onScroll);
+      setTimeout(() => document.addEventListener("pointerdown", onDocPointerDown), 0);
     }
   });
 
   items.forEach(item => {
-    item.addEventListener('click', (e) => {
+    item.addEventListener("click", (e) => {
       e.stopPropagation();
       selectItem(item.dataset.value);
       closeFlyout();
@@ -275,43 +275,43 @@ function initComboBox(comboId, selectedValue, onChange) {
 function initNavigation() {
   let currentTabIndex = 0;
   const INDICATOR_SIZE = 16;
-  const EASE_OUT = 'cubic-bezier(0.1, 0.9, 0.2, 1)';
+  const EASE_OUT = "cubic-bezier(0.1, 0.9, 0.2, 1)";
 
   function getIndicatorY(item) {
     const itemRect = item.getBoundingClientRect();
-    const panelRect = document.querySelector('.win-nav-left-panel').getBoundingClientRect();
+    const panelRect = document.querySelector(".win-nav-left-panel").getBoundingClientRect();
     return itemRect.top - panelRect.top + (itemRect.height / 2) - (INDICATOR_SIZE / 2);
   }
 
   function setIndicatorStyle(indicatorEl, y, h) {
     indicatorEl.style.transform = `translateY(${y}px)`;
-    indicatorEl.style.height = (h || INDICATOR_SIZE) + 'px';
-    indicatorEl.style.transition = 'none';
+    indicatorEl.style.height = (h || INDICATOR_SIZE) + "px";
+    indicatorEl.style.transition = "none";
   }
 
   function animateIndicator(oldY, newY) {
-    const indicatorEl = document.getElementById('nav-indicator');
+    const indicatorEl = document.getElementById("nav-indicator");
     if (!indicatorEl) return;
     indicatorEl.getAnimations().forEach(a => a.cancel());
     const distance = Math.abs(newY - oldY);
     const edge = Math.min(oldY, newY);
     const keyframes = [
-      { transform: `translateY(${oldY}px)`, height: INDICATOR_SIZE + 'px', offset: 0, easing: 'cubic-bezier(0.9, 0.1, 1, 0.2)' },
-      { transform: `translateY(${edge}px)`, height: (distance + INDICATOR_SIZE) + 'px', offset: 0.333, easing: EASE_OUT },
-      { transform: `translateY(${newY}px)`, height: INDICATOR_SIZE + 'px', offset: 1 }
+      { transform: `translateY(${oldY}px)`, height: INDICATOR_SIZE + "px", offset: 0, easing: "cubic-bezier(0.9, 0.1, 1, 0.2)" },
+      { transform: `translateY(${edge}px)`, height: (distance + INDICATOR_SIZE) + "px", offset: 0.333, easing: EASE_OUT },
+      { transform: `translateY(${newY}px)`, height: INDICATOR_SIZE + "px", offset: 1 }
     ];
-    const anim = indicatorEl.animate(keyframes, { duration: 200, fill: 'forwards' });
+    const anim = indicatorEl.animate(keyframes, { duration: 200, fill: "forwards" });
     anim.onfinish = () => {
-      // Sync computed transform back to style (Web Animations API doesn't update style.transform)
+      // 将动画计算出的 transform 回写样式（Web Animations API 不会自动更新 style.transform）
       const computed = getComputedStyle(indicatorEl).transform;
       const match = computed.match(/matrix.*\((.+)\)/);
       if (match) {
         // matrix(a,b,c,d,tx,ty) — ty is at index 5
-        const parts = match[1].split(',').map(s => s.trim());
+        const parts = match[1].split(",").map(s => s.trim());
         const ty = parts[5] ? parseFloat(parts[5]) : newY;
         indicatorEl.style.transform = `translateY(${ty}px)`;
       }
-      indicatorEl.style.height = INDICATOR_SIZE + 'px';
+      indicatorEl.style.height = INDICATOR_SIZE + "px";
     };
   }
 
@@ -334,7 +334,7 @@ function initNavigation() {
       tab.setAttribute("tabindex", "0");
 
       // Animate indicator with stretch
-      const indicatorEl = document.getElementById('nav-indicator');
+      const indicatorEl = document.getElementById("nav-indicator");
       if (indicatorEl) {
         const oldTransform = indicatorEl.style.transform;
         const oldY = oldTransform ? parseFloat(oldTransform.match(/translateY\(([-\d.]+)px\)/)?.[1] || 0) : 0;
@@ -343,21 +343,21 @@ function initNavigation() {
       }
 
       // Slide transition — always: old content slides up, new content slides in from bottom
-      const oldContent = document.getElementById('tab-' + navItems[oldIndex].dataset.tab);
-      const newContent = document.getElementById('tab-' + tab.dataset.tab);
+      const oldContent = document.getElementById("tab-" + navItems[oldIndex].dataset.tab);
+      const newContent = document.getElementById("tab-" + tab.dataset.tab);
 
-      document.querySelectorAll('.tab-content').forEach(c => {
-        c.classList.remove('slide-enter-down', 'slide-leave-up', 'slide-active');
+      document.querySelectorAll(".tab-content").forEach(c => {
+        c.classList.remove("slide-enter-down", "slide-leave-up", "slide-active");
       });
 
-      if (oldContent) oldContent.classList.add('slide-leave-up');
-      newContent.classList.add('slide-active', 'slide-enter-down');
+      if (oldContent) oldContent.classList.add("slide-leave-up");
+      newContent.classList.add("slide-active", "slide-enter-down");
 
       setTimeout(() => {
-        if (oldContent) oldContent.classList.remove('active', 'slide-leave-up', 'slide-active');
+        if (oldContent) oldContent.classList.remove("active", "slide-leave-up", "slide-active");
       }, 170);
 
-      if (pageHeader) pageHeader.textContent = tab.querySelector('.label').textContent;
+      if (pageHeader) pageHeader.textContent = tab.querySelector(".label").textContent;
       currentTabIndex = index;
     });
   });
@@ -366,7 +366,7 @@ function initNavigation() {
   function initIndicator() {
     const selected = document.querySelector(".win-nav-item.is-selected");
     if (!selected) return;
-    const indicatorEl = document.getElementById('nav-indicator');
+    const indicatorEl = document.getElementById("nav-indicator");
     if (!indicatorEl) return;
     const y = getIndicatorY(selected);
     // Verify position is reasonable (within panel bounds)
@@ -658,12 +658,12 @@ function setupCardHoverSuppression() {
 function updateFlyoutBackdrop(material) {
   const root = document.documentElement;
   if (material === "recommended" || material === "acrylic") {
-    root.style.setProperty('--flyout-backdrop', 'blur(30px) saturate(125%)');
-    const isDark = root.getAttribute('data-theme') === 'dark';
-    root.style.setProperty('--flyout-bg', isDark ? 'rgba(44, 44, 44, 0.85)' : 'rgba(252, 252, 252, 0.85)');
+    root.style.setProperty("--flyout-backdrop", "blur(30px) saturate(125%)");
+    const isDark = root.getAttribute("data-theme") === "dark";
+    root.style.setProperty("--flyout-bg", isDark ? "rgba(44, 44, 44, 0.85)" : "rgba(252, 252, 252, 0.85)");
   } else {
-    root.style.removeProperty('--flyout-backdrop');
-    root.style.removeProperty('--flyout-bg');
+    root.style.removeProperty("--flyout-backdrop");
+    root.style.removeProperty("--flyout-bg");
   }
 }
 

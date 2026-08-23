@@ -5,13 +5,13 @@
  *       popup-devices.js(loadDevices/renderDevices)
  */
 document.getElementById("btn-refresh").addEventListener("click", async () => {
-  const activeTab = document.querySelector('.win-nav-item.active');
+  const activeTab = document.querySelector(".win-nav-item.active");
   if (activeTab) {
     const tabName = activeTab.dataset.tab;
-    if (tabName === 'devices') {
+    if (tabName === "devices") {
       await loadDevices();
       showToast("已刷新");
-    } else if (tabName === 'volume') {
+    } else if (tabName === "volume") {
       await loadAudioDevices();
       if (selectedDeviceId) {
         await loadAudioSessions(selectedDeviceId);
@@ -36,9 +36,9 @@ window.addEventListener("focus", async () => {
   const invoke = getInvoke();
   if (!invoke) return;
   try {
-    const volumeTab = document.getElementById('tab-volume');
-    const deviceTab = document.getElementById('tab-devices');
-    const scrollTop = (volumeTab.style.display !== 'none' ? volumeTab : deviceTab).scrollTop;
+    const volumeTab = document.getElementById("tab-volume");
+    const deviceTab = document.getElementById("tab-devices");
+    const scrollTop = (volumeTab.style.display !== "none" ? volumeTab : deviceTab).scrollTop;
 
     const cfg = await invoke("get_config");
     hiddenDevices = cfg.hidden_devices || [];
@@ -49,13 +49,13 @@ window.addEventListener("focus", async () => {
     trayDevices = cfg.tray_devices || [];
     allDevices = await invoke("get_devices");
     renderDevices();
-    if (volumeTab.style.display !== 'none') {
+    if (volumeTab.style.display !== "none") {
       await loadAudioDevices();
       if (selectedDeviceId) {
         await loadAudioSessions(selectedDeviceId);
       }
     }
-    (volumeTab.style.display !== 'none' ? volumeTab : deviceTab).scrollTop = scrollTop;
+    (volumeTab.style.display !== "none" ? volumeTab : deviceTab).scrollTop = scrollTop;
     lastFocusRefresh = Date.now();
   } catch (e) {
     console.error("Failed to refresh on focus:", e);
@@ -73,7 +73,7 @@ if (window.__TAURI__) {
 
 // WinUI NavigationView top-pane indicator
 const INDICATOR_SIZE = 16;
-const EASE_OUT = 'cubic-bezier(0.1, 0.9, 0.2, 1)';
+const EASE_OUT = "cubic-bezier(0.1, 0.9, 0.2, 1)";
 let prevNavItem = null;
 
 function getIndicatorLayoutPosition(element) {
@@ -112,7 +112,7 @@ function setIndicatorVisibility(track, targetRect, sourceRect) {
   const target = clamp(targetRect);
   const source = clamp(sourceRect);
   if (!target) {
-    track.style.clipPath = 'inset(0 100% 0 0)';
+    track.style.clipPath = "inset(0 100% 0 0)";
     return;
   }
   const start = source ? Math.min(target.start, source.start) : target.start;
@@ -122,10 +122,10 @@ function setIndicatorVisibility(track, targetRect, sourceRect) {
 
 function readIndicatorX(indicator, fallback) {
   const transform = getComputedStyle(indicator).transform;
-  if (transform && transform !== 'none') {
+  if (transform && transform !== "none") {
     const match = transform.match(/matrix\((.+)\)/);
     if (match) {
-      const parts = match[1].split(',').map(s => parseFloat(s));
+      const parts = match[1].split(",").map(s => parseFloat(s));
       if (parts.length >= 5 && !isNaN(parts[4])) return parts[4];
     }
   }
@@ -133,18 +133,18 @@ function readIndicatorX(indicator, fallback) {
 }
 
 function updateTopNavIndicator(animate) {
-  const track = document.getElementById('nav-indicator-track');
-  const indicator = document.getElementById('nav-indicator');
-  const active = document.querySelector('.win-nav-item.active');
+  const track = document.getElementById("nav-indicator-track");
+  const indicator = document.getElementById("nav-indicator");
+  const active = document.querySelector(".win-nav-item.active");
   if (!track || !indicator || !active) return;
   const rect = getIndicatorItemRect(active, track);
   const newX = rect.left + (rect.right - rect.left) / 2 - (INDICATOR_SIZE / 2);
 
   if (!animate) {
     indicator.getAnimations().forEach(a => a.cancel());
-    indicator.style.transition = 'none';
+    indicator.style.transition = "none";
     indicator.style.transform = `translateX(${newX}px)`;
-    indicator.style.width = INDICATOR_SIZE + 'px';
+    indicator.style.width = INDICATOR_SIZE + "px";
     setIndicatorVisibility(track, rect, null);
     prevNavItem = active;
     return;
@@ -154,7 +154,7 @@ function updateTopNavIndicator(animate) {
   const dist = Math.abs(newX - oldX);
   if (dist < 1) {
     indicator.style.transform = `translateX(${newX}px)`;
-    indicator.style.width = INDICATOR_SIZE + 'px';
+    indicator.style.width = INDICATOR_SIZE + "px";
     prevNavItem = active;
     return;
   }
@@ -163,46 +163,46 @@ function updateTopNavIndicator(animate) {
   setIndicatorVisibility(track, rect, sourceRect);
   const edge = Math.min(oldX, newX);
   const keyframes = [
-    { transform: `translateX(${oldX}px)`, width: INDICATOR_SIZE + 'px', offset: 0, easing: 'cubic-bezier(0.9, 0.1, 1, 0.2)' },
-    { transform: `translateX(${edge}px)`, width: (dist + INDICATOR_SIZE) + 'px', offset: 0.333, easing: EASE_OUT },
-    { transform: `translateX(${newX}px)`, width: INDICATOR_SIZE + 'px', offset: 1 }
+    { transform: `translateX(${oldX}px)`, width: INDICATOR_SIZE + "px", offset: 0, easing: "cubic-bezier(0.9, 0.1, 1, 0.2)" },
+    { transform: `translateX(${edge}px)`, width: (dist + INDICATOR_SIZE) + "px", offset: 0.333, easing: EASE_OUT },
+    { transform: `translateX(${newX}px)`, width: INDICATOR_SIZE + "px", offset: 1 }
   ];
   indicator.getAnimations().forEach(a => a.cancel());
-  const anim = indicator.animate(keyframes, { duration: 600, fill: 'forwards' });
+  const anim = indicator.animate(keyframes, { duration: 600, fill: "forwards" });
   anim.onfinish = () => {
     indicator.style.transform = `translateX(${newX}px)`;
-    indicator.style.width = INDICATOR_SIZE + 'px';
+    indicator.style.width = INDICATOR_SIZE + "px";
     setIndicatorVisibility(track, rect, null);
   };
   prevNavItem = active;
 }
 
-// ── Tab switching with WinUI SlideNavigationTransitionInfo ───
-const tabOrder = ['devices', 'volume'];
+// ── 标签页切换（WinUI 滑动过渡风格） ─────────────────────────
+const tabOrder = ["devices", "volume"];
 let currentTabIndex = 0;
 let suppressNextSwitchAnimation = false;
 // 切换代际：连续快速切换时使上一次的收尾定时器失效，防止旧定时器隐藏正在进入的标签
 let tabAnimToken = 0;
 
 function applyTabContentDisplay(tabName) {
-  document.getElementById('tab-devices').style.display = tabName === 'devices' ? 'block' : 'none';
-  document.getElementById('tab-volume').style.display = tabName === 'volume' ? 'block' : 'none';
+  document.getElementById("tab-devices").style.display = tabName === "devices" ? "block" : "none";
+  document.getElementById("tab-volume").style.display = tabName === "volume" ? "block" : "none";
 }
 
 function animateTabSwitch(oldIndex, newIndex) {
   const token = ++tabAnimToken;
   const oldTab = tabOrder[oldIndex];
   const newTab = tabOrder[newIndex];
-  const oldContent = document.getElementById('tab-' + oldTab);
-  const newContent = document.getElementById('tab-' + newTab);
+  const oldContent = document.getElementById("tab-" + oldTab);
+  const newContent = document.getElementById("tab-" + newTab);
   const forward = newIndex > oldIndex;
-  const leaveClass = forward ? 'slide-leave-left' : 'slide-leave-right';
-  const enterClass = forward ? 'slide-enter-right' : 'slide-enter-left';
-  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const leaveClass = forward ? "slide-leave-left" : "slide-leave-right";
+  const enterClass = forward ? "slide-enter-right" : "slide-enter-left";
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  document.querySelectorAll('.tab-content').forEach(c => {
-    c.classList.remove('slide-leave-left', 'slide-enter-right', 'slide-leave-right', 'slide-enter-left');
-    c.style.zIndex = '';
+  document.querySelectorAll(".tab-content").forEach(c => {
+    c.classList.remove("slide-leave-left", "slide-enter-right", "slide-leave-right", "slide-enter-left");
+    c.style.zIndex = "";
   });
 
   if (reduced) {
@@ -210,18 +210,18 @@ function animateTabSwitch(oldIndex, newIndex) {
     return;
   }
 
-  oldContent.style.display = 'block';
-  newContent.style.display = 'block';
-  newContent.style.zIndex = '2';
+  oldContent.style.display = "block";
+  newContent.style.display = "block";
+  newContent.style.zIndex = "2";
   oldContent.classList.add(leaveClass);
   newContent.classList.add(enterClass);
 
   setTimeout(() => {
     if (token !== tabAnimToken) return;
-    oldContent.style.display = 'none';
+    oldContent.style.display = "none";
     oldContent.classList.remove(leaveClass);
-    oldContent.style.zIndex = '';
-    newContent.style.zIndex = '';
+    oldContent.style.zIndex = "";
+    newContent.style.zIndex = "";
   }, 150);
 
   setTimeout(() => {
@@ -230,8 +230,8 @@ function animateTabSwitch(oldIndex, newIndex) {
   }, 450);
 }
 
-document.querySelectorAll('.win-nav-item').forEach(tab => {
-  tab.addEventListener('click', async () => {
+document.querySelectorAll(".win-nav-item").forEach(tab => {
+  tab.addEventListener("click", async () => {
     const newIndex = tabOrder.indexOf(tab.dataset.tab);
     // 抑制标志一次性消费：托盘重开时若目标==当前 tab 会提前早退，
     // 标志必须在此之前复位，否则残留并吞掉下一次手动切换的动画
@@ -241,12 +241,12 @@ document.querySelectorAll('.win-nav-item').forEach(tab => {
     const oldIndex = currentTabIndex;
     // 同步更新，避免 await 加载期间再次点击时以旧值重复触发切换
     currentTabIndex = newIndex;
-    document.querySelectorAll('.win-nav-item').forEach(t => {
-      t.classList.remove('active');
-      t.setAttribute('aria-selected', 'false');
+    document.querySelectorAll(".win-nav-item").forEach(t => {
+      t.classList.remove("active");
+      t.setAttribute("aria-selected", "false");
     });
-    tab.classList.add('active');
-    tab.setAttribute('aria-selected', 'true');
+    tab.classList.add("active");
+    tab.setAttribute("aria-selected", "true");
     const tabName = tab.dataset.tab;
     if (suppressed) {
       applyTabContentDisplay(tabName);
@@ -254,7 +254,7 @@ document.querySelectorAll('.win-nav-item').forEach(tab => {
       animateTabSwitch(oldIndex, newIndex);
     }
     updateTopNavIndicator(true);
-    if (tabName === 'volume') {
+    if (tabName === "volume") {
       await loadAudioDevices();
       if (selectedDeviceId) {
         await loadAudioSessions(selectedDeviceId);
@@ -270,17 +270,17 @@ function switchToTab(tabName) {
   target.click();
 }
 
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener("DOMContentLoaded", () => {
   setTimeout(() => updateTopNavIndicator(false), 100);
 });
 setTimeout(() => updateTopNavIndicator(false), 200);
 
-if (location.hash === '#volume') {
-  switchToTab('volume');
+if (location.hash === "#volume") {
+  switchToTab("volume");
 }
 
 if (window.__TAURI__ && window.__TAURI__.event) {
-  window.__TAURI__.event.listen('switch-tab', (e) => {
+  window.__TAURI__.event.listen("switch-tab", (e) => {
     switchToTab(e.payload);
   });
 }

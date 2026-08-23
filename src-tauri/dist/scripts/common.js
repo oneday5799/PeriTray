@@ -613,7 +613,7 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
   return { restore: restoreSaved };
 };
 
-// ── Dialog ──────────────────────────────────────────────
+// ── 对话框 ───────────────────────────────────────────────
 
 window.createDialog = function ({ title, content = [], buttons = [] }) {
   const overlay = document.createElement("div");

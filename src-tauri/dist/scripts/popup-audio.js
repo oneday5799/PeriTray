@@ -60,7 +60,7 @@ function throttle(fn, delay) {
 function updateSliderGradient(slider) {
   const value = slider.value;
   const percentage = ((value - slider.min) / (slider.max - slider.min)) * 100;
-  slider.style.setProperty('--track-color', `linear-gradient(to right, #0078d7 0%, #0078d7 ${percentage}%, var(--slider-track, #e0e0e0) ${percentage}%, var(--slider-track, #e0e0e0) 100%)`);
+  slider.style.setProperty("--track-color", `linear-gradient(to right, #0078d7 0%, #0078d7 ${percentage}%, var(--slider-track, #e0e0e0) ${percentage}%, var(--slider-track, #e0e0e0) 100%)`);
 }
 
 document.addEventListener("mouseup", () => {
@@ -68,18 +68,18 @@ document.addEventListener("mouseup", () => {
 });
 
 function updateSessionCard(session) {
-  const cards = document.querySelectorAll('.card.session');
+  const cards = document.querySelectorAll(".card.session");
   for (const card of cards) {
     if (card.dataset.sessionId === session.id) {
-      updateSliderValue(card.querySelector('.volume-slider'), session.volume);
-      updateMuteButton(card.querySelector('.mute-btn'), session.is_muted, session.volume, session.permanentMute);
+      updateSliderValue(card.querySelector(".volume-slider"), session.volume);
+      updateMuteButton(card.querySelector(".mute-btn"), session.is_muted, session.volume, session.permanentMute);
       break;
     }
   }
 }
 
 if (window.__TAURI__ && window.__TAURI__.event) {
-  window.__TAURI__.event.listen('volume-changed', (event) => {
+  window.__TAURI__.event.listen("volume-changed", (event) => {
     const changes = event.payload;
     if (Array.isArray(changes)) {
       for (const change of changes) {
@@ -114,11 +114,11 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     }
   });
 
-  window.__TAURI__.event.listen('audio-devices-changed', () => {
+  window.__TAURI__.event.listen("audio-devices-changed", () => {
     loadAudioDevices();
   });
 
-  window.__TAURI__.event.listen('config-changed', async () => {
+  window.__TAURI__.event.listen("config-changed", async () => {
     try {
       const cfg = await getInvoke()("get_config");
       applyAudioRuntimeConfig(cfg);
@@ -128,7 +128,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
       for (const s of audioSessions) {
         s.permanentMute = muteLockEnabled && !!(s.is_muted && s.volume > 0);
       }
-      document.querySelectorAll('.volume-slider').forEach(s => {
+      document.querySelectorAll(".volume-slider").forEach(s => {
         s.step = fineAdjustEnabled ? "0.1" : "1";
       });
       renderAudioDevices();
@@ -140,7 +140,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
 }
 
 function updateDeviceCard(device) {
-  const cards = document.querySelectorAll('.card.audio-device');
+  const cards = document.querySelectorAll(".card.audio-device");
   let targetCard = null;
   for (const card of cards) {
     if (card.dataset.deviceId === device.id) {
@@ -150,8 +150,8 @@ function updateDeviceCard(device) {
   }
   if (!targetCard) return;
 
-  updateSliderValue(targetCard.querySelector('.volume-slider'), device.volume);
-  updateMuteButton(targetCard.querySelector('.mute-btn'), device.is_muted, device.volume, device.permanentMute);
+  updateSliderValue(targetCard.querySelector(".volume-slider"), device.volume);
+  updateMuteButton(targetCard.querySelector(".mute-btn"), device.is_muted, device.volume, device.permanentMute);
 }
 
 function updateSliderValue(slider, volume) {
@@ -167,11 +167,11 @@ function muteStateText(isMuted, volume) {
 
 function updateMuteButton(muteBtn, isMuted, volume, permanent) {
   if (muteBtn) {
-    muteBtn.classList.toggle('muted', !!(isMuted && permanent));
+    muteBtn.classList.toggle("muted", !!(isMuted && permanent));
     const html = isMuted ? getMuteIcon() : getVolumeIcon(volume);
-    const iconEl = muteBtn.querySelector('.mute-icon');
+    const iconEl = muteBtn.querySelector(".mute-icon");
     if (iconEl && iconEl.innerHTML !== html) iconEl.innerHTML = html;
-    const tip = muteBtn.querySelector('.tooltip-content');
+    const tip = muteBtn.querySelector(".tooltip-content");
     const tipText = muteStateText(isMuted, volume);
     if (tip && tip.textContent !== tipText) tip.textContent = tipText;
   }
@@ -461,7 +461,7 @@ async function loadAudioDevices() {
       if (firstVisible) selectDevice(firstVisible.id);
     }
   } catch (e) {
-    if (list.querySelectorAll('.card.audio-device').length === 0) {
+    if (list.querySelectorAll(".card.audio-device").length === 0) {
       list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
     }
   }
@@ -503,15 +503,15 @@ function renderAudioDevices() {
     return;
   }
 
-  list.querySelectorAll('.loading').forEach(el => el.remove());
+  list.querySelectorAll(".loading").forEach(el => el.remove());
 
-  reconcileCards(list, '.card.audio-device', "deviceId", visibleDevices,
+  reconcileCards(list, ".card.audio-device", "deviceId", visibleDevices,
     createAudioDeviceCard, updateAudioDeviceCard);
 }
 
 // 确保"(默认)"角标存在（幂等，已存在则跳过）
 function ensureDefaultBadge(nameEl) {
-  if (!nameEl.querySelector('.default-badge')) {
+  if (!nameEl.querySelector(".default-badge")) {
     const badge = document.createElement("span");
     badge.className = "default-badge";
     badge.textContent = "(默认)";
@@ -545,7 +545,7 @@ function createAudioDeviceCard(device) {
       selectDevice(device.id);
     } catch (err) {
       nameEl.classList.remove("default");
-      const badge = nameEl.querySelector('.default-badge');
+      const badge = nameEl.querySelector(".default-badge");
       if (badge) badge.remove();
       console.error("Failed to set default device:", err);
     }
@@ -614,7 +614,7 @@ function createAudioDeviceCard(device) {
   card.appendChild(controls);
 
   card.addEventListener("click", (e) => {
-    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+    if (e.target.tagName !== "INPUT" && e.target.tagName !== "BUTTON") {
       selectDevice(device.id);
     }
   });
@@ -629,7 +629,7 @@ function createAudioDeviceCard(device) {
 
 function updateAudioDeviceCard(card, device) {
 
-  const nameEl = card.querySelector('.audio-device-name');
+  const nameEl = card.querySelector(".audio-device-name");
   if (nameEl) {
     const displayName = deviceDisplayName(device.name);
     const firstChild = nameEl.firstChild;
@@ -643,13 +643,13 @@ function updateAudioDeviceCard(card, device) {
       ensureDefaultBadge(nameEl);
     } else {
       nameEl.classList.remove("default");
-      const badge = nameEl.querySelector('.default-badge');
+      const badge = nameEl.querySelector(".default-badge");
       if (badge) badge.remove();
     }
   }
 
-  updateSliderValue(card.querySelector('.volume-slider'), device.volume);
-  updateMuteButton(card.querySelector('.mute-btn'), device.is_muted, device.volume, device.permanentMute);
+  updateSliderValue(card.querySelector(".volume-slider"), device.volume);
+  updateMuteButton(card.querySelector(".mute-btn"), device.is_muted, device.volume, device.permanentMute);
 }
 
 function selectDevice(deviceId) {
@@ -668,7 +668,7 @@ async function loadAudioSessions(deviceId) {
     audioSessions = (await invoke("get_audio_sessions", { deviceId })).map(s => ({ ...s, permanentMute: muteLockEnabled && !!(s.is_muted && s.volume > 0) }));
     renderAudioSessions();
   } catch (e) {
-    if (list.querySelectorAll('.card.session').length === 0) {
+    if (list.querySelectorAll(".card.session").length === 0) {
       list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
     }
   }
@@ -681,9 +681,9 @@ function renderAudioSessions() {
     return;
   }
 
-  list.querySelectorAll('.loading').forEach(el => el.remove());
+  list.querySelectorAll(".loading").forEach(el => el.remove());
 
-  reconcileCards(list, '.card.session', "sessionId", audioSessions,
+  reconcileCards(list, ".card.session", "sessionId", audioSessions,
     createAudioSessionCard, updateAudioSessionCard);
 }
 
@@ -786,8 +786,8 @@ function createAudioSessionCard(session) {
 }
 
 function updateAudioSessionCard(card, session) {
-  updateSliderValue(card.querySelector('.volume-slider'), session.volume);
-  updateMuteButton(card.querySelector('.mute-btn'), session.is_muted, session.volume, session.permanentMute);
+  updateSliderValue(card.querySelector(".volume-slider"), session.volume);
+  updateMuteButton(card.querySelector(".mute-btn"), session.is_muted, session.volume, session.permanentMute);
 }
 
 let sessionMenuToken = 0;

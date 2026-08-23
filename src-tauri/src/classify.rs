@@ -5,7 +5,7 @@ use crate::device_data;
 pub(crate) fn classify_device(name: &str, pnp_class: &str, pnp_id: &str, caption: &str) -> DevType {
     let lower_combined = format!("{} {}", name, caption).to_lowercase();
 
-    // Check for 2.4G wireless devices by VID/PID, route by device type
+    // 按 VID/PID 检测 2.4G 无线设备并路由到对应类型
     if pnp_id.starts_with("USB\\") && is_wireless_24g_by_vid_pid(pnp_id) {
         if let Some((vid, pid)) = device_data::extract_vid_pid(pnp_id) {
             let dev_type = device_data::get_device_type(&vid, &pid);
