@@ -113,6 +113,10 @@ fn close(
     start_y: f64,
 ) {
     ANIMATING.store(true, Ordering::Relaxed);
+    // 下滑全程保持低于任务栏（防御性重沉：若窗口曾被抬回波段顶则归位）
+    if let Ok(hwnd) = window.hwnd() {
+        windows::place_below_taskbar(hwnd.0 as isize);
+    }
     let (cx, cy) = POPUP_POS.get()
         .map(|m| *crate::state::lock_unpoisoned(m))
         .unwrap_or((target_x, target_y));
@@ -149,6 +153,10 @@ fn show(
     }));
     let _ = window.set_always_on_top(true);
     let _ = window.show();
+    // 沉到 topmost 波段内任务栏正下方：动画期间高于普通窗口、不遮挡任务栏
+    if let Ok(hwnd) = window.hwnd() {
+        windows::place_below_taskbar(hwnd.0 as isize);
+    }
     let win = window.clone();
     std::thread::spawn(move || {
         animate_open(&win, target_x, start_y, target_y);
@@ -207,6 +215,10 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
             }
             let _ = win.show();
             let _ = win.set_focus();
+            // 首启无滑动动画，但层级不变式一致：低于任务栏、高于普通窗口
+            if let Ok(hwnd) = win.hwnd() {
+                windows::place_below_taskbar(hwnd.0 as isize);
+            }
             if let Some(pos) = POPUP_POS.get() {
                 *crate::state::lock_unpoisoned(pos) = (target_x, target_y);
             }
@@ -240,6 +252,10 @@ fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64)
         *crate::state::lock_unpoisoned(pos) = (x, end_y);
     }
     let _ = window.set_focus();
+    // set_focus 的激活可能把窗口抬回波段顶，重新沉降到任务栏之下（静止态恒低于任务栏）
+    if let Ok(hwnd) = window.hwnd() {
+        windows::place_below_taskbar(hwnd.0 as isize);
+    }
 }
 
 fn animate_close(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {

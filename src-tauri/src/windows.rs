@@ -127,6 +127,33 @@ pub fn system_dark_mode() -> bool {
     false
 }
 
+/// 将窗口插入 topmost 波段内任务栏正下方：仍高于一切普通窗口，但不遮挡任务栏。
+/// 用于弹窗动画期间与静止期的统一层级。找不到任务栏（如 Explorer 重启间隙）则保持原 Z 序。
+#[cfg(target_os = "windows")]
+pub fn place_below_taskbar(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+    let class = crate::process::to_wide("Shell_TrayWnd");
+    unsafe {
+        let taskbar = FindWindowW(class.as_ptr(), std::ptr::null());
+        if !taskbar.is_null() {
+            SetWindowPos(
+                hwnd as *mut core::ffi::c_void,
+                taskbar,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn place_below_taskbar(_hwnd: isize) {}
+
 #[cfg(target_os = "windows")]
 pub fn set_rounded_corners(hwnd: isize) {
     unsafe {
