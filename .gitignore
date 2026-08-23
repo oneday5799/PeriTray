@@ -1,6 +1,10 @@
 /node_modules
 /src-tauri/target
 /src-tauri/gen
+
+# 运行时用户覆盖数据（生成于 exe 目录，防御性忽略源码树内的调试残留）
+/src-tauri/data/wireless_24g_devices_user.json
+
 *.pdb
 generate_icons.mjs
 
