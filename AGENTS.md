@@ -26,6 +26,8 @@
 
 - 发版的版本号 bump 单独成提交：`chore(release): vX.Y.Z`
 - 涉及 `src-tauri/dist/` 的提交会被 pre-commit 钩子自动校验（见下节）
+- **Rust 改动提交前必须 `cargo check` 零警告**（main.rs 有 `#![warn(unused_imports, dead_code)]`，
+  出现 warning 即视为未完成）；无自动闸门，靠自觉执行
 
 ## Release Notes 风格规范（每次发版必循）
 
@@ -49,6 +51,7 @@
 
 ### 结构约定
 
+- 节内条目按用户影响程度排序（重要在前）
 - 条目末尾以 `**完整变更列表**：<compare 链接>` 收尾
 - beta 测试版注明承接关系（如「包含自上一测试版以来的全部改进」）
 - 纯晋级发布（tag 与前一 tag 无代码差异）写简短宣告 + 主要能力回顾
@@ -60,21 +63,29 @@
 1. 版本号同步五处：tauri.conf.json、Cargo.toml `[package]`、package.json、
    Cargo.lock（`cargo check` 自动刷新）、settings.html 占位文案——
    单独 `chore(release)` 提交并 push
-2. 创建发布：
+2. notes 写入临时文件经 `--notes-file` 传入（避免 shell 转义问题）
+3. 创建发布：
    ```bash
    gh release create v<ver> --target <完整SHA> --title "PeriphMonitor v<ver>" \
      --notes-file <notes文件> --latest
    ```
-   （--target 必须传完整 SHA，短 SHA 会 422）；CI 构建后自动向该 Release 追加安装包产物
-3. CI 使用 softprops/action-gh-release@v3 + generate_release_notes，
+   （--target 必须传完整 SHA，短 SHA 会 422）；tag 含 `-`（如 v1.2.9-beta.1）
+   时 CI 自动标记为预发布；CI 构建后自动向该 Release 追加安装包产物
+4. CI 使用 softprops/action-gh-release@v3 + generate_release_notes，
    对已存在的 Release 是更新追加而非报错，手工先建 Release 不冲突
 
 ## 代码与注释风格
 
 - **字符串引号**：JS 统一双引号；字符串内容本身含双引号时允许单引号包裹（免转义）
+- **缩进**：JS / CSS 两空格，Rust 四空格，一律空格禁 Tab
+- **命名**：JS 函数/变量 camelCase、CSS 类名 kebab-case（变体用 `--` 后缀）、
+  Rust 与配置键 snake_case
+- **异步**：以 async/await 为主；fire-and-forget 场景可用 `.then().catch()` 链
 - **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
 - **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
-- Rust 用 `///` 为 pub 项写文档注释；JS 文件头注释四要素见「前端架构备忘」
+- Rust 用 `///` 为 pub 项写文档注释；日志统一走 `process::append_log` 并带 `[模块]` 前缀
+  （[popup] [tray] [audio] [bt] [update] 等，新增模块先定标签）
+- JS 文件头注释四要素见「前端架构备忘」
 
 ## 前端完整性守护（强制）
 
@@ -107,6 +118,11 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
 - 结构：popup/settings 双页体系，脚本"分区在前、入口最后"，命名镜像
   （`popup-{devices,audio}.js ↔ settings-{devices,audio}.js`），全部 JS 带标准头注释
+  （四要素：文件职责 / 加载序 N/N · 提供：… / 依赖：…）
+- **invoke 双轨是有意设计，勿"统一"**：popup 页经 common.js 的 `getInvoke()`
+  防御式获取（弹窗生命周期内 webview 注入时序敏感）；settings 页依赖 common.js
+  顶层的 `const { invoke } = window.__TAURI__.core` 全局词法绑定裸用——
+  重排加载序或迁移文件时须保持各自语义
 - 已否决路线：方案乙 ESM 迁移（触发重启条件：前端规模翻倍 / 多人协作 /
   config 共享实际出 bug；届时可先考虑 config 抽为经典脚本单例的廉价中间路线）
 - 材质系统收敛（删除 settings-general 回调手动三件套）暂缓，
