@@ -181,6 +181,8 @@ function updateTopNavIndicator(animate) {
 const tabOrder = ['devices', 'volume'];
 let currentTabIndex = 0;
 let suppressNextSwitchAnimation = false;
+// 切换代际：连续快速切换时使上一次的收尾定时器失效，防止旧定时器隐藏正在进入的标签
+let tabAnimToken = 0;
 
 function applyTabContentDisplay(tabName) {
   document.getElementById('tab-devices').style.display = tabName === 'devices' ? 'block' : 'none';
@@ -188,6 +190,7 @@ function applyTabContentDisplay(tabName) {
 }
 
 function animateTabSwitch(oldIndex, newIndex) {
+  const token = ++tabAnimToken;
   const oldTab = tabOrder[oldIndex];
   const newTab = tabOrder[newIndex];
   const oldContent = document.getElementById('tab-' + oldTab);
@@ -214,6 +217,7 @@ function animateTabSwitch(oldIndex, newIndex) {
   newContent.classList.add(enterClass);
 
   setTimeout(() => {
+    if (token !== tabAnimToken) return;
     oldContent.style.display = 'none';
     oldContent.classList.remove(leaveClass);
     oldContent.style.zIndex = '';
@@ -221,6 +225,7 @@ function animateTabSwitch(oldIndex, newIndex) {
   }, 150);
 
   setTimeout(() => {
+    if (token !== tabAnimToken) return;
     newContent.classList.remove(enterClass);
   }, 450);
 }
@@ -228,8 +233,14 @@ function animateTabSwitch(oldIndex, newIndex) {
 document.querySelectorAll('.win-nav-item').forEach(tab => {
   tab.addEventListener('click', async () => {
     const newIndex = tabOrder.indexOf(tab.dataset.tab);
+    // 抑制标志一次性消费：托盘重开时若目标==当前 tab 会提前早退，
+    // 标志必须在此之前复位，否则残留并吞掉下一次手动切换的动画
+    const suppressed = suppressNextSwitchAnimation;
+    suppressNextSwitchAnimation = false;
     if (newIndex === currentTabIndex) return;
     const oldIndex = currentTabIndex;
+    // 同步更新，避免 await 加载期间再次点击时以旧值重复触发切换
+    currentTabIndex = newIndex;
     document.querySelectorAll('.win-nav-item').forEach(t => {
       t.classList.remove('active');
       t.setAttribute('aria-selected', 'false');
@@ -237,8 +248,7 @@ document.querySelectorAll('.win-nav-item').forEach(tab => {
     tab.classList.add('active');
     tab.setAttribute('aria-selected', 'true');
     const tabName = tab.dataset.tab;
-    if (suppressNextSwitchAnimation) {
-      suppressNextSwitchAnimation = false;
+    if (suppressed) {
       applyTabContentDisplay(tabName);
     } else {
       animateTabSwitch(oldIndex, newIndex);
@@ -250,7 +260,6 @@ document.querySelectorAll('.win-nav-item').forEach(tab => {
         await loadAudioSessions(selectedDeviceId);
       }
     }
-    currentTabIndex = newIndex;
   });
 });
 
