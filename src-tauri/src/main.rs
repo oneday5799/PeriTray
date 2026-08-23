@@ -185,34 +185,28 @@ fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     let include = config::with_config(|c| c.include_prerelease);
                     let current_version = app_handle.package_info().version.to_string();
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::update::check_for_update(&current_version, include)
-                    })
+                    let (result, stored) = crate::update::check_and_store(
+                        "startup",
+                        current_version,
+                        include,
+                    )
                     .await;
                     match result {
-                        Ok(Ok(info)) => {
+                        Ok(info) => {
                             let status = if info.has_update { "update" } else { "latest" };
                             let payload = crate::update::UpdateStatus::from_info(&info, status);
-                            crate::update::set_last_status(payload.clone());
                             let _ = app_handle.emit("update-status", payload);
                             if info.has_update {
                                 let _ = app_handle.emit("update-available", info);
                             }
                         }
-                        Ok(Err(e)) => {
-                            process::append_log(&format!("[update] startup check failed: {}", e));
-                            let payload = crate::update::UpdateStatus {
-                                status: "error".to_string(),
-                                current_version: app_handle.package_info().version.to_string(),
-                                latest_version: String::new(),
-                                release_url: String::new(),
-                                error: Some(e),
-                            };
-                            crate::update::set_last_status(payload.clone());
-                            let _ = app_handle.emit("update-status", payload);
-                        }
-                        Err(e) => {
-                            process::append_log(&format!("[update] task failed: {}", e));
+                        Err(_) => {
+                            // 检查失败：广播已存储的错误状态；任务级失败（未存储）不广播
+                            if stored {
+                                if let Some(payload) = crate::update::get_last_status() {
+                                    let _ = app_handle.emit("update-status", payload);
+                                }
+                            }
                         }
                     }
                 });

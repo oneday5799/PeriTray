@@ -34,6 +34,16 @@ impl UpdateStatus {
             error: None,
         }
     }
+
+    pub fn from_error(current_version: &str, error: &str) -> Self {
+        UpdateStatus {
+            status: "error".to_string(),
+            current_version: current_version.to_string(),
+            latest_version: String::new(),
+            release_url: String::new(),
+            error: Some(error.to_string()),
+        }
+    }
 }
 
 static LAST_STATUS: Mutex<Option<UpdateStatus>> = Mutex::new(None);
@@ -46,6 +56,39 @@ pub fn set_last_status(status: UpdateStatus) {
 
 pub fn get_last_status() -> Option<UpdateStatus> {
     LAST_STATUS.lock().ok().and_then(|guard| guard.clone())
+}
+
+/// 执行一次更新检查并把结果写入 LAST_STATUS（成功与检查失败均存储）。
+/// `tag` 用于日志来源区分（如 "startup"，空串表示设置页手动检查）。
+/// 返回 (检查结果, 本次是否写入了状态)；任务级失败时状态保持原样，由调用方决定是否广播。
+pub async fn check_and_store(
+    tag: &str,
+    current_version: String,
+    include_prerelease: bool,
+) -> (Result<UpdateInfo, String>, bool) {
+    let prefix = if tag.is_empty() { String::new() } else { format!(" {}", tag) };
+    let ver_for_task = current_version.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        check_for_update(&ver_for_task, include_prerelease)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(info)) => {
+            let status = if info.has_update { "update" } else { "latest" };
+            set_last_status(UpdateStatus::from_info(&info, status));
+            (Ok(info), true)
+        }
+        Ok(Err(e)) => {
+            crate::process::append_log(&format!("[update]{} check failed: {}", prefix, e));
+            set_last_status(UpdateStatus::from_error(&current_version, &e));
+            (Err(e), true)
+        }
+        Err(e) => {
+            crate::process::append_log(&format!("[update]{} task failed: {}", prefix, e));
+            (Err(format!("task error: {}", e)), false)
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
