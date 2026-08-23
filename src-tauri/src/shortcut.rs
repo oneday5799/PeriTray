@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
+use std::sync::atomic::Ordering;
+use tauri::Emitter;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 static DEVICE_REGISTERED_KEYS: LazyLock<Mutex<HashSet<String>>> =
@@ -75,7 +77,7 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
             if event.state != ShortcutState::Pressed {
                 return;
             }
-            crate::commands::dispatch_shortcut_action(_app, action, key_str);
+            dispatch_shortcut_action(_app, action, key_str);
         });
         registered.insert(key.clone());
     }
@@ -96,7 +98,77 @@ fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {
         if event.state != ShortcutState::Pressed {
             return;
         }
-        crate::commands::dispatch_shortcut_action(_app, &action_str, &key_str);
+        dispatch_shortcut_action(_app, &action_str, &key_str);
     });
     crate::process::append_log(&format!("[shortcut] registered {} -> {}", key, action));
+}
+
+/// 在共用同一快捷键的设备间循环切换默认输出设备（按设备列表自然顺序）
+fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
+    let group: Vec<String> = crate::config::with_config(|c| {
+        c.device_shortcuts
+            .iter()
+            .filter(|(_, d)| d.shortcut.as_deref() == Some(key))
+            .map(|(id, _)| id.clone())
+            .collect()
+    });
+    if group.is_empty() {
+        return;
+    }
+
+    let devices = crate::audio::enumerate_output_devices().unwrap_or_default();
+    let connected: Vec<&crate::audio::AudioDevice> =
+        devices.iter().filter(|d| group.iter().any(|id| id == &d.id)).collect();
+    if connected.is_empty() {
+        crate::process::append_log(&format!("[hotkey] no connected devices for shared key {}", key));
+        return;
+    }
+
+    let current_default = devices.iter().find(|d| d.is_default);
+    let share_enabled = crate::config::with_config(|c| c.enable_device_shortcut_cycle);
+    let next = if share_enabled {
+        if let Some(current) = current_default {
+            if let Some(pos) = connected.iter().position(|d| d.id == current.id) {
+                connected[(pos + 1) % connected.len()]
+            } else {
+                connected[0]
+            }
+        } else {
+            connected[0]
+        }
+    } else {
+        // 未开启共享：切换到该键关联的第一个已连接设备
+        connected[0]
+    };
+
+    crate::process::append_log(&format!(
+        "[hotkey] device shortcut '{}' -> switch default to {}",
+        key, next.name
+    ));
+    if let Err(e) = crate::audio::set_default_device(&next.id) {
+        crate::process::append_log(&format!("[hotkey] set default device failed: {}", e));
+    }
+    let _ = app.emit("audio-devices-changed", ());
+}
+
+pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str, key: &str) {
+    if crate::state::SHORTCUT_RECORDING.load(Ordering::Relaxed) {
+        // 录制期间：不执行动作，把按下的键上报给前端用于录制
+        crate::process::append_log(&format!("[hotkey] captured while recording: {}", key));
+        let _ = app.emit("shortcut-recorded", key);
+        return;
+    }
+    if let Some(key) = action.strip_prefix("device_shortcut_key:") {
+        crate::process::append_log(&format!("[hotkey] device shortcut key triggered: {}", key));
+        cycle_device_shortcut(app, key);
+        return;
+    }
+    match action {
+        "devices" => crate::popup::open_popup(app, "devices"),
+        "volume" => crate::popup::open_popup(app, "volume"),
+        "volume_up" => crate::audio::adjust_default_volume_up(),
+        "volume_down" => crate::audio::adjust_default_volume_down(),
+        "volume_mute" => crate::audio::toggle_default_mute(),
+        _ => {}
+    }
 }
