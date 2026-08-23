@@ -557,11 +557,24 @@ pub struct SpatialSoundFormat { pub guid: String, pub name: String }
 #[derive(Debug, Clone, Serialize)]
 pub struct SpatialSoundState { pub current: Option<String>, pub supported: Vec<SpatialSoundFormat> }
 
-/// 已知空间音效格式表（GUID 均为本机 Win11 实测，Sonic 与 NirSoft svcl 文档一致）
-const SPATIAL_SOUND_FORMATS: &[(&str, &str)] = &[
-    ("b53d940c-b846-4831-9f76-d102b9b725a0", "用于耳机的 Windows Sonic"),
-    ("1459ac38-3875-49bf-bb59-0fe80f4d395d", "Dolby Atmos for Headphones"),
-    ("4444acb0-8dc0-4c2c-a0d8-2c76db470f86", "DTS Headphone:X"),
+/// 已知空间音效格式表（GUID 均为本机 Win11 实测，Sonic 与 NirSoft svcl 文档一致）。
+/// 第三项为格式提供应用的包族名（AppX PackageFamilyName）：
+/// None = 系统内置恒可用；Some = 需对应商店应用已为当前用户注册，卸载后从菜单移除
+const SPATIAL_SOUND_FORMATS: &[(&str, &str, Option<&[&str]>)] = &[
+    ("b53d940c-b846-4831-9f76-d102b9b725a0", "用于耳机的 Windows Sonic", None),
+    (
+        "1459ac38-3875-49bf-bb59-0fe80f4d395d",
+        "Dolby Atmos for Headphones",
+        Some(&[
+            "DolbyLaboratories.DolbyAtmosforHeadphones_rz1tebttyb220",
+            "DolbyLaboratories.DolbyAccess_rz1tebttyb220",
+        ]),
+    ),
+    (
+        "4444acb0-8dc0-4c2c-a0d8-2c76db470f86",
+        "DTS Headphone:X",
+        Some(&["DTSInc.DTSSoundUnbound_t5j2fzbtdg37r"]),
+    ),
 ];
 
 /// Get/SetDeviceSpatialSettings 写读的状态块有效长度（0x48 之外为堆噪声）
@@ -579,9 +592,32 @@ pub fn get_spatial_sound(device_id: &str) -> std::result::Result<SpatialSoundSta
         Ok(SpatialSoundState {
             current: state_current_guid(&state),
             supported: SPATIAL_SOUND_FORMATS.iter()
-                .map(|(g, n)| SpatialSoundFormat { guid: g.to_string(), name: n.to_string() })
+                .filter(|(_, _, pkgs)| spatial_format_available(pkgs))
+                .map(|(g, n, _)| SpatialSoundFormat { guid: g.to_string(), name: n.to_string() })
                 .collect(),
         })
+    }
+}
+
+/// 查询当前用户是否注册了指定包族的 AppX 应用（免管理员，经 PackageManager WinRT）
+fn is_package_registered_for_user(family: &str) -> bool {
+    use windows::Management::Deployment::PackageManager;
+    unsafe {
+        ensure_com_initialized();
+        let Ok(pm) = PackageManager::new() else { return false; };
+        let empty = HSTRING::from("");
+        let fam = HSTRING::from(family);
+        pm.FindPackagesByUserSecurityIdPackageFamilyName(&empty, &fam)
+            .map(|p| p.into_iter().next().is_some())
+            .unwrap_or(false)
+    }
+}
+
+/// 格式可用性：无包族依赖（内置）恒可用；有依赖则任一包族已注册即视为可用
+fn spatial_format_available(pkgs: &Option<&[&str]>) -> bool {
+    match pkgs {
+        None => true,
+        Some(families) => families.iter().any(|f| is_package_registered_for_user(f)),
     }
 }
 
@@ -590,10 +626,15 @@ pub fn set_spatial_sound(device_id: &str, format_guid: Option<&str>) -> std::res
         None => None,
         Some(s) => Some(parse_guid_str(s).ok_or_else(|| format!("无效的格式 GUID：{}", s))?),
     };
-    let target_name = match (&guid_hex, SPATIAL_SOUND_FORMATS.iter().find(|(g, _)| {
-        parse_guid_str(g) == guid_hex
-    })) {
-        (_, Some((_, n))) => *n,
+    let entry = SPATIAL_SOUND_FORMATS.iter().find(|(g, _, _)| parse_guid_str(g) == guid_hex);
+    // 已知格式需校验提供应用是否仍安装，防止写入已卸载格式
+    if let (Some(_), Some((_, name, pkgs))) = (&guid_hex, entry) {
+        if !spatial_format_available(pkgs) {
+            return Err(format!("{} 未安装或已被卸载", name));
+        }
+    }
+    let target_name = match (&guid_hex, entry) {
+        (_, Some((_, n, _))) => *n,
         (None, _) => "关",
         _ => "自定义格式",
     };
@@ -797,7 +838,7 @@ mod spatial_tests {
 
     #[test]
     fn guid_parse_format_roundtrip() {
-        for (guid, _) in SPATIAL_SOUND_FORMATS {
+        for (guid, _, _) in SPATIAL_SOUND_FORMATS {
             let bytes = parse_guid_str(guid).expect("parse");
             assert_eq!(format_guid_bytes(&bytes), *guid);
         }
