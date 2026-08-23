@@ -20,7 +20,6 @@ const forceMutePrevVolume = {};
 const buttonMutedDevices = new Set();
 let activeAudioMenu = null;
 
-// 设备显示名：有重命名使用重命名，否则简化括号内名称
 // 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为本页运行态）
 function deviceDisplayName(name) {
   return window.formatDeviceName(name, audioDeviceNames, simplifyDeviceNames);
@@ -45,7 +44,7 @@ function updateSessionCard(session) {
   for (const card of cards) {
     if (card.dataset.sessionId === session.id) {
       updateSliderValue(card.querySelector('.volume-slider'), session.volume);
-updateMuteButton(card.querySelector('.mute-btn'), session.is_muted, session.volume, session.permanentMute);
+      updateMuteButton(card.querySelector('.mute-btn'), session.is_muted, session.volume, session.permanentMute);
       break;
     }
   }
@@ -486,7 +485,6 @@ function createAudioDeviceCard(device) {
   const card = document.createElement("div");
   card.className = "card column audio-device";
   card.dataset.deviceId = device.id;
-  card.dataset.deviceName = device.name;
 
   const header = document.createElement("div");
   header.className = "card-left";

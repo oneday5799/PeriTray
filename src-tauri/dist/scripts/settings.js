@@ -623,16 +623,11 @@ function updateFlyoutBackdrop(material) {
   }
 }
 
-/// 设置 <html> 的 data-material 属性（用于 CSS 透明背景规则）
-function updateMaterialAttribute(material) {
-  applyMaterialMode(material);
-}
-
 /// 初始化时应用当前材质的 CSS 效果
 function initMaterialEffects() {
   const material = config?.window_material || "default";
   updateFlyoutBackdrop(material);
-  updateMaterialAttribute(material);
+  applyMaterialMode(material);
 }
 
 init();

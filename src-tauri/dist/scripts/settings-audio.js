@@ -3,7 +3,7 @@
  * 加载序 5/7 · 提供：loadAudioDevicesAsync()/initAudioCardToggle()/initMuteLockSettings()/
  *            initFineAdjustSettings()/initSimplifyNamesSettings()/initForceMuteSettings()/
  *            initSpatialSoundSettings()/initShutdownVolumeSettings()/renderShutdownVolumeDevices()
- * 依赖：common.js(getInvoke/throttle/showToast) / settings.js(config/bindToggle/saveConfig) */
+ * 依赖：common.js(getInvoke/showToast) / settings.js(config/bindToggle/saveConfig) */
 async function loadAudioDevicesAsync() {
   try {
     config = await invoke("get_config");

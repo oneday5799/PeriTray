@@ -41,13 +41,13 @@ function initGeneralTab() {
     updateFlyoutBackdrop(val);
     if (val === "default") {
       // 先移除 CSS 透明规则，再移除 DWM 材质，避免闪烁
-      updateMaterialAttribute(val);
+      applyMaterialMode(val);
       await invoke("set_window_material", { material: val });
     } else {
       await invoke("set_window_material", { material: val });
       // 等待 DWM 材质生效 + webview 背景透明化后再设置 CSS 属性
       await new Promise(r => setTimeout(r, 200));
-      updateMaterialAttribute(val);
+      applyMaterialMode(val);
     }
     window.__materialChangeInProgress = false;
   });

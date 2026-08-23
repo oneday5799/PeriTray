@@ -4,7 +4,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{TrayIcon, TrayIconBuilder},
-    Emitter, Listener,
+    Listener,
 };
 
 use crate::config;
@@ -248,7 +248,6 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = if new_val { autostart.enable() } else { autostart.disable() };
                     update_auto_text();
                     crate::process::append_log(&format!("[tray] auto_start toggled: {}", new_val));
-                    let _ = app.emit("auto-start-changed", new_val);
                 }
                 "exit" => { app.exit(0); }
                 id if id.starts_with("audio_dev_") => {

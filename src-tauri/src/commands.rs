@@ -44,12 +44,6 @@ pub fn open_settings(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-pub fn exit_app(app: tauri::AppHandle) {
-    crate::process::append_log("[cmd] exit_app");
-    app.exit(0);
-}
-
-#[tauri::command]
 pub fn get_config() -> Config {
     config::with_config(|c| c.clone())
 }
@@ -207,11 +201,6 @@ pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_tray_tooltip() -> String {
-    crate::tray::build_tooltip_text()
-}
-
 // Audio commands
 
 #[tauri::command(async)]
@@ -257,13 +246,6 @@ pub async fn set_session_volume(session_id: String, volume: f32) -> Result<(), S
 }
 
 #[tauri::command(async)]
-pub async fn toggle_session_mute(session_id: String) -> Result<(), String> {
-    run_blocking(move || crate::audio::toggle_session_mute(&session_id))
-        .await?
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command(async)]
 pub async fn set_session_mute(session_id: String, muted: bool) -> Result<(), String> {
     run_blocking(move || crate::audio::set_session_mute(&session_id, muted))
         .await?
@@ -289,21 +271,6 @@ pub async fn get_session_device(pid: u32, direction: String) -> Result<Option<St
     run_blocking(move || crate::audio::get_session_device(pid, &direction))
         .await?
         .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn adjust_volume_up() {
-    crate::audio::adjust_default_volume_up();
-}
-
-#[tauri::command]
-pub fn adjust_volume_down() {
-    crate::audio::adjust_default_volume_down();
-}
-
-#[tauri::command]
-pub fn toggle_mute() {
-    crate::audio::toggle_default_mute();
 }
 
 #[tauri::command]

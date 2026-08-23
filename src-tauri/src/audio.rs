@@ -330,15 +330,6 @@ pub fn set_session_volume(session_id: &str, volume: f32) -> Result<()> {
     Ok(())
 }
 
-pub fn toggle_session_mute(session_id: &str) -> Result<()> {
-    unsafe {
-        let sv = find_session_volume(session_id)?;
-        let current = sv.GetMute()?;
-        sv.SetMute(!current.as_bool(), ptr::null())?;
-    }
-    Ok(())
-}
-
 pub fn set_session_mute(session_id: &str, muted: bool) -> Result<()> {
     unsafe {
         let sv = find_session_volume(session_id)?;
