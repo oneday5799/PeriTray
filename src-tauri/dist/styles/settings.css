@@ -118,16 +118,6 @@
   animation: SlideFromBottom_Leave 167ms var(--ease-accel) both;
 }
 
-/* Enter from top (backward navigation — going up the list) */
-.settings-container .tab-content.slide-enter-up {
-  animation: SlideFromTop_Enter 450ms var(--ease-decel) both;
-}
-
-/* Leave to bottom (backward navigation) */
-.settings-container .tab-content.slide-leave-down {
-  animation: SlideFromTop_Leave 167ms var(--ease-accel) both;
-}
-
 @keyframes SlideFromBottom_Enter {
   0%   { opacity: 0; transform: translateY(80px); }
   33.333% { opacity: 0; transform: translateY(80px); }
@@ -140,23 +130,9 @@
   to   { opacity: 0; transform: translateY(-60px); }
 }
 
-@keyframes SlideFromTop_Enter {
-  0%   { opacity: 0; transform: translateY(-80px); }
-  33.333% { opacity: 0; transform: translateY(-80px); }
-  33.334% { opacity: 1; transform: translateY(-80px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes SlideFromTop_Leave {
-  from { opacity: 1; transform: translateY(0); }
-  to   { opacity: 0; transform: translateY(60px); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .settings-container .tab-content.slide-enter-down,
-  .settings-container .tab-content.slide-leave-up,
-  .settings-container .tab-content.slide-enter-up,
-  .settings-container .tab-content.slide-leave-down {
+  .settings-container .tab-content.slide-leave-up {
     animation: none !important;
   }
 }
@@ -779,7 +755,7 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
 .update-error-flyout-summary {
   font-size: 14px;
   line-height: 20px;
-  color: var(--status-error, #d32f2f);
+  color: #d32f2f;
   margin-bottom: 8px;
 }
 

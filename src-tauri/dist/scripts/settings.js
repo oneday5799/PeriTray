@@ -226,11 +226,6 @@ function initComboBox(comboId, selectedValue, onChange) {
   });
 
   selectItem(currentValue);
-
-  return {
-    setValue(v) { selectItem(v); currentValue = v; },
-    getValue() { return currentValue; }
-  };
 }
 
 function initNavigation() {
@@ -308,14 +303,14 @@ function initNavigation() {
       const newContent = document.getElementById('tab-' + tab.dataset.tab);
 
       document.querySelectorAll('.tab-content').forEach(c => {
-        c.classList.remove('slide-enter-down', 'slide-leave-up', 'slide-enter-up', 'slide-leave-down', 'slide-active');
+        c.classList.remove('slide-enter-down', 'slide-leave-up', 'slide-active');
       });
 
       if (oldContent) oldContent.classList.add('slide-leave-up');
       newContent.classList.add('slide-active', 'slide-enter-down');
 
       setTimeout(() => {
-        if (oldContent) oldContent.classList.remove('active', 'slide-leave-up', 'slide-leave-down', 'slide-active');
+        if (oldContent) oldContent.classList.remove('active', 'slide-leave-up', 'slide-active');
       }, 170);
 
       if (pageHeader) pageHeader.textContent = tab.querySelector('.label').textContent;

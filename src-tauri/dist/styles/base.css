@@ -37,7 +37,6 @@
   --text-body: #444444;
   --accent: #0078d7;
   --accent-hover: #106ebe;
-  --accent-subtle-bg: #e8f4fd;
   --text-on-accent: #ffffff;
   --link: #0067c0;
   --link-hover-bg: rgba(0, 103, 192, 0.04);
@@ -109,7 +108,6 @@ html[data-theme="dark"] {
   --text-body: rgba(255, 255, 255, 0.77);
   --accent: #4cc2ff;
   --accent-hover: #3a9ee0;
-  --accent-subtle-bg: rgba(76, 194, 255, 0.12);
   --text-on-accent: #1a1a1a;
   --link: #4cc2ff;
   --link-hover-bg: rgba(255, 255, 255, 0.06);
@@ -685,17 +683,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 
 .dialog-btn.confirm:hover {
   background: var(--accent-hover);
-}
-
-.dialog-btn.restore {
-  background: var(--control-bg);
-  color: var(--accent);
-  border-color: var(--accent);
-  margin-right: auto;
-}
-
-.dialog-btn.restore:hover {
-  background: var(--accent-subtle-bg);
 }
 
 .connect-btn:disabled,
