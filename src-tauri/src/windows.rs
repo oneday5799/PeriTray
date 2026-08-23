@@ -197,7 +197,7 @@ fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
     }
 }
 
-pub fn set_webview_bg_transparent(webview: &tauri::Webview) {
+fn set_webview_bg_transparent(webview: &tauri::Webview) {
     set_webview_bg_color(webview, [0, 0, 0, 0]);
 }
 

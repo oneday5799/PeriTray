@@ -41,7 +41,9 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
             .collect()
     });
 
-    let mut registered = DEVICE_REGISTERED_KEYS.lock().unwrap();
+    let mut registered = DEVICE_REGISTERED_KEYS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
     // 注销已注册但不再使用的键
     for key in registered.iter() {

@@ -28,21 +28,35 @@ fn cubic_bezier(t: f64) -> f64 {
         + t_param.powi(3)
 }
 
-/// 计算弹窗位置参数：(target_x, target_y, start_y)
-fn compute_position(app: &tauri::AppHandle) -> (f64, f64, f64) {
+/// 弹窗位置计算结果（含诊断字段，避免日志重复枚举显示器）
+struct Placement {
+    target_x: f64,
+    target_y: f64,
+    start_y: f64,
+    sf: f64,
+    screen_h: f64,
+    tray: Option<(f64, f64)>,
+}
+
+/// 计算弹窗位置参数
+fn compute_position(app: &tauri::AppHandle) -> Placement {
     let sf = windows::scale_factor(app);
     let screen_h = app.primary_monitor()
         .ok()
         .flatten()
         .map(|m| m.size().height as f64 / sf)
         .unwrap_or(1080.0);
-    let (tray_x, tray_y) = TRAY_POS.get()
-        .map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()))
-        .unwrap_or((100.0, screen_h - 50.0));
-    let target_x = tray_x - POPUP_W / 2.0;
-    let target_y = tray_y - POPUP_H - 15.0;
-    let start_y = screen_h + 10.0;
-    (target_x, target_y, start_y)
+    let tray = TRAY_POS.get()
+        .map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()));
+    let (tray_x, tray_y) = tray.unwrap_or((100.0, screen_h - 50.0));
+    Placement {
+        target_x: tray_x - POPUP_W / 2.0,
+        target_y: tray_y - POPUP_H - 15.0,
+        start_y: screen_h + 10.0,
+        sf,
+        screen_h,
+        tray,
+    }
 }
 
 pub fn toggle(app: &tauri::AppHandle, tab: &str) {
@@ -50,33 +64,27 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
         return;
     }
 
-    crate::process::append_log(&format!("[tray] toggle enter tab={}", tab));
-    let (target_x, target_y, start_y) = compute_position(app);
-    {
-        let tray = TRAY_POS.get().map(|m| *m.lock().unwrap_or_else(|e| e.into_inner()));
-        let sf = windows::scale_factor(app);
-        let screen_h = app.primary_monitor().ok().flatten()
-            .map(|m| m.size().height as f64 / sf).unwrap_or(0.0);
-        crate::process::append_log(&format!(
-            "[tray] coords tray={:?} sf={} screen_h={} target=({}, {}) start_y={}",
-            tray, sf, screen_h, target_x, target_y, start_y
-        ));
-    }
+    crate::process::append_log(&format!("[popup] toggle enter tab={}", tab));
+    let p = compute_position(app);
+    crate::process::append_log(&format!(
+        "[popup] coords tray={:?} sf={} screen_h={} target=({}, {}) start_y={}",
+        p.tray, p.sf, p.screen_h, p.target_x, p.target_y, p.start_y
+    ));
 
     if let Some(window) = app.get_webview_window("popup") {
         let visible = window.is_visible().unwrap_or(false);
-        crate::process::append_log(&format!("[tray] is_visible -> {}", visible));
+        crate::process::append_log(&format!("[popup] is_visible -> {}", visible));
         if visible {
-            close(&window, target_x, target_y, start_y);
-            crate::process::append_log("[tray] close dispatched");
+            close(&window, p.target_x, p.target_y, p.start_y);
+            crate::process::append_log("[popup] close dispatched");
         } else {
             let _ = app.emit("switch-tab", tab);
-            show(&window, target_x, start_y, target_y);
-            crate::process::append_log("[tray] show dispatched");
+            show(&window, p.target_x, p.start_y, p.target_y);
+            crate::process::append_log("[popup] show dispatched");
         }
     } else {
-        create(app, target_x, target_y, tab);
-        crate::process::append_log("[tray] create dispatched");
+        create(app, p.target_x, p.target_y, tab);
+        crate::process::append_log("[popup] create dispatched");
     }
 }
 
@@ -85,16 +93,16 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
         return;
     }
 
-    let (target_x, target_y, start_y) = compute_position(app);
-    crate::process::append_log("[tray] open_popup dispatched");
+    let p = compute_position(app);
+    crate::process::append_log("[popup] open_popup dispatched");
 
     if let Some(window) = app.get_webview_window("popup") {
         let _ = app.emit("switch-tab", tab);
         if !window.is_visible().unwrap_or(false) {
-            show(&window, target_x, start_y, target_y);
+            show(&window, p.target_x, p.start_y, p.target_y);
         }
     } else {
-        create(app, target_x, target_y, tab);
+        create(app, p.target_x, p.target_y, tab);
     }
 }
 
@@ -120,10 +128,10 @@ pub fn close_popup(app: &tauri::AppHandle) {
     if ANIMATING.load(Ordering::Relaxed) {
         return;
     }
-    let (target_x, target_y, start_y) = compute_position(app);
+    let p = compute_position(app);
     if let Some(window) = app.get_webview_window("popup") {
         if window.is_visible().unwrap_or(false) {
-            close(&window, target_x, target_y, start_y);
+            close(&window, p.target_x, p.target_y, p.start_y);
         }
     }
 }
@@ -215,12 +223,12 @@ fn animate_slide(window: &tauri::WebviewWindow, x: f64, from_y: f64, to_y: f64, 
         let t = i as f64 / frames as f64;
         let y = from_y + (to_y - from_y) * cubic_bezier(t);
         if let Err(e) = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y })) {
-            crate::process::append_log(&format!("[tray] set_position FAILED frame={}: {}", i, e));
+            crate::process::append_log(&format!("[popup] set_position FAILED frame={}: {}", i, e));
         }
         std::thread::sleep(std::time::Duration::from_millis(step_ms));
     }
     crate::process::append_log(&format!(
-        "[tray] slide done x={} from_y={} to_y={}",
+        "[popup] slide done x={} from_y={} to_y={}",
         x, from_y, to_y
     ));
 }

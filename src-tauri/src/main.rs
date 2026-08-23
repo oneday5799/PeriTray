@@ -99,12 +99,11 @@ fn main() {
         ))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             process::append_log("[single-instance] second instance forwarded");
+            let tab = config::with_config(|c| c.default_popup_tab.clone());
             if app.get_webview_window("popup").is_some() {
-                let tab = config::with_config(|c| c.default_popup_tab.clone());
                 process::append_log(&format!("[single-instance] popup exists, open tab={}", tab));
                 popup::open_popup(app, &tab);
             } else {
-                let tab = config::with_config(|c| c.default_popup_tab.clone());
                 process::append_log("[single-instance] no popup, create via toggle");
                 popup::toggle(app, &tab);
             }
@@ -112,6 +111,7 @@ fn main() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            // 设备列表与配置
             commands::get_devices,
             commands::get_config,
             commands::set_window_theme,
@@ -123,14 +123,17 @@ fn main() {
             commands::rename_device,
             commands::change_device_group,
             commands::toggle_group_hidden,
+            // 蓝牙
             commands::connect_bluetooth_device,
             commands::disconnect_bluetooth_device,
             commands::check_bt_connection,
             commands::open_bt_settings,
+            // 杂项入口
             commands::open_url,
             commands::open_24g_device_file,
             commands::toggle_device_tray,
             commands::get_tray_tooltip,
+            // 音频设备/会话
             commands::get_audio_devices,
             commands::set_device_volume,
             commands::toggle_device_mute,
@@ -148,13 +151,16 @@ fn main() {
             commands::set_default_device,
             commands::get_spatial_sound,
             commands::set_spatial_sound,
+            // 日志与更新
             commands::open_log_dir,
             commands::check_for_update,
             commands::get_update_status,
+            // 快捷键
             commands::set_hotkey_config,
             commands::set_device_shortcut,
             commands::remove_device_shortcut,
             commands::set_shortcut_recording,
+            // 窗口材质
             commands::set_window_material,
             commands::check_material_support,
         ])
