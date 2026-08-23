@@ -119,6 +119,15 @@ window.simplifyDeviceName = function (name) {
   }
   return name;
 };
+// 设备显示名统一解析：有重命名用重命名 -> 可选简化括号名 -> 原名。
+// customNames/simplify 由调用方注入数据源（popup 与 settings 的存储位置不同）。
+// 注意：getDisplayName 为无简化步骤的另一语义（仅重命名回退原名），勿混淆。
+window.formatDeviceName = function (name, customNames, simplify) {
+  const custom = customNames ? customNames[name] : undefined;
+  if (custom) return custom;
+  if (simplify) return window.simplifyDeviceName(name);
+  return name;
+};
 
 // ── 应用名 tooltip（页面内，超出边界自动避让） ────────────
 let sessionTipTimer = null;
@@ -201,6 +210,18 @@ window.hideAllContextMenus = function () {
 
 document.addEventListener("click", hideAllContextMenus);
 
+// 勾选图标（context-menu-check）：各菜单选中态的统一构造入口
+window.createCheckIcon = function () {
+  const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  check.setAttribute("class", "context-menu-check");
+  check.setAttribute("width", "12");
+  check.setAttribute("height", "12");
+  check.setAttribute("viewBox", "0 0 12 12");
+  check.setAttribute("fill", "none");
+  check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+  return check;
+};
+
 // 子菜单外壳：悬停展开的二级菜单（分组/输出设备/会话路由/空间音效共用）。
 // positionFn(submenu, groupItem, menu) 可注入自定义定位策略；缺省为锚定 groupItem 视口矩形。
 window.createSubmenuShell = function (menu, label, positionFn) {
@@ -220,14 +241,7 @@ window.createSubmenuShell = function (menu, label, positionFn) {
     const leading = document.createElement("span");
     leading.className = "context-menu-leading";
     if (checked) {
-      const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      check.setAttribute("class", "context-menu-check");
-      check.setAttribute("width", "12");
-      check.setAttribute("height", "12");
-      check.setAttribute("viewBox", "0 0 12 12");
-      check.setAttribute("fill", "none");
-      check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-      leading.appendChild(check);
+      leading.appendChild(createCheckIcon());
     }
     item.appendChild(leading);
 

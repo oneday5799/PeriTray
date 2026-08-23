@@ -122,11 +122,9 @@ function initSpatialSoundSettings() {
 }
 
 // 设备显示名：有重命名使用重命名，否则简化括号内名称
+// 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为设置页 config 单例）
 function fmtDevName(name) {
-  const custom = (config.device_names || {})[name];
-  if (custom) return custom;
-  if (config.simplify_device_names !== false) return window.simplifyDeviceName(name);
-  return name;
+  return window.formatDeviceName(name, config.device_names || {}, config.simplify_device_names !== false);
 }
 
 function initForceMuteSettings() {
@@ -166,14 +164,7 @@ function initForceMuteSettings() {
       leading.className = "context-menu-leading";
       const isChecked = selected.has(dev.name);
       if (isChecked) {
-        const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        check.setAttribute("class", "context-menu-check");
-        check.setAttribute("width", "12");
-        check.setAttribute("height", "12");
-        check.setAttribute("viewBox", "0 0 12 12");
-        check.setAttribute("fill", "none");
-        check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-        leading.appendChild(check);
+        leading.appendChild(createCheckIcon());
       }
       item.appendChild(leading);
 
@@ -194,14 +185,7 @@ function initForceMuteSettings() {
         await saveConfig();
         leading.innerHTML = "";
         if (list.indexOf(dev.name) >= 0) {
-          const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-          check.setAttribute("class", "context-menu-check");
-          check.setAttribute("width", "12");
-          check.setAttribute("height", "12");
-          check.setAttribute("viewBox", "0 0 12 12");
-          check.setAttribute("fill", "none");
-          check.innerHTML = '<path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
-          leading.appendChild(check);
+          leading.appendChild(createCheckIcon());
         }
       });
 

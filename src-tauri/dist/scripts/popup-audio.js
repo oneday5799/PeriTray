@@ -19,11 +19,18 @@ const buttonMutedDevices = new Set();
 let activeAudioMenu = null;
 
 // 设备显示名：有重命名使用重命名，否则简化括号内名称
+// 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为本页运行态）
 function deviceDisplayName(name) {
-  const custom = audioDeviceNames[name];
-  if (custom) return custom;
-  if (simplifyDeviceNames) return window.simplifyDeviceName(name);
-  return name;
+  return window.formatDeviceName(name, audioDeviceNames, simplifyDeviceNames);
+}
+
+// config -> 本页运行态字段（config-changed 监听与初次加载共用）
+function applyAudioRuntimeConfig(cfg) {
+  muteLockEnabled = !!cfg.mute_lock;
+  fineAdjustEnabled = !!cfg.volume_fine_adjust;
+  spatialSoundEnabled = !!cfg.enable_spatial_sound;
+  simplifyDeviceNames = cfg.simplify_device_names !== false;
+  forceMuteDevices = cfg.force_mute_devices || [];
 }
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -85,11 +92,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
   window.__TAURI__.event.listen('config-changed', async () => {
     try {
       const cfg = await getInvoke()("get_config");
-      muteLockEnabled = !!cfg.mute_lock;
-      fineAdjustEnabled = !!cfg.volume_fine_adjust;
-      spatialSoundEnabled = !!cfg.enable_spatial_sound;
-      simplifyDeviceNames = cfg.simplify_device_names !== false;
-      forceMuteDevices = cfg.force_mute_devices || [];
+      applyAudioRuntimeConfig(cfg);
       for (const d of audioDevices) {
         d.permanentMute = muteLockEnabled && buttonMutedDevices.has(d.id);
       }
@@ -423,11 +426,7 @@ async function loadAudioDevices() {
   }
   try {
     const [devices, cfg] = await Promise.all([invoke("get_audio_devices"), invoke("get_config")]);
-    muteLockEnabled = !!cfg.mute_lock;
-    fineAdjustEnabled = !!cfg.volume_fine_adjust;
-    spatialSoundEnabled = !!cfg.enable_spatial_sound;
-    simplifyDeviceNames = cfg.simplify_device_names !== false;
-    forceMuteDevices = cfg.force_mute_devices || [];
+    applyAudioRuntimeConfig(cfg);
     audioDevices = devices.map(d => ({ ...d, permanentMute: muteLockEnabled && buttonMutedDevices.has(d.id) }));
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
