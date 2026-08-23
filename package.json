@@ -4,7 +4,8 @@
   "description": "外设监控 - 系统托盘外设管理工具",
   "scripts": {
     "tauri": "tauri",
-    "build": "tauri build --bundles nsis"
+    "build": "tauri build --bundles nsis",
+    "check": "node tools/check.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

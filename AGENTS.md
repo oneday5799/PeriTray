@@ -134,3 +134,14 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   config 共享实际出 bug；届时可先考虑 config 抽为经典脚本单例的廉价中间路线）
 - 材质系统收敛（删除 settings-general 回调手动三件套）暂缓，
   下次因其他原因动材质代码时顺手做并实测闪烁
+
+## 开发与调试
+
+- **本地运行**：仓库根目录 `npm run tauri dev`（首次需编译）；改 Rust 源会被
+  dev 监听自动重建重启，改 dist 前端同样热生效
+- **调试开关**：环境变量 `PM_DEV_OPEN_SETTINGS=1` 启动时延迟 1.5s 自动打开
+  设置窗口（main.rs），用于自动化验证设置页脚本加载与初始化
+- **日志**：写入 `src-tauri/target/debug/debug.log`（exe 同目录）；
+  设置页「通用 → 日志」可开关/调级；排查启动问题先看 `[main] startup complete`
+- **远程校验**：push 到 main 与 PR 由 CI 工作流（.github/workflows/ci.yml）
+  复跑本地闸门全套（check.mjs / rustfmt / cargo check -D warnings / cargo test）
