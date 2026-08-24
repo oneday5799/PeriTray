@@ -27,14 +27,11 @@ fn cubic_bezier(t: f64) -> f64 {
     3.0 * t_param.powi(2) * (1.0 - t_param) + t_param.powi(3)
 }
 
-/// 弹窗位置计算结果（含诊断字段，避免日志重复枚举显示器）
+/// 弹窗位置计算结果
 struct Placement {
     target_x: f64,
     target_y: f64,
     start_y: f64,
-    sf: f64,
-    screen_h: f64,
-    tray: Option<(f64, f64)>,
 }
 
 /// 计算弹窗位置参数
@@ -52,9 +49,6 @@ fn compute_position(app: &tauri::AppHandle) -> Placement {
         target_x: tray_x - POPUP_W / 2.0,
         target_y: tray_y - POPUP_H - 15.0,
         start_y: screen_h + 10.0,
-        sf,
-        screen_h,
-        tray,
     }
 }
 
@@ -63,27 +57,19 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
         return;
     }
 
-    crate::process::append_log(&format!("[popup] toggle enter tab={}", tab));
+    crate::process::append_log(&format!("[popup] toggle tab={}", tab));
     let p = compute_position(app);
-    crate::process::append_log(&format!(
-        "[popup] coords tray={:?} sf={} screen_h={} target=({}, {}) start_y={}",
-        p.tray, p.sf, p.screen_h, p.target_x, p.target_y, p.start_y
-    ));
 
     if let Some(window) = app.get_webview_window("popup") {
         let visible = window.is_visible().unwrap_or(false);
-        crate::process::append_log(&format!("[popup] is_visible -> {}", visible));
         if visible {
             close(&window, p.target_x, p.target_y, p.start_y);
-            crate::process::append_log("[popup] close dispatched");
         } else {
             let _ = app.emit("switch-tab", tab);
             show(&window, p.target_x, p.start_y, p.target_y);
-            crate::process::append_log("[popup] show dispatched");
         }
     } else {
         create(app, p.target_x, p.target_y, tab);
-        crate::process::append_log("[popup] create dispatched");
     }
 }
 
@@ -93,7 +79,6 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
     }
 
     let p = compute_position(app);
-    crate::process::append_log("[popup] open_popup dispatched");
 
     if let Some(window) = app.get_webview_window("popup") {
         let _ = app.emit("switch-tab", tab);
@@ -135,6 +120,10 @@ pub fn close_popup(app: &tauri::AppHandle) {
 }
 
 fn show(window: &tauri::WebviewWindow, target_x: f64, start_y: f64, target_y: f64) {
+    // popup 打开前 Resume WebView2 渲染进程（可能因关闭后 Suspend 或系统唤醒处于挂起状态）
+    let wv: &tauri::Webview = window.as_ref();
+    windows::resume_webview(wv);
+
     ANIMATING.store(true, Ordering::Relaxed);
     // 先移到屏幕外，再置顶，最后显示：滑动全程位于其他窗口之上，
     // 避免非置顶状态下被前台窗口遮挡（表现为动画"丢失"或部分不可见）
@@ -239,10 +228,6 @@ fn animate_slide(
         }
         std::thread::sleep(std::time::Duration::from_millis(step_ms));
     }
-    crate::process::append_log(&format!(
-        "[popup] slide done x={} from_y={} to_y={}",
-        x, from_y, to_y
-    ));
 }
 
 fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {
@@ -260,4 +245,9 @@ fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64)
 fn animate_close(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {
     animate_slide(window, x, start_y, end_y, 200, 16);
     let _ = window.hide();
+    // popup 关闭后 Suspend WebView2 渲染进程：
+    // - 释放 CPU/内存（渲染进程休眠）
+    // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（B 类僵死根治）
+    let wv: &tauri::Webview = window.as_ref();
+    windows::suspend_webview(wv);
 }
