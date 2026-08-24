@@ -1,57 +1,16 @@
 // ── 模块职责 ─────────────────────────────────────────────
-// 雷蛇 2.4G 接收器电量驱动。
-// 协议来源：借鉴 OpenRazer（https://github.com/openrazer/openrazer）
-// 逆向所得的协议事实（报文布局/命令字/CRC/时序），本文件为 Windows
-// 用户态独立实现，运行时不依赖 OpenRazer。
-//
-// 设备差异收敛为两个参数（事务 ID 与响应等待时长），取值严格照抄
-// OpenRazer 的两张开关表：
-//   txid ← razermouse_driver.c razer_attr_read_charge_level()
-//   wait ← razermouse_driver.c razer_get_report()
-// 设备表同时是识别注册表的编译期内置数据源（name 字段经 identities()
-// 对外声明）。除 Orochi V2（0x0094）经实机验证外，其余型号为同族协议
-// 移植，依赖回显校验/负缓存兜底；查询失败时日志附带响应原文供远程定位。
+// 雷蛇鼠标域驱动：收录 OpenRazer 全系支持电量上报的雷蛇无线鼠标
+// （64 个 PID，含同款有线形态；蓝牙 PID 不收）。
+// 协议编解码原语与参数常量见上级 mod.rs；本文件只维护设备表与
+// 驱动实现。除 Orochi V2（0x0094）经实机验证外，其余型号为同族
+// 协议移植，依赖回显校验/负缓存兜底。
 
-use std::time::Duration;
-
-use super::{BatteryDriver, DeviceIdentity};
-use crate::wireless_24g::hid_link::{HidLink, REPORT_LEN};
-
-// ── 协议常量 ────────────────────────────────────────────
-
-/// 命令大类：电池
-const CLASS_BATTERY: u8 = 0x07;
-/// 命令字：获取电量（响应 arguments[1] 为 0-255 原始刻度，需换算百分比）
-const CMD_GET_BATTERY: u8 = 0x80;
-/// 载荷长度
-const DATA_SIZE: u8 = 0x02;
-/// 整轮查询最大重试次数（与 OpenRazer 一致）
-const MAX_RETRIES: usize = 5;
-/// 重试间隔
-const RETRY_INTERVAL: Duration = Duration::from_millis(10);
-
-/// 响应状态码：命令成功
-const STATUS_SUCCESS: u8 = 0x02;
-/// 响应状态码：命令无响应/超时（鼠标休眠或离线时常见）
-const STATUS_TIMEOUT: u8 = 0x04;
-
-// ── 设备参数常量 ─────────────────────────────────────────
-
-/// 事务 ID：新一代接收器
-const TXID_NEW: u8 = 0x1F;
-/// 事务 ID：中代（Lancehead/Mamba Wireless/DeathAdder V2 Pro）
-const TXID_MID: u8 = 0x3F;
-/// 事务 ID：远古（Mamba 2012/Ouroboros/Viper Ultimate 等）
-const TXID_LEGACY: u8 = 0xFF;
-
-/// OpenRazer 默认等待 600us，取整 1ms
-const WAIT_DEFAULT_MS: u64 = 1;
-/// 新一代接收器常规等待（OpenRazer 31ms）
-const WAIT_NEW_MS: u64 = 31;
-/// VIPER 族接收器等待（OpenRazer 59.9ms）
-const WAIT_VIPER_MS: u64 = 60;
-/// Atheris/Orochi 类接收器等待（OpenRazer 400ms）
-const WAIT_ATHERIS_MS: u64 = 400;
+use super::super::{BatteryDriver, DeviceIdentity};
+use super::{
+    build_report, parse_level, MAX_RETRIES, RETRY_INTERVAL, TXID_LEGACY, TXID_MID, TXID_NEW,
+    WAIT_ATHERIS_MS, WAIT_DEFAULT_MS, WAIT_NEW_MS, WAIT_VIPER_MS,
+};
+use crate::wireless_24g::hid_link::HidLink;
 
 // ── 设备能力表 ───────────────────────────────────────────
 // 蓝牙形态 PID 不收录（电量归系统蓝牙栈）；
@@ -217,11 +176,11 @@ static DEVICES: &[RazerDev] = &[
 
 // ── 驱动实现 ────────────────────────────────────────────
 
-pub struct RazerDriver;
+pub(crate) struct RazerMouseDriver;
 
-pub static RAZER: RazerDriver = RazerDriver;
+pub(crate) static RAZER_MOUSE: RazerMouseDriver = RazerMouseDriver;
 
-impl BatteryDriver for RazerDriver {
+impl BatteryDriver for RazerMouseDriver {
     fn matches(&self, vid: u16, pid: u16) -> bool {
         DEVICES.iter().any(|d| d.vid_pid == (vid, pid))
     }
@@ -272,120 +231,9 @@ impl BatteryDriver for RazerDriver {
     }
 }
 
-// ── 报文组包与解析 ───────────────────────────────────────
-// 90 字节布局：status(0) txid(1) remaining(2-3,BE16) proto(4)
-//              data_size(5) class(6) id(7) args[80](8-87) crc(88) reserved(89)
-
-/// 构造「获取电量」请求报文并填入 CRC
-fn build_report(txid: u8) -> [u8; REPORT_LEN] {
-    let mut report = [0u8; REPORT_LEN];
-    report[1] = txid;
-    report[5] = DATA_SIZE;
-    report[6] = CLASS_BATTERY;
-    report[7] = CMD_GET_BATTERY;
-    report[88] = crc(&report);
-    report
-}
-
-/// CRC：字节 [2..88) 区间逐个 XOR
-fn crc(report: &[u8; REPORT_LEN]) -> u8 {
-    report[2..88].iter().fold(0u8, |acc, b| acc ^ b)
-}
-
-/// 响应前 16 字节十六进制摘要（失败诊断用，随日志输出便于远程定位）
-fn hex_prefix(report: &[u8; REPORT_LEN]) -> String {
-    report[..16]
-        .iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// 校验响应回显与状态位并解析电量百分比
-fn parse_level(req: &[u8; REPORT_LEN], resp: &[u8; REPORT_LEN]) -> Result<i32, String> {
-    // remaining_packets(BE16)/command_class/command_id 必须与请求回显一致
-    if resp[2..4] != req[2..4] || resp[6] != req[6] || resp[7] != req[7] {
-        return Err(format!("响应回显不匹配: resp=[{}]", hex_prefix(resp)));
-    }
-    if resp[0] != STATUS_SUCCESS {
-        let reason = if resp[0] == STATUS_TIMEOUT {
-            "设备未响应（可能休眠/离线）"
-        } else {
-            "状态码异常"
-        };
-        return Err(format!(
-            "{}: {:#04X}, resp=[{}]",
-            reason,
-            resp[0],
-            hex_prefix(resp)
-        ));
-    }
-    // 电量位于 arguments[1]，即字节偏移 9。
-    // 该值为 0-255 原始刻度而非百分比（Orochi V2 真机实测 35 ↔ 实际 13%），
-    // 按 OpenRazer daemon 同款公式 (raw/255)*100 换算，截断取整与雷蛇自家显示一致
-    let raw = resp[9] as u32;
-    Ok(((raw * 100) / 255) as i32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn crc_self_consistent_with_xor_definition() {
-        let report = build_report(TXID_NEW);
-        let manual = report[2..88].iter().fold(0u8, |acc, b| acc ^ b);
-        assert_eq!(crc(&report), manual);
-    }
-
-    #[test]
-    fn report_layout_fields() {
-        let report = build_report(TXID_MID);
-        assert_eq!(report[0], 0x00); // status：新命令
-        assert_eq!(report[1], TXID_MID);
-        assert_eq!(&report[2..4], &[0, 0]); // remaining_packets(BE16)=0
-        assert_eq!(report[4], 0x00); // protocol_type
-        assert_eq!(report[5], DATA_SIZE);
-        assert_eq!(report[6], CLASS_BATTERY);
-        assert_eq!(report[7], CMD_GET_BATTERY);
-        assert_eq!(report[89], 0x00); // reserved
-    }
-
-    #[test]
-    fn parse_scales_raw_0_255_to_percent() {
-        let req = build_report(TXID_NEW);
-        let mut resp = [0u8; REPORT_LEN];
-        resp[0] = STATUS_SUCCESS;
-        resp[2..4].copy_from_slice(&req[2..4]);
-        resp[6] = CLASS_BATTERY;
-        resp[7] = CMD_GET_BATTERY;
-        // 真机标定样本：原始值 35 ↔ 实际 13%（截断取整）
-        resp[9] = 35;
-        assert_eq!(parse_level(&req, &resp).unwrap(), 13);
-        resp[9] = 255;
-        assert_eq!(parse_level(&req, &resp).unwrap(), 100);
-        resp[9] = 0;
-        assert_eq!(parse_level(&req, &resp).unwrap(), 0);
-    }
-
-    #[test]
-    fn parse_rejects_echo_mismatch_and_non_success_status() {
-        let req = build_report(TXID_NEW);
-
-        // 命令字不回显（Synapse 并发干扰帧的典型形态）
-        let mut resp = [0u8; REPORT_LEN];
-        resp[0] = STATUS_SUCCESS;
-        resp[7] = 0x03;
-        assert!(parse_level(&req, &resp).is_err());
-
-        // busy 态应重试而非采信
-        let mut resp = [0u8; REPORT_LEN];
-        resp[0] = 0x01;
-        resp[2..4].copy_from_slice(&req[2..4]);
-        resp[6] = CLASS_BATTERY;
-        resp[7] = CMD_GET_BATTERY;
-        assert!(parse_level(&req, &resp).is_err());
-    }
 
     #[test]
     fn device_table_has_no_duplicate_pids() {
@@ -408,13 +256,13 @@ mod tests {
 
     #[test]
     fn identities_derive_one_to_one_from_table() {
-        let ids = RAZER.identities();
+        let ids = RAZER_MOUSE.identities();
         assert_eq!(ids.len(), DEVICES.len());
         assert!(ids.iter().all(|i| !i.name.is_empty()), "存在空名称身份");
         assert!(ids.iter().all(|i| i.dev_type == "mouse"));
         // 与 device_name 抽查一致性
         for i in ids.iter().take(5) {
-            assert_eq!(RAZER.device_name(i.vid, i.pid), Some(i.name));
+            assert_eq!(RAZER_MOUSE.device_name(i.vid, i.pid), Some(i.name));
         }
     }
 }

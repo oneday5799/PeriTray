@@ -1,10 +1,11 @@
 // ── 模块职责 ─────────────────────────────────────────────
-// 2.4G 电量驱动抽象：每协议族（约等于品牌）一个子模块文件，
-// 设备在各自文件内以数据表维护；新增品牌在此注册即可接入。
+// 2.4G 电量驱动抽象。组织约定：每品牌一个子目录（drivers/<品牌>/），
+// 目录内 <设备类型>.rs 为该品牌对应类型的驱动文件，品牌级共享的
+// 协议原语与参数常量放子目录 mod.rs；新增「品牌+类型」在此注册即可。
 // 驱动同时以 identities() 声明设备身份（名称/类型），作为
 // 识别注册表（device_data）的编译期内置数据源。
 
-pub mod razer;
+pub(crate) mod razer;
 
 /// 驱动声明的设备身份：识别注册表的编译期内置数据源。
 /// dev_type 与历史 JSON 口径一致："mouse"/"keyboard"/"audio"/"other"
@@ -27,8 +28,8 @@ pub trait BatteryDriver: Sync {
     fn device_name(&self, vid: u16, pid: u16) -> Option<&'static str>;
 }
 
-/// 已注册的驱动清单（新增品牌在此追加）
-pub static DRIVERS: &[&dyn BatteryDriver] = &[&razer::RAZER];
+/// 已注册的驱动清单（新增「品牌+类型」在此追加）
+pub static DRIVERS: &[&dyn BatteryDriver] = &[&razer::mouse::RAZER_MOUSE];
 
 /// 在注册表中查找支持该 VID/PID 的驱动
 pub fn find_driver(vid: u16, pid: u16) -> Option<&'static dyn BatteryDriver> {
