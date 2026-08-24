@@ -84,9 +84,9 @@ PeriphMonitor/
 
 当前版本支持显示 2.4G 无线设备（按设备类型归入对应分组）。
 
-**电量获取（实验性）**：在设置页开启「2.4G 设备电量」后，应用会通过接收器暴露的厂商自定义 HID 接口（Feature Report）查询设备电量，后台缓存刷新、不阻塞设备列表；点击设备信息页顶部的刷新按钮会绕过缓存强制现查连接状态与电量（设备休眠时可能需数秒）。目前支持：
+**电量获取（实验性）**：在设置页开启「2.4G 设备电量」后，应用会通过接收器暴露的厂商自定义 HID 接口（Feature Report）查询设备电量，后台缓存刷新、不阻塞设备列表；点击设备信息页顶部的刷新按钮会绕过缓存强制现查连接状态与电量（设备休眠时可能需数秒）。
 
-- Razer Orochi V2 接收器（VID:PID `1532:0094`）
+已收录雷蛇全系支持电量上报的无线鼠标（约 60 个 VID/PID）：Orochi V2、Atheris、Pro Click 全系、Viper V2/V3 Pro、Viper V3 HyperSpeed、Viper Mini SE、Viper Ultimate、DeathAdder V2-V4 Pro、DeathAdder V3 HyperSpeed、Basilisk V3 Pro/X HyperSpeed/35K 系列、Naga Pro/V2 Pro/V2 HyperSpeed、Cobra Pro、Mamba/Lancehead/Mamba 2012 等系列的有线与 2.4G 形态。**其中 Orochi V2 经实机验证，其余型号基于同族协议移植、尚未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
 
 不同品牌接收器的私有协议各不相同，无法统一获取。新品牌的接入方式：在 `src-tauri/src/wireless_24g/drivers/` 下按协议族新增一个驱动文件（实现 `BatteryDriver` trait 并注册），同时在 `wireless_24g_devices.json` 添加对应 VID/PID 条目。若想自行抓包逆向其它品牌的协议，可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的方法论。**欢迎有能力的开发者贡献代码或思路，帮助扩展对这些设备的支持。**
 
