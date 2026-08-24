@@ -6,18 +6,30 @@
  */
 document.getElementById("btn-refresh").addEventListener("click", async () => {
   const activeTab = document.querySelector(".win-nav-item.active");
-  if (activeTab) {
-    const tabName = activeTab.dataset.tab;
-    if (tabName === "devices") {
+  if (!activeTab) return;
+  const tabName = activeTab.dataset.tab;
+  // 立即反馈：设备页强制现查耗时可达数秒，先提示避免误以为点击未生效
+  if (tabName === "devices") {
+    showToast("正在刷新...");
+    try {
       // true = 强制现查 2.4G 设备连接状态与电量（绕过缓存）
       await loadDevices(true);
       showToast("已刷新");
-    } else if (tabName === "volume") {
+    } catch (e) {
+      console.error("Refresh failed:", e);
+      showToast("刷新失败", null, true);
+    }
+  } else if (tabName === "volume") {
+    showToast("正在刷新...");
+    try {
       await loadAudioDevices();
       if (selectedDeviceId) {
         await loadAudioSessions(selectedDeviceId);
       }
       showToast("已刷新");
+    } catch (e) {
+      console.error("Refresh failed:", e);
+      showToast("刷新失败", null, true);
     }
   }
 });
