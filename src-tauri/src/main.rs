@@ -19,6 +19,7 @@ mod state;
 mod tray;
 mod update;
 mod windows;
+mod wireless_24g;
 mod wmi_query;
 
 use std::panic;

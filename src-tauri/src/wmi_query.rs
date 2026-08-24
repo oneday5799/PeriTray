@@ -68,8 +68,16 @@ pub fn query_devices() -> Vec<Device> {
     };
 
     let mut bt_names = HashSet::new();
+    let mut pnp_24g_pairs = vec![];
 
-    query_pnp_devices(&con, dedup_enabled, &mut seen, &mut all, &mut cn_index);
+    query_pnp_devices(
+        &con,
+        dedup_enabled,
+        &mut seen,
+        &mut all,
+        &mut cn_index,
+        &mut pnp_24g_pairs,
+    );
     query_bt_devices(
         dedup_enabled,
         &mut seen,
@@ -93,6 +101,9 @@ pub fn query_devices() -> Vec<Device> {
         }
     }
 
+    // 实验性：2.4G 接收器电量并入列表（读缓存即时返回）
+    fill_24g_battery(&mut all, pnp_24g_pairs);
+
     crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
     all
 }
@@ -103,6 +114,7 @@ fn query_pnp_devices(
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
+    p24g_pairs: &mut Vec<(String, String)>,
 ) {
     const PNPCLASS_WHITELIST: &[&str] = &[
         "AudioEndpoint",
@@ -177,12 +189,18 @@ fn query_pnp_devices(
 
         let dt = classify_device(&n, &pnp, &u, &cap);
         let is_24g = is_wireless_24g_by_vid_pid(&u);
-        let display_name = if is_24g {
+        let vid_pid_24g = if is_24g {
             device_data::extract_vid_pid(&u)
-                .and_then(|(vid, pid)| device_data::get_device_name(&vid, &pid))
         } else {
             None
         };
+        let display_name = vid_pid_24g
+            .as_ref()
+            .and_then(|(vid, pid)| device_data::get_device_name(vid, pid));
+        // 收集 2.4G 设备的 VID/PID，供电量缓存模块使用
+        if let Some(pair) = vid_pid_24g {
+            p24g_pairs.push(pair);
+        }
         try_insert(
             &n,
             display_name.as_deref(),
@@ -286,6 +304,34 @@ fn query_battery_devices(
                 is_wireless_24g: false,
             });
             cn_index.entry(cn).or_default().push(idx);
+        }
+    }
+}
+
+/// 实验性：将 2.4G 接收器缓存电量填入设备列表（开关关闭时整体旁路）。
+/// 只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成。
+fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>) {
+    let supported: Vec<_> = pairs
+        .into_iter()
+        .filter(|(v, p)| crate::wireless_24g::supported(v, p))
+        .collect();
+    let enabled = config::with_config(|c| c.enable_24g_battery);
+    if !enabled || supported.is_empty() {
+        return;
+    }
+
+    let snap = crate::wireless_24g::snapshot(supported);
+    // 缓存键 → 数据库显示名，用于把电量对回列表条目（同名设备共享同一接收器型号）
+    let filled: Vec<(String, Option<i32>)> = snap
+        .iter()
+        .filter_map(|((v, p), lvl)| device_data::get_device_name(v, p).map(|n| (n, *lvl)))
+        .collect();
+    for d in all.iter_mut() {
+        if !d.is_wireless_24g || d.battery.is_some() {
+            continue;
+        }
+        if let Some((_, lvl)) = filled.iter().find(|(n, _)| *n == d.name) {
+            d.battery = *lvl;
         }
     }
 }

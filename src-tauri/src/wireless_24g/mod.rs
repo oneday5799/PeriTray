@@ -1,0 +1,125 @@
+// ── 模块职责 ─────────────────────────────────────────────
+// 2.4G 设备电量查看对外入口：驱动注册表查找 + TTL 缓存 + 后台惰性刷新。
+// 设备列表只读缓存（即时返回），实际 HID 查询由后台线程完成；
+// 日志标签统一为 [24g]。
+
+mod drivers;
+mod hid_link;
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+/// 成功电量的缓存有效期
+const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+/// 失败负缓存的有效期（避免对休眠设备反复敲门）
+const NEG_TTL: Duration = Duration::from_secs(60);
+
+static CACHE: OnceLock<Mutex<HashMap<(String, String), CacheEntry>>> = OnceLock::new();
+/// 后台刷新线程单飞标记（防止多轮列表刷新并发查询）
+static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct CacheEntry {
+    /// Some=电量百分比；None=近期查询失败（负缓存）
+    level: Option<i32>,
+    at: Instant,
+}
+
+// ── 对外入口 ────────────────────────────────────────────
+
+fn cache() -> &'static Mutex<HashMap<(String, String), CacheEntry>> {
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 解析 4 位十六进制 VID/PID 字符串
+fn parse_hex(s: &str) -> Option<u16> {
+    u16::from_str_radix(s, 16).ok()
+}
+
+/// 驱动是否支持该 VID/PID（vid/pid 为 4 位十六进制大写字符串）
+pub fn supported(vid: &str, pid: &str) -> bool {
+    match (parse_hex(vid), parse_hex(pid)) {
+        (Some(v), Some(p)) => drivers::find_driver(v, p).is_some(),
+        _ => false,
+    }
+}
+
+/// 设备列表入口：返回各 (vid,pid) 的缓存电量；过期/缺失项触发后台刷新，
+/// 结果下次列表刷新可见。返回映射仅含传入的键，值 None 表示暂无有效数据。
+pub fn snapshot(pairs: Vec<(String, String)>) -> HashMap<(String, String), Option<i32>> {
+    let now = Instant::now();
+    let mut result = HashMap::new();
+    let mut stale = vec![];
+
+    {
+        let guard = crate::state::lock_unpoisoned(cache());
+        for key in &pairs {
+            match guard.get(key) {
+                Some(e) if now.duration_since(e.at) < ttl_of(e) => {
+                    result.insert(key.clone(), e.level);
+                }
+                _ => {
+                    if !stale.contains(key) {
+                        stale.push(key.clone());
+                    }
+                    result.insert(key.clone(), None);
+                }
+            }
+        }
+    }
+
+    // 单飞触发后台刷新：已有线程在跑则跳过本轮，待其结束后下轮补查
+    if !stale.is_empty()
+        && REFRESHING
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+    {
+        std::thread::spawn(move || {
+            refresh_worker(stale);
+            REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    result
+}
+
+// ── 缓存与刷新 ───────────────────────────────────────────
+
+fn ttl_of(entry: &CacheEntry) -> Duration {
+    if entry.level.is_some() {
+        CACHE_TTL
+    } else {
+        NEG_TTL
+    }
+}
+
+/// 后台线程体：逐台查询并写回缓存（成功与失败均记录，便于诊断休眠/离线）
+fn refresh_worker(pairs: Vec<(String, String)>) {
+    for (vid, pid) in pairs {
+        let Some((v, p)) = parse_hex(&vid).zip(parse_hex(&pid)) else {
+            continue;
+        };
+        let Some(driver) = drivers::find_driver(v, p) else {
+            continue;
+        };
+        let level = driver.read_battery(v, p);
+        match &level {
+            Ok(lv) => {
+                crate::process::append_log(&format!("[24g] {:04X}:{:04X} 电量 {}%", v, p, lv))
+            }
+            Err(e) => {
+                crate::process::append_log(&format!("[24g] {:04X}:{:04X} 查询失败: {}", v, p, e))
+            }
+        }
+        let entry = CacheEntry {
+            level: level.ok(),
+            at: Instant::now(),
+        };
+        crate::state::lock_unpoisoned(cache()).insert((vid, pid), entry);
+    }
+}

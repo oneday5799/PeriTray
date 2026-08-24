@@ -112,6 +112,8 @@ pub struct Config {
     pub theme_mode: String,
     #[serde(default = "default_window_material")]
     pub window_material: String,
+    #[serde(default)]
+    pub enable_24g_battery: bool,
 }
 
 fn default_true() -> bool {
@@ -164,6 +166,7 @@ impl Default for Config {
             enable_device_shortcut_cycle: false,
             theme_mode: default_theme_mode(),
             window_material: default_window_material(),
+            enable_24g_battery: false,
         }
     }
 }

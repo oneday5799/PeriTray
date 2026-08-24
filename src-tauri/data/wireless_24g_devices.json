@@ -32,7 +32,8 @@
     "0079": { "name": "Razer Device", "type": "mouse" },
     "007A": { "name": "Razer Device", "type": "mouse" },
     "007B": { "name": "Razer Device", "type": "mouse" },
-    "007C": { "name": "Razer Device", "type": "mouse" }
+    "007C": { "name": "Razer Device", "type": "mouse" },
+    "0094": { "name": "Razer Orochi V2", "type": "mouse" }
   },
   "1038": {
     "1122": { "name": "SteelSeries Device", "type": "other" },

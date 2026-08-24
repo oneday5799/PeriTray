@@ -24,6 +24,7 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 ## 功能
 
 - **设备监控**：实时检测音频、USB、蓝牙、电池、显示器等设备，显示连接状态、电量与连接类型标签（蓝牙/2.4G）；支持重命名、隐藏、正则过滤、去重与自定义分组
+- **2.4G 设备电量（实验性）**：设置页开启「2.4G 设备电量」后，通过接收器的厂商 HID 私有协议查询无线设备电量并显示在设备列表，当前支持 Razer Orochi V2 接收器（1532:0094），默认关闭
 - **蓝牙**：显示连接/配对状态与电量（BLE 走 GATT Battery Service，BTC 走 windows_pnp），支持连接/断开及跳转系统蓝牙设置
 - **音量控制**：切换默认输出设备、调节音量、静音；音量精细调节开启后滑块拖动与滚轮均按 0.1 步进微调；静音锁定开关开启后，点击静音图标即锁定静音（红色图标），锁定期间拖动音量条不会改变静音状态，需再次点击图标解除；强制静音可将需多次点击才能静音的设备（如部分智能音箱）一次直接静音；按应用调节会话音量，滑块支持实时数值 tooltip；设备右键菜单支持重命名、隐藏、空间音效（关/Windows Sonic/Dolby Atmos/DTS，需系统已安装对应格式）与录制全局快捷键；支持为每个应用单独指定音频输出/输入设备（通过 SetPersistedDefaultAudioEndpoint API）
 - **全局快捷键**：支持录制音量控制（提高/降低/静音）与输出设备切换快捷键；可开启共享循环切换（多个设备共用同一快捷键，按下时循环切换默认输出设备）
@@ -58,7 +59,7 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 | 设备检测 | WMI + WinRT Bluetooth + windows_pnp |
 | 音量控制 | Windows Core Audio API（事件驱动） |
 | 2.4G 识别 | USB VID/PID 匹配（wireless_24g_devices.json） |
-| 电量 | BLE GATT Battery Service / BTC windows_pnp |
+| 电量 | BLE GATT Battery Service / BTC windows_pnp / HID Feature Report（hidapi，实验性） |
 | 异步 / 网络 | tokio / WinHTTP |
 
 ## 项目结构
@@ -81,9 +82,13 @@ PeriphMonitor/
 
 ## 2.4G 设备支持
 
-当前版本仅支持显示 2.4G 无线设备（按设备类型归入对应分组），**暂不支持获取电量**。
+当前版本支持显示 2.4G 无线设备（按设备类型归入对应分组）。
 
-不同 2.4G 设备的通信协议各不相同，无法统一获取电量信息。若需实现，需先获取设备 VID/PID，再借助 Wireshark 与 USBPcap 嗅探并解析设备电量变化时发送的数据包。可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的实现方案。**欢迎有能力的开发者贡献代码或思路，帮助扩展对这些设备的支持。**
+**电量获取（实验性）**：在设置页开启「2.4G 设备电量」后，应用会通过接收器暴露的厂商自定义 HID 接口（Feature Report）查询设备电量，后台缓存刷新、不阻塞设备列表。目前支持：
+
+- Razer Orochi V2 接收器（VID:PID `1532:0094`）
+
+不同品牌接收器的私有协议各不相同，无法统一获取。新品牌的接入方式：在 `src-tauri/src/wireless_24g/drivers/` 下按协议族新增一个驱动文件（实现 `BatteryDriver` trait 并注册），同时在 `wireless_24g_devices.json` 添加对应 VID/PID 条目。若想自行抓包逆向其它品牌的协议，可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的方法论。**欢迎有能力的开发者贡献代码或思路，帮助扩展对这些设备的支持。**
 
 可在设置页点击「打开」编辑 `wireless_24g_devices_user.json` 添加自定义设备（应用更新时不会覆盖），同 VID/PID 时用户条目优先。VID/PID 可通过 [USB 设备查看器](https://www.codertools.net/tools/usb-device-viewer.php?lang=zh) 获取：
 
@@ -145,3 +150,5 @@ git push origin v1.1.0
 - [EarTrumpet](https://github.com/File-New-Project/EarTrumpet) — 托盘声音设置入口实现参考
 - [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量读取方案参考，windows_pnp 库来源
 - [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接/断开方案参考
+- [OpenRazer](https://github.com/openrazer/openrazer) — 雷蛇接收器私有协议参考（报文格式/命令字/CRC/时序），本项目为 Windows 用户态独立实现，运行时不依赖
+- [2.4G 无线设备电量获取](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) — 各品牌 2.4G 私有协议逆向方法论参考
