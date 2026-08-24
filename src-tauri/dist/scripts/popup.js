@@ -77,7 +77,8 @@ window.addEventListener("focus", async () => {
 
 if (window.__TAURI__) {
   initTheme();
-  loadDevices();
+  // 首屏水合：有快照则秒显旧数据并提示「正在刷新」，完成后换「已刷新」
+  loadDevices(false, { notify: true });
 } else {
   window.addEventListener("DOMContentLoaded", () => {
     setTimeout(loadDevices, 100);

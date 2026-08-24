@@ -1,11 +1,13 @@
 /* popup-devices.js — 主窗口·设备信息 tab：设备列表对账式渲染/右键菜单/连接与托盘项
  * 加载序 3/4（common → popup-audio → 本文件 → popup.js）
- * 提供：loadDevices(fresh24g)（供 popup.js 的刷新按钮/focus 刷新调用，
- *       刷新按钮传 true 走 get_devices_fresh 强制现查 2.4G 电量）
+ * 提供：loadDevices(fresh24g, opts)（供 popup.js 的刷新按钮/focus 刷新调用，
+ *       刷新按钮传 true 走 get_devices_fresh 强制现查 2.4G 电量）；
+ *       快照水合与 24g-battery-updated/devices-changed 推送订阅（静默重拉）
  * 依赖：common.js（getInvoke/CATEGORIES/getDisplayName/showToast/registerContextMenu/
  *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell） /
  *       popup-audio.js（reconcileCards 对账式渲染骨架——两页刷新时统一按差集增删、
- *       已有卡原地更新，避免整页 innerHTML 重建导致的闪烁）
+ *       已有卡原地更新，避免整页 innerHTML 重建导致的闪烁） /
+ *       window.__TAURI__.event（后端推送：电量变更/设备增删）
  */
 let allDevices = [];
 let hiddenDevices = [];
@@ -15,17 +17,63 @@ let deviceGroups = {};
 let useSystemBt = false;
 let trayDevices = [];
 
-async function loadDevices(fresh24g = false) {
-  const list = document.getElementById("device-list");
-  // 已有内容时不清屏占位：强制现查可能耗时数秒，保持旧列表可见避免闪烁
-  const hasCards = !!list.querySelector(".card.device");
-  if (!hasCards) {
-    list.innerHTML = '<div class="loading">加载中...</div>';
+// ── 本地快照水合（页面重载/重启后的秒显数据源）──────────
+
+const SNAPSHOT_KEY = "pm_devices_snapshot";
+
+function saveDevicesSnapshot() {
+  try {
+    if (!Array.isArray(allDevices) || allDevices.length === 0) return;
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ devices: allDevices }));
+  } catch (e) { /* 存储不可用（隐私模式等）时静默 */ }
+}
+
+async function hydrateFromSnapshot() {
+  const invoke = getInvoke();
+  if (!invoke) return false;
+  try {
+    const raw = localStorage.getItem(SNAPSHOT_KEY);
+    if (!raw) return false;
+    const snap = JSON.parse(raw);
+    if (!Array.isArray(snap.devices) || snap.devices.length === 0) return false;
+    // 渲染依赖的配置派生量先行就绪（本地读取，毫秒级）
+    const config = await invoke("get_config");
+    hiddenDevices = config.hidden_devices || [];
+    hiddenGroups = config.hidden_groups || [];
+    deviceNames = config.device_names || {};
+    deviceGroups = config.device_groups || {};
+    useSystemBt = config.use_system_bt || false;
+    trayDevices = config.tray_devices || [];
+    allDevices = snap.devices;
+    renderDevices();
+    return !!document.querySelector("#device-list .card.device");
+  } catch (e) {
+    console.error("Snapshot hydrate failed:", e);
+    return false;
   }
+}
+
+let loadGen = 0;
+
+async function loadDevices(fresh24g = false, opts = {}) {
+  const gen = ++loadGen;
+  const list = document.getElementById("device-list");
+  // 已有内容时不清屏；无卡片时优先快照秒显，「加载中」仅剩全新环境首启场景
+  const hasCards = !!list.querySelector(".card.device");
+  let hydrated = false;
+  if (!hasCards) {
+    hydrated = await hydrateFromSnapshot();
+    if (!hydrated && !opts.silent) {
+      list.innerHTML = '<div class="loading">加载中...</div>';
+    }
+  }
+  // 重启水合场景：明示数据正在刷新，完成前保持「正在刷新」态
+  const notify = !!opts.notify && hydrated;
+  if (notify) showToast("正在刷新...");
 
   const invoke = getInvoke();
   if (!invoke) {
-    if (!hasCards) list.innerHTML = '<div class="loading">Tauri API 未加载</div>';
+    if (!hasCards && !hydrated) list.innerHTML = '<div class="loading">Tauri API 未加载</div>';
     return;
   }
 
@@ -40,9 +88,16 @@ async function loadDevices(fresh24g = false) {
     useSystemBt = config.use_system_bt || false;
     trayDevices = config.tray_devices || [];
     renderDevices();
+    saveDevicesSnapshot();
+    // 代际校验：期间被更新的拉取取代则不再回写 toast 状态
+    if (gen === loadGen && notify) showToast("已刷新");
   } catch (e) {
-    // 已有内容时保留旧列表，仅空态才显示错误占位
-    if (!hasCards) list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
+    console.error("Failed to refresh devices:", e);
+    // 失败保留既有渲染（水合快照或上一轮数据）
+    if (gen === loadGen) {
+      if (notify) showToast("刷新失败", null, true);
+      else if (!hasCards && !hydrated) list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
+    }
   }
 }
 
@@ -275,6 +330,9 @@ function updateDeviceCard(card, dev) {
 function renderDevices() {
   const list = document.getElementById("device-list");
 
+  // 查询瞬态失败（后端 Err 在前端表现为空数组）且已有卡片：保留旧渲染等待下一轮
+  if (allDevices.length === 0 && list.querySelector(".card.device")) return;
+
   // 分组 → 组内已连接优先排序
   const groups = {};
   for (const d of allDevices) {
@@ -350,10 +408,29 @@ function renderDevices() {
     const section = list.querySelector(`.category[data-group-id="${CSS.escape(g.id)}"]`);
     list.appendChild(section);
   }
+
+  saveDevicesSnapshot();
 }
 
 let activeMenu = null;
 registerContextMenu({ get menu() { return activeMenu; }, set menu(v) { activeMenu = v; } });
+
+// ── 后端推送订阅：电量变更/设备增删 → 静默重拉（reconcile 原地更新）──
+
+let silentRefreshTimer = null;
+
+function scheduleSilentRefresh() {
+  if (silentRefreshTimer) return;
+  silentRefreshTimer = setTimeout(async () => {
+    silentRefreshTimer = null;
+    await loadDevices(false);
+  }, 500);
+}
+
+if (window.__TAURI__ && window.__TAURI__.event) {
+  window.__TAURI__.event.listen("24g-battery-updated", scheduleSilentRefresh);
+  window.__TAURI__.event.listen("devices-changed", scheduleSilentRefresh);
+}
 
 function showContextMenu(x, y, dev) {
   hideAllContextMenus();
