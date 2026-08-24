@@ -2,6 +2,11 @@
 // 2.4G 设备电量查看对外入口：驱动注册表查找 + TTL 缓存 + 后台惰性刷新。
 // 设备列表只读缓存（即时返回），实际 HID 查询由后台线程完成；
 // 日志标签统一为 [24g]。
+//
+// 缓存语义（stale-while-revalidate）：
+// - 成功值永不过期性丢失——TTL 过期后仍返回旧值供 UI 常驻，同时触发刷新，
+//   新值到达后经 24g-battery-updated 事件推送前端原地替换；
+// - 查询失败不抹除既有成功值，仅推进重试时钟；从未成功过的失败走负缓存。
 
 mod drivers;
 mod hid_link;
@@ -14,6 +19,8 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use tauri::Emitter;
+
 /// 成功电量的缓存有效期
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// 失败负缓存的有效期（避免对休眠设备反复敲门）
@@ -22,10 +29,13 @@ const NEG_TTL: Duration = Duration::from_secs(60);
 static CACHE: OnceLock<Mutex<HashMap<(String, String), CacheEntry>>> = OnceLock::new();
 /// 后台刷新线程单飞标记（防止多轮列表刷新并发查询）
 static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 事件推送句柄（main setup 注入）
+static EVENT_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 struct CacheEntry {
-    /// Some=电量百分比；None=近期查询失败（负缓存）
+    /// Some=最后已知电量百分比；None=从未成功过（负缓存）
     level: Option<i32>,
+    /// 最近一次尝试时刻（成功与失败均推进，作为刷新/负缓存时钟）
     at: Instant,
 }
 
@@ -48,8 +58,20 @@ pub fn supported(vid: &str, pid: &str) -> bool {
     }
 }
 
-/// 设备列表入口：返回各 (vid,pid) 的缓存电量；过期/缺失项触发后台刷新，
-/// 结果下次列表刷新可见。返回映射仅含传入的键，值 None 表示暂无有效数据。
+/// 注入事件推送句柄（main setup 调用一次）
+pub fn init_event_handle(app: &tauri::AppHandle) {
+    EVENT_HANDLE.set(app.clone()).ok();
+}
+
+/// 电量发生实质变化后通知前端静默重拉（未注入句柄时静默跳过）
+fn notify_battery_changed() {
+    if let Some(app) = EVENT_HANDLE.get() {
+        let _ = app.emit("24g-battery-updated", ());
+    }
+}
+
+/// 设备列表入口：返回各 (vid,pid) 的缓存电量；过期/缺失项触发后台刷新。
+/// stale-while-revalidate：过期成功条目仍返回旧值（UI 常驻），新值经事件推送。
 /// force=true 时同步逐台现查（设备列表手动刷新按钮入口，绕过 TTL）。
 pub fn snapshot(
     mut pairs: Vec<(String, String)>,
@@ -70,10 +92,20 @@ pub fn snapshot(
         let guard = crate::state::lock_unpoisoned(cache());
         for key in &pairs {
             match guard.get(key) {
-                Some(e) if now.duration_since(e.at) < ttl_of(e) => {
-                    result.insert(key.clone(), e.level);
+                Some(e) => {
+                    let fresh = now.duration_since(e.at) < ttl_of(e);
+                    // 过期（成功或失败）都排入后台刷新队列
+                    if !fresh && !stale.contains(key) {
+                        stale.push(key.clone());
+                    }
+                    // 成功过的条目常驻旧值；纯失败态仅在负缓存窗口内返回 None
+                    if fresh || e.level.is_some() {
+                        result.insert(key.clone(), e.level);
+                    } else {
+                        result.insert(key.clone(), None);
+                    }
                 }
-                _ => {
+                None => {
                     if !stale.contains(key) {
                         stale.push(key.clone());
                     }
@@ -112,33 +144,47 @@ fn ttl_of(entry: &CacheEntry) -> Duration {
     }
 }
 
-/// 查询单台设备并写回缓存，返回电量值（无驱动支持时返回 None）
-fn query_and_cache(key: &(String, String)) -> Option<i32> {
+/// 合并规则：成功更新值；失败保留既有成功值（仅推进重试时钟）。
+/// 返回新条目与「是否发生实质变化」（None↔有值、数值变动），供条件推送判定。
+fn apply_result(old: Option<&CacheEntry>, result: &Result<i32, String>) -> (CacheEntry, bool) {
+    let level = match result {
+        Ok(lv) => Some(*lv),
+        Err(_) => old.and_then(|e| e.level),
+    };
+    let old_level = old.and_then(|e| e.level);
+    let changed = old_level != level;
+    (
+        CacheEntry {
+            level,
+            at: Instant::now(),
+        },
+        changed,
+    )
+}
+
+/// 查询单台设备并写回缓存，返回 (电量值, 是否实质变化)
+fn query_and_cache(key: &(String, String)) -> (Option<i32>, bool) {
     let Some((v, p)) = parse_hex(&key.0).zip(parse_hex(&key.1)) else {
-        return None;
+        return (None, false);
     };
     let Some(driver) = drivers::find_driver(v, p) else {
-        return None;
+        return (None, false);
     };
     // 日志优先带设备名，便于社区反馈定位
     let label = match driver.device_name(v, p) {
         Some(name) => format!("{} ({:04X}:{:04X})", name, v, p),
         None => format!("{:04X}:{:04X}", v, p),
     };
-    let level = driver.read_battery(v, p);
-    match &level {
+    let result = driver.read_battery(v, p);
+    match &result {
         Ok(lv) => crate::process::append_log(&format!("[24g] {} 电量 {}%", label, lv)),
         Err(e) => crate::process::append_log(&format!("[24g] {} 查询失败: {}", label, e)),
     }
-    let level = level.ok();
-    crate::state::lock_unpoisoned(cache()).insert(
-        key.clone(),
-        CacheEntry {
-            level,
-            at: Instant::now(),
-        },
-    );
-    level
+    let mut guard = crate::state::lock_unpoisoned(cache());
+    let (entry, changed) = apply_result(guard.get(key), &result);
+    let level = entry.level;
+    guard.insert(key.clone(), entry);
+    (level, changed)
 }
 
 /// 强制刷新路径（手动刷新按钮）：在调用方阻塞线程中同步逐台现查并返回最新值。
@@ -164,17 +210,28 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
     }
 
     let mut result = HashMap::new();
+    let mut any_changed = false;
     for key in &pairs {
-        let level = query_and_cache(key);
+        let (level, changed) = query_and_cache(key);
+        any_changed |= changed;
         result.insert(key.clone(), level);
+    }
+    if any_changed {
+        notify_battery_changed();
     }
     REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
     result
 }
 
-/// 后台线程体：逐台查询并写回缓存（成功与失败均记录，便于诊断休眠/离线）
+/// 后台线程体：逐台查询并写回缓存（成功与失败均记录，便于诊断休眠/离线）；
+/// 本轮存在实质变化时推送前端
 fn refresh_worker(pairs: Vec<(String, String)>) {
+    let mut any_changed = false;
     for key in &pairs {
-        query_and_cache(key);
+        let (_, changed) = query_and_cache(key);
+        any_changed |= changed;
+    }
+    if any_changed {
+        notify_battery_changed();
     }
 }

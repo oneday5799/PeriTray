@@ -244,6 +244,8 @@ fn main() {
             // 初始化音频通知回调（替代轮询）
             crate::audio_notify::init_audio_notify(app.handle().clone());
             process::append_log("[main] audio_notify initialized");
+            // 2.4G 电量变更事件推送句柄
+            crate::wireless_24g::init_event_handle(app.handle());
             crate::shortcut::register_shortcuts(app.handle());
             if !is_autostart {
                 popup::open_popup(app.handle(), "devices");
