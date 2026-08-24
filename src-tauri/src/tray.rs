@@ -16,9 +16,16 @@ use crate::windows;
 static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new();
 static AUDIO_DEVICES_SUBMENU: OnceLock<Mutex<Option<Submenu<tauri::Wry>>>> = OnceLock::new();
 
-/// 刷新设备缓存，返回是否发生变化
+/// 刷新设备缓存，返回是否发生变化。
+/// 查询失败（WMI 不可信态）时跳过本轮，保留旧缓存避免 tooltip 抖动
 fn refresh_devices_cache() -> bool {
-    let new_devices = crate::wmi_query::query_devices(false);
+    let new_devices = match crate::wmi_query::query_devices(false) {
+        Ok(d) => d,
+        Err(e) => {
+            crate::process::append_log(&format!("[tray] skip cache refresh: {}", e));
+            return false;
+        }
+    };
     let cache = get_devices_cache();
 
     if let Ok(mut guard) = cache.lock() {
@@ -75,7 +82,11 @@ fn update_tooltip() {
 }
 
 /// 后台刷新线程：定期查询设备并更新缓存，状态变化时自动更新 tooltip
-fn start_device_watcher() {
+/// 并向弹窗推送 devices-changed（卡片实时增删，无需等焦点）
+fn start_device_watcher(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+
+    let handle = app.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(10));
 
@@ -86,6 +97,7 @@ fn start_device_watcher() {
         let changed = refresh_devices_cache();
         if changed {
             std::thread::spawn(move || update_tooltip());
+            let _ = handle.emit("devices-changed", ());
         }
     });
 }
@@ -389,7 +401,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // 启动后台设备监控线程
-    start_device_watcher();
+    start_device_watcher(app.handle());
     // 启动系统深色模式监听线程（仅跟随系统）
     start_theme_watcher();
 

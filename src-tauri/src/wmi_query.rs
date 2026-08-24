@@ -48,8 +48,10 @@ struct BatteryDevice {
     estimated_charge_remaining: Option<i32>,
 }
 
-/// fresh_24g=true 时强制现查 2.4G 接收器电量（设备列表手动刷新入口），否则走缓存
-pub fn query_devices(fresh_24g: bool) -> Vec<Device> {
+/// fresh_24g=true 时强制现查 2.4G 接收器电量（设备列表手动刷新入口），否则走缓存。
+/// Err 表示主查询通道不可信（COM/WMI 连接失败或 PnP 主查询失败），
+/// 调用方应保留既有数据而非应用残缺结果。
+pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
     let mut all = vec![];
     let mut seen = HashSet::new();
     let mut cn_index: HashMap<String, Vec<usize>> = HashMap::new();
@@ -64,21 +66,24 @@ pub fn query_devices(fresh_24g: bool) -> Vec<Device> {
         Ok(c) => c,
         Err(_) => {
             crate::process::append_log("[wmi] WMIConnection::new failed");
-            return all;
+            return Err("wmi connection failed".to_string());
         }
     };
 
     let mut bt_names = HashSet::new();
     let mut pnp_24g_pairs = vec![];
 
-    query_pnp_devices(
+    if let Err(e) = query_pnp_devices(
         &con,
         dedup_enabled,
         &mut seen,
         &mut all,
         &mut cn_index,
         &mut pnp_24g_pairs,
-    );
+    ) {
+        crate::process::append_log(&format!("[wmi] {}", e));
+        return Err(e);
+    }
     query_bt_devices(
         dedup_enabled,
         &mut seen,
@@ -106,7 +111,7 @@ pub fn query_devices(fresh_24g: bool) -> Vec<Device> {
     fill_24g_battery(&mut all, pnp_24g_pairs, fresh_24g);
 
     crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
-    all
+    Ok(all)
 }
 
 fn query_pnp_devices(
@@ -116,7 +121,7 @@ fn query_pnp_devices(
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
     p24g_pairs: &mut Vec<(String, String)>,
-) {
+) -> Result<(), String> {
     const PNPCLASS_WHITELIST: &[&str] = &[
         "AudioEndpoint",
         "Bluetooth",
@@ -132,8 +137,9 @@ fn query_pnp_devices(
     ) {
         Ok(r) => r,
         Err(e) => {
-            crate::process::append_log(&format!("[wmi] PnP query failed: {}", e));
-            return;
+            let msg = format!("pnp query failed: {}", e);
+            crate::process::append_log(&format!("[wmi] {}", msg));
+            return Err(msg);
         }
     };
 
@@ -217,6 +223,7 @@ fn query_pnp_devices(
             cn_index,
         );
     }
+    Ok(())
 }
 
 fn query_bt_devices(

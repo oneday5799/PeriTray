@@ -32,23 +32,19 @@ fn toggle_vec_item(vec: &mut Vec<String>, item: &str) {
 }
 
 #[tauri::command(async)]
-pub async fn get_devices() -> Vec<device::Device> {
-    let devices = run_blocking(|| query_devices(false))
-        .await
-        .unwrap_or_default();
+pub async fn get_devices() -> Result<Vec<device::Device>, String> {
+    let devices = run_blocking(|| query_devices(false)).await??;
     device::store_device_ids(&devices);
-    devices
+    Ok(devices)
 }
 
 /// 设备信息页手动刷新入口：强制现查 2.4G 接收器电量（绕过 TTL 缓存），
 /// 其余流程与 get_devices 一致；鼠标休眠时现查耗时可达数秒
 #[tauri::command(async)]
-pub async fn get_devices_fresh() -> Vec<device::Device> {
-    let devices = run_blocking(|| query_devices(true))
-        .await
-        .unwrap_or_default();
+pub async fn get_devices_fresh() -> Result<Vec<device::Device>, String> {
+    let devices = run_blocking(|| query_devices(true)).await??;
     device::store_device_ids(&devices);
-    devices
+    Ok(devices)
 }
 
 #[tauri::command]
