@@ -82,11 +82,13 @@
   min-width: 0;
 }
 
-/* 标签页视口：面板切换期间的定位锚（对齐主窗口 tab-viewport 模式） */
+/* 标签页视口：面板切换期间的定位锚（对齐主窗口 tab-viewport 模式）；
+   overflow 裁剪进入动画的 80px 下移溢出，避免越出视口压住外部元素 */
 .settings-tab-viewport {
   position: relative;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .win-nav-page-header {
