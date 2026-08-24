@@ -78,7 +78,6 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: var(--page-padding);
   min-width: 0;
 }
 
@@ -92,7 +91,7 @@
 }
 
 .win-nav-page-header {
-  padding: 10px 0 12px;
+  padding: 10px 20px 12px;
   font-size: 28px;
   font-weight: 600;
   color: var(--text-primary, #1a1a1a);
@@ -117,6 +116,8 @@
   overflow-x: hidden;
   scrollbar-gutter: stable;
   will-change: opacity, transform;
+  /* 卡片与侧边栏/滚动条保持间距（滚动条贴窗缘，对齐主窗口与 Win11 设置布局） */
+  padding: var(--page-padding);
 }
 
 /* Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, vertical) */
