@@ -121,6 +121,8 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
 也可随时手动自检：`node tools/check.mjs`。详见 [AGENTS.md](AGENTS.md)。
 
+项目架构、模块详解、踩坑复盘（假死问题、高频回归等）与开发指南见 [项目 Wiki](https://github.com/oneday5799/PeriphMonitor/wiki)。
+
 ## 下载
 
 从 [Releases](https://github.com/oneday5799/PeriphMonitor/releases) 页面下载最新版本，支持 x64 和 ARM64 架构。
