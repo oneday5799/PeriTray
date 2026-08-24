@@ -157,12 +157,15 @@ fn main() {
         process::append_log("[main] autostart mode");
     }
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--autostart"]),
-        ))
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec!["--autostart"]),
+    ));
+    // 看门狗自重启实例跳过单实例保护：旧进程在数百毫秒内退出、新实例必然独占，
+    // 若仍注册，启动竞态窗口内会因旧实例互斥量/窗口尚未完成内核清理而被
+    // 误判为第二实例，走转发路径 exit(0) 自杀（beta.1 自愈实测踩中）
+    if watchdog_restart.is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             process::append_log("[single-instance] second instance forwarded");
             // 回调在事件线程上分发：窗口/配置操作全部移出
             let app = app.clone();
@@ -179,7 +182,9 @@ fn main() {
                     popup::toggle(&app, &tab);
                 }
             });
-        }))
+        }));
+    }
+    let builder = builder
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -374,11 +379,19 @@ fn main() {
                 }
                 _ => {}
             }
-        })
-        .build(tauri::generate_context!())
-        .unwrap_or_else(|e| {
+        });
+    process::append_log("[main] building tauri app");
+    let app = match builder.build(tauri::generate_context!()) {
+        Ok(app) => {
+            process::append_log("[main] tauri app built");
+            app
+        }
+        Err(e) => {
             show_error_box(&format!("应用初始化失败：\n{}", e));
             std::process::exit(1);
-        })
-        .run(|_app_handle, _event| {});
+        }
+    };
+    app.run(|_app_handle, _event| {});
+    // 事件循环正常情况下永不返回；返回即异常信号
+    process::append_log("[main] EVENT LOOP RETURNED ABNORMALLY");
 }
