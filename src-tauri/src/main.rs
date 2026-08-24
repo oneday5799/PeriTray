@@ -90,6 +90,16 @@ fn wait_process_exit(_pid: u32, _timeout_ms: u32) {}
 /// --autostart 复用静默启动逻辑（重启不弹窗）；
 /// 旧 pid 经参数传递，新实例启动时内核级等待其退出，规避 single-instance 转发竞态。
 fn watchdog_self_restart() {
+    // STUCK 时记录电源状态上下文，用于定罪 B 类（显示器唤醒触发僵死）
+    unsafe {
+        let mut power: windows_sys::Win32::System::Power::SYSTEM_POWER_STATUS = std::mem::zeroed();
+        if windows_sys::Win32::System::Power::GetSystemPowerStatus(&mut power) != 0 {
+            process::append_log(&format!(
+                "[watchdog] power at STUCK: AC={} sys_flag={}",
+                power.ACLineStatus, power.SystemStatusFlag
+            ));
+        }
+    }
     process::append_log("[watchdog] EVENT LOOP STUCK — self-restarting");
     let exe = std::env::current_exe().unwrap_or_default();
     if exe.as_os_str().is_empty() {
@@ -291,22 +301,58 @@ fn main() {
             // 探针原理：is_visible 经 proxy 往返（排队+recv），事件循环僵死则永挂；
             // worker 结果经 channel 回传，主循环 recv_timeout 超时即计僵死。
             // 连续 2 次超时（最坏 ~40s）判定僵死，自动重启自身进程自愈。
+            // B 类定罪：电源状态变化 + 时间跳变检测，用于确认僵死是否与唤醒相关。
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
+                use std::time::Instant;
+                use windows_sys::Win32::System::Power::{
+                    GetSystemPowerStatus, SYSTEM_POWER_STATUS,
+                };
+
                 let mut stuck_streak = 0u32;
+                let mut last_instant = Instant::now();
+                let mut last_power: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+                let mut power_initialized = false;
+
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(15));
                     crate::process::append_log("[heartbeat]");
+
+                    // 时间跳变检测：期望 ~15s，>20s 说明系统经历过休眠/唤醒
+                    let now = Instant::now();
+                    let elapsed = now.duration_since(last_instant);
+                    last_instant = now;
+                    if elapsed > std::time::Duration::from_secs(20) {
+                        crate::process::append_log(&format!(
+                            "[watchdog] time jump: {:.1}s (expected ~15s)",
+                            elapsed.as_secs_f64()
+                        ));
+                    }
+
+                    // 电源状态监控：桌面机 AC 常在线，但显示器唤醒/系统休眠时 SystemStatusFlag 可能变化
+                    let mut power: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+                    if unsafe { GetSystemPowerStatus(&mut power) } != 0 {
+                        if power_initialized
+                            && (power.ACLineStatus != last_power.ACLineStatus
+                                || power.SystemStatusFlag != last_power.SystemStatusFlag)
+                        {
+                            crate::process::append_log(&format!(
+                                "[watchdog] power changed: AC={} sys_flag={}",
+                                power.ACLineStatus, power.SystemStatusFlag
+                            ));
+                        }
+                        last_power = power;
+                        power_initialized = true;
+                    }
+
                     let probe_app = app_handle.clone();
                     let (tx, rx) = std::sync::mpsc::channel();
                     std::thread::spawn(move || {
                         let result = probe_app
-                            .get_webview_window("popup") // None ⇒ 视为存活（popup 常驻，缺失属异常重建期）
+                            .get_webview_window("popup")
                             .map(|w| w.is_visible().is_ok())
                             .unwrap_or(true);
                         let _ = tx.send(result);
-                        // 事件循环僵死时 worker 卡在 is_visible 的 recv 上，
-                        // 泄漏至进程重启回收——无害
                     });
                     match rx.recv_timeout(std::time::Duration::from_secs(5)) {
                         Ok(true) => stuck_streak = 0,
@@ -341,6 +387,26 @@ fn main() {
                 }
                 tauri::WindowEvent::CloseRequested { .. } => {
                     crate::process::append_log(&format!("[event] CloseRequested label={}", label));
+                }
+                // 显示器唤醒/配置变化时窗口会收到 ScaleFactorChanged/Moved/Resized，
+                // B 类僵死（非 destroy 触发）疑似与唤醒瞬间 WebView2 渲染恢复阻塞相关
+                tauri::WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    crate::process::append_log(&format!(
+                        "[event] ScaleFactorChanged({:.2}) label={}",
+                        scale_factor, label
+                    ));
+                }
+                tauri::WindowEvent::Moved(position) => {
+                    crate::process::append_log(&format!(
+                        "[event] Moved({}, {}) label={}",
+                        position.x, position.y, label
+                    ));
+                }
+                tauri::WindowEvent::Resized(size) => {
+                    crate::process::append_log(&format!(
+                        "[event] Resized({}, {}) label={}",
+                        size.width, size.height, label
+                    ));
                 }
                 _ => {}
             }
