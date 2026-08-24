@@ -27,9 +27,6 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": {
-      "data/wireless_24g_devices.json": "data/wireless_24g_devices.json"
-    },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico"

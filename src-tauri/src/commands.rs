@@ -201,6 +201,10 @@ pub fn open_24g_device_file() -> Result<(), String> {
         .join("data")
         .join("wireless_24g_devices_user.json");
     if !path.exists() {
+        // 内置 2.4G 库已废除，全新安装环境可能没有 data 目录
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
         std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
     }
     process::open_with_system(&path.to_string_lossy())

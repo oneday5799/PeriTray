@@ -58,7 +58,7 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 | 框架 | Tauri v2（Rust 后端 + 纯 HTML/CSS/JS 前端） |
 | 设备检测 | WMI + WinRT Bluetooth + windows_pnp |
 | 音量控制 | Windows Core Audio API（事件驱动） |
-| 2.4G 识别 | USB VID/PID 匹配（wireless_24g_devices.json） |
+| 2.4G 识别 | USB VID/PID 匹配（驱动内置声明 + 用户自定义文件） |
 | 电量 | BLE GATT Battery Service / BTC windows_pnp / HID Feature Report（hidapi，实验性） |
 | 异步 / 网络 | tokio / WinHTTP |
 
@@ -88,7 +88,7 @@ PeriphMonitor/
 
 已收录雷蛇全系支持电量上报的无线鼠标（约 60 个 VID/PID）：Orochi V2、Atheris、Pro Click 全系、Viper V2/V3 Pro、Viper V3 HyperSpeed、Viper Mini SE、Viper Ultimate、DeathAdder V2-V4 Pro、DeathAdder V3 HyperSpeed、Basilisk V3 Pro/X HyperSpeed/35K 系列、Naga Pro/V2 Pro/V2 HyperSpeed、Cobra Pro、Mamba/Lancehead/Mamba 2012 等系列的有线与 2.4G 形态。**其中 Orochi V2 经实机验证，其余型号基于同族协议移植、尚未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
 
-不同品牌接收器的私有协议各不相同，无法统一获取。新品牌的接入方式：在 `src-tauri/src/wireless_24g/drivers/` 下按协议族新增一个驱动文件（实现 `BatteryDriver` trait 并注册），同时在 `wireless_24g_devices.json` 添加对应 VID/PID 条目。若想自行抓包逆向其它品牌的协议，可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的方法论。**欢迎有能力的开发者贡献代码或思路，帮助扩展对这些设备的支持。**
+不同品牌接收器的私有协议各不相同，无法统一获取。新品牌的接入方式：在 `src-tauri/src/wireless_24g/drivers/` 下按协议族新增一个驱动文件（实现 `BatteryDriver` trait，登记设备身份与协议参数并注册）。临时添加未收录设备可编辑用户自定义文件（见下）。若想自行抓包逆向其它品牌的协议，可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的方法论。**欢迎有能力的开发者贡献代码或思路，帮助扩展对这些设备的支持。**
 
 可在设置页点击「打开」编辑 `wireless_24g_devices_user.json` 添加自定义设备（应用更新时不会覆盖），同 VID/PID 时用户条目优先。VID/PID 可通过 [USB 设备查看器](https://www.codertools.net/tools/usb-device-viewer.php?lang=zh) 获取：
 

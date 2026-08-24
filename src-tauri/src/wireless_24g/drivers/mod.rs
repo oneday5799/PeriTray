@@ -1,15 +1,30 @@
 // ── 模块职责 ─────────────────────────────────────────────
 // 2.4G 电量驱动抽象：每协议族（约等于品牌）一个子模块文件，
 // 设备在各自文件内以数据表维护；新增品牌在此注册即可接入。
+// 驱动同时以 identities() 声明设备身份（名称/类型），作为
+// 识别注册表（device_data）的编译期内置数据源。
 
 pub mod razer;
 
+/// 驱动声明的设备身份：识别注册表的编译期内置数据源。
+/// dev_type 与历史 JSON 口径一致："mouse"/"keyboard"/"audio"/"other"
+pub struct DeviceIdentity {
+    pub vid: u16,
+    pub pid: u16,
+    pub name: &'static str,
+    pub dev_type: &'static str,
+}
+
 /// 单台 2.4G 设备电量查询能力的统一抽象
 pub trait BatteryDriver: Sync {
-    /// 是否支持该 VID/PID
+    /// 是否支持该 VID/PID（实现应直接扫描自身设备表，保持热路径零分配）
     fn matches(&self, vid: u16, pid: u16) -> bool;
     /// 查询电量百分比（0-100）；设备休眠/离线/未收录时返回 Err，由上层走负缓存
     fn read_battery(&self, vid: u16, pid: u16) -> Result<i32, String>;
+    /// 声明收录设备的身份列表（识别注册表构建期调用一次，非热路径）
+    fn identities(&self) -> Vec<DeviceIdentity>;
+    /// 设备显示名（日志用，零分配）
+    fn device_name(&self, vid: u16, pid: u16) -> Option<&'static str>;
 }
 
 /// 已注册的驱动清单（新增品牌在此追加）

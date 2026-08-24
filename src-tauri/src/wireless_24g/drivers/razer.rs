@@ -8,12 +8,13 @@
 // OpenRazer 的两张开关表：
 //   txid ← razermouse_driver.c razer_attr_read_charge_level()
 //   wait ← razermouse_driver.c razer_get_report()
-// 除 Orochi V2（0x0094）经实机验证外，其余型号为同族协议移植，
-// 依赖回显校验/负缓存兜底；查询失败时日志附带响应原文供远程定位。
+// 设备表同时是识别注册表的编译期内置数据源（name 字段经 identities()
+// 对外声明）。除 Orochi V2（0x0094）经实机验证外，其余型号为同族协议
+// 移植，依赖回显校验/负缓存兜底；查询失败时日志附带响应原文供远程定位。
 
 use std::time::Duration;
 
-use super::BatteryDriver;
+use super::{BatteryDriver, DeviceIdentity};
 use crate::wireless_24g::hid_link::{HidLink, REPORT_LEN};
 
 // ── 协议常量 ────────────────────────────────────────────
@@ -58,6 +59,8 @@ const WAIT_ATHERIS_MS: u64 = 400;
 
 struct RazerDev {
     vid_pid: (u16, u16),
+    /// 设备显示名（识别注册表与日志共用）
+    name: &'static str,
     /// 事务 ID
     txid: u8,
     /// 发送后等待响应的时长
@@ -65,9 +68,10 @@ struct RazerDev {
 }
 
 macro_rules! dev {
-    ($pid:expr, $txid:expr, $wait:expr) => {
+    ($pid:expr, $name:expr, $txid:expr, $wait:expr) => {
         RazerDev {
             vid_pid: (0x1532, $pid),
+            name: $name,
             txid: $txid,
             wait_ms: $wait,
         }
@@ -76,75 +80,139 @@ macro_rules! dev {
 
 static DEVICES: &[RazerDev] = &[
     // ── 新代协议 txid=0x1F · 默认 31ms ──
-    dev!(0x008F, TXID_NEW, WAIT_NEW_MS), // Naga Pro 有线
-    dev!(0x0090, TXID_NEW, WAIT_NEW_MS), // Naga Pro 无线
-    dev!(0x0088, TXID_NEW, WAIT_NEW_MS), // Basilisk Ultimate 接收器
-    dev!(0x0086, TXID_NEW, WAIT_NEW_MS), // Basilisk Ultimate 有线
-    dev!(0x006F, TXID_NEW, WAIT_NEW_MS), // Lancehead Wireless 接收器
-    dev!(0x0070, TXID_NEW, WAIT_NEW_MS), // Lancehead Wireless 有线
-    dev!(0x0077, TXID_NEW, WAIT_NEW_MS), // Pro Click 接收器
-    dev!(0x0080, TXID_NEW, WAIT_NEW_MS), // Pro Click 有线
-    dev!(0x009C, TXID_NEW, WAIT_NEW_MS), // DeathAdder V2 X HyperSpeed
-    dev!(0x00A6, TXID_NEW, WAIT_NEW_MS), // Viper V2 Pro 无线
-    dev!(0x00A5, TXID_NEW, WAIT_NEW_MS), // Viper V2 Pro 有线
-    dev!(0x00B0, TXID_NEW, WAIT_NEW_MS), // Cobra Pro 无线
-    dev!(0x00AF, TXID_NEW, WAIT_NEW_MS), // Cobra Pro 有线
-    dev!(0x00B7, TXID_NEW, WAIT_NEW_MS), // DeathAdder V3 Pro 无线
-    dev!(0x00B6, TXID_NEW, WAIT_NEW_MS), // DeathAdder V3 Pro 有线
-    dev!(0x00C3, TXID_NEW, WAIT_NEW_MS), // DeathAdder V3 Pro 无线（新固件 PID）
-    dev!(0x00C2, TXID_NEW, WAIT_NEW_MS), // DeathAdder V3 Pro 有线（新固件 PID）
-    dev!(0x00C5, TXID_NEW, WAIT_NEW_MS), // DeathAdder V3 HyperSpeed 无线
-    dev!(0x00C4, TXID_NEW, WAIT_NEW_MS), // DeathAdder V3 HyperSpeed 有线
-    dev!(0x00AB, TXID_NEW, WAIT_NEW_MS), // Basilisk V3 Pro 无线
-    dev!(0x00AA, TXID_NEW, WAIT_NEW_MS), // Basilisk V3 Pro 有线
-    dev!(0x00CD, TXID_NEW, WAIT_NEW_MS), // Basilisk V3 Pro 35K 无线
-    dev!(0x00CC, TXID_NEW, WAIT_NEW_MS), // Basilisk V3 Pro 35K 有线
-    dev!(0x00D7, TXID_NEW, WAIT_NEW_MS), // Basilisk V3 Pro 35K 幻彩绿 无线
-    dev!(0x00D6, TXID_NEW, WAIT_NEW_MS), // Basilisk V3 Pro 35K 幻彩绿 有线
-    dev!(0x009A, TXID_NEW, WAIT_NEW_MS), // Pro Click Mini 接收器
-    dev!(0x00A8, TXID_NEW, WAIT_NEW_MS), // Naga V2 Pro 无线
-    dev!(0x00A7, TXID_NEW, WAIT_NEW_MS), // Naga V2 Pro 有线
-    dev!(0x00B4, TXID_NEW, WAIT_NEW_MS), // Naga V2 HyperSpeed 接收器
-    dev!(0x00B9, TXID_NEW, WAIT_NEW_MS), // Basilisk V3 X HyperSpeed
-    dev!(0x00D4, TXID_NEW, WAIT_NEW_MS), // Basilisk Mobile 接收器
-    dev!(0x00D3, TXID_NEW, WAIT_NEW_MS), // Basilisk Mobile 有线
-    dev!(0x00BF, TXID_NEW, WAIT_NEW_MS), // DeathAdder V4 Pro 无线
-    dev!(0x00BE, TXID_NEW, WAIT_NEW_MS), // DeathAdder V4 Pro 有线
-    dev!(0x00C0, TXID_NEW, WAIT_NEW_MS), // Viper V3 Pro 有线（注意：无线为 60ms）
-    dev!(0x00C8, TXID_NEW, WAIT_NEW_MS), // Pro Click V2 垂直版 无线
-    dev!(0x00C7, TXID_NEW, WAIT_NEW_MS), // Pro Click V2 垂直版 有线
-    dev!(0x00D1, TXID_NEW, WAIT_NEW_MS), // Pro Click V2 无线
-    dev!(0x00D0, TXID_NEW, WAIT_NEW_MS), // Pro Click V2 有线
+    dev!(0x008F, "Razer Naga Pro", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x0090, "Razer Naga Pro", TXID_NEW, WAIT_NEW_MS), // 无线
+    dev!(0x0088, "Razer Basilisk Ultimate", TXID_NEW, WAIT_NEW_MS), // 接收器
+    dev!(0x0086, "Razer Basilisk Ultimate", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x006F, "Razer Lancehead Wireless", TXID_NEW, WAIT_NEW_MS), // 接收器
+    dev!(0x0070, "Razer Lancehead Wireless", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x0077, "Razer Pro Click", TXID_NEW, WAIT_NEW_MS), // 接收器
+    dev!(0x0080, "Razer Pro Click", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(
+        0x009C,
+        "Razer DeathAdder V2 X HyperSpeed",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ),
+    dev!(0x00A6, "Razer Viper V2 Pro", TXID_NEW, WAIT_NEW_MS), // 无线
+    dev!(0x00A5, "Razer Viper V2 Pro", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x00B0, "Razer Cobra Pro", TXID_NEW, WAIT_NEW_MS),    // 无线
+    dev!(0x00AF, "Razer Cobra Pro", TXID_NEW, WAIT_NEW_MS),    // 有线
+    dev!(0x00B7, "Razer DeathAdder V3 Pro", TXID_NEW, WAIT_NEW_MS), // 无线
+    dev!(0x00B6, "Razer DeathAdder V3 Pro", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x00C3, "Razer DeathAdder V3 Pro", TXID_NEW, WAIT_NEW_MS), // 无线（新固件 PID）
+    dev!(0x00C2, "Razer DeathAdder V3 Pro", TXID_NEW, WAIT_NEW_MS), // 有线（新固件 PID）
+    dev!(
+        0x00C5,
+        "Razer DeathAdder V3 HyperSpeed",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ), // 无线
+    dev!(
+        0x00C4,
+        "Razer DeathAdder V3 HyperSpeed",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ), // 有线
+    dev!(0x00AB, "Razer Basilisk V3 Pro", TXID_NEW, WAIT_NEW_MS), // 无线
+    dev!(0x00AA, "Razer Basilisk V3 Pro", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x00CD, "Razer Basilisk V3 Pro 35K", TXID_NEW, WAIT_NEW_MS), // 无线
+    dev!(0x00CC, "Razer Basilisk V3 Pro 35K", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(
+        0x00D7,
+        "Razer Basilisk V3 Pro 35K Phantom Green Edition",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ), // 无线
+    dev!(
+        0x00D6,
+        "Razer Basilisk V3 Pro 35K Phantom Green Edition",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ), // 有线
+    dev!(0x009A, "Razer Pro Click Mini", TXID_NEW, WAIT_NEW_MS), // 接收器
+    dev!(0x00A8, "Razer Naga V2 Pro", TXID_NEW, WAIT_NEW_MS),  // 无线
+    dev!(0x00A7, "Razer Naga V2 Pro", TXID_NEW, WAIT_NEW_MS),  // 有线
+    dev!(0x00B4, "Razer Naga V2 HyperSpeed", TXID_NEW, WAIT_NEW_MS), // 接收器
+    dev!(
+        0x00B9,
+        "Razer Basilisk V3 X HyperSpeed",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ),
+    dev!(0x00D4, "Razer Basilisk Mobile", TXID_NEW, WAIT_NEW_MS), // 接收器
+    dev!(0x00D3, "Razer Basilisk Mobile", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x00BF, "Razer DeathAdder V4 Pro", TXID_NEW, WAIT_NEW_MS), // 无线
+    dev!(0x00BE, "Razer DeathAdder V4 Pro", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(
+        0x00C8,
+        "Razer Pro Click V2 Vertical Edition",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ), // 无线
+    dev!(
+        0x00C7,
+        "Razer Pro Click V2 Vertical Edition",
+        TXID_NEW,
+        WAIT_NEW_MS
+    ), // 有线
+    dev!(0x00D1, "Razer Pro Click V2", TXID_NEW, WAIT_NEW_MS),    // 无线
+    dev!(0x00D0, "Razer Pro Click V2", TXID_NEW, WAIT_NEW_MS),    // 有线
     // ── 新代协议 · Atheris/Orochi 类 400ms ──
-    dev!(0x0062, TXID_NEW, WAIT_ATHERIS_MS), // Atheris 接收器
-    dev!(0x0094, TXID_NEW, WAIT_ATHERIS_MS), // Orochi V2 接收器（已真机验证）
+    dev!(0x0062, "Razer Atheris", TXID_NEW, WAIT_ATHERIS_MS), // 接收器
+    dev!(0x0094, "Razer Orochi V2", TXID_NEW, WAIT_ATHERIS_MS), // 接收器（已真机验证）
     // ── 新代协议 · VIPER 族 60ms ──
-    dev!(0x009F, TXID_NEW, WAIT_VIPER_MS), // Viper Mini SE 无线
-    dev!(0x009E, TXID_NEW, WAIT_VIPER_MS), // Viper Mini SE 有线
-    dev!(0x00B3, TXID_NEW, WAIT_VIPER_MS), // HyperPolling Wireless Dongle
-    dev!(0x00B8, TXID_NEW, WAIT_VIPER_MS), // Viper V3 HyperSpeed
-    dev!(0x00C1, TXID_NEW, WAIT_VIPER_MS), // Viper V3 Pro 无线（注意：有线为 31ms）
+    dev!(0x009F, "Razer Viper Mini SE", TXID_NEW, WAIT_VIPER_MS), // 无线
+    dev!(0x009E, "Razer Viper Mini SE", TXID_NEW, WAIT_VIPER_MS), // 有线
+    dev!(
+        0x00B3,
+        "Razer HyperPolling Wireless Dongle",
+        TXID_NEW,
+        WAIT_VIPER_MS
+    ),
+    dev!(0x00B8, "Razer Viper V3 HyperSpeed", TXID_NEW, WAIT_VIPER_MS),
+    dev!(0x00C1, "Razer Viper V3 Pro", TXID_NEW, WAIT_VIPER_MS), // 无线（注意：有线为 31ms）
     // ── 新代协议 · 35K 特例 1ms（走 interface 3，由集合试探覆盖）──
-    dev!(0x00CB, TXID_NEW, WAIT_DEFAULT_MS), // Basilisk V3 35K
+    dev!(0x00CB, "Razer Basilisk V3 35K", TXID_NEW, WAIT_DEFAULT_MS),
     // ── 中代协议 txid=0x3F ──
-    dev!(0x0072, TXID_MID, WAIT_NEW_MS), // Mamba Wireless 接收器
-    dev!(0x0073, TXID_MID, WAIT_NEW_MS), // Mamba Wireless 有线
-    dev!(0x007D, TXID_MID, WAIT_VIPER_MS), // DeathAdder V2 Pro 无线
-    dev!(0x007C, TXID_MID, WAIT_VIPER_MS), // DeathAdder V2 Pro 有线
-    dev!(0x005A, TXID_MID, WAIT_DEFAULT_MS), // Lancehead Wireless
-    dev!(0x0059, TXID_MID, WAIT_DEFAULT_MS), // Lancehead 有线
+    dev!(0x0072, "Razer Mamba Wireless", TXID_MID, WAIT_NEW_MS), // 接收器
+    dev!(0x0073, "Razer Mamba Wireless", TXID_MID, WAIT_NEW_MS), // 有线
+    dev!(0x007D, "Razer DeathAdder V2 Pro", TXID_MID, WAIT_VIPER_MS), // 无线
+    dev!(0x007C, "Razer DeathAdder V2 Pro", TXID_MID, WAIT_VIPER_MS), // 有线
+    dev!(
+        0x005A,
+        "Razer Lancehead Wireless",
+        TXID_MID,
+        WAIT_DEFAULT_MS
+    ),
+    dev!(0x0059, "Razer Lancehead", TXID_MID, WAIT_DEFAULT_MS), // 有线
     // ── 远古协议 txid=0xFF ──
-    dev!(0x0083, TXID_LEGACY, WAIT_NEW_MS), // Basilisk X HyperSpeed
-    dev!(0x007B, TXID_LEGACY, WAIT_VIPER_MS), // Viper Ultimate 无线
-    dev!(0x007A, TXID_LEGACY, WAIT_VIPER_MS), // Viper Ultimate 有线
-    dev!(0x001F, TXID_LEGACY, WAIT_DEFAULT_MS), // Naga Epic
-    dev!(0x0025, TXID_LEGACY, WAIT_DEFAULT_MS), // Mamba 2012 无线
-    dev!(0x0024, TXID_LEGACY, WAIT_DEFAULT_MS), // Mamba 2012 有线
-    dev!(0x0032, TXID_LEGACY, WAIT_DEFAULT_MS), // Ouroboros
-    dev!(0x003E, TXID_LEGACY, WAIT_DEFAULT_MS), // Naga Epic Chroma
-    dev!(0x003F, TXID_LEGACY, WAIT_DEFAULT_MS), // Naga Epic Chroma Dock
-    dev!(0x0045, TXID_LEGACY, WAIT_DEFAULT_MS), // Mamba 无线
-    dev!(0x0044, TXID_LEGACY, WAIT_DEFAULT_MS), // Mamba 有线
+    dev!(
+        0x0083,
+        "Razer Basilisk X HyperSpeed",
+        TXID_LEGACY,
+        WAIT_NEW_MS
+    ),
+    dev!(0x007B, "Razer Viper Ultimate", TXID_LEGACY, WAIT_VIPER_MS), // 无线
+    dev!(0x007A, "Razer Viper Ultimate", TXID_LEGACY, WAIT_VIPER_MS), // 有线
+    dev!(0x001F, "Razer Naga Epic", TXID_LEGACY, WAIT_DEFAULT_MS),
+    dev!(0x0025, "Razer Mamba 2012", TXID_LEGACY, WAIT_DEFAULT_MS), // 无线
+    dev!(0x0024, "Razer Mamba 2012", TXID_LEGACY, WAIT_DEFAULT_MS), // 有线
+    dev!(0x0032, "Razer Ouroboros", TXID_LEGACY, WAIT_DEFAULT_MS),
+    dev!(
+        0x003E,
+        "Razer Naga Epic Chroma",
+        TXID_LEGACY,
+        WAIT_DEFAULT_MS
+    ),
+    dev!(
+        0x003F,
+        "Razer Naga Epic Chroma Dock",
+        TXID_LEGACY,
+        WAIT_DEFAULT_MS
+    ),
+    dev!(0x0045, "Razer Mamba", TXID_LEGACY, WAIT_DEFAULT_MS), // 无线
+    dev!(0x0044, "Razer Mamba", TXID_LEGACY, WAIT_DEFAULT_MS), // 有线
 ];
 
 // ── 驱动实现 ────────────────────────────────────────────
@@ -182,6 +250,25 @@ impl BatteryDriver for RazerDriver {
             std::thread::sleep(RETRY_INTERVAL);
         }
         Err(last_err)
+    }
+
+    fn identities(&self) -> Vec<DeviceIdentity> {
+        DEVICES
+            .iter()
+            .map(|d| DeviceIdentity {
+                vid: d.vid_pid.0,
+                pid: d.vid_pid.1,
+                name: d.name,
+                dev_type: "mouse",
+            })
+            .collect()
+    }
+
+    fn device_name(&self, vid: u16, pid: u16) -> Option<&'static str> {
+        DEVICES
+            .iter()
+            .find(|d| d.vid_pid == (vid, pid))
+            .map(|d| d.name)
     }
 }
 
@@ -317,5 +404,17 @@ mod tests {
             .find(|d| d.vid_pid == (0x1532, 0x0094))
             .expect("Orochi V2 参考行缺失");
         assert_eq!((dev.txid, dev.wait_ms), (TXID_NEW, WAIT_ATHERIS_MS));
+    }
+
+    #[test]
+    fn identities_derive_one_to_one_from_table() {
+        let ids = RAZER.identities();
+        assert_eq!(ids.len(), DEVICES.len());
+        assert!(ids.iter().all(|i| !i.name.is_empty()), "存在空名称身份");
+        assert!(ids.iter().all(|i| i.dev_type == "mouse"));
+        // 与 device_name 抽查一致性
+        for i in ids.iter().take(5) {
+            assert_eq!(RAZER.device_name(i.vid, i.pid), Some(i.name));
+        }
     }
 }

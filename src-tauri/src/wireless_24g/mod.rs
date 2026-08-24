@@ -6,6 +6,9 @@
 mod drivers;
 mod hid_link;
 
+// 识别注册表（device_data）消费驱动声明的身份清单；hid_link 等实现细节不外露
+pub use drivers::DRIVERS;
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -117,10 +120,15 @@ fn query_and_cache(key: &(String, String)) -> Option<i32> {
     let Some(driver) = drivers::find_driver(v, p) else {
         return None;
     };
+    // 日志优先带设备名，便于社区反馈定位
+    let label = match driver.device_name(v, p) {
+        Some(name) => format!("{} ({:04X}:{:04X})", name, v, p),
+        None => format!("{:04X}:{:04X}", v, p),
+    };
     let level = driver.read_battery(v, p);
     match &level {
-        Ok(lv) => crate::process::append_log(&format!("[24g] {:04X}:{:04X} 电量 {}%", v, p, lv)),
-        Err(e) => crate::process::append_log(&format!("[24g] {:04X}:{:04X} 查询失败: {}", v, p, e)),
+        Ok(lv) => crate::process::append_log(&format!("[24g] {} 电量 {}%", label, lv)),
+        Err(e) => crate::process::append_log(&format!("[24g] {} 查询失败: {}", label, e)),
     }
     let level = level.ok();
     crate::state::lock_unpoisoned(cache()).insert(
