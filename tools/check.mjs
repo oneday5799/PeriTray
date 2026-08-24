@@ -252,7 +252,7 @@ for (const dirName of ["scripts"]) {
       catch { return undefined; }
     })(),
     "settings.html": read(path.join(DIST, "settings.html"))
-      .match(/版本 v([\d.]+)/)?.[1],
+      .match(/版本 v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/)?.[1],
   };
   const bad = Object.values(versions).some((v) => !v);
   if (new Set(Object.values(versions)).size > 1 || bad) {
