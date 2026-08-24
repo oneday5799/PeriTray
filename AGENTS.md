@@ -90,6 +90,9 @@
    时 CI 自动标记为预发布；CI 构建后自动向该 Release 追加安装包产物
 4. CI 使用 softprops/action-gh-release@v3 + generate_release_notes，
    对已存在的 Release 是更新追加而非报错，手工先建 Release 不冲突
+5. **WIKI 校准轮**（正式版必做，beta 跳过；连续多个 beta 晋级时补做一次）：
+   版本演进史补行 / 进行中分支表刷新 / 本版 commits 是否有漏更的触发项 /
+   README↔WIKI 入口互通——清单见 WIKI「Wiki-维护规范」§2 模式 B
 
 ## 提交自动闸门（强制）
 
@@ -135,6 +138,19 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   config 共享实际出 bug；届时可先考虑 config 抽为经典脚本单例的廉价中间路线）
 - 材质系统收敛（删除 settings-general 回调手动三件套）暂缓，
   下次因其他原因动材质代码时顺手做并实测闪烁
+
+## 项目 Wiki 维护
+
+开发者知识库位于 GitHub Wiki（独立仓库，页面即 `PeriphMonitor.wiki.git`），
+主仓内不存副本。完整规范见 WIKI「Wiki-维护规范」页，此处仅列强制义务：
+
+- **不随 commit / push 同步**；以下七类变更落地时必须同步更新对应 Wiki 页
+  （模块增删→03、命令/事件增删→05、架构决策→02、重大踩坑定案→06/07 按模板、
+  否决路线状态变化→09、工具链变化→08、新前端页面→04），AGENTS.md 与 Wiki
+  双处内容以 AGENTS.md 为权威源回改
+- 发版走「发布流程」第 5 步校准轮（正式版必做）
+- wiki 工作区固定在主仓并列目录 `../PeriphMonitor.wiki`，勿用系统临时目录；
+  推送前自检清单见 WIKI 规范 §5
 
 ## 开发与调试
 
