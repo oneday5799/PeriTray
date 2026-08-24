@@ -1,6 +1,7 @@
 /* popup-devices.js — 主窗口·设备信息 tab：设备列表渲染/右键菜单/连接与托盘项
  * 加载序 3/4（common → popup-audio → 本文件 → popup.js）
- * 提供：loadDevices()（供 popup.js 的刷新按钮/focus 刷新调用）
+ * 提供：loadDevices(fresh24g)（供 popup.js 的刷新按钮/focus 刷新调用，
+ *       刷新按钮传 true 走 get_devices_fresh 强制现查 2.4G 电量）
  * 依赖：common.js（getInvoke/CATEGORIES/getDisplayName/showToast/registerContextMenu/
  *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell）
  */
@@ -12,7 +13,7 @@ let deviceGroups = {};
 let useSystemBt = false;
 let trayDevices = [];
 
-async function loadDevices() {
+async function loadDevices(fresh24g = false) {
   const list = document.getElementById("device-list");
   list.innerHTML = '<div class="loading">加载中...</div>';
 
@@ -23,7 +24,8 @@ async function loadDevices() {
   }
 
   try {
-    allDevices = await invoke("get_devices");
+    // 手动刷新走 get_devices_fresh：强制现查 2.4G 电量（绕过缓存，鼠标休眠时较慢）
+    allDevices = await invoke(fresh24g ? "get_devices_fresh" : "get_devices");
     const config = await invoke("get_config");
     hiddenDevices = config.hidden_devices || [];
     hiddenGroups = config.hidden_groups || [];

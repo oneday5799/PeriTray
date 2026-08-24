@@ -18,7 +18,7 @@ static AUDIO_DEVICES_SUBMENU: OnceLock<Mutex<Option<Submenu<tauri::Wry>>>> = Onc
 
 /// 刷新设备缓存，返回是否发生变化
 fn refresh_devices_cache() -> bool {
-    let new_devices = crate::wmi_query::query_devices();
+    let new_devices = crate::wmi_query::query_devices(false);
     let cache = get_devices_cache();
 
     if let Ok(mut guard) = cache.lock() {

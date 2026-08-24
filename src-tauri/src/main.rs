@@ -190,6 +190,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             // 设备列表与配置
             commands::get_devices,
+            commands::get_devices_fresh,
             commands::get_config,
             commands::get_app_version,
             commands::set_window_theme,

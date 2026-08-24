@@ -9,7 +9,8 @@ document.getElementById("btn-refresh").addEventListener("click", async () => {
   if (activeTab) {
     const tabName = activeTab.dataset.tab;
     if (tabName === "devices") {
-      await loadDevices();
+      // true = 强制现查 2.4G 设备连接状态与电量（绕过缓存）
+      await loadDevices(true);
       showToast("已刷新");
     } else if (tabName === "volume") {
       await loadAudioDevices();

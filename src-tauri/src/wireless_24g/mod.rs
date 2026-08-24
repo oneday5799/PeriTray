@@ -47,7 +47,18 @@ pub fn supported(vid: &str, pid: &str) -> bool {
 
 /// 设备列表入口：返回各 (vid,pid) 的缓存电量；过期/缺失项触发后台刷新，
 /// 结果下次列表刷新可见。返回映射仅含传入的键，值 None 表示暂无有效数据。
-pub fn snapshot(pairs: Vec<(String, String)>) -> HashMap<(String, String), Option<i32>> {
+/// force=true 时同步逐台现查（设备列表手动刷新按钮入口，绕过 TTL）。
+pub fn snapshot(
+    mut pairs: Vec<(String, String)>,
+    force: bool,
+) -> HashMap<(String, String), Option<i32>> {
+    pairs.sort();
+    pairs.dedup();
+
+    if force {
+        return snapshot_fresh(pairs);
+    }
+
     let now = Instant::now();
     let mut result = HashMap::new();
     let mut stale = vec![];
@@ -98,28 +109,64 @@ fn ttl_of(entry: &CacheEntry) -> Duration {
     }
 }
 
+/// 查询单台设备并写回缓存，返回电量值（无驱动支持时返回 None）
+fn query_and_cache(key: &(String, String)) -> Option<i32> {
+    let Some((v, p)) = parse_hex(&key.0).zip(parse_hex(&key.1)) else {
+        return None;
+    };
+    let Some(driver) = drivers::find_driver(v, p) else {
+        return None;
+    };
+    let level = driver.read_battery(v, p);
+    match &level {
+        Ok(lv) => crate::process::append_log(&format!("[24g] {:04X}:{:04X} 电量 {}%", v, p, lv)),
+        Err(e) => crate::process::append_log(&format!("[24g] {:04X}:{:04X} 查询失败: {}", v, p, e)),
+    }
+    let level = level.ok();
+    crate::state::lock_unpoisoned(cache()).insert(
+        key.clone(),
+        CacheEntry {
+            level,
+            at: Instant::now(),
+        },
+    );
+    level
+}
+
+/// 强制刷新路径（手动刷新按钮）：在调用方阻塞线程中同步逐台现查并返回最新值。
+/// 后台刷新线程恰好在跑时退化为读缓存，避免并发访问同一 HID 设备。
+fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Option<i32>> {
+    if REFRESHING
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        let guard = crate::state::lock_unpoisoned(cache());
+        return pairs
+            .into_iter()
+            .map(|k| {
+                let lvl = guard.get(&k).and_then(|e| e.level);
+                (k, lvl)
+            })
+            .collect();
+    }
+
+    let mut result = HashMap::new();
+    for key in &pairs {
+        let level = query_and_cache(key);
+        result.insert(key.clone(), level);
+    }
+    REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
+    result
+}
+
 /// 后台线程体：逐台查询并写回缓存（成功与失败均记录，便于诊断休眠/离线）
 fn refresh_worker(pairs: Vec<(String, String)>) {
-    for (vid, pid) in pairs {
-        let Some((v, p)) = parse_hex(&vid).zip(parse_hex(&pid)) else {
-            continue;
-        };
-        let Some(driver) = drivers::find_driver(v, p) else {
-            continue;
-        };
-        let level = driver.read_battery(v, p);
-        match &level {
-            Ok(lv) => {
-                crate::process::append_log(&format!("[24g] {:04X}:{:04X} 电量 {}%", v, p, lv))
-            }
-            Err(e) => {
-                crate::process::append_log(&format!("[24g] {:04X}:{:04X} 查询失败: {}", v, p, e))
-            }
-        }
-        let entry = CacheEntry {
-            level: level.ok(),
-            at: Instant::now(),
-        };
-        crate::state::lock_unpoisoned(cache()).insert((vid, pid), entry);
+    for key in &pairs {
+        query_and_cache(key);
     }
 }

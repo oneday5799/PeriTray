@@ -48,7 +48,8 @@ struct BatteryDevice {
     estimated_charge_remaining: Option<i32>,
 }
 
-pub fn query_devices() -> Vec<Device> {
+/// fresh_24g=true 时强制现查 2.4G 接收器电量（设备列表手动刷新入口），否则走缓存
+pub fn query_devices(fresh_24g: bool) -> Vec<Device> {
     let mut all = vec![];
     let mut seen = HashSet::new();
     let mut cn_index: HashMap<String, Vec<usize>> = HashMap::new();
@@ -101,8 +102,8 @@ pub fn query_devices() -> Vec<Device> {
         }
     }
 
-    // 实验性：2.4G 接收器电量并入列表（读缓存即时返回）
-    fill_24g_battery(&mut all, pnp_24g_pairs);
+    // 实验性：2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
+    fill_24g_battery(&mut all, pnp_24g_pairs, fresh_24g);
 
     crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
     all
@@ -309,8 +310,9 @@ fn query_battery_devices(
 }
 
 /// 实验性：将 2.4G 接收器缓存电量填入设备列表（开关关闭时整体旁路）。
-/// 只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成。
-fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>) {
+/// 默认只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成；
+/// fresh=true 时同步现查（手动刷新按钮，耗时约 0.5~2 秒）。
+fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: bool) {
     let supported: Vec<_> = pairs
         .into_iter()
         .filter(|(v, p)| crate::wireless_24g::supported(v, p))
@@ -320,7 +322,7 @@ fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>) {
         return;
     }
 
-    let snap = crate::wireless_24g::snapshot(supported);
+    let snap = crate::wireless_24g::snapshot(supported, fresh);
     // 缓存键 → 数据库显示名，用于把电量对回列表条目（同名设备共享同一接收器型号）
     let filled: Vec<(String, Option<i32>)> = snap
         .iter()
