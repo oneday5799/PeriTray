@@ -1,6 +1,6 @@
 [package]
 name = "PeriphMonitor"
-version = "1.2.11-beta.2"
+version = "1.2.11-beta.3"
 edition = "2021"
 
 [dependencies]
