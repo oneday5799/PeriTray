@@ -105,7 +105,6 @@ function initSpatialSoundSettings() {
   });
 }
 
-// 设备显示名：有重命名使用重命名，否则简化括号内名称
 // 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为设置页 config 单例）
 function fmtDevName(name) {
   return window.formatDeviceName(name, config.device_names || {}, config.simplify_device_names !== false);

@@ -169,7 +169,7 @@ function initDeviceFilterTab() {
 
   if (filterCard) {
     filterExpandable.bindHeaderClick(filterCard, {
-      extraGuards: ['.toggle'],
+      extraGuards: [".toggle"],
       onChanged: resetRegexSize,
     });
   }

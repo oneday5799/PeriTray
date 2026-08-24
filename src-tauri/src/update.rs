@@ -35,7 +35,7 @@ impl UpdateStatus {
         }
     }
 
-    pub fn from_error(current_version: &str, error: &str) -> Self {
+    fn from_error(current_version: &str, error: &str) -> Self {
         UpdateStatus {
             status: "error".to_string(),
             current_version: current_version.to_string(),
@@ -48,7 +48,7 @@ impl UpdateStatus {
 
 static LAST_STATUS: Mutex<Option<UpdateStatus>> = Mutex::new(None);
 
-pub fn set_last_status(status: UpdateStatus) {
+fn set_last_status(status: UpdateStatus) {
     if let Ok(mut guard) = LAST_STATUS.lock() {
         *guard = Some(status);
     }

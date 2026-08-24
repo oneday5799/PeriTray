@@ -34,7 +34,7 @@ fn refresh_devices_cache() -> bool {
 }
 
 /// 根据缓存的设备信息构建 tooltip 文本
-pub fn build_tooltip_text() -> String {
+fn build_tooltip_text() -> String {
     let cache = get_devices_cache();
     let devices = crate::state::lock_unpoisoned(cache);
 
@@ -481,7 +481,7 @@ fn build_audio_devices_menu(
 }
 
 /// 更新音频设备切换子菜单（在设备列表变化时调用）
-pub fn update_audio_devices_menu() {
+fn update_audio_devices_menu() {
     let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
     let Some(ref tray) = *tray_guard else { return };
     let app = tray.app_handle().clone();
