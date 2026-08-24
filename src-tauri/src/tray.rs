@@ -243,18 +243,24 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
             crate::process::append_log(&format!("[tray] menu: {}", event.id.as_ref()));
+            // 菜单事件在事件线程上分发：重操作（窗口/材质/DWM）一律 spawn 移出，
+            // 比照 audio_dev_ 分支的既有模式
             match event.id.as_ref() {
                 "show" => {
-                    crate::popup::open_popup(app, "devices");
+                    let app = app.clone();
+                    std::thread::spawn(move || crate::popup::open_popup(&app, "devices"));
                 }
                 "volume" => {
-                    crate::popup::open_popup(app, "volume");
+                    let app = app.clone();
+                    std::thread::spawn(move || crate::popup::open_popup(&app, "volume"));
                 }
                 "settings" => {
-                    windows::open_settings(app);
+                    let app = app.clone();
+                    std::thread::spawn(move || windows::open_settings(&app));
                 }
                 "about" => {
-                    windows::open_settings_tab(app, "about");
+                    let app = app.clone();
+                    std::thread::spawn(move || windows::open_settings_tab(&app, "about"));
                 }
                 "auto_start" => {
                     let old = AUTO_START.load(Ordering::Relaxed);

@@ -23,21 +23,27 @@ pub fn open_settings_tab(app: &tauri::AppHandle, tab: &str) {
 
 fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
     if let Some(win) = app.get_webview_window("settings") {
-        if let Some(t) = tab {
-            let _ = app.emit_to("settings", "settings-tab", t);
-        }
-        #[cfg(target_os = "windows")]
-        if let Ok(hwnd) = win.hwnd() {
-            let material = config::with_config(|c| c.window_material.clone());
-            process::append_log(&format!(
-                "[material] reopen settings, material={}",
-                material
-            ));
-            apply_window_material(hwnd.0 as isize, &material);
-        }
-        let _ = win.unminimize();
-        let _ = win.show();
-        let _ = win.set_focus();
+        // 已有窗口的重开路径整体移出调用线程（菜单事件在事件线程上分发，
+        // DWM 材质调用与 show/focus 一旦阻塞会拖垮整个事件循环）
+        let app = app.clone();
+        let tab = tab.map(|t| t.to_string());
+        std::thread::spawn(move || {
+            if let Some(ref t) = tab {
+                let _ = app.emit_to("settings", "settings-tab", t);
+            }
+            #[cfg(target_os = "windows")]
+            if let Ok(hwnd) = win.hwnd() {
+                let material = config::with_config(|c| c.window_material.clone());
+                process::append_log(&format!(
+                    "[material] reopen settings, material={}",
+                    material
+                ));
+                apply_window_material(hwnd.0 as isize, &material);
+            }
+            let _ = win.unminimize();
+            let _ = win.show();
+            let _ = win.set_focus();
+        });
         return;
     }
     let app = app.clone();

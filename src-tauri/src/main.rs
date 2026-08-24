@@ -103,14 +103,21 @@ fn main() {
         ))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             process::append_log("[single-instance] second instance forwarded");
-            let tab = config::with_config(|c| c.default_popup_tab.clone());
-            if app.get_webview_window("popup").is_some() {
-                process::append_log(&format!("[single-instance] popup exists, open tab={}", tab));
-                popup::open_popup(app, &tab);
-            } else {
-                process::append_log("[single-instance] no popup, create via toggle");
-                popup::toggle(app, &tab);
-            }
+            // 回调在事件线程上分发：窗口/配置操作全部移出
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let tab = config::with_config(|c| c.default_popup_tab.clone());
+                if app.get_webview_window("popup").is_some() {
+                    process::append_log(&format!(
+                        "[single-instance] popup exists, open tab={}",
+                        tab
+                    ));
+                    popup::open_popup(&app, &tab);
+                } else {
+                    process::append_log("[single-instance] no popup, create via toggle");
+                    popup::toggle(&app, &tab);
+                }
+            });
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -215,14 +222,10 @@ fn main() {
             }
 
             // 心跳线程：事件线程若阻塞则日志同步停滞，可据此判断死点时刻
-            {
-                let h = app.handle().clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    crate::process::append_log("[heartbeat]");
-                    let _ = &h;
-                });
-            }
+            std::thread::spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(15));
+                crate::process::append_log("[heartbeat]");
+            });
 
             process::append_log("[main] startup complete");
             Ok(())
@@ -246,14 +249,11 @@ fn main() {
             }
             match event {
                 tauri::WindowEvent::Focused(focused) => {
-                    if window.label() == "popup" {
-                        if !focused
-                            && !state::ANIMATING.load(std::sync::atomic::Ordering::Relaxed)
-                            && window.is_visible().unwrap_or(false)
-                        {
-                            let app = window.app_handle();
-                            popup::close_popup(app);
-                        }
+                    if window.label() == "popup" && !focused {
+                        // 事件线程只做轻量判断；close_popup 内部自带 ANIMATING/is_visible 防护，
+                        // 重复分发安全，且 compute_position/Win32 调用不阻塞事件循环
+                        let app = window.app_handle().clone();
+                        std::thread::spawn(move || popup::close_popup(&app));
                     }
                 }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
