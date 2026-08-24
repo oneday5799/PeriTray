@@ -42,8 +42,8 @@
 - **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
 - **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
 - **Rust 文档注释与日志**：`///` 用于 pub 项；日志统一走 `process::append_log` 并带
-  `[模块]` 前缀（[popup] [tray] [audio] [bt] [update] [material] [event] [heartbeat] 等，
-  新增模块先定标签）
+  `[模块]` 前缀（[popup] [tray] [audio] [bt] [update] [material] [event] [heartbeat]
+  [watchdog] [window] 等，新增模块先定标签）
 - **JS 头注释**：四要素（文件职责 / 加载序 N/N · 提供：… / 依赖：…）见「前端架构备忘」
 
 ## Release Notes 风格规范（每次发版必循）

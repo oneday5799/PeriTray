@@ -67,9 +67,70 @@ fn show_error_box(msg: &str) {
     }
 }
 
+/// 等待指定 pid 的进程退出，最多 timeout_ms 毫秒。
+/// 进程不存在（已退出/从未存在）时立即返回。用于看门狗重启路径。
+#[cfg(target_os = "windows")]
+fn wait_process_exit(pid: u32, timeout_ms: u32) {
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if !handle.is_null() {
+            WaitForSingleObject(handle, timeout_ms);
+            windows_sys::Win32::Foundation::CloseHandle(handle);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wait_process_exit(_pid: u32, _timeout_ms: u32) {}
+
+/// 事件循环僵死自愈：spawn 自身新实例后立即退出当前进程。
+/// --autostart 复用静默启动逻辑（重启不弹窗）；
+/// 旧 pid 经参数传递，新实例启动时内核级等待其退出，规避 single-instance 转发竞态。
+fn watchdog_self_restart() {
+    process::append_log("[watchdog] EVENT LOOP STUCK — self-restarting");
+    let exe = std::env::current_exe().unwrap_or_default();
+    if exe.as_os_str().is_empty() {
+        // 拿不到自身路径则只能退出，交由用户手动拉起
+        std::process::exit(0);
+    }
+    let arg = format!("--watchdog-restart={}", std::process::id());
+    let spawn_ok = std::process::Command::new(&exe)
+        .args(["--autostart", &arg])
+        .spawn()
+        .is_ok();
+    if !spawn_ok {
+        process::append_log("[watchdog] respawn FAILED, exiting anyway");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    std::process::exit(0);
+}
+
 fn main() {
+    // 看门狗自重启路径：等待旧实例内核级死亡后再初始化。
+    // 必须先于一切（含 single-instance 插件）：插件第二实例会 SendMessageW(WM_COPYDATA)
+    // 同步转发给旧窗口，若旧实例僵死未退则新实例将永久阻塞在转发这一步
+    let watchdog_restart = std::env::args().find_map(|a| {
+        a.strip_prefix("--watchdog-restart=")
+            .and_then(|p| p.parse::<u32>().ok())
+    });
+    if let Some(old_pid) = watchdog_restart {
+        // 此行先于 init_config 会被 log_enabled 吞掉，仅保留语义占位；
+        // 确认日志在配置初始化后补写（见下）
+        wait_process_exit(old_pid, 3000);
+    }
+
     // 先初始化配置（panic hook 和日志都依赖配置）
     config::init_config();
+
+    if let Some(old_pid) = watchdog_restart {
+        process::append_log(&format!(
+            "[watchdog] restart mode, waited old pid={} exit",
+            old_pid
+        ));
+    }
 
     install_panic_hook();
 
@@ -221,10 +282,41 @@ fn main() {
                 });
             }
 
-            // 心跳线程：事件线程若阻塞则日志同步停滞，可据此判断死点时刻
-            std::thread::spawn(|| loop {
-                std::thread::sleep(std::time::Duration::from_secs(15));
-                crate::process::append_log("[heartbeat]");
+            // 看门狗线程：心跳 + 事件循环探活。
+            // 探针原理：is_visible 经 proxy 往返（排队+recv），事件循环僵死则永挂；
+            // worker 结果经 channel 回传，主循环 recv_timeout 超时即计僵死。
+            // 连续 2 次超时（最坏 ~40s）判定僵死，自动重启自身进程自愈。
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut stuck_streak = 0u32;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(15));
+                    crate::process::append_log("[heartbeat]");
+                    let probe_app = app_handle.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let result = probe_app
+                            .get_webview_window("popup") // None ⇒ 视为存活（popup 常驻，缺失属异常重建期）
+                            .map(|w| w.is_visible().is_ok())
+                            .unwrap_or(true);
+                        let _ = tx.send(result);
+                        // 事件循环僵死时 worker 卡在 is_visible 的 recv 上，
+                        // 泄漏至进程重启回收——无害
+                    });
+                    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                        Ok(true) => stuck_streak = 0,
+                        _ => {
+                            stuck_streak += 1;
+                            crate::process::append_log(&format!(
+                                "[watchdog] event loop unresponsive, streak={}",
+                                stuck_streak
+                            ));
+                            if stuck_streak >= 2 {
+                                watchdog_self_restart();
+                            }
+                        }
+                    }
+                }
             });
 
             process::append_log("[main] startup complete");
@@ -259,8 +351,22 @@ fn main() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     let label = window.label();
                     if label == "settings" {
+                        // hide 先行：点击瞬间响应。销毁延后 3s 在子线程触发——
+                        // wry drop 链的 controller.Close() 会在事件循环线程同步执行，
+                        // 浏览器进程繁忙时曾三次卡死整个事件循环（假死）。
+                        // dispatched/destroyed 成对日志用于定罪卡点。
                         api.prevent_close();
-                        let _ = window.destroy();
+                        let _ = window.hide();
+                        let win = window.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            if win.is_visible().unwrap_or(true) {
+                                return; // 延迟期内被重新打开，放弃本次销毁
+                            }
+                            crate::process::append_log("[window] settings destroy dispatched");
+                            let _ = win.destroy();
+                            crate::process::append_log("[window] settings destroyed");
+                        });
                     } else if label == "popup" {
                         api.prevent_close();
                         let _ = window.hide();
