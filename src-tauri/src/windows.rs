@@ -253,153 +253,32 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// WebView2 Suspend / Resume（ICoreWebView2_3 页面生命周期 API）
+// WebView2 Suspend / Resume（put_IsVisible 模式）
 // ═══════════════════════════════════════════════════════════════
 //
-// popup 关闭后 Suspend：渲染进程休眠、释放 CPU/内存，系统睡眠时已
-// 处于 Suspended 状态不阻塞事件循环（B 类僵死根治）。
-// popup 打开前 / 唤醒后 Resume：恢复渲染，页面状态完整保留。
-// 调用链：PlatformWebview → wry Webview → controller → QI(ICoreWebView2_3) → TrySuspend/Resume
+// popup 关闭后 IsVisible=FALSE：WebView2 停止渲染、Chromium 节流页面
+// 活动、清理缓存、释放 CPU（微软官方文档确认的电源管理模式）。
+// 系统睡眠时 WebView2 处于隐藏状态，降低阻塞事件循环的概率。
+// popup 打开前 / 唤醒后 IsVisible=TRUE：恢复渲染。
 //
-// ICoreWebView2_3 vtable 偏移量（webview2-com-sys 0.38.2 确认）：
-//   IUnknown(3) + ICoreWebView2(58) + ICoreWebView2_2(7) = 68 → TrySuspend
-//   69 → Resume
-// ICoreWebView2Controller vtable：
-//   IUnknown(3) + own methods... = 25 → CoreWebView2
+// ICoreWebView2Controller vtable：IUnknown(0-2), IsVisible(3), SetIsVisible(4)
 
-/// TrySuspend 回调：最小 COM 对象，满足 handler 参数要求。
-/// 挂起成功与否不影响功能（best effort），通过日志记录结果。
-#[cfg(target_os = "windows")]
-mod try_suspend_cb {
-    use super::process;
-
-    #[repr(C)]
-    pub struct Obj {
-        vtable: *const Vtable,
-    }
-
-    #[repr(C)]
-    struct Vtable {
-        qi: unsafe extern "system" fn(
-            *mut Obj,
-            *const windows_sys::core::GUID,
-            *mut *mut core::ffi::c_void,
-        ) -> i32,
-        add_ref: unsafe extern "system" fn(*mut Obj) -> u32,
-        release: unsafe extern "system" fn(*mut Obj) -> u32,
-        invoke: unsafe extern "system" fn(*mut Obj, i32, i32) -> i32,
-    }
-
-    unsafe extern "system" fn qi(
-        _this: *mut Obj,
-        _iid: *const windows_sys::core::GUID,
-        out: *mut *mut core::ffi::c_void,
-    ) -> i32 {
-        unsafe { *out = core::ptr::null_mut() };
-        -2147467262 // E_NOINTERFACE
-    }
-
-    unsafe extern "system" fn add_ref(_this: *mut Obj) -> u32 {
-        1
-    }
-
-    unsafe extern "system" fn release(this: *mut Obj) -> u32 {
-        unsafe { drop(Box::from_raw(this)) };
-        0
-    }
-
-    unsafe extern "system" fn invoke(_this: *mut Obj, error_code: i32, is_successful: i32) -> i32 {
-        process::append_log(&format!(
-            "[webview] TrySuspend result: hr=0x{:08X} success={}",
-            error_code as u32,
-            is_successful != 0
-        ));
-        0 // S_OK
-    }
-
-    static VTABLE: Vtable = Vtable {
-        qi,
-        add_ref,
-        release,
-        invoke,
-    };
-
-    /// 创建回调对象（Box 分配，COM 持有后 release 时 drop）
-    pub fn new() -> *mut core::ffi::c_void {
-        let obj = Box::new(Obj { vtable: &VTABLE });
-        Box::into_raw(obj) as *mut core::ffi::c_void
-    }
-
-    /// 释放未被 COM 持有的回调对象
-    pub unsafe fn free(ptr: *mut core::ffi::c_void) {
-        unsafe { drop(Box::from_raw(ptr as *mut Obj)) };
-    }
-}
-
-/// Suspend WebView2 渲染进程（popup 关闭后调用）。
-/// 通过 COM vtable 调用 ICoreWebView2_3::TrySuspend，best effort。
+/// Suspend WebView2 渲染（popup 关闭后调用）。
+/// 通过 controller 的 put_IsVisible(FALSE) 隐藏 WebView：
+/// 停止渲染 + Chromium 节流 + 清理缓存（微软官方文档推荐的 minimize 模式）。
 #[cfg(target_os = "windows")]
 pub fn suspend_webview(webview: &tauri::Webview) {
     let wb = webview.clone();
-    // COM 调用需在 WebView 线程执行（STA）
     let r = wb.with_webview(|wv| {
         unsafe {
-            // 1. 从 controller 获取 ICoreWebView2 指针
             let controller: *mut core::ffi::c_void = std::mem::transmute(wv.controller());
             if controller.is_null() {
                 return;
             }
             let cvtable = *(controller as *const *const usize);
-            type GetCoreWebView2Fn = unsafe extern "system" fn(
-                *mut core::ffi::c_void,
-                *mut *mut core::ffi::c_void,
-            ) -> i32;
-            let get_webview: GetCoreWebView2Fn = std::mem::transmute(*cvtable.add(25));
-            let mut wv_ptr: *mut core::ffi::c_void = std::ptr::null_mut();
-            let hr = get_webview(controller, &mut wv_ptr);
-            if hr != 0 || wv_ptr.is_null() {
-                process::append_log("[webview] get_CoreWebView2 failed for TrySuspend");
-                return;
-            }
-
-            // 2. QI 到 ICoreWebView2_3
-            let wv_vtable = *(wv_ptr as *const *const usize);
-            type QIFn = unsafe extern "system" fn(
-                *mut core::ffi::c_void,
-                *const windows_sys::core::GUID,
-                *mut *mut core::ffi::c_void,
-            ) -> i32;
-            let qi: QIFn = std::mem::transmute(*wv_vtable.add(0));
-            let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
-            // ICoreWebView2_3 IID: 8ee661b0-27c2-5979-8972-4e2a27d538f5
-            let iid = windows_sys::core::GUID::from_u128(0x8ee661b0_27c2_5979_8972_4e2a27d538f5);
-            let hr = qi(wv_ptr, &iid, &mut ptr);
-            // 释放 ICoreWebView2 (get_CoreWebView2 返回的需要 Release)
-            type ReleaseFn = unsafe extern "system" fn(*mut core::ffi::c_void) -> u32;
-            let release: ReleaseFn = std::mem::transmute(*wv_vtable.add(2));
-            if hr != 0 || ptr.is_null() {
-                process::append_log("[webview] QI ICoreWebView2_3 failed for TrySuspend");
-                release(wv_ptr);
-                return;
-            }
-
-            // 3. 调用 TrySuspend
-            let vtable3 = *(ptr as *const *const usize);
-            type TrySuspendFn =
-                unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void) -> i32;
-            let try_suspend: TrySuspendFn = std::mem::transmute(*vtable3.add(68));
-            let cb_ptr = try_suspend_cb::new();
-            let hr = try_suspend(ptr, cb_ptr);
-            if hr != 0 {
-                process::append_log(&format!("[webview] TrySuspend call failed: 0x{:08X}", hr));
-                try_suspend_cb::free(cb_ptr);
-            }
-
-            // 释放 ICoreWebView2_3
-            let release3: ReleaseFn = std::mem::transmute(*vtable3.add(2));
-            release3(ptr);
-            // 释放 ICoreWebView2
-            release(wv_ptr);
+            type SetIsVisibleFn = unsafe extern "system" fn(*mut core::ffi::c_void, i32) -> i32;
+            let set_visible: SetIsVisibleFn = std::mem::transmute(*cvtable.add(4));
+            set_visible(controller, 0); // FALSE
         }
     });
     if r.is_err() {
@@ -407,53 +286,22 @@ pub fn suspend_webview(webview: &tauri::Webview) {
     }
 }
 
-/// Resume WebView2 渲染进程（popup 打开前 / 系统唤醒后调用）。
-/// 通过 COM vtable 调用 ICoreWebView2_3::Resume，同步立即生效。
+/// Resume WebView2 渲染（popup 打开前 / 系统唤醒后调用）。
+/// 通过 controller 的 put_IsVisible(TRUE) 恢复 WebView 渲染。
 #[cfg(target_os = "windows")]
 pub fn resume_webview(webview: &tauri::Webview) {
     let wb = webview.clone();
-    let r = wb.with_webview(|wv| unsafe {
-        let controller: *mut core::ffi::c_void = std::mem::transmute(wv.controller());
-        if controller.is_null() {
-            return;
+    let r = wb.with_webview(|wv| {
+        unsafe {
+            let controller: *mut core::ffi::c_void = std::mem::transmute(wv.controller());
+            if controller.is_null() {
+                return;
+            }
+            let cvtable = *(controller as *const *const usize);
+            type SetIsVisibleFn = unsafe extern "system" fn(*mut core::ffi::c_void, i32) -> i32;
+            let set_visible: SetIsVisibleFn = std::mem::transmute(*cvtable.add(4));
+            set_visible(controller, 1); // TRUE
         }
-        let cvtable = *(controller as *const *const usize);
-        type GetCoreWebView2Fn =
-            unsafe extern "system" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> i32;
-        let get_webview: GetCoreWebView2Fn = std::mem::transmute(*cvtable.add(25));
-        let mut wv_ptr: *mut core::ffi::c_void = std::ptr::null_mut();
-        let hr = get_webview(controller, &mut wv_ptr);
-        if hr != 0 || wv_ptr.is_null() {
-            process::append_log("[webview] get_CoreWebView2 failed for Resume");
-            return;
-        }
-        let wv_vtable = *(wv_ptr as *const *const usize);
-        type QIFn = unsafe extern "system" fn(
-            *mut core::ffi::c_void,
-            *const windows_sys::core::GUID,
-            *mut *mut core::ffi::c_void,
-        ) -> i32;
-        let qi: QIFn = std::mem::transmute(*wv_vtable.add(0));
-        let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
-        let iid = windows_sys::core::GUID::from_u128(0x8ee661b0_27c2_5979_8972_4e2a27d538f5);
-        let hr = qi(wv_ptr, &iid, &mut ptr);
-        type ReleaseFn = unsafe extern "system" fn(*mut core::ffi::c_void) -> u32;
-        let release: ReleaseFn = std::mem::transmute(*wv_vtable.add(2));
-        if hr != 0 || ptr.is_null() {
-            process::append_log("[webview] QI ICoreWebView2_3 failed for Resume");
-            release(wv_ptr);
-            return;
-        }
-        let vtable3 = *(ptr as *const *const usize);
-        type ResumeFn = unsafe extern "system" fn(*mut core::ffi::c_void) -> i32;
-        let resume_fn: ResumeFn = std::mem::transmute(*vtable3.add(69));
-        let hr = resume_fn(ptr);
-        if hr != 0 {
-            process::append_log(&format!("[webview] Resume call failed: 0x{:08X}", hr));
-        }
-        let release3: ReleaseFn = std::mem::transmute(*vtable3.add(2));
-        release3(ptr);
-        release(wv_ptr);
     });
     if r.is_err() {
         process::append_log("[webview] resume_webview: with_webview dispatch failed");
