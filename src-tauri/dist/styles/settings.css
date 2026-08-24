@@ -77,11 +77,16 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   padding: var(--page-padding);
-  scrollbar-gutter: stable;
   min-width: 0;
+}
+
+/* 标签页视口：面板切换期间的定位锚（对齐主窗口 tab-viewport 模式） */
+.settings-tab-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
 }
 
 .win-nav-page-header {
@@ -98,18 +103,23 @@
   display: none;
 }
 
-.settings-container .tab-content.active {
+/* 可见面板统一绝对铺满视口：新旧面板切换期真正重叠交叉，
+   滚动职责移入面板（各标签滚动位置独立保留），消除文档流堆叠与布局塌缩跳变 */
+.settings-container .tab-content.active,
+.settings-container .tab-content.slide-active,
+.settings-container .tab-content.slide-leave-up {
   display: block;
-}
-
-/* ── Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, vertical) ─── */
-.settings-container .tab-content.slide-active {
-  display: block;
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   will-change: opacity, transform;
 }
 
-/* Enter from bottom (forward navigation — going down the list) */
+/* Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, vertical) */
+/* 进入面板置于离开面板之上（侧栏序与面板 DOM 序不一致，反向切换时必须显式提层） */
 .settings-container .tab-content.slide-enter-down {
+  z-index: 1;
   animation: SlideFromBottom_Enter 450ms var(--ease-decel) both;
 }
 
@@ -117,7 +127,6 @@
 .settings-container .tab-content.slide-leave-up {
   animation: SlideFromBottom_Leave 167ms var(--ease-accel) both;
 }
-
 @keyframes SlideFromBottom_Enter {
   0%   { opacity: 0; transform: translateY(80px); }
   33.333% { opacity: 0; transform: translateY(80px); }

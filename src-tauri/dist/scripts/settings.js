@@ -7,6 +7,10 @@
  * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/about) */
 let config = null;
 let activeSettingsMenu = null;
+// 导航就绪门：get_config 往返期间各标签页内容尚未初始化，
+// 此期间的点击/托盘事件先记录、init 完成后统一补执行（防首次切换播在空白面板上）
+let settingsNavReady = false;
+let pendingNavTab = null;
 registerContextMenu({ get menu() { return activeSettingsMenu; }, set menu(v) { activeSettingsMenu = v; } });
 
 // [data-tip] 提示：定位与 DOM 复用 common.js 的边界避让实现
@@ -320,6 +324,7 @@ function initNavigation() {
   const pageHeader = document.getElementById("page-header");
   navItems.forEach((tab, index) => {
     tab.addEventListener("click", () => {
+      if (!settingsNavReady) { pendingNavTab = tab; return; }
       if (currentTabIndex === index) return;
       const oldIndex = currentTabIndex;
 
@@ -617,6 +622,21 @@ async function init() {
     setupCardHoverSuppression();
   } catch (e) {
     console.error("Failed to load settings:", e);
+  }
+
+  // 预热：提前完成各面板首次布局/绘制，避免首次切换动画被渲染耗时吃掉
+  document.querySelectorAll(".tab-content").forEach(p => {
+    p.style.display = "block";
+    void p.offsetHeight;
+    p.style.display = "";
+  });
+
+  // 无条件放行导航（配置加载失败也必须可操作），并补执行就绪前的待处理切换
+  settingsNavReady = true;
+  if (pendingNavTab) {
+    const t = pendingNavTab;
+    pendingNavTab = null;
+    t.click();
   }
 }
 
