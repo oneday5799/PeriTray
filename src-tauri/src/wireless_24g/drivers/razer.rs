@@ -13,7 +13,7 @@ use crate::wireless_24g::hid_link::{HidLink, REPORT_LEN};
 
 /// 命令大类：电池
 const CLASS_BATTERY: u8 = 0x07;
-/// 命令字：获取电量（响应 arguments[1] 为百分比）
+/// 命令字：获取电量（响应 arguments[1] 为 0-255 原始刻度，需换算百分比）
 const CMD_GET_BATTERY: u8 = 0x80;
 /// 载荷长度
 const DATA_SIZE: u8 = 0x02;
@@ -119,11 +119,10 @@ fn parse_level(req: &[u8; REPORT_LEN], resp: &[u8; REPORT_LEN]) -> Result<i32, S
         };
         return Err(format!("{}: {:#04X}", reason, resp[0]));
     }
-    // 电量位于 arguments[1]，即字节偏移 9；Orochi V2 直接返回 0-100 百分比
-    let level = resp[9] as i32;
-    if (0..=100).contains(&level) {
-        Ok(level)
-    } else {
-        Err(format!("电量原始值越界: {}", level))
-    }
+    // 电量位于 arguments[1]，即字节偏移 9。
+    // 该值为 0-255 原始刻度而非百分比（真机实测 35 ↔ 实际 13%），
+    // 按 OpenRazer daemon 同款公式 (raw/255)*100 换算，截断取整与
+    // 雷蛇自家显示一致（35 → 13）
+    let raw = resp[9] as u32;
+    Ok(((raw * 100) / 255) as i32)
 }
