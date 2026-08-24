@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/Rust-1.85+-black?style=flat-square&logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/Tauri-2.x-blue?style=flat-square&logo=tauri" alt="Tauri">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64%2FARM64)-0078d4?style=flat-square&logo=windows" alt="Platform">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square" alt="License">
 </p>
 
 ---
@@ -143,7 +143,7 @@ git push origin v1.1.0
 
 ## 许可证
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE)
 
 ## 致谢
 
@@ -152,3 +152,5 @@ git push origin v1.1.0
 - [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接/断开方案参考
 - [OpenRazer](https://github.com/openrazer/openrazer) — 雷蛇接收器私有协议参考（报文格式/命令字/CRC/时序），本项目为 Windows 用户态独立实现，运行时不依赖
 - [2.4G 无线设备电量获取](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) — 各品牌 2.4G 私有协议逆向方法论参考
+- [win11React](https://github.com/blueedgetechno/win11React) — WinUI 风格样式参考
+- [WinUIonWeb](https://github.com/Furry-Xiyi/WinUIonWeb) — WinUI 风格样式参考
