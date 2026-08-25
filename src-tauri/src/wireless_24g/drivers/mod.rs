@@ -29,7 +29,8 @@ pub trait BatteryDriver: Sync {
 }
 
 /// 已注册的驱动清单（新增「品牌+类型」在此追加）
-pub static DRIVERS: &[&dyn BatteryDriver] = &[&razer::mouse::RAZER_MOUSE];
+pub static DRIVERS: &[&dyn BatteryDriver] =
+    &[&razer::mouse::RAZER_MOUSE, &razer::keyboard::RAZER_KEYBOARD];
 
 /// 在注册表中查找支持该 VID/PID 的驱动
 pub fn find_driver(vid: u16, pid: u16) -> Option<&'static dyn BatteryDriver> {

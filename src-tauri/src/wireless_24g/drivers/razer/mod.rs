@@ -1,17 +1,20 @@
 // ── 模块职责 ─────────────────────────────────────────────
-// 雷蛇域驱动：收录 OpenRazer 全系支持电量上报的雷蛇无线设备。
+// 雷蛇域驱动：收录 OpenRazer 全系支持电量上报的雷蛇无线设备
+// （mouse.rs 鼠标域 64 PID / keyboard.rs 键盘域 12 PID）。
 // 本文件承载跨类型共享的私有协议编解码原语与参数常量；各设备
-// 类型（mouse.rs 等）以数据表 + 迷你驱动实现接入顶层注册表。
+// 类型文件以数据表 + 迷你驱动实现接入顶层注册表。
 //
 // 协议来源：借鉴 OpenRazer（https://github.com/openrazer/openrazer）
 // 逆向所得的协议事实，Windows 用户态独立实现，运行时不依赖。
-// 参数取值严格照抄其两张开关表：
-//   txid ← razermouse_driver.c razer_attr_read_charge_level()
-//   wait ← razermouse_driver.c razer_get_report()
+// 参数取值严格照抄其开关表：
+//   txid ← razermouse_driver.c / razerkbd_driver.c 的 charge_level()
+//   wait ← razermouse_driver.c razer_get_report() /
+//          razerkbd_driver.c razer_get_report_params()
 
+pub(crate) mod keyboard;
 pub(crate) mod mouse;
 
-use crate::wireless_24g::hid_link::REPORT_LEN;
+use crate::wireless_24g::hid_link::{HidLink, REPORT_LEN};
 
 // ── 协议常量 ────────────────────────────────────────────
 
@@ -32,16 +35,18 @@ const STATUS_SUCCESS: u8 = 0x02;
 const STATUS_TIMEOUT: u8 = 0x04;
 
 // ── 设备参数常量 ─────────────────────────────────────────
-// 键盘域移植时在此补充其特有事务 ID（如 0x9F）与时序档位。
+// 品牌级参数词汇表：鼠标与键盘域的设备表按行引用。
 
-/// 事务 ID：新一代接收器（鼠标有线组与未来键盘有线共用）
+/// 事务 ID：新一代接收器
 const TXID_NEW: u8 = 0x1F;
-/// 事务 ID：中代（Lancehead/Mamba Wireless/DeathAdder V2 Pro）
+/// 事务 ID：键盘无线形态（BlackWidow V3/V4、DeathStalker V2 系列）
+const TXID_KBD_WL: u8 = 0x9F;
+/// 事务 ID：中代（Lancehead/Mamba Wireless/DeathAdder V2 Pro/BlackWidow V3 Pro 有线）
 const TXID_MID: u8 = 0x3F;
 /// 事务 ID：远古（Mamba 2012/Ouroboros/Viper Ultimate 等）
 const TXID_LEGACY: u8 = 0xFF;
 
-/// OpenRazer 默认等待 600us，取整 1ms
+/// OpenRazer 默认等待 600us，取整 1ms（含键盘 BlackWidow Chroma 档）
 const WAIT_DEFAULT_MS: u64 = 1;
 /// 新一代接收器常规等待（OpenRazer 31ms）
 const WAIT_NEW_MS: u64 = 31;
@@ -49,6 +54,33 @@ const WAIT_NEW_MS: u64 = 31;
 const WAIT_VIPER_MS: u64 = 60;
 /// Atheris/Orochi 类接收器等待（OpenRazer 400ms）
 const WAIT_ATHERIS_MS: u64 = 400;
+/// 键盘无线形态等待（OpenRazer 4900us，BlackWidow V3/V4 WL 与 DeathStalker V2 WL 共用）
+const WAIT_KBD_WL_MS: u64 = 5;
+
+// ── 查询流程 ─────────────────────────────────────────────
+
+/// 完整电量查询流程：枚举 HID 集合 → 组包收发 → 校验解析，
+/// 含重试（与 OpenRazer 一致）。鼠标/键盘域共用。
+fn read_battery_level(vid: u16, pid: u16, txid: u8, wait_ms: u64) -> Result<i32, String> {
+    let link = HidLink::new()?;
+    let paths = link.enumerate_paths(vid, pid)?;
+    let request = build_report(txid);
+    let mut last_err = String::new();
+
+    for _ in 0..MAX_RETRIES {
+        for path in &paths {
+            match link.exchange(path, &request, wait_ms) {
+                Ok(resp) => match parse_level(&request, &resp) {
+                    Ok(level) => return Ok(level),
+                    Err(e) => last_err = e,
+                },
+                Err(e) => last_err = e,
+            }
+        }
+        std::thread::sleep(RETRY_INTERVAL);
+    }
+    Err(last_err)
+}
 
 // ── 报文组包与解析原语 ───────────────────────────────────
 // 90 字节布局：status(0) txid(1) remaining(2-3,BE16) proto(4)
