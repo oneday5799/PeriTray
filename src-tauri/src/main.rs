@@ -208,6 +208,7 @@ fn main() {
             commands::open_bt_settings,
             // 杂项入口
             commands::open_url,
+            commands::frontend_log,
             commands::open_24g_device_file,
             commands::toggle_device_tray,
             // 音频设备/会话

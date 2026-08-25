@@ -61,20 +61,82 @@ const WAIT_KBD_WL_MS: u64 = 5;
 
 /// 完整电量查询流程：枚举 HID 集合 → 组包收发 → 校验解析，
 /// 含重试（与 OpenRazer 一致）。鼠标/键盘域共用。
+/// 标准级输出枚举摘要；详细级输出逐路径尝试、重试轮次与成功响应原文。
 fn read_battery_level(vid: u16, pid: u16, txid: u8, wait_ms: u64) -> Result<i32, String> {
     let link = HidLink::new()?;
     let paths = link.enumerate_paths(vid, pid)?;
+    crate::process::append_log(&format!(
+        "[24g] {:04X}:{:04X} 枚举到 {} 个候选集合",
+        vid,
+        pid,
+        paths.len()
+    ));
+    if crate::config::verbose_log_enabled() {
+        let detail = paths
+            .iter()
+            .enumerate()
+            .map(|(i, p)| format!("#{}/page={:#06X}", i + 1, p.usage_page))
+            .collect::<Vec<_>>()
+            .join(" ");
+        crate::process::append_verbose_log(&format!(
+            "[24g:dbg] {:04X}:{:04X} 候选清单(txid={:#04X}, wait={}ms): {}",
+            vid, pid, txid, wait_ms, detail
+        ));
+    }
+
     let request = build_report(txid);
     let mut last_err = String::new();
 
-    for _ in 0..MAX_RETRIES {
-        for path in &paths {
-            match link.exchange(path, &request, wait_ms) {
-                Ok(resp) => match parse_level(&request, &resp) {
-                    Ok(level) => return Ok(level),
-                    Err(e) => last_err = e,
-                },
-                Err(e) => last_err = e,
+    for round in 0..MAX_RETRIES {
+        if round > 0 && crate::config::verbose_log_enabled() {
+            crate::process::append_verbose_log(&format!(
+                "[24g:dbg] {:04X}:{:04X} 进入第 {}/{} 轮重试",
+                vid,
+                pid,
+                round + 1,
+                MAX_RETRIES
+            ));
+        }
+        for (i, p) in paths.iter().enumerate() {
+            match link.exchange(&p.path, &request, wait_ms) {
+                Ok(resp) => {
+                    if crate::config::verbose_log_enabled() {
+                        crate::process::append_verbose_log(&format!(
+                            "[24g:dbg] 路径 {}/{} (page={:#06X}) 响应: {}",
+                            i + 1,
+                            paths.len(),
+                            p.usage_page,
+                            hex_prefix(&resp)
+                        ));
+                    }
+                    match parse_level(&request, &resp) {
+                        Ok(level) => return Ok(level),
+                        Err(e) => {
+                            last_err = e.clone();
+                            if crate::config::verbose_log_enabled() {
+                                crate::process::append_verbose_log(&format!(
+                                    "[24g:dbg] 路径 {}/{} (page={:#06X}) 解析失败: {}",
+                                    i + 1,
+                                    paths.len(),
+                                    p.usage_page,
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_err = e.clone();
+                    if crate::config::verbose_log_enabled() {
+                        crate::process::append_verbose_log(&format!(
+                            "[24g:dbg] 路径 {}/{} (page={:#06X}) 收发失败: {}",
+                            i + 1,
+                            paths.len(),
+                            p.usage_page,
+                            e
+                        ));
+                    }
+                }
             }
         }
         std::thread::sleep(RETRY_INTERVAL);

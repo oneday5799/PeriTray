@@ -191,6 +191,12 @@ pub async fn check_bt_connection(name: String) -> Result<Option<bool>, String> {
     Ok(run_blocking(move || crate::bluetooth::check_device_connection(&name)).await?)
 }
 
+/// 前端行为埋点：写入运行日志（受日志级别门控，标准级可见）
+#[tauri::command]
+pub fn frontend_log(tag: String, msg: String) {
+    crate::process::append_log(&format!("[{tag}] {msg}"));
+}
+
 #[tauri::command]
 pub fn open_24g_device_file() -> Result<(), String> {
     let path = crate::process::exe_dir()

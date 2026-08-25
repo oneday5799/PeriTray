@@ -34,9 +34,17 @@ fn log_path() -> std::path::PathBuf {
     }
 }
 
-/// 追加日志到文件
+/// 追加日志到文件（标准级：生命周期摘要与各模块常规行）
 pub fn append_log(msg: &str) {
-    if !crate::config::log_enabled() {
+    if !crate::config::standard_log_enabled() {
+        return;
+    }
+    write_log(msg);
+}
+
+/// 追加诊断日志到文件（详细级：逐路径/轮次/缓存决策等现场细节）
+pub fn append_verbose_log(msg: &str) {
+    if !crate::config::verbose_log_enabled() {
         return;
     }
     write_log(msg);
@@ -61,8 +69,8 @@ pub fn clean_old_logs() {
     use crate::config::LogRetention;
     use std::time::{Duration, SystemTime};
 
-    let (enabled, retention) = crate::config::with_config(|c| (c.log_enabled, c.log_retention));
-    if !enabled {
+    let (level, retention) = crate::config::with_config(|c| (c.log_level.clone(), c.log_retention));
+    if crate::config::parse_log_level(&level) == 0 {
         return;
     }
 

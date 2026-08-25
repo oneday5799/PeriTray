@@ -46,6 +46,7 @@ async function hydrateFromSnapshot() {
     trayDevices = config.tray_devices || [];
     allDevices = snap.devices;
     renderDevices();
+    feLog(`快照水合完成: ${allDevices.length} 台`);
     return !!document.querySelector("#device-list .card.device");
   } catch (e) {
     console.error("Snapshot hydrate failed:", e);
@@ -55,8 +56,15 @@ async function hydrateFromSnapshot() {
 
 let loadGen = 0;
 
+// 前端行为埋点：经后端命令写入运行日志（标准级可见）
+function feLog(msg) {
+  const invoke = getInvoke();
+  if (invoke) invoke("frontend_log", { tag: "popup", msg }).catch(() => {});
+}
+
 async function loadDevices(fresh24g = false, opts = {}) {
   const gen = ++loadGen;
+  if (fresh24g) feLog("强制现查触发");
   const list = document.getElementById("device-list");
   // 已有内容时不清屏；无卡片时优先快照秒显，「加载中」仅剩全新环境首启场景
   const hasCards = !!list.querySelector(".card.device");
@@ -423,6 +431,7 @@ function scheduleSilentRefresh() {
   if (silentRefreshTimer) return;
   silentRefreshTimer = setTimeout(async () => {
     silentRefreshTimer = null;
+    feLog("收到后端推送, 静默重拉");
     await loadDevices(false);
   }, 500);
 }

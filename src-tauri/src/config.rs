@@ -68,8 +68,12 @@ pub struct Config {
     pub tray_devices: Vec<String>,
     #[serde(default)]
     pub hidden_audio_devices: Vec<String>,
-    #[serde(default)]
-    pub log_enabled: bool,
+    /// 日志级别："off"/"standard"/"verbose"
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    /// 旧版布尔日志开关迁移承接（迁移后置空，不再序列化）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_log_enabled: Option<bool>,
     #[serde(default)]
     pub log_retention: LogRetention,
     #[serde(default)]
@@ -144,7 +148,8 @@ impl Default for Config {
             use_system_bt: false,
             tray_devices: vec![],
             hidden_audio_devices: vec![],
-            log_enabled: false,
+            log_level: default_log_level(),
+            legacy_log_enabled: None,
             log_retention: LogRetention::default(),
             shutdown_volume_enabled: false,
             shutdown_volume_devices: std::collections::HashMap::new(),
@@ -180,11 +185,31 @@ impl Config {
 }
 
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
-static LOG_ENABLED: AtomicBool = AtomicBool::new(false);
+/// 日志级别进程缓存：0=关闭 1=标准 2=详细
+static LOG_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 static LOG_ONCE: AtomicBool = AtomicBool::new(false);
 
-pub fn log_enabled() -> bool {
-    LOG_ENABLED.load(Ordering::Relaxed)
+/// 解析日志级别字符串（未知值按关闭处理）
+pub fn parse_log_level(s: &str) -> u8 {
+    match s {
+        "standard" => 1,
+        "verbose" => 2,
+        _ => 0,
+    }
+}
+
+fn default_log_level() -> String {
+    "off".to_string()
+}
+
+/// 标准级日志是否启用（生命周期摘要与各模块常规行）
+pub fn standard_log_enabled() -> bool {
+    LOG_LEVEL.load(Ordering::Relaxed) >= 1
+}
+
+/// 详细级诊断日志是否启用
+pub fn verbose_log_enabled() -> bool {
+    LOG_LEVEL.load(Ordering::Relaxed) >= 2
 }
 
 pub fn log_once() -> bool {
@@ -192,7 +217,7 @@ pub fn log_once() -> bool {
 }
 
 fn sync_log_cache(config: &Config) {
-    LOG_ENABLED.store(config.log_enabled, Ordering::Relaxed);
+    LOG_LEVEL.store(parse_log_level(&config.log_level), Ordering::Relaxed);
     LOG_ONCE.store(
         config.log_retention == LogRetention::Once,
         Ordering::Relaxed,
@@ -227,6 +252,24 @@ pub fn init_config() {
     let mut guard = crate::state::lock_unpoisoned(CONFIG.get().unwrap());
     *guard = config;
     sync_log_cache(&guard);
+
+    // 旧版布尔日志开关一次性迁移（true→标准 / false→关闭），
+    // 消费 legacy 字段并立即持久化，防止每次启动重复映射
+    if with_config(|c| c.legacy_log_enabled.is_some()) {
+        with_config_mut(|c| {
+            let to_standard = c.legacy_log_enabled == Some(true);
+            c.log_level = if to_standard {
+                "standard".to_string()
+            } else {
+                "off".to_string()
+            };
+            c.legacy_log_enabled = None;
+            crate::process::append_log(&format!(
+                "[config] 旧版日志开关已迁移为级别: {}",
+                c.log_level
+            ));
+        });
+    }
 }
 
 pub fn with_config<F, R>(f: F) -> R

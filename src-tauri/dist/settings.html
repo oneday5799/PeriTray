@@ -242,11 +242,40 @@
       <div class="card">
         <div class="card-left">
           <span class="card-title">运行日志</span>
+          <div class="card-desc">详细级别包含 2.4G 设备查询的完整诊断现场</div>
         </div>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-log">
-          <span class="slider"></span>
-        </label>
+        <div class="win-combo-box" id="combo-log-level">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">关闭</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout" style="display:none;">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="off">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">关闭</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="standard">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">标准</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="verbose">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">详细</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="card">
         <div class="card-left">

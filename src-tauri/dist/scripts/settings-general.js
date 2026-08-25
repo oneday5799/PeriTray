@@ -54,9 +54,9 @@ function initGeneralTab() {
 }
 
 function initLogSettings() {
-  bindToggle("toggle-log", {
-    get: () => config.log_enabled,
-    set: (v) => { config.log_enabled = v; }
+  initComboBox("combo-log-level", config.log_level || "off", async (val) => {
+    config.log_level = val;
+    await saveConfig();
   });
 
   initComboBox("combo-log-retention", config.log_retention || "one_day", async (val) => {

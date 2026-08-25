@@ -17,6 +17,16 @@ pub struct HidLink {
     api: HidApi,
 }
 
+/// 候选集合路径及其拓扑信息（枚举排序与诊断日志共用）
+pub struct HidPath {
+    /// 设备接口路径（open_path 用）
+    pub path: String,
+    /// UsagePage（厂商自定义页 ≥0xFF00 优先）
+    pub usage_page: u16,
+    /// Usage
+    pub usage: u16,
+}
+
 impl HidLink {
     /// 初始化 HID 会话
     pub fn new() -> Result<Self, String> {
@@ -29,17 +39,21 @@ impl HidLink {
     /// 是常规控制通道，而部分接收器（如 Orochi V2）没有厂商集合、
     /// 控制报文实际由鼠标集合（UsagePage 0x0001 / Usage 0x0002）应答，
     /// 故按「厂商 → 鼠标 → 其余」排序逐一试探，以回显校验确认有效通道。
-    pub fn enumerate_paths(&self, vid: u16, pid: u16) -> Result<Vec<String>, String> {
+    pub fn enumerate_paths(&self, vid: u16, pid: u16) -> Result<Vec<HidPath>, String> {
         let mut vendor = vec![];
         let mut mice = vec![];
         let mut others = vec![];
         for dev in self.api.device_list() {
             if dev.vendor_id() == vid && dev.product_id() == pid {
-                let path = dev.path().to_string_lossy().into_owned();
-                match (dev.usage_page(), dev.usage()) {
-                    (page, _) if page >= 0xFF00 => vendor.push(path),
-                    (0x0001, 0x0002) => mice.push(path),
-                    _ => others.push(path),
+                let hp = HidPath {
+                    path: dev.path().to_string_lossy().into_owned(),
+                    usage_page: dev.usage_page(),
+                    usage: dev.usage(),
+                };
+                match (hp.usage_page, hp.usage) {
+                    (page, _) if page >= 0xFF00 => vendor.push(hp),
+                    (0x0001, 0x0002) => mice.push(hp),
+                    _ => others.push(hp),
                 }
             }
         }

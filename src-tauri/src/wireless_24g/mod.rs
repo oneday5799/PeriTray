@@ -91,6 +91,7 @@ pub fn snapshot(
     {
         let guard = crate::state::lock_unpoisoned(cache());
         for key in &pairs {
+            let k = format!("{}:{}", key.0, key.1);
             match guard.get(key) {
                 Some(e) => {
                     let fresh = now.duration_since(e.at) < ttl_of(e);
@@ -100,12 +101,26 @@ pub fn snapshot(
                     }
                     // 成功过的条目常驻旧值；纯失败态仅在负缓存窗口内返回 None
                     if fresh || e.level.is_some() {
+                        if !fresh {
+                            crate::process::append_verbose_log(&format!(
+                                "[24g:dbg] {} 过期，SWR 服务旧值并排入刷新",
+                                k
+                            ));
+                        }
                         result.insert(key.clone(), e.level);
                     } else {
+                        crate::process::append_verbose_log(&format!(
+                            "[24g:dbg] {} 负缓存窗口内，返回无数据",
+                            k
+                        ));
                         result.insert(key.clone(), None);
                     }
                 }
                 None => {
+                    crate::process::append_verbose_log(&format!(
+                        "[24g:dbg] {} 无缓存条目（冷启动），排入刷新",
+                        k
+                    ));
                     if !stale.contains(key) {
                         stale.push(key.clone());
                     }
@@ -116,8 +131,8 @@ pub fn snapshot(
     }
 
     // 单飞触发后台刷新：已有线程在跑则跳过本轮，待其结束后下轮补查
-    if !stale.is_empty()
-        && REFRESHING
+    if !stale.is_empty() {
+        if REFRESHING
             .compare_exchange(
                 false,
                 true,
@@ -125,11 +140,21 @@ pub fn snapshot(
                 std::sync::atomic::Ordering::SeqCst,
             )
             .is_ok()
-    {
-        std::thread::spawn(move || {
-            refresh_worker(stale);
-            REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
-        });
+        {
+            crate::process::append_log(&format!(
+                "[24g] 后台刷新开始: {} 台（来源：惰性补查）",
+                stale.len()
+            ));
+            std::thread::spawn(move || {
+                refresh_worker(stale);
+                REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        } else {
+            crate::process::append_log(&format!(
+                "[24g] 已有后台刷新进行中，跳过本轮（{} 台待查）",
+                stale.len()
+            ));
+        }
     }
     result
 }
@@ -209,10 +234,16 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
             .collect();
     }
 
+    crate::process::append_log(&format!("[24g] 强制刷新开始: {} 台", pairs.len()));
     let mut result = HashMap::new();
+    let (mut ok, mut fail) = (0, 0);
     let mut any_changed = false;
     for key in &pairs {
         let (level, changed) = query_and_cache(key);
+        match level {
+            Some(_) => ok += 1,
+            None => fail += 1,
+        }
         any_changed |= changed;
         result.insert(key.clone(), level);
     }
@@ -220,18 +251,60 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
         notify_battery_changed();
     }
     REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
+    crate::process::append_log(&format!("[24g] 强制刷新结束: 成功 {} 失败 {}", ok, fail));
     result
 }
 
 /// 后台线程体：逐台查询并写回缓存（成功与失败均记录，便于诊断休眠/离线）；
 /// 本轮存在实质变化时推送前端
 fn refresh_worker(pairs: Vec<(String, String)>) {
+    let (mut ok, mut fail) = (0, 0);
     let mut any_changed = false;
     for key in &pairs {
-        let (_, changed) = query_and_cache(key);
+        let (level, changed) = query_and_cache(key);
+        match level {
+            Some(_) => ok += 1,
+            None => fail += 1,
+        }
         any_changed |= changed;
     }
+    crate::process::append_log(&format!("[24g] 后台刷新结束: 成功 {} 失败 {}", ok, fail));
     if any_changed {
         notify_battery_changed();
+        crate::process::append_log("[24g] 已推送电量变更事件");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(level: Option<i32>) -> CacheEntry {
+        CacheEntry {
+            level,
+            at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn apply_result_success_updates_value() {
+        let (e, changed) = apply_result(Some(&entry(Some(9))), &Ok(12));
+        assert_eq!(e.level, Some(12));
+        assert!(changed, "数值变动应判定为实质变化");
+    }
+
+    #[test]
+    fn apply_result_failure_preserves_known_value() {
+        // 失败不得抹除既有成功值（SWR 常驻语义）
+        let (e, changed) = apply_result(Some(&entry(Some(9))), &Err("超时".into()));
+        assert_eq!(e.level, Some(9));
+        assert!(!changed);
+    }
+
+    #[test]
+    fn apply_result_first_failure_enters_negative_cache() {
+        let (e, changed) = apply_result(None, &Err("离线".into()));
+        assert_eq!(e.level, None);
+        assert!(!changed);
     }
 }
