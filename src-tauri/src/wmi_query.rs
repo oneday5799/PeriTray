@@ -361,17 +361,24 @@ fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: boo
     }
 
     let snap = crate::wireless_24g::snapshot(supported, fresh);
+
     // 缓存键 → 数据库显示名，用于把电量对回列表条目（同名设备共享同一接收器型号）
-    let filled: Vec<(String, Option<i32>)> = snap
-        .iter()
-        .filter_map(|((v, p), lvl)| device_data::get_device_name(v, p).map(|n| (n, *lvl)))
-        .collect();
-    for d in all.iter_mut() {
-        if !d.is_wireless_24g || d.battery.is_some() {
+    for (v, p) in snap.keys() {
+        let Some(base_name) = device_data::get_device_name(v, p) else {
             continue;
-        }
-        if let Some((_, lvl)) = filled.iter().find(|(n, _)| *n == d.name) {
-            d.battery = *lvl;
+        };
+        let Some(lvl) = snap.get(&(v.clone(), p.clone())).cloned().flatten() else {
+            continue;
+        };
+        if let Some(d) = all
+            .iter_mut()
+            .find(|d| d.is_wireless_24g && d.name == base_name && d.battery.is_none())
+        {
+            d.battery = Some(lvl);
+            // 罗技单下游：卡片名替换为下游设备名（如 "MX Master 3S"）
+            if let Some(oname) = crate::wireless_24g::display_override_name(v, p) {
+                d.name = oname;
+            }
         }
     }
 }

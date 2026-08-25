@@ -68,6 +68,15 @@ impl HidLink {
         Ok(vendor)
     }
 
+    /// 打开指定路径返回原始句柄——供非 Feature Report 模型的驱动
+    /// （如罗技 HID++ 的 output/input report 收发）自行组织读写
+    pub fn open_path_handle(&self, path: &str) -> Result<hidapi::HidDevice, String> {
+        let path_c = CString::new(path).map_err(|_| "设备路径含非法字符".to_string())?;
+        self.api
+            .open_path(&path_c)
+            .map_err(|e| format!("打开设备失败: {}", e))
+    }
+
     /// 打开指定路径并完成一次「发送请求 → 等待 → 取回响应」。
     /// 返回 90 字节响应体（已剥离 Report ID 前缀）。
     pub fn exchange(

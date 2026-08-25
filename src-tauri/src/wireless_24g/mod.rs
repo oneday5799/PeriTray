@@ -58,6 +58,14 @@ pub fn supported(vid: &str, pid: &str) -> bool {
     }
 }
 
+/// 动态显示名覆盖（罗技单下游：返回下游设备名，如 "MX Master 3S"）；
+/// 无覆盖时 None。字符串参数与识别注册表口径一致
+pub fn display_override_name(vid: &str, pid: &str) -> Option<String> {
+    let (v, p) = parse_hex(vid).zip(parse_hex(pid))?;
+    let driver = drivers::find_driver(v, p)?;
+    driver.display_override(v, p)
+}
+
 /// 注入事件推送句柄（main setup 调用一次）
 pub fn init_event_handle(app: &tauri::AppHandle) {
     EVENT_HANDLE.set(app.clone()).ok();

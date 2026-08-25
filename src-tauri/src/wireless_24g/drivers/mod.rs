@@ -5,6 +5,7 @@
 // 驱动同时以 identities() 声明设备身份（名称/类型），作为
 // 识别注册表（device_data）的编译期内置数据源。
 
+pub(crate) mod logitech;
 pub(crate) mod razer;
 
 /// 驱动声明的设备身份：识别注册表的编译期内置数据源。
@@ -24,13 +25,21 @@ pub trait BatteryDriver: Sync {
     fn read_battery(&self, vid: u16, pid: u16) -> Result<i32, String>;
     /// 声明收录设备的身份列表（识别注册表构建期调用一次，非热路径）
     fn identities(&self) -> Vec<DeviceIdentity>;
-    /// 设备显示名（日志用，零分配）
+    /// 设备显示名（日志用，零分配；动态名经 display_override 通道）
     fn device_name(&self, vid: u16, pid: u16) -> Option<&'static str>;
+    /// 动态显示名覆盖：下游设备名等运行期才能确定的名称（默认无）。
+    /// 管线层存在此覆盖时将替换卡片显示名
+    fn display_override(&self, _vid: u16, _pid: u16) -> Option<String> {
+        None
+    }
 }
 
 /// 已注册的驱动清单（新增「品牌+类型」在此追加）
-pub static DRIVERS: &[&dyn BatteryDriver] =
-    &[&razer::mouse::RAZER_MOUSE, &razer::keyboard::RAZER_KEYBOARD];
+pub static DRIVERS: &[&dyn BatteryDriver] = &[
+    &razer::mouse::RAZER_MOUSE,
+    &razer::keyboard::RAZER_KEYBOARD,
+    &logitech::LOGITECH,
+];
 
 /// 在注册表中查找支持该 VID/PID 的驱动
 pub fn find_driver(vid: u16, pid: u16) -> Option<&'static dyn BatteryDriver> {
