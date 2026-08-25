@@ -91,6 +91,8 @@ PeriphMonitor/
 - **鼠标**（64 个 PID）：Orochi V2、Atheris、Pro Click 全系、Viper V2/V3 Pro、Viper V3 HyperSpeed、Viper Mini SE、Viper Ultimate、DeathAdder V2-V4 Pro、DeathAdder V3 HyperSpeed、Basilisk V3 Pro/X HyperSpeed/35K 系列、Naga Pro/V2 Pro/V2 HyperSpeed、Cobra Pro、Mamba/Lancehead/Mamba 2012 等系列的有线与 2.4G 形态
 - **键盘**（12 个 PID）：BlackWidow V3/V4 Mini HyperSpeed、BlackWidow V3 Pro、BlackWidow V4 Tenkeyless HyperSpeed、DeathStalker V2 Pro（含 TKL 版）的有线与 2.4G 形态
 
+**罗技接收器**（Unifying/Lightspeed/Bolt/Nano，PID 范围启发识别）：采用单下游简化——接收器仅有一台在线设备时显示其名称与电量；多设备接收器暂不支持。下游设备为运行期动态枚举，不逐型号列出。
+
 完整逐设备清单（含各形态 VID:PID 与验证状态）见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
 
 **其中 Orochi V2 经实机验证，其余型号基于同族协议移植、尚未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
@@ -161,3 +163,5 @@ git push origin v1.1.0
 - [2.4G 无线设备电量获取](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) — 各品牌 2.4G 私有协议逆向方法论参考
 - [win11React](https://github.com/blueedgetechno/win11React) — WinUI 风格样式参考
 - [WinUIonWeb](https://github.com/Furry-Xiyi/WinUIonWeb) — WinUI 风格样式参考
+- [OpenLogi](https://github.com/AprilNEA/OpenLogi) — 罗技 HID++ 协议 Rust 参考实现（电量特性与 Windows 收发细节）
+- [Solaar](https://github.com/pwr-Solaar/Solaar) — 罗技电量读取路径的权威参考（特性优先级与电压换算表）
