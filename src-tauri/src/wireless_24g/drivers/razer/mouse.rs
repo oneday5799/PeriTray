@@ -102,6 +102,7 @@ static DEVICES: &[RazerDev] = &[
     dev!(0x00D3, "Razer Basilisk Mobile", TXID_NEW, WAIT_NEW_MS), // 有线
     dev!(0x00BF, "Razer DeathAdder V4 Pro", TXID_NEW, WAIT_NEW_MS), // 无线
     dev!(0x00BE, "Razer DeathAdder V4 Pro", TXID_NEW, WAIT_NEW_MS), // 有线
+    dev!(0x00C0, "Razer Viper V3 Pro", TXID_NEW, WAIT_NEW_MS),    // 有线（注意：无线为 60ms）
     dev!(
         0x00C8,
         "Razer Pro Click V2 Vertical Edition",

@@ -86,10 +86,12 @@ PeriphMonitor/
 
 **电量获取（实验性）**：在设置页开启「2.4G 设备电量」后，应用会通过接收器暴露的厂商自定义 HID 接口（Feature Report）查询设备电量，后台缓存刷新、不阻塞设备列表；点击设备信息页顶部的刷新按钮会绕过缓存强制现查连接状态与电量（设备休眠时可能需数秒）。
 
-已收录雷蛇全系支持电量上报的无线设备（约 70 个 VID/PID）：
+已收录雷蛇全系支持电量上报的无线设备（共 76 个 VID/PID）：
 
 - **鼠标**（64 个 PID）：Orochi V2、Atheris、Pro Click 全系、Viper V2/V3 Pro、Viper V3 HyperSpeed、Viper Mini SE、Viper Ultimate、DeathAdder V2-V4 Pro、DeathAdder V3 HyperSpeed、Basilisk V3 Pro/X HyperSpeed/35K 系列、Naga Pro/V2 Pro/V2 HyperSpeed、Cobra Pro、Mamba/Lancehead/Mamba 2012 等系列的有线与 2.4G 形态
 - **键盘**（12 个 PID）：BlackWidow V3/V4 Mini HyperSpeed、BlackWidow V3 Pro、BlackWidow V4 Tenkeyless HyperSpeed、DeathStalker V2 Pro（含 TKL 版）的有线与 2.4G 形态
+
+完整逐设备清单（含各形态 VID:PID 与验证状态）见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
 
 **其中 Orochi V2 经实机验证，其余型号基于同族协议移植、尚未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
 
