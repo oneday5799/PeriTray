@@ -71,8 +71,13 @@ pub struct Config {
     /// 日志级别："off"/"standard"/"verbose"
     #[serde(default = "default_log_level")]
     pub log_level: String,
-    /// 旧版布尔日志开关迁移承接（迁移后置空，不再序列化）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// 旧版布尔日志开关迁移承接（字段名经 alias 兼容旧键 log_enabled；
+    /// 迁移后置空，不再序列化）
+    #[serde(
+        default,
+        alias = "log_enabled",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub legacy_log_enabled: Option<bool>,
     #[serde(default)]
     pub log_retention: LogRetention,
@@ -236,11 +241,14 @@ pub fn init_config() {
             Ok(content) => match toml::from_str(&content) {
                 Ok(config) => config,
                 Err(e) => {
+                    // stderr 直出：日志门控依赖本文件解析成功，失败时必须可见
+                    eprintln!("[config] parse error: {}", e);
                     crate::process::append_log(&format!("[config] parse error: {}", e));
                     Config::default()
                 }
             },
             Err(e) => {
+                eprintln!("[config] load failed (using defaults): {}", e);
                 crate::process::append_log(&format!(
                     "[config] load failed (using defaults): {}",
                     e
@@ -249,12 +257,15 @@ pub fn init_config() {
             }
         }
     };
-    let mut guard = crate::state::lock_unpoisoned(CONFIG.get().unwrap());
-    *guard = config;
-    sync_log_cache(&guard);
-
+    {
+        let mut guard = crate::state::lock_unpoisoned(CONFIG.get().unwrap());
+        *guard = config;
+        sync_log_cache(&guard);
+    }
     // 旧版布尔日志开关一次性迁移（true→标准 / false→关闭），
-    // 消费 legacy 字段并立即持久化，防止每次启动重复映射
+    // 消费 legacy 字段并立即持久化，防止每次启动重复映射。
+    // 注意：此处必须在上方 guard 作用域结束后执行，否则 CONFIG
+    // 重入加锁将死锁（with_config 系列会再次锁定）。
     if with_config(|c| c.legacy_log_enabled.is_some()) {
         with_config_mut(|c| {
             let to_standard = c.legacy_log_enabled == Some(true);
