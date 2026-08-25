@@ -58,6 +58,7 @@ function initAboutTab() {
     "about-homepage": "https://github.com/oneday5799/PeriphMonitor",
     "about-help": "https://github.com/oneday5799/PeriphMonitor/issues",
     "about-feedback": "https://github.com/oneday5799/PeriphMonitor/issues",
+    "about-24g-devices": "https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8",
     "about-pr": "https://github.com/oneday5799/PeriphMonitor/pulls"
   };
   Object.entries(links).forEach(([id, url]) => {
