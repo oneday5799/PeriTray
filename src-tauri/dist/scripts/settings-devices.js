@@ -202,12 +202,6 @@ function initDeviceFilterTab() {
     set: (v) => { config.use_system_bt = v; }
   });
 
-  bindToggle("toggle-24g-battery", {
-    get: () => config.enable_24g_battery,
-    set: (v) => { config.enable_24g_battery = v; },
-    onChange: async () => { await loadDevicesAsync(); }
-  });
-
   // Open 2.4G device list button
   document.getElementById("btn-add-24g").addEventListener("click", async () => {
     try {

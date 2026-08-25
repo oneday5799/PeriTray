@@ -107,7 +107,7 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
         }
     }
 
-    // 实验性：2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
+    // 2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
     fill_24g_battery(&mut all, pnp_24g_pairs, fresh_24g);
 
     crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
@@ -316,12 +316,12 @@ fn query_battery_devices(
     }
 }
 
-/// 实验性：将 2.4G 接收器缓存电量填入设备列表（开关关闭时整体旁路）。
+/// 将 2.4G 接收器缓存电量填入设备列表。
 /// 默认只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成；
 /// fresh=true 时同步现查（手动刷新按钮，耗时约 0.5~2 秒）。
 fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: bool) {
     // 入口可见性：列出本次发现的全部 2.4G 实体与驱动支持判定——
-    // 「设备为什么没电量」的第一层证据，不受实验开关状态影响；
+    // 「设备为什么没电量」的第一层证据；
     // 内容变化时才输出，避免托盘轮询反复刷屏
     if !pairs.is_empty() {
         let mut uniq = pairs.clone();
@@ -355,8 +355,7 @@ fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: boo
         .into_iter()
         .filter(|(v, p)| crate::wireless_24g::supported(v, p))
         .collect();
-    let enabled = config::with_config(|c| c.enable_24g_battery);
-    if !enabled || supported.is_empty() {
+    if supported.is_empty() {
         return;
     }
 
