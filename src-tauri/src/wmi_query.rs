@@ -320,6 +320,37 @@ fn query_battery_devices(
 /// 默认只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成；
 /// fresh=true 时同步现查（手动刷新按钮，耗时约 0.5~2 秒）。
 fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: bool) {
+    // 入口可见性：列出本次发现的全部 2.4G 实体与驱动支持判定——
+    // 「设备为什么没电量」的第一层证据，不受实验开关状态影响；
+    // 内容变化时才输出，避免托盘轮询反复刷屏
+    if !pairs.is_empty() {
+        let mut uniq = pairs.clone();
+        uniq.sort();
+        uniq.dedup();
+        let summary = uniq
+            .iter()
+            .map(|(v, p)| {
+                format!(
+                    "{v}:{p}{}",
+                    if crate::wireless_24g::supported(v, p) {
+                        "✓"
+                    } else {
+                        "✗未收录"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        static LAST_SUMMARY: std::sync::OnceLock<Mutex<String>> = std::sync::OnceLock::new();
+        let last = LAST_SUMMARY.get_or_init(|| Mutex::new(String::new()));
+        let mut guard = crate::state::lock_unpoisoned(last);
+        if *guard != summary {
+            *guard = summary.clone();
+            drop(guard);
+            crate::process::append_log(&format!("[24g] 管线实体: {}", summary));
+        }
+    }
+
     let supported: Vec<_> = pairs
         .into_iter()
         .filter(|(v, p)| crate::wireless_24g::supported(v, p))

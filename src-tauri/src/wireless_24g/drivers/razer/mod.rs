@@ -75,7 +75,14 @@ fn read_battery_level(vid: u16, pid: u16, txid: u8, wait_ms: u64) -> Result<i32,
         let detail = paths
             .iter()
             .enumerate()
-            .map(|(i, p)| format!("#{}/page={:#06X}", i + 1, p.usage_page))
+            .map(|(i, p)| {
+                format!(
+                    "#{}/page={:#06X}/ifc={}",
+                    i + 1,
+                    p.usage_page,
+                    p.interface_number
+                )
+            })
             .collect::<Vec<_>>()
             .join(" ");
         crate::process::append_verbose_log(&format!(
@@ -102,10 +109,11 @@ fn read_battery_level(vid: u16, pid: u16, txid: u8, wait_ms: u64) -> Result<i32,
                 Ok(resp) => {
                     if crate::config::verbose_log_enabled() {
                         crate::process::append_verbose_log(&format!(
-                            "[24g:dbg] 路径 {}/{} (page={:#06X}) 响应: {}",
+                            "[24g:dbg] 路径 {}/{} (page={:#06X},ifc={}) 响应: {}",
                             i + 1,
                             paths.len(),
                             p.usage_page,
+                            p.interface_number,
                             hex_prefix(&resp)
                         ));
                     }
@@ -115,10 +123,11 @@ fn read_battery_level(vid: u16, pid: u16, txid: u8, wait_ms: u64) -> Result<i32,
                             last_err = e.clone();
                             if crate::config::verbose_log_enabled() {
                                 crate::process::append_verbose_log(&format!(
-                                    "[24g:dbg] 路径 {}/{} (page={:#06X}) 解析失败: {}",
+                                    "[24g:dbg] 路径 {}/{} (page={:#06X},ifc={}) 解析失败: {}",
                                     i + 1,
                                     paths.len(),
                                     p.usage_page,
+                                    p.interface_number,
                                     e
                                 ));
                             }
@@ -129,10 +138,11 @@ fn read_battery_level(vid: u16, pid: u16, txid: u8, wait_ms: u64) -> Result<i32,
                     last_err = e.clone();
                     if crate::config::verbose_log_enabled() {
                         crate::process::append_verbose_log(&format!(
-                            "[24g:dbg] 路径 {}/{} (page={:#06X}) 收发失败: {}",
+                            "[24g:dbg] 路径 {}/{} (page={:#06X},ifc={}) 收发失败: {}",
                             i + 1,
                             paths.len(),
                             p.usage_page,
+                            p.interface_number,
                             e
                         ));
                     }

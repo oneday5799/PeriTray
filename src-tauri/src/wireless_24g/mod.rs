@@ -146,7 +146,12 @@ pub fn snapshot(
                 stale.len()
             ));
             std::thread::spawn(move || {
+                let started = std::time::Instant::now();
                 refresh_worker(stale);
+                crate::process::append_log(&format!(
+                    "[24g] 后台刷新耗时 {}ms",
+                    started.elapsed().as_millis()
+                ));
                 REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
             });
         } else {
@@ -235,6 +240,7 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
     }
 
     crate::process::append_log(&format!("[24g] 强制刷新开始: {} 台", pairs.len()));
+    let started = std::time::Instant::now();
     let mut result = HashMap::new();
     let (mut ok, mut fail) = (0, 0);
     let mut any_changed = false;
@@ -251,7 +257,12 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
         notify_battery_changed();
     }
     REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
-    crate::process::append_log(&format!("[24g] 强制刷新结束: 成功 {} 失败 {}", ok, fail));
+    crate::process::append_log(&format!(
+        "[24g] 强制刷新结束(耗时 {}ms): 成功 {} 失败 {}",
+        started.elapsed().as_millis(),
+        ok,
+        fail
+    ));
     result
 }
 

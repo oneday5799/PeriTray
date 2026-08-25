@@ -25,6 +25,8 @@ pub struct HidPath {
     pub usage_page: u16,
     /// Usage
     pub usage: u16,
+    /// USB 接口号（未验证设备的接口差异定位）
+    pub interface_number: i32,
 }
 
 impl HidLink {
@@ -49,6 +51,7 @@ impl HidLink {
                     path: dev.path().to_string_lossy().into_owned(),
                     usage_page: dev.usage_page(),
                     usage: dev.usage(),
+                    interface_number: dev.interface_number(),
                 };
                 match (hp.usage_page, hp.usage) {
                     (page, _) if page >= 0xFF00 => vendor.push(hp),
