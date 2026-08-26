@@ -5,6 +5,7 @@
 // 驱动同时以 identities() 声明设备身份（名称/类型），作为
 // 识别注册表（device_data）的编译期内置数据源。
 
+pub(crate) mod aula;
 pub(crate) mod logitech;
 pub(crate) mod razer;
 
@@ -39,6 +40,7 @@ pub static DRIVERS: &[&dyn BatteryDriver] = &[
     &razer::mouse::RAZER_MOUSE,
     &razer::keyboard::RAZER_KEYBOARD,
     &logitech::LOGITECH,
+    &aula::AULA,
 ];
 
 /// 在注册表中查找支持该 VID/PID 的驱动
