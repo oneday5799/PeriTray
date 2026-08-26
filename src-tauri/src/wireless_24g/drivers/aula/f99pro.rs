@@ -3,17 +3,16 @@
 // 协议事实转录自 aula-x99-pro-driver-linux 的 PROTOCOL.md 与参考实现；
 // 仅支持 2.4G 无线模式（有线固件为另一套 feature report 协议且电量 N/A）。
 //
-// 传输层选择：
-// 参考实现用 write()/read()（中断端点），但在 Windows 上 AULA 接收器的
-// 键盘 HID 接口中断 OUT 端点被系统 kbdclass 驱动独占，导致
-// WriteFile 拒绝访问（ERROR_ACCESS_DENIED 0x00000005）。
-// 改用 send_feature_report()/get_feature_report()（控制端点）绕过独占，
-// 与罗技驱动对齐——控制端点不走中断端点，不受 kbdclass 独占影响。
+// 传输层选择（Windows 实测迭代）：
+// 1. write()/read_timeout()（中断端点）→ ACCESS_DENIED：kbdclass 独占中断 OUT
+// 2. send_feature_report()/get_feature_report()（控制端点）→ INVALID_FUNCTION：
+//    设备 HID 描述符不含 Feature Report 定义
+// 3. send_output_report()/read_timeout()（当前）→ send_output_report 走控制端点
+//    （HidD_SetOutputReport，绕过 kbdclass），read_timeout 走中断 IN（已验证可达）。
 //
 // 收发模式：
-// Feature Report 是请求-响应对（控制端点），不存在中断端点的残留帧队列，
-// 无需 drain。采用固定 sleep + 单次读取（与 hid_link::exchange 同款策略），
-// 避免 get_feature_report 在 Windows 上无限阻塞（overlapped.get_result(None)）。
+// Output Report 是单次命令（控制端点），无残留帧队列，无需 drain。
+// 固定300ms sleep + 单次 read_timeout 读取（与 hid_link::exchange 同款策略）。
 
 use std::time::Duration;
 
@@ -32,19 +31,23 @@ const PACKET_SIZE: usize = 20;
 const CMD_GET_VERSION: u8 = 0x0B;
 /// 应答首页页索引
 const PAGE_INDEX_FIRST: u8 = 0x00;
-/// Feature Report 缓冲长（Report ID 1 字节 + 有效载荷）
-const FEATURE_BUF_LEN: usize = 1 + PACKET_SIZE;
+/// Output Report 缓冲长（Report ID 1 字节 + 有效载荷）
+const OUTPUT_BUF_LEN: usize = 1 + PACKET_SIZE;
+/// read_timeout 缓冲长（Windows hidapi 可能附加 0x0 前缀，多留余量）
+const READ_BUF_LEN: usize = 64;
 /// 发送后等待固件处理的固定时长（参考实现：write 后 300ms sleep）
 const RESPONSE_WAIT_MS: u64 = 300;
+/// read_timeout 单次超时
+const READ_TIMEOUT_MS: i32 = 500;
 
 /// 读取电量百分比。
 /// - `Ok(Some(pct))`：无线连接态的有效电量
 /// - `Ok(None)`：设备在线但处于非无线连接态（conn_type != 0x01）
-/// - `Err`：枚举/打开/收发失败等原因
+/// - `Err`：全部候选均失败
 pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
     let paths = link.enumerate_paths(VID, PID)?;
     crate::process::append_verbose_log(&format!(
-        "[24g:dbg] AULA {:04X}:{:04X} 枚举到 {} 个候选集合（Feature Report 模式）",
+        "[24g:dbg] AULA {:04X}:{:04X} 枚举到 {} 个候选集合（Output Report 模式）",
         VID,
         PID,
         paths.len()
@@ -73,6 +76,12 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
             Ok(Some(pct)) => return Ok(Some(pct)),
             Ok(None) => return Err("非无线连接态，电量不可用".to_string()),
             Err(e) => {
+                crate::process::append_verbose_log(&format!(
+                    "[24g:dbg] 集合 {}/{} 协议交互失败: {}",
+                    i + 1,
+                    paths.len(),
+                    e
+                ));
                 last_err = e;
             }
         }
@@ -82,11 +91,15 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
 
 // ── 协议细节 ────────────────────────────────────────────
 //
-// Feature Report 收发缓冲格式（Windows hidapi）：
-//   发送：send_feature_report([REPORT_ID, payload...])
-//   接收：get_feature_report(buf) → buf[0]=REPORT_ID（回写），buf[1..]=payload
+// Output Report 发送缓冲格式（Windows hidapi）：
+//   send_output_report([REPORT_ID, payload...]) → HidD_SetOutputReport（控制端点）
 //
-// 有效载荷布局（20 字节，偏移相对于 payload 起始）：
+// 响应读取：
+//   read_timeout(buf, timeout) → ReadFile（中断 IN 端点）
+//   Windows hidapi 对 buf[0]==0x0 自动剥除 Report ID 前缀；
+//   AULA 用 Report ID 0x13（非零），故 read_timeout 返回 [0x13, payload...] 完整帧。
+//
+// 有效载荷布局（20 字节，偏移相对于 payload 起始，即 buf[1]）：
 //   [0] resp_cmd      响应命令（与请求 CMD 对应）
 //   [1] pages         总页数
 //   [2] page_idx      当前页索引（首页 = 0x00）
@@ -97,40 +110,49 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
 //   [7..18] reserved  保留区
 //   [19] checksum     sum(payload[0..19]) & 0xFF（文档口径存歧义，v1 仅信息性记录）
 
-/// 发送 CMD → 固定等待 → 读取响应 → 提取电量。
-/// Feature Report 是请求-响应对，无残留帧队列，无需 drain。
+/// 发送 Output Report → 固定等待 → read_timeout 读取响应 → 提取电量。
 fn query_battery(dev: &HidDevice) -> Result<Option<i32>, String> {
-    // 发送请求
-    let mut frame = [0u8; FEATURE_BUF_LEN];
+    // 构造请求：Report ID + cmd + 补零
+    let mut frame = [0u8; OUTPUT_BUF_LEN];
     frame[0] = REPORT_ID;
     frame[1] = CMD_GET_VERSION;
-    dev.send_feature_report(&frame)
-        .map_err(|e| format!("Feature Report 写入失败: {e}"))?;
+    dev.send_output_report(&frame)
+        .map_err(|e| format!("Output Report 写入失败: {e}"))?;
     crate::process::append_verbose_log(&format!(
-        "[24g:dbg] Feature Report 已发送: {}",
+        "[24g:dbg] Output Report 已发送: {}",
         hex_prefix(&frame)
     ));
 
-    // 等待固件处理（Feature Report 无超时参数，用固定 sleep 规避无限阻塞）
+    // 等待固件处理
     std::thread::sleep(Duration::from_millis(RESPONSE_WAIT_MS));
 
-    // 读取响应（单次，Feature Report 队列每次仅一帧）
-    let mut buf = [0u8; FEATURE_BUF_LEN];
-    buf[0] = REPORT_ID;
+    // 读取响应（中断 IN 端点，带超时不阻塞）
+    let mut buf = [0u8; READ_BUF_LEN];
     let n = dev
-        .get_feature_report(&mut buf)
-        .map_err(|e| format!("Feature Report 读取失败: {e}"))?;
+        .read_timeout(&mut buf, READ_TIMEOUT_MS)
+        .map_err(|e| format!("读取失败: {e}"))?;
     if n == 0 {
-        return Err("Feature Report 响应为空".to_string());
+        return Err("响应为空（read_timeout 返回0字节）".to_string());
     }
     crate::process::append_verbose_log(&format!(
-        "[24g:dbg] Feature Report 已接收: {}字节 {}",
+        "[24g:dbg] 已接收: {}字节 {}",
         n,
-        hex_prefix(&buf[..n.min(FEATURE_BUF_LEN)])
+        hex_prefix(&buf[..n.min(READ_BUF_LEN)])
     ));
 
-    // buf[1..] = 有效载荷（buf[0] 为 Report ID 回写）
-    let payload = &buf[1..n.min(FEATURE_BUF_LEN)];
+    // 自适应定位 payload：AULA Report ID 0x13 非零，read_timeout 不剥除，
+    // buf[0]=0x13, buf[1..]=payload；若 HID 栈行为异常（buf[0]=0x00），则 buf[0..]=payload
+    let (offset, payload) = if n > 0 && buf[0] == REPORT_ID {
+        (1, &buf[1..n])
+    } else {
+        (0, &buf[..n])
+    };
+    crate::process::append_verbose_log(&format!(
+        "[24g:dbg] Report ID 偏移={}，有效载荷 {} 字节",
+        offset,
+        payload.len()
+    ));
+
     if payload.len() < 8 {
         return Err(format!("有效载荷过短: {} 字节", payload.len()));
     }
@@ -187,9 +209,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn feature_buf_len_sufficient() {
-        assert_eq!(FEATURE_BUF_LEN, 1 + PACKET_SIZE);
-        assert_eq!(FEATURE_BUF_LEN, 21);
+    fn output_buf_len_sufficient() {
+        assert_eq!(OUTPUT_BUF_LEN, 1 + PACKET_SIZE);
+        assert_eq!(OUTPUT_BUF_LEN, 21);
     }
 
     #[test]
