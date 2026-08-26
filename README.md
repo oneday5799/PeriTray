@@ -93,6 +93,8 @@ PeriphMonitor/
 
 **罗技接收器**（Unifying/Lightspeed/Bolt/Nano，PID 范围启发识别）：采用单下游简化——接收器仅有一台在线设备时显示其名称与电量；多设备接收器暂不支持。下游设备为运行期动态枚举，不逐型号列出。
 
+**AULA 键盘**（F75 Max / F99 Pro·X99 Pro 无线模式）：仅支持 2.4G 接收器模式的电量读取；F75 Max dongle（05AC:024F）与 F99 Pro 系接收器（3554:FA09）均为专用单设备，卡片即键盘本体。有线模式固件不支持电量，不收录。
+
 完整逐设备清单（含各形态 VID:PID 与验证状态）见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
 
 **其中 Orochi V2 经实机验证，其余型号基于同族协议移植、尚未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
