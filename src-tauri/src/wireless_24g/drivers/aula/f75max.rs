@@ -51,10 +51,11 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
             Ok(d) => d,
             Err(e) => {
                 crate::process::append_verbose_log(&format!(
-                    "[24g:dbg] 集合 {}/{} 打开失败: {}",
+                    "[24g:dbg] 集合 {}/{} 打开失败: {} | 路径 {}",
                     i + 1,
                     candidates.len(),
-                    e
+                    e,
+                    p.path
                 ));
                 continue;
             }
