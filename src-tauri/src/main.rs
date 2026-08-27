@@ -21,6 +21,7 @@ mod update;
 mod windows;
 mod wireless_24g;
 mod wmi_query;
+mod xinput;
 
 use std::panic;
 

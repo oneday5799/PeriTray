@@ -28,6 +28,8 @@ use tauri::Emitter;
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// 失败负缓存的有效期（避免对休眠设备反复敲门）
 const NEG_TTL: Duration = Duration::from_secs(60);
+/// Microsoft VID：Xbox 360 / Xbox One 手柄（XInput 模式）
+const MS_VID: u16 = 0x045E;
 
 static CACHE: OnceLock<Mutex<HashMap<(String, String), CacheEntry>>> = OnceLock::new();
 /// 后台刷新线程单飞标记（防止多轮列表刷新并发查询）
@@ -247,28 +249,57 @@ fn query_and_cache(key: &(String, String)) -> QueryOutcome {
     let Some((v, p)) = parse_hex(&key.0).zip(parse_hex(&key.1)) else {
         return invalid;
     };
-    let Some(driver) = drivers::find_driver(v, p) else {
-        return invalid;
-    };
-    // 日志优先带设备名，便于社区反馈定位
-    let label = match driver.device_name(v, p) {
-        Some(name) => format!("{} ({:04X}:{:04X})", name, v, p),
-        None => format!("{:04X}:{:04X}", v, p),
-    };
-    let result = driver.read_battery(v, p);
-    match &result {
-        Ok(lv) => crate::process::append_log(&format!("[24g] {} 电量 {}%", label, lv)),
-        Err(e) => crate::process::append_log(&format!("[24g] {} 查询失败: {}", label, e)),
+
+    // XInput 设备走独立路径（XInputDriver 的 read_battery 是空桩）
+    if v == MS_VID {
+        let result = match crate::xinput::scan_battery() {
+            Some(pct) => Ok(pct),
+            None => Err("XInput 无可用控制器".to_string()),
+        };
+        match &result {
+            Ok(lv) => crate::process::append_log(&format!(
+                "[24g] XInput {:04X}:{:04X} 电量 {}%",
+                v, p, lv
+            )),
+            Err(e) => crate::process::append_verbose_log(&format!(
+                "[24g:dbg] XInput {:04X}:{:04X} 查询失败: {}",
+                v, p, e
+            )),
+        }
+        let mut guard = crate::state::lock_unpoisoned(cache());
+        let (entry, changed) = apply_result(guard.get(key), &result);
+        let outcome = QueryOutcome {
+            level: entry.level,
+            changed,
+            queried_ok: result.is_ok(),
+        };
+        guard.insert(key.clone(), entry);
+        return outcome;
     }
-    let mut guard = crate::state::lock_unpoisoned(cache());
-    let (entry, changed) = apply_result(guard.get(key), &result);
-    let outcome = QueryOutcome {
-        level: entry.level,
-        changed,
-        queried_ok: result.is_ok(),
-    };
-    guard.insert(key.clone(), entry);
-    outcome
+
+    // 标准 HID 驱动查找
+    if let Some(driver) = drivers::find_driver(v, p) {
+        let label = match driver.device_name(v, p) {
+            Some(name) => format!("{} ({:04X}:{:04X})", name, v, p),
+            None => format!("{:04X}:{:04X}", v, p),
+        };
+        let result = driver.read_battery(v, p);
+        match &result {
+            Ok(lv) => crate::process::append_log(&format!("[24g] {} 电量 {}%", label, lv)),
+            Err(e) => crate::process::append_log(&format!("[24g] {} 查询失败: {}", label, e)),
+        }
+        let mut guard = crate::state::lock_unpoisoned(cache());
+        let (entry, changed) = apply_result(guard.get(key), &result);
+        let outcome = QueryOutcome {
+            level: entry.level,
+            changed,
+            queried_ok: result.is_ok(),
+        };
+        guard.insert(key.clone(), entry);
+        return outcome;
+    }
+
+    invalid
 }
 
 /// 强制刷新路径（手动刷新按钮）：在调用方阻塞线程中同步逐台现查并返回最新值。

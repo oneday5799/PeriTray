@@ -9,6 +9,7 @@ pub(crate) mod aula;
 pub(crate) mod flydigi;
 pub(crate) mod logitech;
 pub(crate) mod razer;
+pub(crate) mod xinput;
 
 /// 驱动声明的设备身份：识别注册表的编译期内置数据源。
 /// dev_type 与历史 JSON 口径一致："mouse"/"keyboard"/"audio"/"other"
@@ -43,6 +44,7 @@ pub static DRIVERS: &[&dyn BatteryDriver] = &[
     &logitech::LOGITECH,
     &aula::AULA,
     &flydigi::FLYDIGI,
+    &xinput::XINPUT,
 ];
 
 /// 在注册表中查找支持该 VID/PID 的驱动
