@@ -131,6 +131,12 @@ function initDeviceFilterTab() {
   const filterArrow = document.getElementById("arrow-filter");
   const filterCard = document.getElementById("filter-card");
 
+  bindToggle("toggle-wireless-only", {
+    get: () => config.wireless_only,
+    set: (v) => { config.wireless_only = v; },
+    onChange: async () => { await loadDevicesAsync(); }
+  });
+
   // Filter regex input
   const regexInput = document.getElementById("filter-regex");
   regexInput.value = config.filter_regex || "";

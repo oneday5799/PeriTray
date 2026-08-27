@@ -390,6 +390,11 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         update_auto_text();
         update_tray_icon();
         update_audio_devices_menu();
+        // config 变更时立即刷新设备缓存和 tooltip（异步避免阻塞主线程）
+        std::thread::spawn(|| {
+            refresh_devices_cache();
+            update_tooltip();
+        });
     });
 
     app.listen("tray-devices-changed", move |_| {

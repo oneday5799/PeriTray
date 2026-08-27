@@ -64,6 +64,8 @@ pub struct Config {
     pub dedup_devices: bool,
     pub show_unnamed_bt: bool,
     pub use_system_bt: bool,
+    #[serde(default = "default_true")]
+    pub wireless_only: bool,
     #[serde(default)]
     pub tray_devices: Vec<String>,
     #[serde(default)]
@@ -149,6 +151,7 @@ impl Default for Config {
             dedup_devices: true,
             show_unnamed_bt: false,
             use_system_bt: false,
+            wireless_only: true,
             tray_devices: vec![],
             hidden_audio_devices: vec![],
             log_level: default_log_level(),

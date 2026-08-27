@@ -58,8 +58,15 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
 
     crate::device_data::reload_device_data();
 
-    let (filter_enabled, dedup_enabled, filter_regex_str) =
-        config::with_config(|c| (c.filter_enabled, c.dedup_devices, c.filter_regex.clone()));
+    let (filter_enabled, dedup_enabled, filter_regex_str, wireless_only) =
+        config::with_config(|c| {
+            (
+                c.filter_enabled,
+                c.dedup_devices,
+                c.filter_regex.clone(),
+                c.wireless_only,
+            )
+        });
 
     // 编译正则（在查询前准备，避免查询期间重复编译）
     let re = if filter_enabled && !filter_regex_str.is_empty() {
@@ -85,6 +92,7 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
         &con,
         dedup_enabled,
         re_ref,
+        wireless_only,
         &mut seen,
         &mut all,
         &mut cn_index,
@@ -101,14 +109,17 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
         &mut bt_names,
         &mut cn_index,
     );
-    query_battery_devices(
-        &con,
-        dedup_enabled,
-        re_ref,
-        &mut seen,
-        &mut all,
-        &mut cn_index,
-    );
+    // 电池查询：wireless_only 时跳过（电池设备均为有线 USB）
+    if !wireless_only {
+        query_battery_devices(
+            &con,
+            dedup_enabled,
+            re_ref,
+            &mut seen,
+            &mut all,
+            &mut cn_index,
+        );
+    }
 
     // Temporarily hide status for devices not detected by WinRT Bluetooth API
     for d in &mut all {
@@ -128,6 +139,7 @@ fn query_pnp_devices(
     con: &WMIConnection,
     dedup: bool,
     re: Option<&Regex>,
+    wireless_only: bool,
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
@@ -218,6 +230,10 @@ fn query_pnp_devices(
         // 收集 2.4G 设备的 VID/PID，供电量缓存模块使用
         if let Some(pair) = vid_pid_24g {
             p24g_pairs.push(pair);
+        }
+        // wireless_only 时只保留 2.4G 设备，跳过有线设备
+        if wireless_only && !is_24g {
+            continue;
         }
         try_insert(
             &n,
