@@ -1,8 +1,7 @@
 // ── 模块职责 ─────────────────────────────────────────────
 // AULA 域驱动：F75 Max（05AC:024F dongle）与 F99 Pro/X99 Pro
 // （3554:FA09 无线接收器）的电量读取，按 VID 分发至各自协议模块。
-// F99 Pro 传输层：write()（WriteFile 中断 OUT）经 vendor 集合（0xFF02）可达，
-// 不被 kbdclass 锁定。详见 Wiki「F99 Pro 排障过程」页。
+// F99 Pro 在 Windows 上暂不支持：write 可达但设备不回复。
 // AULA 接收器为专用单设备——无需槽位扫描/单下游判定。
 
 pub(crate) mod f75max;
