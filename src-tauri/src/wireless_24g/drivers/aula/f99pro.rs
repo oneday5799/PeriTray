@@ -72,6 +72,8 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
             }
         };
 
+        dump_report_descriptor(&dev, i + 1, paths.len(), p.usage_page, p.interface_number);
+
         match query_battery(&dev) {
             Ok(Some(pct)) => return Ok(Some(pct)),
             Ok(None) => return Err("非无线连接态，电量不可用".to_string()),
@@ -87,6 +89,107 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
         }
     }
     Err(last_err)
+}
+
+// ── 诊断 ────────────────────────────────────────────────
+
+/// 转储 HID Report Descriptor（诊断用）。
+/// Windows hidapi 从 PreparsedData 重建描述符，功能等价于原始 USB 描述符。
+const DESC_BUF_SIZE: usize = 512;
+
+fn dump_report_descriptor(
+    dev: &HidDevice,
+    idx: usize,
+    total: usize,
+    usage_page: u16,
+    interface_number: i32,
+) {
+    let mut buf = [0u8; DESC_BUF_SIZE];
+    match dev.get_report_descriptor(&mut buf) {
+        Ok(n) => {
+            // 按行输出（每行16字节）
+            let hex_lines: Vec<String> = buf[..n]
+                .chunks(16)
+                .enumerate()
+                .map(|(row, chunk)| {
+                    let hex: String = chunk
+                        .iter()
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    format!("  {:04X}: {}", row * 16, hex)
+                })
+                .collect();
+            crate::process::append_verbose_log(&format!(
+                "[24g:dbg] 集合 {}/{} (page={:#06X},ifc={}) Report Descriptor {}字节:\n{}",
+                idx,
+                total,
+                usage_page,
+                interface_number,
+                n,
+                hex_lines.join("\n")
+            ));
+
+            // 扫描 Report ID 0x13 出现位置及关联的 Report Type
+            let desc = &buf[..n];
+            let mut rid_positions = Vec::new();
+            let mut i = 0;
+            while i < desc.len() {
+                let byte = desc[i];
+                let _item_type = (byte & 0x03) as u8;
+                let _item_tag = (byte & 0x0C) >> 2;
+                let item_size = match byte & 0x03 {
+                    0 => 0,
+                    1 => 1,
+                    2 => 2,
+                    3 => 4,
+                    _ => 0,
+                };
+                // Long Item (0xFE) 跳过
+                if byte == 0xFE && i + 1 < desc.len() {
+                    let long_size = desc[i + 1] as usize;
+                    i += 3 + long_size;
+                    continue;
+                }
+                if i + 1 + item_size <= desc.len() {
+                    let payload = &desc[i + 1..i + 1 + item_size];
+                    // Usage Page (Main item type 0, tag 0) = 0x05/0x06
+                    // Report ID (Global item type 1, tag 8) = 0x85
+                    // Report Count (Global item type 1, tag 9) = 0x95/0x96
+                    // Report Size (Global item type 1, tag 7) = 0x75/0x76
+                    // Output (Main item type 0, tag 9) = 0x91/0x92
+                    // Input (Main item type 0, tag 8) = 0x81/0x82
+                    // Feature (Main item type 2, tag 9) = 0xB1/0xB2
+                    if byte == 0x85 && item_size >= 1 && payload[0] == REPORT_ID {
+                        rid_positions.push(i);
+                    }
+                }
+                i += 1 + item_size;
+            }
+            if rid_positions.is_empty() {
+                crate::process::append_verbose_log(&format!(
+                    "[24g:dbg] Report ID {:#04X} 未在描述符中找到定义",
+                    REPORT_ID
+                ));
+            } else {
+                crate::process::append_verbose_log(&format!(
+                    "[24g:dbg] Report ID {:#04X} 在描述符偏移 {} 处找到",
+                    REPORT_ID,
+                    rid_positions
+                        .iter()
+                        .map(|p| format!("{p:#06X}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        Err(e) => {
+            crate::process::append_verbose_log(&format!(
+                "[24g:dbg] 集合 {}/{} (page={:#06X},ifc={}) Report Descriptor 读取失败: {}",
+                idx, total, usage_page, interface_number, e
+            ));
+        }
+    }
 }
 
 // ── 协议细节 ────────────────────────────────────────────
