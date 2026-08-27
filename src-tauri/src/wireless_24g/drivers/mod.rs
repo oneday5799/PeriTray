@@ -6,6 +6,7 @@
 // 识别注册表（device_data）的编译期内置数据源。
 
 pub(crate) mod aula;
+pub(crate) mod flydigi;
 pub(crate) mod logitech;
 pub(crate) mod razer;
 
@@ -41,6 +42,7 @@ pub static DRIVERS: &[&dyn BatteryDriver] = &[
     &razer::keyboard::RAZER_KEYBOARD,
     &logitech::LOGITECH,
     &aula::AULA,
+    &flydigi::FLYDIGI,
 ];
 
 /// 在注册表中查找支持该 VID/PID 的驱动
