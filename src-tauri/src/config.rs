@@ -181,7 +181,7 @@ impl Default for Config {
 impl Config {
     /// Combined regex for all device exclusion filters (case-insensitive)
     fn default_filter_regex() -> String {
-        "Virtual|虚拟|^HID|Audio Device|Audio 设备|Hands-Free|A2DP|gvinput Device|英特尔\\(R\\)"
+        "Virtual|虚拟|^HID|^符合 HID|Audio Device|Audio 设备|Hands-Free|A2DP|gvinput Device|英特尔\\(R\\)|^NVIDIA"
             .to_string()
     }
 }

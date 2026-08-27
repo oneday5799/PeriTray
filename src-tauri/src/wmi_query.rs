@@ -61,6 +61,14 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
     let (filter_enabled, dedup_enabled, filter_regex_str) =
         config::with_config(|c| (c.filter_enabled, c.dedup_devices, c.filter_regex.clone()));
 
+    // 编译正则（在查询前准备，避免查询期间重复编译）
+    let re = if filter_enabled && !filter_regex_str.is_empty() {
+        get_cached_regex(&filter_regex_str)
+    } else {
+        None
+    };
+    let re_ref = re.as_deref();
+
     let com = unsafe { wmi::COMLibrary::assume_initialized() };
     let con = match WMIConnection::new(com) {
         Ok(c) => c,
@@ -76,6 +84,7 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
     if let Err(e) = query_pnp_devices(
         &con,
         dedup_enabled,
+        re_ref,
         &mut seen,
         &mut all,
         &mut cn_index,
@@ -86,19 +95,20 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
     }
     query_bt_devices(
         dedup_enabled,
+        re_ref,
         &mut seen,
         &mut all,
         &mut bt_names,
         &mut cn_index,
     );
-    query_battery_devices(&con, dedup_enabled, &mut seen, &mut all, &mut cn_index);
-
-    // Apply user-defined regex filter
-    if filter_enabled && !filter_regex_str.is_empty() {
-        if let Some(re) = get_cached_regex(&filter_regex_str) {
-            all.retain(|d| !re.is_match(&d.name));
-        }
-    }
+    query_battery_devices(
+        &con,
+        dedup_enabled,
+        re_ref,
+        &mut seen,
+        &mut all,
+        &mut cn_index,
+    );
 
     // Temporarily hide status for devices not detected by WinRT Bluetooth API
     for d in &mut all {
@@ -117,6 +127,7 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
 fn query_pnp_devices(
     con: &WMIConnection,
     dedup: bool,
+    re: Option<&Regex>,
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
@@ -218,6 +229,7 @@ fn query_pnp_devices(
             false,
             is_24g,
             dedup,
+            re,
             seen,
             all,
             cn_index,
@@ -228,6 +240,7 @@ fn query_pnp_devices(
 
 fn query_bt_devices(
     dedup: bool,
+    re: Option<&Regex>,
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     bt_names: &mut HashSet<String>,
@@ -241,6 +254,12 @@ fn query_bt_devices(
     for (name, connected, battery, device_id) in btc_devices {
         if name.is_empty() {
             continue;
+        }
+        // 正则匹配原始名（core_name 之前），命中即跳过
+        if let Some(re) = re {
+            if re.is_match(&name) {
+                continue;
+            }
         }
         let dt = match classify_bluetooth(&name) {
             Some(dt) => dt,
@@ -275,6 +294,7 @@ fn query_bt_devices(
                 true,
                 false,
                 dedup,
+                re,
                 seen,
                 all,
                 cn_index,
@@ -286,6 +306,7 @@ fn query_bt_devices(
 fn query_battery_devices(
     con: &WMIConnection,
     dedup: bool,
+    re: Option<&Regex>,
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
@@ -295,6 +316,12 @@ fn query_battery_devices(
             let (n, s) = (d.name.unwrap_or_default(), d.status.unwrap_or_default());
             if n.is_empty() {
                 continue;
+            }
+            // 正则匹配原始名（core_name 之前），命中即跳过
+            if let Some(re) = re {
+                if re.is_match(&n) {
+                    continue;
+                }
             }
             let cn = core_name(&n);
             if dedup && seen.contains(&format!("{}:usb", cn)) {

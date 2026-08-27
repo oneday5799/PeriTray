@@ -1,4 +1,5 @@
 use crate::device::{DevType, Device};
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
 /// 取设备名括号内核心名并剥离蓝牙协议后缀（Hands-Free/Stereo/LE/Audio 等），用于重名合并。
@@ -52,10 +53,18 @@ pub fn try_insert(
     is_bluetooth: bool,
     is_wireless_24g: bool,
     dedup: bool,
+    re: Option<&Regex>,
     seen: &mut HashSet<String>,
     devices: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
 ) {
+    // 正则匹配原始名（core_name 之前），命中即丢弃
+    if let Some(re) = re {
+        if re.is_match(name) {
+            return;
+        }
+    }
+
     let effective_name = display_name.unwrap_or(name);
     let cn = if display_name.is_some() {
         effective_name.to_string()
