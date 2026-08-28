@@ -507,6 +507,24 @@
         </div>
       </div>
 
+      <div class="card expandable" id="low-battery-card">
+        <div class="card-left">
+          <div class="card-title">低电量通知
+            <span class="tooltip-trigger" data-tip="当无线设备电量达到阈值时弹出 Windows 系统通知。需手动选择要监听的设备，未选择任何设备时不发送通知。">?</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-low-battery">
+            <span class="slider"></span>
+          </label>
+          <div class="card-arrow" id="arrow-low-battery">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="low-battery-items"></div>
+      </div>
+
       <div class="section-title">设备信息页设备列表</div>
       <div class="device-groups" id="device-groups"></div>
     </div>

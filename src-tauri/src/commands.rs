@@ -47,6 +47,14 @@ pub async fn get_devices_fresh() -> Result<Vec<device::Device>, String> {
     Ok(devices)
 }
 
+/// 返回设备缓存（tray watcher 每轮更新），供设置页等场景避免重复 WMI 查询。
+/// 缓存为空时返回空 vec，调用方应 fallback 到 get_devices。
+#[tauri::command]
+pub fn get_cached_devices() -> Vec<device::Device> {
+    let cache = crate::state::get_devices_cache();
+    crate::state::lock_unpoisoned(&cache).clone()
+}
+
 #[tauri::command]
 pub fn open_settings(app: tauri::AppHandle) {
     crate::windows::open_settings(&app);

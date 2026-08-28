@@ -602,6 +602,7 @@ async function init() {
     initLogSettings();
     initDeviceFilterTab();
     initAboutTab();
+    initLowBatteryNotifyTab();
     initMaterialEffects();
 
     // 跟随系统时，实时响应系统主题切换 → 刷新 flyout 背景颜色
@@ -648,6 +649,7 @@ window.__TAURI__.event.listen("config-changed", async () => {
   await renderShutdownVolumeDevices();
   const listEl = document.getElementById("device-shortcut-list");
   if (listEl) initDeviceShortcutSettings();
+  await renderLowBatteryContent();
   // 材质切换进行中时跳过 initMaterialEffects，避免 data-material 被提前设置
   if (!window.__materialChangeInProgress) {
     initMaterialEffects();

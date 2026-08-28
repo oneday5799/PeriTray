@@ -5,6 +5,7 @@ mod app_icon;
 mod audio;
 mod audio_notify;
 mod audio_spatial;
+mod battery_notify;
 mod bluetooth;
 mod classify;
 mod commands;
@@ -192,6 +193,7 @@ fn main() {
             // 设备列表与配置
             commands::get_devices,
             commands::get_devices_fresh,
+            commands::get_cached_devices,
             commands::get_config,
             commands::get_app_version,
             commands::set_window_theme,

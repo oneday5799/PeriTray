@@ -123,6 +123,14 @@ pub struct Config {
     pub theme_mode: String,
     #[serde(default = "default_window_material")]
     pub window_material: String,
+    #[serde(default)]
+    pub low_battery_notify: bool,
+    #[serde(default)]
+    pub low_battery_devices: Vec<String>,
+    #[serde(default = "default_battery_thresholds")]
+    pub low_battery_thresholds: Vec<i32>,
+    #[serde(default = "default_battery_refresh_secs")]
+    pub low_battery_refresh_secs: u32,
 }
 
 fn default_true() -> bool {
@@ -136,6 +144,12 @@ fn default_theme_mode() -> String {
 }
 fn default_window_material() -> String {
     "default".to_string()
+}
+fn default_battery_thresholds() -> Vec<i32> {
+    vec![15, 10, 5]
+}
+fn default_battery_refresh_secs() -> u32 {
+    10
 }
 
 impl Default for Config {
@@ -177,6 +191,10 @@ impl Default for Config {
             enable_device_shortcut_cycle: false,
             theme_mode: default_theme_mode(),
             window_material: default_window_material(),
+            low_battery_notify: false,
+            low_battery_devices: vec![],
+            low_battery_thresholds: default_battery_thresholds(),
+            low_battery_refresh_secs: default_battery_refresh_secs(),
         }
     }
 }

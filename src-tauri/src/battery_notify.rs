@@ -1,0 +1,90 @@
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
+use crate::config;
+use crate::device::Device;
+
+// ── 去重状态 ──
+// 每个 (设备名, 阈值) 组合只通知一次；重启后清空重新检测
+static NOTIFIED: OnceLock<Mutex<HashSet<(String, i32)>>> = OnceLock::new();
+
+/// 检查设备电量是否达到配置的阈值，命中时弹出 Windows 原生通知。
+/// 由 tray watcher 每轮调用，传入设备缓存快照。
+pub fn check_battery_notify(devices: &[Device]) {
+    let (enabled, selected, thresholds) = config::with_config(|c| {
+        (
+            c.low_battery_notify,
+            c.low_battery_devices.clone(),
+            c.low_battery_thresholds.clone(),
+        )
+    });
+
+    if !enabled || thresholds.is_empty() {
+        return;
+    }
+
+    let notified = NOTIFIED.get_or_init(|| Mutex::new(HashSet::new()));
+    let icon = crate::windows::resolve_toast_icon();
+
+    for d in devices {
+        let Some(level) = d.battery else {
+            continue;
+        };
+
+        // 未选择任何设备 → 不通知
+        if selected.is_empty() {
+            continue;
+        }
+
+        // 指定了设备列表但当前设备不在其中 → 跳过
+        if !selected.contains(&d.name) {
+            continue;
+        }
+
+        // 取用户自定义显示名，无则用原始名
+        let display_name = config::with_config(|c| {
+            c.device_names
+                .get(&d.name)
+                .cloned()
+                .unwrap_or_else(|| d.name.clone())
+        });
+
+        for &threshold in &thresholds {
+            if level <= threshold {
+                // 去重：insert 返回 false 表示已存在（已通知过）
+                if !notified
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert((d.name.clone(), threshold))
+                {
+                    continue;
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    use tauri_winrt_notification::{IconCrop, Toast};
+
+                    let mut toast = Toast::new("com.periph.monitor")
+                        .title("低电量提醒")
+                        .text1(&format!("{} 电量仅剩 {}%", display_name, level));
+
+                    if let Some(ref path) = icon {
+                        toast = toast.icon(path.as_path(), IconCrop::Circular, "");
+                    }
+
+                    if let Err(e) = toast.show() {
+                        crate::process::append_log(&format!(
+                            "[battery-notify] toast failed: {:?}",
+                            e
+                        ));
+                    }
+                }
+
+                crate::process::append_log(&format!(
+                    "[battery-notify] {} 电量 {}% ≤ 阈值 {}%",
+                    display_name, level, threshold
+                ));
+            }
+        }
+    }
+}

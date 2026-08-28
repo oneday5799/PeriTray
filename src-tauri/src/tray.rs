@@ -88,16 +88,28 @@ fn start_device_watcher(app: &tauri::AppHandle) {
 
     let handle = app.clone();
     std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(10));
+        // 每轮重新读取间隔（支持运行时修改）
+        let secs = config::with_config(|c| c.low_battery_refresh_secs.max(10));
+        std::thread::sleep(std::time::Duration::from_secs(secs as u64));
 
-        if !config::with_config(|c| !c.tray_devices.is_empty()) {
+        let has_tray = config::with_config(|c| !c.tray_devices.is_empty());
+        let has_battery_notify = config::with_config(|c| c.low_battery_notify);
+        if !has_tray && !has_battery_notify {
             continue;
         }
 
         let changed = refresh_devices_cache();
-        if changed {
+        if has_tray && changed {
             std::thread::spawn(move || update_tooltip());
             let _ = handle.emit("devices-changed", ());
+        }
+
+        // 低电量通知检查
+        if has_battery_notify {
+            let cache = get_devices_cache();
+            if let Ok(guard) = cache.lock() {
+                crate::battery_notify::check_battery_notify(&guard);
+            }
         }
     });
 }
