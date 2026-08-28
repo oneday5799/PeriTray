@@ -179,6 +179,80 @@ pub fn set_rounded_corners(hwnd: isize) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// AUMID 注册（Windows 通知图标依赖）
+// ═══════════════════════════════════════════════════════════════
+
+const AUMID: &str = "com.periph.monitor";
+
+/// 注册 AUMID 到开始菜单快捷方式，使 Windows 通知显示应用图标。
+/// 已存在同名快捷方式时跳过。
+#[cfg(target_os = "windows")]
+pub fn register_aumid() {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let Ok(exe_path) = std::env::current_exe() else {
+        process::append_verbose_log("[aumid] failed to get exe path");
+        return;
+    };
+    let exe_dir = exe_path.parent().unwrap_or(exe_path.as_path());
+    let exe_str = exe_path.to_string_lossy().replace('\'', "''");
+    let dir_str = exe_dir.to_string_lossy().replace('\'', "''");
+
+    // 查找 icon.ico：优先 exe 同目录（已安装），其次 src-tauri/icons（开发）
+    let ico_path = if exe_dir.join("icon.ico").exists() {
+        exe_dir.join("icon.ico")
+    } else {
+        let dev_ico = exe_dir.join("../../icons/icon.ico");
+        if dev_ico.exists() {
+            dev_ico
+        } else {
+            process::append_verbose_log("[aumid] icon.ico not found, skipping");
+            return;
+        }
+    };
+    let icon_str = ico_path.to_string_lossy().replace('\'', "''");
+
+    // 开始菜单 Programs 目录
+    let ps = format!(
+        r#"
+$programs = [Environment]::GetFolderPath('Programs')
+$shortcutPath = Join-Path $programs 'PeriphMonitor.lnk'
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = '{exe}'
+$shortcut.WorkingDirectory = '{dir}'
+$shortcut.AppUserModelID = '{aumid}'
+$shortcut.IconLocation = '{ico}'
+$shortcut.Save()
+"#,
+        exe = exe_str,
+        dir = dir_str,
+        aumid = AUMID,
+        ico = icon_str,
+    );
+
+    match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+    {
+        Ok(out) => {
+            if out.status.success() {
+                process::append_verbose_log("[aumid] registered successfully");
+            } else {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                process::append_log(&format!("[aumid] registration failed: {}", stderr.trim()));
+            }
+        }
+        Err(e) => process::append_verbose_log(&format!("[aumid] powershell exec error: {}", e)),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn register_aumid() {}
+
+// ═══════════════════════════════════════════════════════════════
 // 窗口材质（Window Material）
 // ═══════════════════════════════════════════════════════════════
 

@@ -240,6 +240,10 @@ fn main() {
             commands::check_material_support,
         ])
         .setup(move |app| {
+            // 注册 AUMID，使 Windows 通知显示应用图标
+            #[cfg(target_os = "windows")]
+            crate::windows::register_aumid();
+
             if let Err(e) = tray::setup_tray(app) {
                 process::append_log(&format!("[main] setup_tray failed: {}", e));
             }
@@ -266,6 +270,7 @@ fn main() {
             if !is_autostart && config::with_config(|c| c.check_updates) {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    crate::process::append_verbose_log("[update] startup check starting");
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     let include = config::with_config(|c| c.include_prerelease);
                     let current_version = app_handle.package_info().version.to_string();
@@ -277,7 +282,57 @@ fn main() {
                             let payload = crate::update::UpdateStatus::from_info(&info, status);
                             let _ = app_handle.emit("update-status", payload);
                             if info.has_update {
-                                let _ = app_handle.emit("update-available", info);
+                                let _ = app_handle.emit("update-available", info.clone());
+                                // Windows 原生通知（带图标 + 点击跳转关于页）
+                                #[cfg(target_os = "windows")]
+                                {
+                                    use tauri_winrt_notification::{IconCrop, Toast};
+
+                                    // 查找图标并复制到 exe 目录，避免 canonicalize 产生的 \\?\ 前缀
+                                    let ico_path = std::env::current_exe().ok().and_then(|p| {
+                                        let dir = p.parent()?;
+                                        let target = dir.join("toast_icon.png");
+                                        for name in &[
+                                            "icon.png",
+                                            "../../icons/128x128@2x.png",
+                                            "../../dist/icon.png",
+                                        ] {
+                                            let src = dir.join(name);
+                                            if src.exists() {
+                                                let _ = std::fs::copy(&src, &target);
+                                                return Some(target);
+                                            }
+                                        }
+                                        None
+                                    });
+
+                                    let app = app_handle.clone();
+                                    let mut toast = Toast::new("com.periph.monitor")
+                                        .title("发现新版本")
+                                        .text1(&format!(
+                                            "发现新版本 v{}，点击查看详情",
+                                            info.latest_version
+                                        ))
+                                        .on_activated(move |_args| {
+                                            crate::process::append_log(
+                                                "[update] toast clicked → open about",
+                                            );
+                                            let app = app.clone();
+                                            std::thread::spawn(move || {
+                                                crate::windows::open_settings_tab(&app, "about");
+                                            });
+                                            Ok(())
+                                        });
+                                    if let Some(ref path) = ico_path {
+                                        toast = toast.icon(path.as_path(), IconCrop::Circular, "");
+                                    }
+                                    if let Err(e) = toast.show() {
+                                        crate::process::append_log(&format!(
+                                            "[update] toast failed: {:?}",
+                                            e
+                                        ));
+                                    }
+                                }
                             }
                         }
                         Err(_) => {
