@@ -58,7 +58,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
                 .inner_size(960.0, 720.0)
                 .resizable(true)
                 .visible(false)
-                .min_inner_size(400.0, 300.0);
+                .min_inner_size(720.0, 420.0);
 
         // 恒透明创建：透明能力在窗口诞生时固化，「默认」材质的不透明观感由 CSS 承担
         builder = builder
