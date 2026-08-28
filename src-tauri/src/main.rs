@@ -288,24 +288,7 @@ fn main() {
                                 {
                                     use tauri_winrt_notification::{IconCrop, Toast};
 
-                                    // 查找图标并复制到 exe 目录，避免 canonicalize 产生的 \\?\ 前缀
-                                    let ico_path = std::env::current_exe().ok().and_then(|p| {
-                                        let dir = p.parent()?;
-                                        let target = dir.join("toast_icon.png");
-                                        for name in &[
-                                            "icon.png",
-                                            "../../icons/128x128@2x.png",
-                                            "../../dist/icon.png",
-                                        ] {
-                                            let src = dir.join(name);
-                                            if src.exists() {
-                                                let _ = std::fs::copy(&src, &target);
-                                                return Some(target);
-                                            }
-                                        }
-                                        None
-                                    });
-
+                                    let ico_path = crate::windows::resolve_toast_icon();
                                     let app = app_handle.clone();
                                     let mut toast = Toast::new("com.periph.monitor")
                                         .title("发现新版本")

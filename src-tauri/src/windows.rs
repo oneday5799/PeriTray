@@ -179,6 +179,38 @@ pub fn set_rounded_corners(hwnd: isize) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Toast 通知图标
+// ═══════════════════════════════════════════════════════════════
+
+/// 查找 toast 通知图标，返回可直接传给 `Toast::icon()` 的路径。
+///
+/// 图标来源（按优先级）：
+/// 1. 已安装：exe 同目录 `icon.png`（Tauri 部署 `dist/icon.png` 到此）
+/// 2. 开发：`../../dist/icon.png`（即 `src-tauri/dist/icon.png`）
+///
+/// 找到后复制为 `toast_icon.png` 到 exe 目录，避免 `canonicalize` 产生的
+/// `\\?\` 前缀导致 WinRT `file:///` URI 失效。
+#[cfg(target_os = "windows")]
+pub fn resolve_toast_icon() -> Option<std::path::PathBuf> {
+    let exe_path = std::env::current_exe().ok()?;
+    let dir = exe_path.parent()?;
+    let target = dir.join("toast_icon.png");
+    for name in &["icon.png", "../../dist/icon.png"] {
+        let src = dir.join(name);
+        if src.exists() {
+            let _ = std::fs::copy(&src, &target);
+            return Some(target);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn resolve_toast_icon() -> Option<std::path::PathBuf> {
+    None
+}
+
+// ═══════════════════════════════════════════════════════════════
 // AUMID 注册（Windows 通知图标依赖）
 // ═══════════════════════════════════════════════════════════════
 
