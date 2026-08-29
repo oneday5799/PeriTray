@@ -58,7 +58,8 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
                 .inner_size(960.0, 720.0)
                 .resizable(true)
                 .visible(false)
-                .min_inner_size(720.0, 420.0);
+                .min_inner_size(720.0, 420.0)
+                .prevent_overflow();
 
         // 恒透明创建：透明能力在窗口诞生时固化，「默认」材质的不透明观感由 CSS 承担
         builder = builder
@@ -92,6 +93,31 @@ pub fn scale_factor(app: &tauri::AppHandle) -> f64 {
             1.0
         }
     }
+}
+
+/// 物理坐标所在的显示器（`monitor_from_point` 参数为物理像素坐标）
+pub fn monitor_at_point(app: &tauri::AppHandle, x: f64, y: f64) -> Option<tauri::Monitor> {
+    app.monitor_from_point(x, y).ok().flatten()
+}
+
+/// 物理坐标所在显示器的定位信息：缩放因子 + 逻辑工作区（越过任务栏）。
+/// 工作区为物理坐标，需除以 SF 转逻辑坐标供窗口定位使用。
+/// 混合 DPI 场景下主屏 SF 会导焦点定位偏移，须按托盘实际所在屏取值。
+pub fn monitor_info_at(
+    app: &tauri::AppHandle,
+    x: f64,
+    y: f64,
+) -> Option<crate::state::TrayMonitorInfo> {
+    let m = monitor_at_point(app, x, y)?;
+    let sf = m.scale_factor();
+    let wa = m.work_area();
+    Some(crate::state::TrayMonitorInfo {
+        scale_factor: sf,
+        work_x: wa.position.x as f64 / sf,
+        work_y: wa.position.y as f64 / sf,
+        work_w: wa.size.width as f64 / sf,
+        work_h: wa.size.height as f64 / sf,
+    })
 }
 
 #[cfg(target_os = "windows")]

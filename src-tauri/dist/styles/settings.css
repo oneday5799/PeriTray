@@ -804,3 +804,42 @@ html[data-theme="dark"] .win-infobar.win-infobar-error {
     transform: scale(1);
   }
 }
+
+/* ── 窄屏适配：侧栏折叠为图标栏（Win11 icon-only rail） ──
+   窗口宽度 ≤ 820px 时侧栏收起为 48px，仅保留图标，悬停经 data-tip 显示名称，
+   为右侧内容区让出空间，避免卡片控件被 overflow-x:hidden 裁剪。 */
+@media (max-width: 820px) {
+  .win-nav-left-panel {
+    width: 48px;
+  }
+
+  .win-nav-header {
+    padding: 12px 0;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .win-nav-header .win-nav-title {
+    display: none;
+  }
+
+  .win-nav-header .win-nav-logo {
+    width: 32px;
+    height: 32px;
+  }
+
+  .win-nav-left-panel .win-nav-menu {
+    margin-left: 0;
+    padding: 0 4px;
+  }
+
+  .win-nav-left-panel .win-nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+
+  .win-nav-left-panel .win-nav-item .label {
+    display: none;
+  }
+}

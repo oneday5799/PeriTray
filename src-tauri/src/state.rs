@@ -10,6 +10,25 @@ pub static TRAY_POS: OnceLock<Mutex<(f64, f64)>> = OnceLock::new();
 /// 弹窗窗口位置
 pub static POPUP_POS: OnceLock<Mutex<(f64, f64)>> = OnceLock::new();
 
+/// 托盘图标所在显示器的信息（缩放因子 + 逻辑工作区），
+/// 用于混合 DPI 下弹窗定位与高度 clamp。
+#[derive(Debug, Clone, Copy)]
+pub struct TrayMonitorInfo {
+    pub scale_factor: f64,
+    pub work_x: f64,
+    pub work_y: f64,
+    pub work_w: f64,
+    pub work_h: f64,
+}
+
+/// 托盘所在显示器信息缓存（托盘点击时刷新，None 表示尚未确定）
+pub static TRAY_MONITOR: OnceLock<Mutex<Option<TrayMonitorInfo>>> = OnceLock::new();
+
+/// 获取托盘所在显示器信息缓存的引用
+pub fn get_tray_monitor() -> &'static Mutex<Option<TrayMonitorInfo>> {
+    TRAY_MONITOR.get_or_init(|| Mutex::new(None))
+}
+
 /// 弹窗动画状态
 pub static ANIMATING: AtomicBool = AtomicBool::new(false);
 

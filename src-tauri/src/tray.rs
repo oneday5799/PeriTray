@@ -357,11 +357,24 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let rect = rect;
                     std::thread::spawn(move || {
                         if let Some(pos) = TRAY_POS.get() {
-                            let sf = windows::scale_factor(&app);
                             // 物理坐标需整体转逻辑：仅除 x 会让 y 携带物理值，
-                            // 在缩放屏上把弹出窗底边推出屏幕外
+                            // 在缩放屏上把弹出窗底边推出屏幕外。
+                            // 混合 DPI 时须按托盘所在屏的 SF 换算（主屏 SF 会定位偏移）。
                             let (px, py) = match rect.position {
-                                tauri::Position::Physical(p) => (p.x as f64 / sf, p.y as f64 / sf),
+                                tauri::Position::Physical(p) => {
+                                    let (x, y) = (p.x as f64, p.y as f64);
+                                    let info = windows::monitor_info_at(&app, x, y);
+                                    let sf = info
+                                        .as_ref()
+                                        .map(|i| i.scale_factor)
+                                        .unwrap_or_else(|| windows::scale_factor(&app));
+                                    if let Some(i) = info {
+                                        *crate::state::lock_unpoisoned(
+                                            crate::state::get_tray_monitor(),
+                                        ) = Some(i);
+                                    }
+                                    (x / sf, y / sf)
+                                }
                                 tauri::Position::Logical(p) => (p.x, p.y),
                             };
                             *crate::state::lock_unpoisoned(pos) = (px, py);
