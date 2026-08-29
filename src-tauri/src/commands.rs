@@ -90,10 +90,15 @@ pub fn update_config(app: tauri::AppHandle, mut new_config: Config) {
         clear_shared_device_shortcuts(&mut new_config);
         crate::shortcut::sync_device_shortcuts(&app);
     }
+    // 保留时长变更时，落地后立即清理一次旧日志
+    let retention_changed = config::with_config(|c| c.log_retention) != new_config.log_retention;
     config::with_config_mut(|c| {
         *c = new_config;
     });
     let _ = app.emit("config-changed", ());
+    if retention_changed {
+        process::clean_old_logs();
+    }
 }
 
 /// 清除被多个设备共用的快捷键（保留各设备的名称，仅清空 shortcut）
@@ -344,7 +349,7 @@ pub async fn set_spatial_sound(
 
 #[tauri::command]
 pub fn open_log_dir() -> Result<(), String> {
-    let dir = crate::process::exe_dir();
+    let dir = crate::process::logs_dir();
     let _ = std::fs::create_dir_all(&dir);
     process::open_with_system(&dir.to_string_lossy())
 }
