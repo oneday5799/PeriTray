@@ -409,6 +409,15 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Mutex::new((screen_w - 300.0, screen_h - 50.0))
     });
 
+    // 首启即定位任务栏所在屏与通知区锚点：托盘尚未被点击前，弹窗据此确定所在屏、
+    // 工作区与落点，避免 fallback 主屏/假锚点导致副屏/混合 DPI 首启错位（托盘点击后再精确纠偏）。
+    if let Some((info, anchor_x, anchor_y)) = windows::monitor_info_of_taskbar(app.handle()) {
+        *crate::state::lock_unpoisoned(crate::state::get_tray_monitor()) = Some(info);
+        if let Some(pos) = TRAY_POS.get() {
+            *crate::state::lock_unpoisoned(pos) = (anchor_x, anchor_y);
+        }
+    }
+
     app.listen("config-changed", move |_| {
         let new_auto = config::with_config(|c| c.auto_start);
         AUTO_START.store(new_auto, Ordering::Relaxed);

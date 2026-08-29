@@ -10,6 +10,10 @@ const POPUP_W: f64 = 360.0;
 const POPUP_H: f64 = 520.0;
 /// 弹窗动态 clamp 下限（极低分屏下避免退化为不可用高度）
 const POPUP_MIN_H: f64 = 200.0;
+/// 弹窗距屏幕左右边缘的留白（逻辑像素＝物理 26×缩放因子，随缩放等比）
+const POPUP_EDGE_MARGIN: f64 = 26.0;
+/// 弹窗底边与任务栏上缘的固定间隙（13px 逻辑＝物理 13×缩放因子，随缩放等比）
+const POPUP_TASKBAR_GAP: f64 = 13.0;
 
 /// cubic-bezier(0.62, 0, 0.32, 1) easing — same as win11React
 fn cubic_bezier(t: f64) -> f64 {
@@ -40,34 +44,32 @@ struct Placement {
 
 /// 计算弹窗位置参数
 fn compute_position(app: &tauri::AppHandle) -> Placement {
-    // 优先取托盘所在显示器信息（含逻辑工作区），fallback 主屏尺寸
-    if let Some(info) = *crate::state::lock_unpoisoned(crate::state::get_tray_monitor()) {
-        return placement_from(info.work_x, info.work_y, info.work_w, info.work_h);
-    }
-
-    let sf = windows::scale_factor(app);
-    let (w, h) = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| (m.size().width as f64 / sf, m.size().height as f64 / sf))
-        .unwrap_or((1920.0, 1080.0));
-    placement_from(0.0, 0.0, w, h)
+    // 托盘所在屏工作区（fallback 主屏）：见 windows::resolve_work_area
+    let info = windows::resolve_work_area(app);
+    placement_from(info.work_x, info.work_y, info.work_w, info.work_h)
 }
 
 /// 依据工作区（逻辑坐标）算出弹窗落点与实高
 fn placement_from(work_x: f64, work_y: f64, work_w: f64, work_h: f64) -> Placement {
-    let tray = TRAY_POS.get().map(|m| *crate::state::lock_unpoisoned(m));
-    let (tray_x, tray_y) = tray.unwrap_or((work_x + work_w / 2.0, work_y + work_h - 50.0));
+    let tray_x = TRAY_POS
+        .get()
+        .map(|m| crate::state::lock_unpoisoned(m).0)
+        .unwrap_or(work_x + work_w / 2.0);
 
     // 弹窗高度按工作区动态 clamp：低分屏不越出上缘，留 45px 上下余量
     let max_h = (work_h - 45.0).max(POPUP_MIN_H);
     let popup_h = POPUP_H.min(max_h).max(POPUP_MIN_H);
 
-    let target_y = (tray_y - popup_h - 15.0).max(work_y + 8.0);
+    // 底边与任务栏上缘固定留 POPUP_TASKBAR_GAP 间隙（不再依赖托盘图标 y 精度）
+    let target_y = (work_y + work_h - popup_h - POPUP_TASKBAR_GAP).max(work_y + 8.0);
+
+    // 水平钳制到工作区：居中托盘但不得溢出左右（留 POPUP_EDGE_MARGIN 边距）
+    let min_x = work_x + POPUP_EDGE_MARGIN;
+    let max_x = (work_x + work_w - POPUP_W - POPUP_EDGE_MARGIN).max(min_x);
+    let target_x = (tray_x - POPUP_W / 2.0).clamp(min_x, max_x);
 
     Placement {
-        target_x: tray_x - POPUP_W / 2.0,
+        target_x,
         target_y,
         start_y: work_y + work_h + 10.0,
         popup_h,
@@ -217,6 +219,14 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, popup_h: f64, ta
                 let wv: &tauri::Webview = win.as_ref();
                 windows::ensure_webview_bg_transparent(wv);
             }
+            // 首启即按 show() 语义重设尺寸/位置：窗口先按创建屏 SF 诞生再被移到目标屏，
+            // 混合 DPI 下 builder 的 inner_size 用了创建屏 SF，移动后物理尺寸失真；
+            // 此时窗口已就位于目标屏，按逻辑重设即可用目标屏 SF 正确换算。
+            let _ = win.set_size(tauri::LogicalSize::new(POPUP_W, popup_h));
+            let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x: target_x,
+                y: target_y,
+            }));
             let _ = win.show();
             let _ = win.set_focus();
             // 首启无滑动动画，但层级不变式一致：低于任务栏、高于普通窗口
@@ -226,6 +236,16 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, popup_h: f64, ta
             if let Some(pos) = POPUP_POS.get() {
                 *crate::state::lock_unpoisoned(pos) = (target_x, target_y);
             }
+            // WM_DPICHANGED 异步：延迟按目标屏 SF 补一次尺寸，杜绝首启残留创建屏尺寸
+            let rewin = win.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                crate::process::append_verbose_log(&format!(
+                    "[popup] create size reapply, popup_h={}",
+                    popup_h
+                ));
+                let _ = rewin.set_size(tauri::LogicalSize::new(POPUP_W, popup_h));
+            });
         }
         Err(e) => {
             crate::process::append_log(&format!("[popup] create window failed: {}", e));

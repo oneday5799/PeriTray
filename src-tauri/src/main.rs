@@ -187,7 +187,12 @@ fn main() {
         }));
     }
     let builder = builder
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // popup 每次点击都重定位，持久化无意义且会以旧物理坐标覆盖新算位置
+                .with_denylist(&["popup"])
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             // 设备列表与配置

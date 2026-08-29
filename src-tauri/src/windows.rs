@@ -78,7 +78,11 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
                 apply_window_material(hwnd.0 as isize, &material);
                 ensure_webview_bg_transparent(win.as_ref());
             }
+            // 窗口状态插件恢复后即钳制：跨分辨率/DPI 下恢复的物理尺寸可能越界
+            clamp_window_to_work_area(&win);
             std::thread::sleep(std::time::Duration::from_millis(200));
+            // 静置后 DPI 已稳定，再次钳制以兜底首帧缩放未就绪
+            clamp_window_to_work_area(&win);
             let _ = win.show();
             let _ = win.set_focus();
         }
@@ -118,6 +122,156 @@ pub fn monitor_info_at(
         work_w: wa.size.width as f64 / sf,
         work_h: wa.size.height as f64 / sf,
     })
+}
+
+/// 弹窗/设置窗定位通用的工作区（逻辑坐标）：优先托盘所在屏，否则主屏兜底。
+pub fn resolve_work_area(app: &tauri::AppHandle) -> crate::state::TrayMonitorInfo {
+    if let Some(info) = *crate::state::lock_unpoisoned(crate::state::get_tray_monitor()) {
+        return info;
+    }
+    if let Some(m) = app.primary_monitor().ok().flatten() {
+        let sf = m.scale_factor();
+        let wa = m.work_area();
+        return crate::state::TrayMonitorInfo {
+            scale_factor: sf,
+            work_x: wa.position.x as f64 / sf,
+            work_y: wa.position.y as f64 / sf,
+            work_w: wa.size.width as f64 / sf,
+            work_h: wa.size.height as f64 / sf,
+        };
+    }
+    crate::state::TrayMonitorInfo {
+        scale_factor: 1.0,
+        work_x: 0.0,
+        work_y: 0.0,
+        work_w: 1920.0,
+        work_h: 1080.0,
+    }
+}
+
+/// 定位任务栏所在显示器信息及其通知区锚点（首启用：托盘尚未被点击时据此确定弹窗所在屏）。
+/// 返回 `(显示器信息, 通知区近似横坐标[逻辑], 任务栏垂直中心[逻辑])`。
+/// 找不到任务栏（Explorer 重启间隙等）返回 None。
+#[cfg(target_os = "windows")]
+pub fn monitor_info_of_taskbar(
+    app: &tauri::AppHandle,
+) -> Option<(crate::state::TrayMonitorInfo, f64, f64)> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
+
+    let class = crate::process::to_wide("Shell_TrayWnd");
+    unsafe {
+        let taskbar = FindWindowW(class.as_ptr(), std::ptr::null());
+        if taskbar.is_null() {
+            crate::process::append_log("[monitor] taskbar not found, fallback primary");
+            return None;
+        }
+        let mut rect = std::mem::zeroed::<RECT>();
+        if GetWindowRect(taskbar, &mut rect) == 0 {
+            crate::process::append_log("[monitor] GetWindowRect(taskbar) failed, fallback primary");
+            return None;
+        }
+        let cx = (rect.left as f64 + rect.right as f64) / 2.0;
+        let cy = (rect.top as f64 + rect.bottom as f64) / 2.0;
+        let info = monitor_info_at(app, cx, cy)?;
+        let sf = info.scale_factor;
+        // 通知区近似位（右缘内缩 80 物理像素）；任务栏垂直中心即真实托盘 y
+        let anchor_x = (rect.right as f64 - 80.0) / sf;
+        let anchor_y = (rect.top as f64 + rect.bottom as f64) / 2.0 / sf;
+        Some((info, anchor_x, anchor_y))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn monitor_info_of_taskbar(
+    _app: &tauri::AppHandle,
+) -> Option<(crate::state::TrayMonitorInfo, f64, f64)> {
+    None
+}
+
+/// 将窗口尺寸/位置钳制到其所在显示器工作区内（防跨分辨率/DPI 恢复越界）。
+/// 尺寸走 inner 语义（`set_size` 即 inner），位置走 outer 左上角（`set_position` 即 outer）。
+pub fn clamp_window_to_work_area(win: &tauri::WebviewWindow) {
+    if win.is_maximized().unwrap_or(false) || win.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let (Ok(inner), Ok(outer), Ok(pos)) =
+        (win.inner_size(), win.outer_size(), win.outer_position())
+    else {
+        return;
+    };
+    let sf = win.scale_factor().unwrap_or(1.0);
+    if sf <= 0.0 {
+        return;
+    }
+
+    // 外框边距（标题栏+边框，逻辑值）：inner/outer 之差即此
+    let frame_w = (outer.width as f64 - inner.width as f64) / sf;
+    let frame_h = (outer.height as f64 - inner.height as f64) / sf;
+
+    let app = win.app_handle();
+    // 以窗口中心（物理）定位所在显示器，拿不到回退主屏
+    let center_x = pos.x as f64 + outer.width as f64 / 2.0;
+    let center_y = pos.y as f64 + outer.height as f64 / 2.0;
+    let wa = monitor_info_at(app, center_x, center_y).unwrap_or_else(|| resolve_work_area(app));
+
+    const MARGIN: f64 = 16.0;
+    const MIN_INNER_W: f64 = 720.0;
+    const MIN_INNER_H: f64 = 420.0;
+
+    let max_inner_w = (wa.work_w - MARGIN - frame_w).max(MIN_INNER_W);
+    let max_inner_h = (wa.work_h - MARGIN - frame_h).max(MIN_INNER_H);
+
+    let cur_inner_w = inner.width as f64 / sf;
+    let cur_inner_h = inner.height as f64 / sf;
+    let new_inner_w = cur_inner_w.min(max_inner_w);
+    let new_inner_h = cur_inner_h.min(max_inner_h);
+
+    let cur_x = pos.x as f64 / sf;
+    let cur_y = pos.y as f64 / sf;
+    let new_outer_w = new_inner_w + frame_w;
+    let new_outer_h = new_inner_h + frame_h;
+
+    // 越界判定：当前外框完全在目标工作区外则居中，否则「保位置只缩尺寸」平移回屏内
+    let right = cur_x + new_outer_w;
+    let bottom = cur_y + new_outer_h;
+    let fully_out = right < wa.work_x
+        || cur_x > wa.work_x + wa.work_w
+        || bottom < wa.work_y
+        || cur_y > wa.work_y + wa.work_h;
+
+    let (new_x, new_y) = if fully_out {
+        (
+            wa.work_x + (wa.work_w - new_outer_w) / 2.0,
+            wa.work_y + (wa.work_h - new_outer_h) / 2.0,
+        )
+    } else {
+        let mut nx = cur_x;
+        let mut ny = cur_y;
+        if right > wa.work_x + wa.work_w {
+            nx = wa.work_x + wa.work_w - new_outer_w;
+        }
+        if bottom > wa.work_y + wa.work_h {
+            ny = wa.work_y + wa.work_h - new_outer_h;
+        }
+        if nx < wa.work_x {
+            nx = wa.work_x;
+        }
+        if ny < wa.work_y {
+            ny = wa.work_y;
+        }
+        (nx, ny)
+    };
+
+    if (new_inner_w - cur_inner_w).abs() > 0.5 || (new_inner_h - cur_inner_h).abs() > 0.5 {
+        let _ = win.set_size(tauri::LogicalSize::new(new_inner_w, new_inner_h));
+    }
+    if (new_x - cur_x).abs() > 0.5 || (new_y - cur_y).abs() > 0.5 {
+        let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+            x: new_x,
+            y: new_y,
+        }));
+    }
 }
 
 #[cfg(target_os = "windows")]
