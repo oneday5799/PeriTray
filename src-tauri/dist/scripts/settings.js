@@ -306,16 +306,11 @@ function initNavigation() {
     ];
     const anim = indicatorEl.animate(keyframes, { duration: 200, fill: "forwards" });
     anim.onfinish = () => {
-      // 将动画计算出的 transform 回写样式（Web Animations API 不会自动更新 style.transform）
-      const computed = getComputedStyle(indicatorEl).transform;
-      const match = computed.match(/matrix.*\((.+)\)/);
-      if (match) {
-        // matrix(a,b,c,d,tx,ty) — ty is at index 5
-        const parts = match[1].split(",").map(s => s.trim());
-        const ty = parts[5] ? parseFloat(parts[5]) : newY;
-        indicatorEl.style.transform = `translateY(${ty}px)`;
-      }
+      // 回写最终位并立即释放动画：fill:"forwards" 的已完成动画仍会覆盖后续
+      // inline 样式（折叠侧栏时 repositionIndicator 重算的 transform 会被旧动画值压住）
+      indicatorEl.style.transform = `translateY(${newY}px)`;
       indicatorEl.style.height = INDICATOR_SIZE + "px";
+      anim.cancel();
     };
   }
 
@@ -383,6 +378,26 @@ function initNavigation() {
     }
   }
   requestAnimationFrame(() => requestAnimationFrame(initIndicator));
+
+  // 侧栏折叠/窗口缩放时重算指示条 Y（header 高度变化会使导航项垂直位移）
+  function repositionIndicator() {
+    const selected = document.querySelector(".win-nav-item.is-selected");
+    const indicatorEl = document.getElementById("nav-indicator");
+    if (!selected || !indicatorEl) return;
+    // 取消进行中的指示条动画（Web Animations 会覆盖直接写 style.transform）
+    indicatorEl.getAnimations().forEach(a => a.cancel());
+    const y = getIndicatorY(selected);
+    if (y >= 0 && y < 500) {
+      setIndicatorStyle(indicatorEl, y);
+    }
+  }
+  let repositionRaf = 0;
+  function scheduleReposition() {
+    cancelAnimationFrame(repositionRaf);
+    repositionRaf = requestAnimationFrame(repositionIndicator);
+  }
+  window.addEventListener("resize", scheduleReposition);
+  window.matchMedia("(max-width: 820px)").addEventListener("change", scheduleReposition);
 }
 
 async function runUpdateCheck(btnId) {
