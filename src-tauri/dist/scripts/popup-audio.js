@@ -809,11 +809,11 @@ async function showSessionContextMenu(x, y, session) {
   if (token !== sessionMenuToken) return;
 
   const visibleOutDevices = audioDevices.filter(d => !hiddenAudioDevices.includes(d.name));
-  buildSessionSubmenu(menu, "输出设备", visibleOutDevices, curOut, (deviceId) => {
+  buildSessionSubmenu(menu, "输出设备", visibleOutDevices, audioDevices, curOut, (deviceId) => {
     setSessionDevice(session, "output", deviceId);
   });
   const visibleInDevices = inDevices.filter(d => !hiddenAudioDevices.includes(d.name));
-  buildSessionSubmenu(menu, "输入设备", visibleInDevices, curIn, (deviceId) => {
+  buildSessionSubmenu(menu, "输入设备", visibleInDevices, inDevices, curIn, (deviceId) => {
     setSessionDevice(session, "input", deviceId);
   });
 
@@ -822,15 +822,21 @@ async function showSessionContextMenu(x, y, session) {
   activeAudioMenu = menu;
 }
 
-function buildSessionSubmenu(menu, label, devices, currentId, onSelect) {
+function buildSessionSubmenu(menu, label, devices, allDevices, currentId, onSelect) {
   const shell = createSubmenuShell(menu, label);
 
-  const defaultId = (devices.find(d => d.is_default) || {}).id;
-  const isDefault = !currentId || currentId === defaultId || !devices.some(d => d.id === currentId);
+  const connected = currentId && allDevices.some(d => d.id === currentId);
+  const listed = currentId ? devices.some(d => d.id === currentId) : false;
+  // 未设置，或所设设备已断开（跟随系统默认），都视为「系统默认」
+  const isDefault = !currentId || !connected;
 
   shell.addItem("系统默认", isDefault, () => onSelect(""));
   for (const dev of devices) {
-    shell.addItem(deviceDisplayName(dev.name), !isDefault && dev.id === currentId, () => onSelect(dev.id));
+    shell.addItem(deviceDisplayName(dev.name), dev.id === currentId, () => onSelect(dev.id));
+  }
+  // 覆盖设备连接中但被隐藏（不在可见列表）：补「设备已隐藏」已选提示
+  if (currentId && !listed && connected) {
+    shell.addItem("设备已隐藏", true, () => {});
   }
 
   shell.finish();
