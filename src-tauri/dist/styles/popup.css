@@ -320,9 +320,9 @@
   position: relative;
 }
 
-/* 应用被设置了特定输出/输入设备时，图标外圈红环提醒 */
+/* 应用被设置了特定输出/输入设备时，图标外圈蓝环提醒（与音量条颜色一致） */
 .session-icon--routed {
-  box-shadow: 0 0 0 2px var(--danger);
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 .session-controls {
