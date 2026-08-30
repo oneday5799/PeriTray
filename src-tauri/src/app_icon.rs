@@ -27,17 +27,26 @@ pub fn get_process_name_by_pid(pid: u32) -> Option<Arc<str>> {
     name
 }
 
-/// 从进程PID解析应用名称
-fn resolve_process_name(pid: u32) -> Option<String> {
-    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW};
+/// 从进程 PID 查询其 exe 路径（低权限 + 长路径安全）。
+/// 取图标/名字仅需路径，无需读进程内存，故用 PROCESS_QUERY_LIMITED_INFORMATION，
+/// 避免管理员/保护进程因无 VM_READ 权限被拒（正是部分应用图标兜底的根因）。
+fn query_exe_path_by_pid(pid: u32) -> Option<String> {
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
     unsafe {
-        let process_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut path_buf = [0u16; 1024];
+        let process_handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(h) => h,
+            Err(_) => {
+                crate::process::append_verbose_log(&format!(
+                    "[app_icon] OpenProcess pid={pid} 失败（权限/保护进程）"
+                ));
+                return None;
+            }
+        };
+        let mut path_buf = [0u16; 32768];
         let mut path_size = path_buf.len() as u32;
         let result = QueryFullProcessImageNameW(
             process_handle,
@@ -47,11 +56,23 @@ fn resolve_process_name(pid: u32) -> Option<String> {
         );
         let _ = windows::Win32::Foundation::CloseHandle(process_handle);
         if result.is_err() {
+            crate::process::append_verbose_log(&format!(
+                "[app_icon] QueryFullProcessImageNameW pid={pid} 失败"
+            ));
             return None;
         }
-        let exe_path = String::from_utf16_lossy(&path_buf[..path_size as usize]);
+        Some(String::from_utf16_lossy(&path_buf[..path_size as usize]))
+    }
+}
 
-        // 读取文件版本信息中的 FileDescription（如 "Google Chrome"）
+/// 从进程PID解析应用名称
+fn resolve_process_name(pid: u32) -> Option<String> {
+    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW};
+
+    let exe_path = query_exe_path_by_pid(pid)?;
+
+    // 读取文件版本信息中的 FileDescription（如 "Google Chrome"）
+    unsafe {
         let wide_path: Vec<u16> = crate::process::to_wide(&exe_path);
         let size = GetFileVersionInfoSizeW(windows::core::PCWSTR(wide_path.as_ptr()), None);
         if size > 0 {
@@ -69,12 +90,12 @@ fn resolve_process_name(pid: u32) -> Option<String> {
                 }
             }
         }
-
-        // 回退：exe 文件名（去掉扩展名）
-        std::path::Path::new(&exe_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
     }
+
+    // 回退：exe 文件名（去掉扩展名）
+    std::path::Path::new(&exe_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
 }
 
 /// 从版本信息数据中查询 FileDescription
@@ -133,29 +154,14 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
         }
     }
     let icon: Option<Arc<str>> = (|| -> Option<Arc<str>> {
-        unsafe {
-            let process_handle = windows::Win32::System::Threading::OpenProcess(
-                windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION
-                    | windows::Win32::System::Threading::PROCESS_VM_READ,
-                false,
-                pid,
-            )
-            .ok()?;
-            let mut path_buf = [0u16; 260];
-            let mut path_size = path_buf.len() as u32;
-            let result = windows::Win32::System::Threading::QueryFullProcessImageNameW(
-                process_handle,
-                windows::Win32::System::Threading::PROCESS_NAME_FORMAT(0),
-                windows::core::PWSTR(path_buf.as_mut_ptr()),
-                &mut path_size,
-            );
-            let _ = windows::Win32::Foundation::CloseHandle(process_handle);
-            if result.is_err() {
-                return None;
-            }
-            let exe_path = String::from_utf16_lossy(&path_buf[..path_size as usize]);
-            get_icon_from_path(&exe_path)
+        let exe_path = query_exe_path_by_pid(pid)?;
+        let icon = get_icon_from_path(&exe_path);
+        if icon.is_none() {
+            crate::process::append_verbose_log(&format!(
+                "[app_icon] 取图失败 pid={pid} path={exe_path}"
+            ));
         }
+        icon
     })();
     icon.as_ref()?;
     let mut guard = crate::state::lock_unpoisoned(cache);
@@ -166,6 +172,9 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
 /// 从文件路径提取图标（返回base64编码的PNG）
 fn get_icon_from_path(path: &str) -> Option<Arc<str>> {
     unsafe {
+        // 注：windows crate 将 PrivateExtractIconsW 的 szfilename 固定为 &[u16; 260]，
+        // 故取图阶段的路径缓冲无法放大；长路径(>259)的 exe 会在此截断失败（罕见）。
+        // 路径查询阶段（query_exe_path_by_pid）已支持长路径。
         let mut path_buf = [0u16; 260];
         let path_wide: Vec<u16> = crate::process::to_wide(path);
         let copy_len = path_wide.len().min(259);
