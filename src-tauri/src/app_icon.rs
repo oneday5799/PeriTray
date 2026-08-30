@@ -27,10 +27,10 @@ pub fn get_process_name_by_pid(pid: u32) -> Option<Arc<str>> {
     name
 }
 
-/// 从进程 PID 查询其 exe 路径（低权限 + 长路径安全）。
+/// 主路径：低权限 OpenProcess 查询 exe 路径（长路径安全）。
 /// 取图标/名字仅需路径，无需读进程内存，故用 PROCESS_QUERY_LIMITED_INFORMATION，
-/// 避免管理员/保护进程因无 VM_READ 权限被拒（正是部分应用图标兜底的根因）。
-fn query_exe_path_by_pid(pid: u32) -> Option<String> {
+/// 避免管理员进程因无 VM_READ 权限被拒。
+fn query_exe_path_by_openprocess(pid: u32) -> Option<String> {
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
@@ -63,6 +63,138 @@ fn query_exe_path_by_pid(pid: u32) -> Option<String> {
         }
         Some(String::from_utf16_lossy(&path_buf[..path_size as usize]))
     }
+}
+
+/// NtQuerySystemInformation(SystemProcessIdInformation) 输入结构（repr(C) 与 C 布局一致）。
+#[repr(C)]
+struct NtUnicodeString {
+    length: u16,
+    maximum_length: u16,
+    buffer: *mut u16,
+}
+
+#[repr(C)]
+struct SystemProcessIdInformation {
+    process_id: *mut core::ffi::c_void,
+    image_name: NtUnicodeString,
+}
+
+/// 兜底：NtQuerySystemInformation(SystemProcessIdInformation) 查询 exe 路径。
+/// 纯内核查询，无需打开目标进程句柄，可覆盖 PPL 等 OpenProcess 被拒的受保护进程
+/// （返回 NT 设备路径，由 normalize_image_path 转回盘符）。
+fn query_exe_path_by_nt(pid: u32) -> Option<String> {
+    use ntapi::ntexapi::{NtQuerySystemInformation, SystemProcessIdInformation};
+
+    unsafe {
+        let mut name_buf = [0u16; 2048];
+        let mut info = SystemProcessIdInformation {
+            process_id: pid as usize as *mut core::ffi::c_void,
+            image_name: NtUnicodeString {
+                length: 0,
+                maximum_length: (name_buf.len() * 2) as u16,
+                buffer: name_buf.as_mut_ptr(),
+            },
+        };
+        let mut ret: u32 = 0;
+        let status = NtQuerySystemInformation(
+            SystemProcessIdInformation,
+            &mut info as *mut _ as *mut ntapi::winapi::ctypes::c_void,
+            std::mem::size_of::<SystemProcessIdInformation>() as u32,
+            &mut ret,
+        );
+        if status != 0 {
+            crate::process::append_verbose_log(&format!(
+                "[app_icon] NtQuerySystemInformation pid={pid} 失败 status={:#x}",
+                status as u32
+            ));
+            return None;
+        }
+        let len = info.image_name.length as usize / 2;
+        if len == 0 {
+            return None;
+        }
+        normalize_image_path(&String::from_utf16_lossy(&name_buf[..len]))
+    }
+}
+
+/// NT 设备路径（\Device\HarddiskVolumeN\...）转盘符路径；已有盘符则原样返回。
+fn normalize_image_path(path: &str) -> Option<String> {
+    use windows::Win32::Storage::FileSystem::{GetLogicalDriveStringsW, QueryDosDeviceW};
+
+    // \??\ 与 \\?\ 均为 Win32 命名空间前缀，剥掉即为盘符路径
+    if let Some(rest) = path
+        .strip_prefix("\\\\?\\")
+        .or_else(|| path.strip_prefix("\\??\\"))
+    {
+        return Some(rest.to_string());
+    }
+
+    // 已含盘符（"C:\..."）
+    if path.as_bytes().get(1) == Some(&b':') {
+        return Some(path.to_string());
+    }
+
+    // \Device\HarddiskVolumeN\... → 盘符
+    let rest = match path.strip_prefix("\\Device\\") {
+        Some(r) => r,
+        None => {
+            crate::process::append_verbose_log(&format!("[app_icon] 未知路径形态: {path}"));
+            return Some(path.to_string());
+        }
+    };
+    let mut parts = rest.splitn(2, '\\');
+    let volume = parts.next().unwrap_or("");
+    let after = parts.next().unwrap_or("");
+    if volume.is_empty() {
+        return Some(path.to_string());
+    }
+    let device = format!("\\Device\\{volume}");
+
+    unsafe {
+        let mut drives = [0u16; 512];
+        let n = GetLogicalDriveStringsW(Some(&mut drives));
+        if n == 0 {
+            crate::process::append_verbose_log(&format!(
+                "[app_icon] GetLogicalDriveStringsW 失败: {path}"
+            ));
+            return None;
+        }
+        let mut cur = 0usize;
+        while cur < n as usize {
+            let s = &drives[cur..];
+            let len = s.iter().position(|&c| c == 0).unwrap_or(s.len());
+            if len == 0 {
+                break;
+            }
+            let drive = String::from_utf16_lossy(&s[..len]); // "C:\"
+            let drive_root = drive.trim_end_matches('\\');
+            let wide: Vec<u16> = crate::process::to_wide(drive_root);
+            let mut target = [0u16; 512];
+            let t = QueryDosDeviceW(windows::core::PCWSTR(wide.as_ptr()), Some(&mut target));
+            if t > 0 {
+                // 返回长度 t 跨 Windows 版本可能含结尾 NUL，故以首个 \0 为准截断
+                let end = target.iter().position(|&c| c == 0).unwrap_or(target.len());
+                let target_str = String::from_utf16_lossy(&target[..end]);
+                if target_str.eq_ignore_ascii_case(&device) {
+                    return Some(format!("{drive}{after}"));
+                }
+            }
+            cur += len + 1;
+        }
+    }
+
+    crate::process::append_verbose_log(&format!("[app_icon] 设备路径转盘符失败: {path}"));
+    None
+}
+
+/// 从进程 PID 查询 exe 路径：主路径（OpenProcess）→ 内核兜底（NtQuerySystemInformation）。
+fn query_exe_path_by_pid(pid: u32) -> Option<String> {
+    query_exe_path_by_openprocess(pid).or_else(|| {
+        crate::process::append_verbose_log(&format!(
+            "[app_icon] 常规查询失败 pid={pid}，走 NtQuerySystemInformation 兜底"
+        ));
+        query_exe_path_by_nt(pid)
+    })
 }
 
 /// 从进程PID解析应用名称
