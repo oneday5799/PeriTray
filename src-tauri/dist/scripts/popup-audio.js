@@ -666,6 +666,11 @@ async function loadAudioSessions(deviceId) {
   }
   try {
     audioSessions = (await invoke("get_audio_sessions", { deviceId })).map(s => ({ ...s, permanentMute: muteLockEnabled && !!(s.is_muted && s.volume > 0) }));
+    const devInfo = await invoke("get_sessions_device_names", { pids: audioSessions.map(s => s.pid) }).catch(() => ({}));
+    audioSessions = audioSessions.map(s => {
+      const info = devInfo[s.pid] || {};
+      return { ...s, outputDevice: info.output || null, inputDevice: info.input || null };
+    });
     renderAudioSessions();
   } catch (e) {
     if (list.querySelectorAll(".card.session").length === 0) {
@@ -685,6 +690,13 @@ function renderAudioSessions() {
 
   reconcileCards(list, ".card.session", "sessionId", audioSessions,
     createAudioSessionCard, updateAudioSessionCard);
+}
+
+function buildSessionTooltipText(session) {
+  let t = session.name;
+  if (session.outputDevice) t += `\n输出设备：${deviceDisplayName(session.outputDevice)}`;
+  if (session.inputDevice) t += `\n输入设备：${deviceDisplayName(session.inputDevice)}`;
+  return t;
 }
 
 function createAudioSessionCard(session) {
@@ -709,11 +721,14 @@ function createAudioSessionCard(session) {
     iconEl.style.color = "#fff";
     iconEl.style.fontWeight = "bold";
   }
+  if (session.outputDevice || session.inputDevice) {
+    iconEl.classList.add("session-icon--routed");
+  }
   const iconWrap = document.createElement("div");
   iconWrap.className = "session-icon-wrap";
   iconWrap.appendChild(iconEl);
   card.appendChild(iconWrap);
-  window.attachSessionTooltip(iconWrap, session.name);
+  window.attachSessionTooltip(iconWrap, buildSessionTooltipText(session));
 
   const controls = document.createElement("div");
   controls.className = "card-controls session-controls";
@@ -788,6 +803,12 @@ function createAudioSessionCard(session) {
 function updateAudioSessionCard(card, session) {
   updateSliderValue(card.querySelector(".volume-slider"), session.volume);
   updateMuteButton(card.querySelector(".mute-btn"), session.is_muted, session.volume, session.permanentMute);
+  const iconEl = card.querySelector(".session-icon");
+  if (iconEl) {
+    iconEl.classList.toggle("session-icon--routed", !!(session.outputDevice || session.inputDevice));
+  }
+  const iconWrap = card.querySelector(".session-icon-wrap");
+  if (iconWrap) window.setSessionTooltip(iconWrap, buildSessionTooltipText(session));
 }
 
 let sessionMenuToken = 0;

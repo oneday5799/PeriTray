@@ -230,6 +230,7 @@ fn main() {
             commands::get_input_devices,
             commands::set_session_device,
             commands::get_session_device,
+            commands::get_sessions_device_names,
             commands::set_default_device,
             commands::get_spatial_sound,
             commands::set_spatial_sound,

@@ -321,6 +321,13 @@ pub async fn get_session_device(pid: u32, direction: String) -> Result<Option<St
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command(async)]
+pub async fn get_sessions_device_names(
+    pids: Vec<u32>,
+) -> Result<std::collections::HashMap<u32, crate::audio::SessionDeviceNames>, String> {
+    run_blocking(move || crate::audio::resolve_session_device_names(&pids)).await
+}
+
 #[tauri::command]
 pub fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<(), String> {
     crate::process::append_log(&format!("[cmd] set_default_device: {}", device_id));

@@ -153,11 +153,19 @@ function showSessionTip(el, text) {
 }
 
 window.attachSessionTooltip = function (el, text) {
+  el.__sessionTipText = text;
+  if (el.dataset.tooltipSetup) return;
+  el.dataset.tooltipSetup = "1";
   el.addEventListener("pointerenter", () => {
     if (sessionTipTimer) clearTimeout(sessionTipTimer);
-    sessionTipTimer = setTimeout(() => showSessionTip(el, text), 800);
+    sessionTipTimer = setTimeout(() => showSessionTip(el, el.__sessionTipText), 800);
   });
   el.addEventListener("pointerleave", () => hideSessionTip());
+};
+
+// 仅更新已挂载 tooltip 的文本（供卡片复用时刷新提示内容，避免重复挂监听）
+window.setSessionTooltip = function (el, text) {
+  el.__sessionTipText = text;
 };
 
 // 供页面级事件委托复用（如设置页 [data-tip] 提示）

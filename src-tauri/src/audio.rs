@@ -41,6 +41,13 @@ pub struct AudioSession {
     pub is_active: bool,
 }
 
+/// 某应用已设置的输出/输入设备名（用于应用音量卡片的图标红框与悬停提示）
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDeviceNames {
+    pub output: Option<String>,
+    pub input: Option<String>,
+}
+
 /// 确保当前线程已初始化 COM（幂等调用）
 pub(crate) unsafe fn ensure_com_initialized() {
     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok();
@@ -637,6 +644,39 @@ pub fn get_session_device(pid: u32, direction: &str) -> Result<Option<String>> {
             Ok(Some(unpack_device_id(&id)))
         }
     }
+}
+
+/// 解析给定一批 pid 各自已设置的输出/输入设备名（id→名，取系统友好名）。
+/// 未设置覆盖、设备不可解析（已断开等）时为 None。
+pub fn resolve_session_device_names(
+    pids: &[u32],
+) -> std::collections::HashMap<u32, SessionDeviceNames> {
+    let out_map: std::collections::HashMap<String, String> = enumerate_output_devices()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| (d.id, d.name))
+        .collect();
+    let in_map: std::collections::HashMap<String, String> = enumerate_input_devices()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| (d.id, d.name))
+        .collect();
+
+    let mut result = std::collections::HashMap::new();
+    for &pid in pids {
+        let output = get_session_device(pid, "output")
+            .ok()
+            .flatten()
+            .and_then(|id| out_map.get(&id).cloned());
+        let input = get_session_device(pid, "input")
+            .ok()
+            .flatten()
+            .and_then(|id| in_map.get(&id).cloned());
+        if output.is_some() || input.is_some() {
+            result.insert(pid, SessionDeviceNames { output, input });
+        }
+    }
+    result
 }
 
 unsafe fn get_session_display_name(session: &IAudioSessionControl) -> Result<String> {

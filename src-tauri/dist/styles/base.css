@@ -913,6 +913,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   box-sizing: border-box;
   font-size: 12px;
   overflow-wrap: anywhere;
+  white-space: pre-line;
   pointer-events: none;
 }
 
