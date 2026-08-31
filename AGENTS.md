@@ -41,9 +41,10 @@
 - **异步**：以 async/await 为主；fire-and-forget 场景可用 `.then().catch()` 链
 - **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
 - **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
-- **Rust 文档注释与日志**：`///` 用于 pub 项；日志统一走 `process::append_log` 并带
-  `[模块]` 前缀（[popup] [tray] [audio] [bt] [update] [material] [event] [heartbeat]
-  [watchdog] [window] 等，新增模块先定标签）
+- **Rust 文档注释与日志**：`///` 用于 pub 项；日志统一走 `process::append_log`（标准级）
+  / `process::append_verbose_log`（详细级）并带 `[模块]` 前缀（[popup] [tray] [audio]
+  [audio_notify] [bt] [update] [material] [event] [heartbeat] [watchdog] [window] 等，
+  新增模块先定标签）
 - **JS 头注释**：四要素（文件职责 / 加载序 N/N · 提供：… / 依赖：…）见「前端架构备忘」
 
 ## Release Notes 风格规范（每次发版必循）
@@ -100,17 +101,18 @@
 Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` 零警告校验
 （合计热增量约 3s）。
 
-**五类校验**：
+**六类校验**：
 1. HTML 引用与磁盘文件双向一致（含孤立文件检测）
 2. 跨文件调用审计：调用的标识符必有声明
-3. 全量 JS `node --check` 语法机检
-4. BOM 扫描（CSS/JS/HTML 禁止 UTF-8 BOM）
-5. 版本号一致性：tauri.conf.json / Cargo.toml / Cargo.lock / package.json /
+3. 跨文件同名全局函数检测：经典脚本后加载会遮蔽先加载（防 updateDeviceCard 类覆盖回归）
+4. 全量 JS `node --check` 语法机检
+5. BOM 扫描（CSS/JS/HTML 禁止 UTF-8 BOM）
+6. 版本号一致性：tauri.conf.json / Cargo.toml / Cargo.lock / package.json /
    settings.html 占位 五处须为同一版本（防发版间隙漂移）
 
-**防护边界**：结构完整性闸门。能拦引用缺失/孤立文件/未定义调用/语法错误/BOM/
-版本漂移/Rust 格式不符/编译警告；拦不住 CSS 语义错误、合法语法下的逻辑 bug、
-运行时行为问题——这些仍需构建后人工回归。
+**防护边界**：结构完整性闸门。能拦引用缺失/孤立文件/未定义调用/同名全局函数覆盖/
+语法错误/BOM/版本漂移/Rust 格式不符/编译警告；拦不住 CSS 语义错误、其余合法语法下的
+逻辑 bug、运行时行为问题——这些仍需构建后人工回归。
 
 **例外通道**：
 - `git commit --no-verify` 可跳过钩子，仅限明知未完成的 WIP 中间提交
@@ -158,7 +160,8 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   dev 监听自动重建重启，改 dist 前端同样热生效
 - **调试开关**：环境变量 `PM_DEV_OPEN_SETTINGS=1` 启动时延迟 1.5s 自动打开
   设置窗口（main.rs），用于自动化验证设置页脚本加载与初始化
-- **日志**：写入 `src-tauri/target/debug/debug.log`（exe 同目录）；
+- **日志**：写入 `<exe 目录>/logs/debug_YYYYMMDD.log`（保留策略设为「每次仅保留一次」时
+  为 `debug_once_<pid>.log`）；分「标准/详细」两级，级别关闭时 `append_log` 不落盘；
   设置页「通用 → 日志」可开关/调级；排查启动问题先看 `[main] startup complete`
 - **远程校验**：push 到 main 与 PR 由 CI 工作流（.github/workflows/ci.yml）
   复跑本地闸门全套（check.mjs / rustfmt / cargo check -D warnings / cargo test）
