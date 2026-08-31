@@ -60,6 +60,22 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
     Ok(f(&enumerator))
 }
 
+/// 音频策略配置对象的 COM CLSID（IPolicyConfig / IAudioPolicyConfigFactory 共用）
+pub(crate) const CLSID_POLICY_CONFIG: windows_sys::core::GUID = windows_sys::core::GUID {
+    data1: 0x870af99c,
+    data2: 0x171d,
+    data3: 0x4f9e,
+    data4: [0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9],
+};
+
+/// IUnknown 接口 IID
+pub(crate) const IID_IUNKNOWN: windows_sys::core::GUID = windows_sys::core::GUID {
+    data1: 0x00000000,
+    data2: 0x0000,
+    data3: 0x0000,
+    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+};
+
 pub fn set_default_device(device_id: &str) -> Result<()> {
     crate::process::append_log(&format!("[audio] set_default_device: {}", device_id));
     unsafe {
@@ -71,31 +87,19 @@ pub fn set_default_device(device_id: &str) -> Result<()> {
 }
 
 unsafe fn set_default_device_raw(wide_ptr: *const u16) -> Result<()> {
-    let policy_config_cls = windows_sys::core::GUID {
-        data1: 0x870af99c,
-        data2: 0x171d,
-        data3: 0x4f9e,
-        data4: [0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9],
-    };
     let ipolicy_iid = windows_sys::core::GUID {
         data1: 0xf8679f50,
         data2: 0x850a,
         data3: 0x41cf,
         data4: [0x9c, 0x72, 0x43, 0x0f, 0x29, 0x02, 0x90, 0xc8],
     };
-    let iid_unknown = windows_sys::core::GUID {
-        data1: 0x00000000,
-        data2: 0x0000,
-        data3: 0x0000,
-        data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
-    };
 
     let mut unknown_ptr: *mut c_void = ptr::null_mut();
     let hr = windows_sys::Win32::System::Com::CoCreateInstance(
-        &policy_config_cls,
+        &CLSID_POLICY_CONFIG,
         ptr::null_mut(),
         windows_sys::Win32::System::Com::CLSCTX_ALL,
-        &iid_unknown,
+        &IID_IUNKNOWN,
         &mut unknown_ptr as *mut *mut _,
     );
     if hr < 0 {

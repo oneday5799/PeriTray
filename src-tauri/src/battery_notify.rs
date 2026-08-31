@@ -64,7 +64,7 @@ pub fn check_battery_notify(devices: &[Device]) {
                 {
                     use tauri_winrt_notification::{IconCrop, Toast};
 
-                    let mut toast = Toast::new("com.periph.monitor")
+                    let mut toast = Toast::new(crate::windows::AUMID)
                         .title("低电量提醒")
                         .text1(&format!("{} 电量仅剩 {}%", display_name, level));
 

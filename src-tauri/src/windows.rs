@@ -394,7 +394,7 @@ pub fn resolve_toast_icon() -> Option<std::path::PathBuf> {
 // AUMID 注册（Windows 通知图标依赖）
 // ═══════════════════════════════════════════════════════════════
 
-const AUMID: &str = "com.periph.monitor";
+pub(crate) const AUMID: &str = "com.periph.monitor";
 
 /// 注册 AUMID 到开始菜单快捷方式，使 Windows 通知显示应用图标。
 /// 已存在同名快捷方式时跳过。

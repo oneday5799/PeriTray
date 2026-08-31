@@ -298,7 +298,7 @@ fn main() {
 
                                     let ico_path = crate::windows::resolve_toast_icon();
                                     let app = app_handle.clone();
-                                    let mut toast = Toast::new("com.periph.monitor")
+                                    let mut toast = Toast::new(crate::windows::AUMID)
                                         .title("发现新版本")
                                         .text1(&format!(
                                             "发现新版本 v{}，点击查看详情",

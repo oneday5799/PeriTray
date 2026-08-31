@@ -245,27 +245,14 @@ impl Drop for PolicySpatialClient {
 }
 
 impl PolicySpatialClient {
-    const CLSID_POLICY_CONFIG_CLIENT: windows_sys::core::GUID = windows_sys::core::GUID {
-        data1: 0x870af99c,
-        data2: 0x171d,
-        data3: 0x4f9e,
-        data4: [0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9],
-    };
-
     unsafe fn acquire() -> std::result::Result<Self, String> {
         crate::audio::ensure_com_initialized();
-        let iid_unknown = windows_sys::core::GUID {
-            data1: 0x00000000,
-            data2: 0x0000,
-            data3: 0x0000,
-            data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
-        };
         let mut unk: *mut c_void = ptr::null_mut();
         let hr = windows_sys::Win32::System::Com::CoCreateInstance(
-            &Self::CLSID_POLICY_CONFIG_CLIENT,
+            &crate::audio::CLSID_POLICY_CONFIG,
             ptr::null_mut(),
             windows_sys::Win32::System::Com::CLSCTX_ALL,
-            &iid_unknown,
+            &crate::audio::IID_IUNKNOWN,
             &mut unk,
         );
         if hr < 0 || unk.is_null() {
