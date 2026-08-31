@@ -110,6 +110,186 @@ fn watchdog_self_restart() {
     std::process::exit(0);
 }
 
+/// 处理第二实例启动：聚焦既有弹窗，或经 toggle 重建。
+/// 回调在事件线程上分发，窗口/配置操作全部移出线程。
+fn forward_second_instance(app: &tauri::AppHandle) {
+    process::append_log("[single-instance] second instance forwarded");
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let tab = config::with_config(|c| c.default_popup_tab.clone());
+        if app.get_webview_window("popup").is_some() {
+            process::append_log(&format!("[single-instance] popup exists, open tab={}", tab));
+            popup::open_popup(&app, &tab);
+        } else {
+            process::append_log("[single-instance] no popup, create via toggle");
+            popup::toggle(&app, &tab);
+        }
+    });
+}
+
+/// 开发调试：设置环境变量 PM_DEV_OPEN_SETTINGS 时延迟自动打开设置窗口（自动化检测用）
+fn spawn_dev_open_settings(app: &tauri::AppHandle) {
+    if std::env::var("PM_DEV_OPEN_SETTINGS").is_ok() {
+        let handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            crate::windows::open_settings(&handle);
+        });
+    }
+}
+
+/// 启动时检测更新：延迟 3s 后查询并广播状态，有更新时弹 Windows 原生通知。
+fn spawn_startup_update_check(app: &tauri::AppHandle) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::process::append_verbose_log("[update] startup check starting");
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let include = config::with_config(|c| c.include_prerelease);
+        let current_version = app_handle.package_info().version.to_string();
+        let (result, stored) =
+            crate::update::check_and_store("startup", current_version, include).await;
+        match result {
+            Ok(info) => {
+                let status = if info.has_update { "update" } else { "latest" };
+                let payload = crate::update::UpdateStatus::from_info(&info, status);
+                let _ = app_handle.emit("update-status", payload);
+                if info.has_update {
+                    let _ = app_handle.emit("update-available", info.clone());
+                    // Windows 原生通知（带图标 + 点击跳转关于页）
+                    #[cfg(target_os = "windows")]
+                    {
+                        let ico_path = crate::windows::resolve_toast_icon();
+                        let app = app_handle.clone();
+                        let toast = crate::windows::build_toast(
+                            "发现新版本",
+                            &format!("发现新版本 v{}，点击查看详情", info.latest_version),
+                            ico_path.as_deref(),
+                        )
+                        .on_activated(move |_args| {
+                            crate::process::append_log("[update] toast clicked → open about");
+                            let app = app.clone();
+                            std::thread::spawn(move || {
+                                crate::windows::open_settings_tab(&app, "about");
+                            });
+                            Ok(())
+                        });
+                        if let Err(e) = toast.show() {
+                            crate::process::append_log(&format!("[update] toast failed: {:?}", e));
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // 检查失败：广播已存储的错误状态；任务级失败（未存储）不广播
+                if stored {
+                    if let Some(payload) = crate::update::get_last_status() {
+                        let _ = app_handle.emit("update-status", payload);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// 看门狗线程：心跳 + 事件循环探活 + 唤醒恢复。
+/// 探针原理：is_visible 经 proxy 往返（排队+recv），事件循环僵死则永挂；
+/// worker 结果经 channel 回传，主循环 recv_timeout 超时即计僵死。
+/// 连续 2 次超时（最坏 ~40s）判定僵死，自动重启自身进程自愈。
+/// 时间跳变检测：唤醒后主动 Resume WebView2（B 类僵死根治）。
+fn spawn_watchdog(app: &tauri::AppHandle) {
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        use std::time::Instant;
+
+        let mut stuck_streak = 0u32;
+        let mut last_instant = Instant::now();
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            crate::process::append_log("[heartbeat]");
+
+            // 时间跳变检测：期望 ~15s，>20s 说明系统经历过休眠/唤醒。
+            // 唤醒后主动 Resume WebView2 渲染进程（Suspend 期间渲染暂停）。
+            let now = Instant::now();
+            let elapsed = now.duration_since(last_instant);
+            last_instant = now;
+            if elapsed > std::time::Duration::from_secs(20) {
+                crate::process::append_log(&format!(
+                    "[watchdog] time jump: {:.1}s — resuming webview",
+                    elapsed.as_secs_f64()
+                ));
+                if let Some(popup_win) = app_handle.get_webview_window("popup") {
+                    let wv: &tauri::Webview = popup_win.as_ref();
+                    crate::windows::resume_webview(wv);
+                }
+            }
+
+            let probe_app = app_handle.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = probe_app
+                    .get_webview_window("popup")
+                    .map(|w| w.is_visible().is_ok())
+                    .unwrap_or(true);
+                let _ = tx.send(result);
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(true) => stuck_streak = 0,
+                _ => {
+                    stuck_streak += 1;
+                    crate::process::append_log(&format!(
+                        "[watchdog] event loop unresponsive, streak={}",
+                        stuck_streak
+                    ));
+                    if stuck_streak >= 2 {
+                        watchdog_self_restart();
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// 处理窗口事件：弹窗失焦关闭、设置窗延迟销毁、弹窗关闭改为隐藏。
+/// 事件线程只做轻量判断，阻塞操作移入子线程。
+fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    match event {
+        tauri::WindowEvent::Focused(focused) => {
+            if window.label() == "popup" && !focused {
+                // close_popup 内部自带 ANIMATING/is_visible 防护，
+                // 重复分发安全，且 compute_position/Win32 调用不阻塞事件循环
+                let app = window.app_handle().clone();
+                std::thread::spawn(move || popup::close_popup(&app));
+            }
+        }
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            let label = window.label();
+            if label == "settings" {
+                // hide 先行：点击瞬间响应。销毁延后 3s 在子线程触发——
+                // wry drop 链的 controller.Close() 会在事件循环线程同步执行，
+                // 浏览器进程繁忙时曾三次卡死整个事件循环（假死）。
+                // dispatched/destroyed 成对日志用于定罪卡点。
+                api.prevent_close();
+                let _ = window.hide();
+                let win = window.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if win.is_visible().unwrap_or(true) {
+                        return; // 延迟期内被重新打开，放弃本次销毁
+                    }
+                    crate::process::append_log("[window] settings destroy dispatched");
+                    let _ = win.destroy();
+                    crate::process::append_log("[window] settings destroyed");
+                });
+            } else if label == "popup" {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn main() {
     // 看门狗自重启路径：等待旧实例内核级死亡后再初始化。
     // 必须先于一切（含 single-instance 插件）：插件第二实例会 SendMessageW(WM_COPYDATA)
@@ -168,22 +348,7 @@ fn main() {
     // 误判为第二实例，走转发路径 exit(0) 自杀（beta.1 自愈实测踩中）
     if watchdog_restart.is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            process::append_log("[single-instance] second instance forwarded");
-            // 回调在事件线程上分发：窗口/配置操作全部移出
-            let app = app.clone();
-            std::thread::spawn(move || {
-                let tab = config::with_config(|c| c.default_popup_tab.clone());
-                if app.get_webview_window("popup").is_some() {
-                    process::append_log(&format!(
-                        "[single-instance] popup exists, open tab={}",
-                        tab
-                    ));
-                    popup::open_popup(&app, &tab);
-                } else {
-                    process::append_log("[single-instance] no popup, create via toggle");
-                    popup::toggle(&app, &tab);
-                }
-            });
+            forward_second_instance(app);
         }));
     }
     let builder = builder
@@ -266,174 +431,20 @@ fn main() {
             }
 
             // 开发调试：设置此环境变量时自动打开设置窗口（用于自动化检测）
-            if std::env::var("PM_DEV_OPEN_SETTINGS").is_ok() {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                    crate::windows::open_settings(&handle);
-                });
-            }
+            spawn_dev_open_settings(app.handle());
 
             // 启动时检测更新（仅非 autostart 模式）
             if !is_autostart && config::with_config(|c| c.check_updates) {
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    crate::process::append_verbose_log("[update] startup check starting");
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    let include = config::with_config(|c| c.include_prerelease);
-                    let current_version = app_handle.package_info().version.to_string();
-                    let (result, stored) =
-                        crate::update::check_and_store("startup", current_version, include).await;
-                    match result {
-                        Ok(info) => {
-                            let status = if info.has_update { "update" } else { "latest" };
-                            let payload = crate::update::UpdateStatus::from_info(&info, status);
-                            let _ = app_handle.emit("update-status", payload);
-                            if info.has_update {
-                                let _ = app_handle.emit("update-available", info.clone());
-                                // Windows 原生通知（带图标 + 点击跳转关于页）
-                                #[cfg(target_os = "windows")]
-                                {
-                                    let ico_path = crate::windows::resolve_toast_icon();
-                                    let app = app_handle.clone();
-                                    let toast = crate::windows::build_toast(
-                                        "发现新版本",
-                                        &format!(
-                                            "发现新版本 v{}，点击查看详情",
-                                            info.latest_version
-                                        ),
-                                        ico_path.as_deref(),
-                                    )
-                                    .on_activated(
-                                        move |_args| {
-                                            crate::process::append_log(
-                                                "[update] toast clicked → open about",
-                                            );
-                                            let app = app.clone();
-                                            std::thread::spawn(move || {
-                                                crate::windows::open_settings_tab(&app, "about");
-                                            });
-                                            Ok(())
-                                        },
-                                    );
-                                    if let Err(e) = toast.show() {
-                                        crate::process::append_log(&format!(
-                                            "[update] toast failed: {:?}",
-                                            e
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // 检查失败：广播已存储的错误状态；任务级失败（未存储）不广播
-                            if stored {
-                                if let Some(payload) = crate::update::get_last_status() {
-                                    let _ = app_handle.emit("update-status", payload);
-                                }
-                            }
-                        }
-                    }
-                });
+                spawn_startup_update_check(app.handle());
             }
 
-            // 看门狗线程：心跳 + 事件循环探活 + 唤醒恢复。
-            // 探针原理：is_visible 经 proxy 往返（排队+recv），事件循环僵死则永挂；
-            // worker 结果经 channel 回传，主循环 recv_timeout 超时即计僵死。
-            // 连续 2 次超时（最坏 ~40s）判定僵死，自动重启自身进程自愈。
-            // 时间跳变检测：唤醒后主动 Resume WebView2（B 类僵死根治）。
-            let app_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                use std::time::Instant;
-
-                let mut stuck_streak = 0u32;
-                let mut last_instant = Instant::now();
-
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(15));
-                    crate::process::append_log("[heartbeat]");
-
-                    // 时间跳变检测：期望 ~15s，>20s 说明系统经历过休眠/唤醒。
-                    // 唤醒后主动 Resume WebView2 渲染进程（Suspend 期间渲染暂停）。
-                    let now = Instant::now();
-                    let elapsed = now.duration_since(last_instant);
-                    last_instant = now;
-                    if elapsed > std::time::Duration::from_secs(20) {
-                        crate::process::append_log(&format!(
-                            "[watchdog] time jump: {:.1}s — resuming webview",
-                            elapsed.as_secs_f64()
-                        ));
-                        if let Some(popup_win) = app_handle.get_webview_window("popup") {
-                            let wv: &tauri::Webview = popup_win.as_ref();
-                            crate::windows::resume_webview(wv);
-                        }
-                    }
-
-                    let probe_app = app_handle.clone();
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        let result = probe_app
-                            .get_webview_window("popup")
-                            .map(|w| w.is_visible().is_ok())
-                            .unwrap_or(true);
-                        let _ = tx.send(result);
-                    });
-                    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                        Ok(true) => stuck_streak = 0,
-                        _ => {
-                            stuck_streak += 1;
-                            crate::process::append_log(&format!(
-                                "[watchdog] event loop unresponsive, streak={}",
-                                stuck_streak
-                            ));
-                            if stuck_streak >= 2 {
-                                watchdog_self_restart();
-                            }
-                        }
-                    }
-                }
-            });
+            // 看门狗线程：心跳 + 事件循环探活 + 唤醒恢复（详注见 spawn_watchdog）
+            spawn_watchdog(app.handle());
 
             process::append_log("[main] startup complete");
             Ok(())
         })
-        .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::Focused(focused) => {
-                    if window.label() == "popup" && !focused {
-                        // 事件线程只做轻量判断；close_popup 内部自带 ANIMATING/is_visible 防护，
-                        // 重复分发安全，且 compute_position/Win32 调用不阻塞事件循环
-                        let app = window.app_handle().clone();
-                        std::thread::spawn(move || popup::close_popup(&app));
-                    }
-                }
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    let label = window.label();
-                    if label == "settings" {
-                        // hide 先行：点击瞬间响应。销毁延后 3s 在子线程触发——
-                        // wry drop 链的 controller.Close() 会在事件循环线程同步执行，
-                        // 浏览器进程繁忙时曾三次卡死整个事件循环（假死）。
-                        // dispatched/destroyed 成对日志用于定罪卡点。
-                        api.prevent_close();
-                        let _ = window.hide();
-                        let win = window.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_secs(3));
-                            if win.is_visible().unwrap_or(true) {
-                                return; // 延迟期内被重新打开，放弃本次销毁
-                            }
-                            crate::process::append_log("[window] settings destroy dispatched");
-                            let _ = win.destroy();
-                            crate::process::append_log("[window] settings destroyed");
-                        });
-                    } else if label == "popup" {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    }
-                }
-                _ => {}
-            }
-        });
+        .on_window_event(|window, event| handle_window_event(window, event));
     let app = match builder.build(tauri::generate_context!()) {
         Ok(app) => app,
         Err(e) => {
