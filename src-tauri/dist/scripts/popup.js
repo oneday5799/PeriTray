@@ -1,6 +1,6 @@
 /* popup.js — 主窗口·入口：导航指示条/tab 切换动画/按钮与 focus 刷新/托盘联动
  * 加载序 4/4（common → popup-audio → popup-devices → 本文件）
- * 提供：switchToTab()（托盘跳转 tab 用）；focus 处理器写入 popup-devices.js 的域缓存变量（同页全局作用域）
+ * 提供：（入口，无跨文件函数；switchToTab 为内部，由 switch-tab 事件/#volume 哈希驱动）；focus 处理器写入 popup-devices.js 的域缓存变量（同页全局作用域）
  * 依赖：common.js(initTheme/getInvoke) / popup-audio.js(loadAudioDevices/loadAudioSessions) /
  *       popup-devices.js(loadDevices/renderDevices)
  */

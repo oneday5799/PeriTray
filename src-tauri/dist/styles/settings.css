@@ -542,9 +542,6 @@
   border-radius: 3px;
   display: flex;
   align-items: center;
-}
-
-.win-combo-item-layout {
   position: relative;
   width: calc(100% - 10px);
 }
@@ -552,9 +549,6 @@
 .win-combo-item-content {
   padding: 5px 11px 7px;
   box-sizing: border-box;
-}
-
-.win-combo-item-content {
   min-width: 0;
   display: block;
   overflow: hidden;

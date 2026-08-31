@@ -635,13 +635,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   white-space: nowrap;
   user-select: none;
   transition: background 0.167s var(--ease-standard), color 0.167s;
-}
-
-/* WinUI 控件按钮共用边框/背景（普通按钮） */
-.dialog-btn,
-.connect-btn,
-.add-device-btn,
-.shortcut-delete-btn {
   border-left: 1px solid var(--control-border);
   border-top: 1px solid var(--control-border);
   border-right: 1px solid var(--control-border);
@@ -1075,15 +1068,17 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 .context-menu-item {
   min-height: 32px;
   margin: 2px 5px;
+  padding: 5px 11px 7px;
   box-sizing: border-box;
   border-radius: 3px;
   display: flex;
   align-items: center;
-}
-
-.context-menu-item {
-  padding: 5px 11px 7px;
-  box-sizing: border-box;
+  position: relative;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--flyout-text);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .context-menu-item:hover {
@@ -1101,15 +1096,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   min-width: 120px;
   box-sizing: border-box;
   padding: 4px 0;
-}
-
-.context-menu-item {
-  position: relative;
-  font-size: 14px;
-  line-height: 20px;
-  color: var(--flyout-text);
-  white-space: nowrap;
-  cursor: pointer;
 }
 
 .context-menu-subitem {
