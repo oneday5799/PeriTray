@@ -27,7 +27,13 @@ impl IAudioEndpointVolumeCallback_Impl for VolumeCallback_Impl {
     fn OnNotify(&self, pnotify: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<()> {
         unsafe {
             if let Some(data) = pnotify.as_ref() {
-                let _ = self.app_handle.emit(
+                crate::process::append_verbose_log(&format!(
+                    "[audio_notify] OnNotify 设备: {} vol={} muted={}",
+                    self.device_id,
+                    data.fMasterVolume,
+                    data.bMuted.as_bool()
+                ));
+                if let Err(e) = self.app_handle.emit(
                     "volume-changed",
                     vec![VolumeChangeEvent {
                         device_id: Some(self.device_id.to_string()),
@@ -35,7 +41,12 @@ impl IAudioEndpointVolumeCallback_Impl for VolumeCallback_Impl {
                         volume: data.fMasterVolume,
                         is_muted: data.bMuted.as_bool(),
                     }],
-                );
+                ) {
+                    crate::process::append_log(&format!(
+                        "[audio_notify] emit volume-changed 失败: {}",
+                        e
+                    ));
+                }
             }
         }
         Ok(())
@@ -69,7 +80,13 @@ impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
         newmute: BOOL,
         _eventcontext: *const GUID,
     ) -> Result<()> {
-        let _ = self.app_handle.emit(
+        crate::process::append_verbose_log(&format!(
+            "[audio_notify] OnSimpleVolumeChanged 会话: {} vol={} muted={}",
+            self.session_id,
+            newvolume,
+            newmute.as_bool()
+        ));
+        if let Err(e) = self.app_handle.emit(
             "volume-changed",
             vec![VolumeChangeEvent {
                 device_id: None,
@@ -77,7 +94,9 @@ impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
                 volume: newvolume,
                 is_muted: newmute.as_bool(),
             }],
-        );
+        ) {
+            crate::process::append_log(&format!("[audio_notify] emit volume-changed 失败: {}", e));
+        }
         Ok(())
     }
 
@@ -116,26 +135,35 @@ struct DeviceNotification {
 }
 
 impl IMMNotificationClient_Impl for DeviceNotification_Impl {
-    fn OnDeviceStateChanged(
-        &self,
-        _pwstrdeviceid: &PCWSTR,
-        _dwnewstate: DEVICE_STATE,
-    ) -> Result<()> {
+    fn OnDeviceStateChanged(&self, pwstrdeviceid: &PCWSTR, dwnewstate: DEVICE_STATE) -> Result<()> {
         unsafe {
+            crate::process::append_verbose_log(&format!(
+                "[audio_notify] OnDeviceStateChanged id={} state={}",
+                (*pwstrdeviceid).to_string().unwrap_or_default(),
+                dwnewstate.0
+            ));
             let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
         }
         Ok(())
     }
 
-    fn OnDeviceAdded(&self, _pwstrdeviceid: &PCWSTR) -> Result<()> {
+    fn OnDeviceAdded(&self, pwstrdeviceid: &PCWSTR) -> Result<()> {
         unsafe {
+            crate::process::append_verbose_log(&format!(
+                "[audio_notify] OnDeviceAdded id={}",
+                (*pwstrdeviceid).to_string().unwrap_or_default()
+            ));
             let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
         }
         Ok(())
     }
 
-    fn OnDeviceRemoved(&self, _pwstrdeviceid: &PCWSTR) -> Result<()> {
+    fn OnDeviceRemoved(&self, pwstrdeviceid: &PCWSTR) -> Result<()> {
         unsafe {
+            crate::process::append_verbose_log(&format!(
+                "[audio_notify] OnDeviceRemoved id={}",
+                (*pwstrdeviceid).to_string().unwrap_or_default()
+            ));
             let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
         }
         Ok(())
@@ -143,14 +171,28 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
 
     fn OnDefaultDeviceChanged(
         &self,
-        _edflow: EDataFlow,
-        _erender: ERole,
-        _pwstrdefaultdeviceid: &PCWSTR,
+        edflow: EDataFlow,
+        erender: ERole,
+        pwstrdefaultdeviceid: &PCWSTR,
     ) -> Result<()> {
+        unsafe {
+            crate::process::append_verbose_log(&format!(
+                "[audio_notify] OnDefaultDeviceChanged flow={} role={} id={}",
+                edflow.0,
+                erender.0,
+                (*pwstrdefaultdeviceid).to_string().unwrap_or_default()
+            ));
+        }
         Ok(())
     }
 
-    fn OnPropertyValueChanged(&self, _pwstrdeviceid: &PCWSTR, _key: &PROPERTYKEY) -> Result<()> {
+    fn OnPropertyValueChanged(&self, pwstrdeviceid: &PCWSTR, _key: &PROPERTYKEY) -> Result<()> {
+        unsafe {
+            crate::process::append_verbose_log(&format!(
+                "[audio_notify] OnPropertyValueChanged id={}",
+                (*pwstrdeviceid).to_string().unwrap_or_default()
+            ));
+        }
         Ok(())
     }
 }
@@ -240,7 +282,19 @@ impl AudioMonitor {
 
             self.sync_session_callbacks();
 
-            let _ = self.app_handle.emit("audio-devices-changed", ());
+            crate::process::append_verbose_log(&format!(
+                "[audio_notify] sync_callbacks: 枚举 {} 台设备，设备回调 {} 个，会话回调 {} 个",
+                count,
+                self.callbacks.len(),
+                self.session_callbacks.len()
+            ));
+
+            if let Err(e) = self.app_handle.emit("audio-devices-changed", ()) {
+                crate::process::append_log(&format!(
+                    "[audio_notify] emit audio-devices-changed 失败: {}",
+                    e
+                ));
+            }
         }
     }
 
@@ -322,20 +376,34 @@ impl AudioMonitor {
         }
         .into();
 
-        if control.RegisterAudioSessionNotification(&callback).is_ok() {
-            self.session_callbacks
-                .insert(id.to_string(), (control.clone(), callback));
-            crate::process::append_log(&format!(
-                "[audio_notify] registered session volume callback: {}",
-                id
-            ));
+        match control.RegisterAudioSessionNotification(&callback) {
+            Ok(()) => {
+                self.session_callbacks
+                    .insert(id.to_string(), (control.clone(), callback));
+                crate::process::append_log(&format!(
+                    "[audio_notify] registered session volume callback: {}",
+                    id
+                ));
+            }
+            Err(e) => {
+                crate::process::append_log(&format!(
+                    "[audio_notify] RegisterAudioSessionNotification failed: {} {}",
+                    id, e
+                ));
+            }
         }
     }
 
     unsafe fn register_device(&mut self, device: &IMMDevice, id: &str) {
         let endpoint: IAudioEndpointVolume = match device.Activate(CLSCTX_ALL, None) {
             Ok(e) => e,
-            Err(_) => return,
+            Err(e) => {
+                crate::process::append_log(&format!(
+                    "[audio_notify] register_device Activate 失败: {} {}",
+                    id, e
+                ));
+                return;
+            }
         };
 
         let device_id: Arc<str> = Arc::from(id);
@@ -345,8 +413,17 @@ impl AudioMonitor {
         }
         .into();
 
-        if endpoint.RegisterControlChangeNotify(&callback).is_ok() {
-            self.callbacks.insert(id.to_string(), (endpoint, callback));
+        match endpoint.RegisterControlChangeNotify(&callback) {
+            Ok(()) => {
+                self.callbacks.insert(id.to_string(), (endpoint, callback));
+                crate::process::append_log(&format!("[audio_notify] 已注册设备音量回调: {}", id));
+            }
+            Err(e) => {
+                crate::process::append_log(&format!(
+                    "[audio_notify] RegisterControlChangeNotify 失败: {} {}",
+                    id, e
+                ));
+            }
         }
     }
 }
