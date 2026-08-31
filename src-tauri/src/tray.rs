@@ -14,7 +14,6 @@ use crate::state::{get_devices_cache, AUTO_MENU_ITEM, AUTO_START, TRAY_POS};
 use crate::windows;
 
 static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new();
-static AUDIO_DEVICES_SUBMENU: OnceLock<Mutex<Option<Submenu<tauri::Wry>>>> = OnceLock::new();
 
 /// 刷新设备缓存，返回是否发生变化。
 /// 查询失败（WMI 不可信态）时跳过本轮，保留旧缓存避免 tooltip 抖动
@@ -254,7 +253,6 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     // 构建音频设备切换子菜单
     let audio_devices_menu = build_audio_devices_menu(app.handle())?;
-    let _ = AUDIO_DEVICES_SUBMENU.get_or_init(|| Mutex::new(Some(audio_devices_menu.clone())));
 
     let menu = build_full_menu(app.handle(), &audio_devices_menu)?;
 
@@ -547,11 +545,6 @@ fn update_audio_devices_menu() {
     }
 
     drop(tray_guard);
-    if let Some(submenu_lock) = AUDIO_DEVICES_SUBMENU.get() {
-        if let Ok(mut guard) = submenu_lock.lock() {
-            *guard = Some(new_submenu);
-        }
-    }
 }
 
 /// 构建 Windows 声音设置子菜单
