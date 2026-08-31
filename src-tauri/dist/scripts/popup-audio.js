@@ -100,7 +100,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
             device.permanentMute = false;
             buttonMutedDevices.delete(device.id);
           }
-          updateDeviceCard(device);
+          applyAudioDeviceChange(device);
         }
         if (change.session_id) {
           const session = audioSessions.find(s => s.id === change.session_id);
@@ -139,7 +139,7 @@ if (window.__TAURI__ && window.__TAURI__.event) {
   });
 }
 
-function updateDeviceCard(device) {
+function applyAudioDeviceChange(device) {
   const cards = document.querySelectorAll(".card.audio-device");
   let targetCard = null;
   for (const card of cards) {
