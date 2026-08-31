@@ -14,6 +14,11 @@ function initGeneralTab() {
     await saveConfig();
   });
 
+  initComboBox("combo-popup-size", config.popup_size || "default", async (val) => {
+    config.popup_size = val;
+    await saveConfig();
+  });
+
   bindToggle("toggle-hardware-acceleration", {
     get: () => config.hardware_acceleration || false,
     set: (v) => { config.hardware_acceleration = v; }

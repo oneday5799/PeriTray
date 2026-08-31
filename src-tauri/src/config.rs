@@ -115,6 +115,9 @@ pub struct Config {
     pub hardware_acceleration: bool,
     #[serde(default = "default_popup_tab")]
     pub default_popup_tab: String,
+    /// 弹窗尺寸档位："small"/"default"/"large"
+    #[serde(default = "default_popup_size")]
+    pub popup_size: String,
     #[serde(default)]
     pub device_shortcuts: std::collections::HashMap<String, DeviceShortcut>,
     #[serde(default)]
@@ -138,6 +141,9 @@ fn default_true() -> bool {
 }
 fn default_popup_tab() -> String {
     "devices".to_string()
+}
+fn default_popup_size() -> String {
+    "default".to_string()
 }
 fn default_theme_mode() -> String {
     "follow_system".to_string()
@@ -187,6 +193,7 @@ impl Default for Config {
             shortcut_volume_mute: None,
             hardware_acceleration: false,
             default_popup_tab: default_popup_tab(),
+            popup_size: default_popup_size(),
             device_shortcuts: std::collections::HashMap::new(),
             enable_device_shortcut_cycle: false,
             theme_mode: default_theme_mode(),

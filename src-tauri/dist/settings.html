@@ -116,6 +116,45 @@
 
       <div class="card">
         <div class="card-left">
+          <span class="card-title">弹出窗口大小</span>
+          <div class="card-desc">调整托盘弹出面板的尺寸，修改后下次打开弹窗生效</div>
+        </div>
+        <div class="win-combo-box" id="combo-popup-size">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">默认</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout" style="display:none;">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="small">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">小</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="default">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">默认</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="large">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">大</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
           <span class="card-title">硬件加速</span>
           <div class="card-desc">关闭可降低内存占用，开启可使动画更流畅，修改后重启生效</div>
         </div>

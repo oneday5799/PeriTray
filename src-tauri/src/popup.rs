@@ -5,9 +5,8 @@ use tauri::Manager;
 use crate::state::{ANIMATING, POPUP_POS, TRAY_POS};
 use crate::windows;
 
-const POPUP_W: f64 = 360.0;
-/// 弹窗首选高度（工作区足够时采用）
-const POPUP_H: f64 = 520.0;
+/// 弹窗宽度 clamp 下限（窄屏下避免退化为不可用宽度）
+const POPUP_MIN_W: f64 = 300.0;
 /// 弹窗动态 clamp 下限（极低分屏下避免退化为不可用高度）
 const POPUP_MIN_H: f64 = 200.0;
 /// 弹窗距屏幕左右边缘的留白（逻辑像素＝物理 26×缩放因子，随缩放等比）
@@ -39,6 +38,7 @@ struct Placement {
     target_x: f64,
     target_y: f64,
     start_y: f64,
+    popup_w: f64,
     popup_h: f64,
 }
 
@@ -46,32 +46,52 @@ struct Placement {
 fn compute_position(app: &tauri::AppHandle) -> Placement {
     // 托盘所在屏工作区（fallback 主屏）：见 windows::resolve_work_area
     let info = windows::resolve_work_area(app);
-    placement_from(info.work_x, info.work_y, info.work_w, info.work_h)
+    let (pref_w, pref_h) = preferred_popup_size();
+    placement_from(
+        info.work_x,
+        info.work_y,
+        info.work_w,
+        info.work_h,
+        pref_w,
+        pref_h,
+    )
 }
 
-/// 依据工作区（逻辑坐标）算出弹窗落点与实高
-fn placement_from(work_x: f64, work_y: f64, work_w: f64, work_h: f64) -> Placement {
+/// 依据工作区（逻辑坐标）算出弹窗落点与实宽高（宽高均对称 clamp，防窄/低分屏溢出）
+fn placement_from(
+    work_x: f64,
+    work_y: f64,
+    work_w: f64,
+    work_h: f64,
+    pref_w: f64,
+    pref_h: f64,
+) -> Placement {
     let tray_x = TRAY_POS
         .get()
         .map(|m| crate::state::lock_unpoisoned(m).0)
         .unwrap_or(work_x + work_w / 2.0);
 
+    // 宽度按工作区动态 clamp：窄屏不越出左右，留 POPUP_EDGE_MARGIN 边距
+    let max_w = (work_w - POPUP_EDGE_MARGIN * 2.0).max(POPUP_MIN_W);
+    let popup_w = pref_w.min(max_w).max(POPUP_MIN_W);
+
     // 弹窗高度按工作区动态 clamp：低分屏不越出上缘，留 45px 上下余量
     let max_h = (work_h - 45.0).max(POPUP_MIN_H);
-    let popup_h = POPUP_H.min(max_h).max(POPUP_MIN_H);
+    let popup_h = pref_h.min(max_h).max(POPUP_MIN_H);
 
     // 底边与任务栏上缘固定留 POPUP_TASKBAR_GAP 间隙（不再依赖托盘图标 y 精度）
     let target_y = (work_y + work_h - popup_h - POPUP_TASKBAR_GAP).max(work_y + 8.0);
 
     // 水平钳制到工作区：居中托盘但不得溢出左右（留 POPUP_EDGE_MARGIN 边距）
     let min_x = work_x + POPUP_EDGE_MARGIN;
-    let max_x = (work_x + work_w - POPUP_W - POPUP_EDGE_MARGIN).max(min_x);
-    let target_x = (tray_x - POPUP_W / 2.0).clamp(min_x, max_x);
+    let max_x = (work_x + work_w - popup_w - POPUP_EDGE_MARGIN).max(min_x);
+    let target_x = (tray_x - popup_w / 2.0).clamp(min_x, max_x);
 
     Placement {
         target_x,
         target_y,
         start_y: work_y + work_h + 10.0,
+        popup_w,
         popup_h,
     }
 }
@@ -90,10 +110,12 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
             close(&window, p.target_x, p.target_y, p.start_y);
         } else {
             let _ = app.emit("switch-tab", tab);
-            show(&window, p.target_x, p.start_y, p.target_y, p.popup_h);
+            show(
+                &window, p.target_x, p.start_y, p.target_y, p.popup_w, p.popup_h,
+            );
         }
     } else {
-        create(app, p.target_x, p.target_y, p.popup_h, tab);
+        create(app, p.target_x, p.target_y, p.popup_w, p.popup_h, tab);
     }
 }
 
@@ -107,10 +129,12 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
     if let Some(window) = app.get_webview_window("popup") {
         let _ = app.emit("switch-tab", tab);
         if !window.is_visible().unwrap_or(false) {
-            show(&window, p.target_x, p.start_y, p.target_y, p.popup_h);
+            show(
+                &window, p.target_x, p.start_y, p.target_y, p.popup_w, p.popup_h,
+            );
         }
     } else {
-        create(app, p.target_x, p.target_y, p.popup_h, tab);
+        create(app, p.target_x, p.target_y, p.popup_w, p.popup_h, tab);
     }
 }
 
@@ -143,13 +167,20 @@ pub fn close_popup(app: &tauri::AppHandle) {
     }
 }
 
-fn show(window: &tauri::WebviewWindow, target_x: f64, start_y: f64, target_y: f64, popup_h: f64) {
+fn show(
+    window: &tauri::WebviewWindow,
+    target_x: f64,
+    start_y: f64,
+    target_y: f64,
+    popup_w: f64,
+    popup_h: f64,
+) {
     // popup 打开前 Resume WebView2 渲染进程（可能因关闭后 Suspend 或系统唤醒处于挂起状态）
     let wv: &tauri::Webview = window.as_ref();
     windows::resume_webview(wv);
 
-    // 按当前工作区动态高度调整窗口（换显示器/换分辨率后高度可能变化）
-    let _ = window.set_size(tauri::LogicalSize::new(POPUP_W, popup_h));
+    // 按当前工作区动态尺寸调整窗口（换显示器/换分辨率/改档位后尺寸可能变化）
+    let _ = window.set_size(tauri::LogicalSize::new(popup_w, popup_h));
 
     ANIMATING.store(true, Ordering::Relaxed);
     // 先移到屏幕外，再置顶，最后显示：滑动全程位于其他窗口之上，
@@ -171,7 +202,14 @@ fn show(window: &tauri::WebviewWindow, target_x: f64, start_y: f64, target_y: f6
     });
 }
 
-fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, popup_h: f64, tab: &str) {
+fn create(
+    app: &tauri::AppHandle,
+    target_x: f64,
+    target_y: f64,
+    popup_w: f64,
+    popup_h: f64,
+    tab: &str,
+) {
     let url = if tab == "volume" {
         "popup.html#volume".to_string()
     } else {
@@ -185,7 +223,7 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, popup_h: f64, ta
             tauri::WebviewWindowBuilder::new(app, "popup", tauri::WebviewUrl::App(url.into()))
                 .additional_browser_args(&crate::windows::browser_args())
                 .title("外设信息")
-                .inner_size(POPUP_W, popup_h)
+                .inner_size(popup_w, popup_h)
                 .decorations(false)
                 .resizable(false)
                 .skip_taskbar(true)
@@ -201,7 +239,7 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, popup_h: f64, ta
     let builder =
         tauri::WebviewWindowBuilder::new(app, "popup", tauri::WebviewUrl::App(url.into()))
             .title("外设信息")
-            .inner_size(POPUP_W, popup_h)
+            .inner_size(popup_w, popup_h)
             .decorations(false)
             .resizable(false)
             .skip_taskbar(true)
@@ -222,7 +260,7 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, popup_h: f64, ta
             // 首启即按 show() 语义重设尺寸/位置：窗口先按创建屏 SF 诞生再被移到目标屏，
             // 混合 DPI 下 builder 的 inner_size 用了创建屏 SF，移动后物理尺寸失真；
             // 此时窗口已就位于目标屏，按逻辑重设即可用目标屏 SF 正确换算。
-            let _ = win.set_size(tauri::LogicalSize::new(POPUP_W, popup_h));
+            let _ = win.set_size(tauri::LogicalSize::new(popup_w, popup_h));
             let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition {
                 x: target_x,
                 y: target_y,
@@ -241,10 +279,10 @@ fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, popup_h: f64, ta
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 crate::process::append_verbose_log(&format!(
-                    "[popup] create size reapply, popup_h={}",
-                    popup_h
+                    "[popup] create size reapply, popup_w={}, popup_h={}",
+                    popup_w, popup_h
                 ));
-                let _ = rewin.set_size(tauri::LogicalSize::new(POPUP_W, popup_h));
+                let _ = rewin.set_size(tauri::LogicalSize::new(popup_w, popup_h));
             });
         }
         Err(e) => {
@@ -273,6 +311,21 @@ fn animate_slide(
         }
         std::thread::sleep(std::time::Duration::from_millis(step_ms));
     }
+}
+
+/// 弹窗尺寸档位 → 首选逻辑宽高（未知档位回退默认 360×520）
+fn popup_size_dims(size: &str) -> (f64, f64) {
+    match size {
+        "small" => (300.0, 440.0),
+        "large" => (420.0, 600.0),
+        _ => (360.0, 520.0),
+    }
+}
+
+/// 从配置读取弹窗当前档位并映射为首选尺寸
+fn preferred_popup_size() -> (f64, f64) {
+    let size = crate::config::with_config(|c| c.popup_size.clone());
+    popup_size_dims(&size)
 }
 
 fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {
