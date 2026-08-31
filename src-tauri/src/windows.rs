@@ -390,6 +390,25 @@ pub fn resolve_toast_icon() -> Option<std::path::PathBuf> {
     None
 }
 
+/// 装配带应用 AUMID 与（可选）圆角图标的 Toast，标题/正文由调用点指定。
+/// 通知的 `on_activated` 回调与 `.show()` 由调用点链式补全，便于各自定制行为与日志标签。
+#[cfg(target_os = "windows")]
+pub fn build_toast(
+    title: &str,
+    text: &str,
+    icon: Option<&std::path::Path>,
+) -> tauri_winrt_notification::Toast {
+    use tauri_winrt_notification::IconCrop;
+
+    let mut toast = tauri_winrt_notification::Toast::new(AUMID)
+        .title(title)
+        .text1(text);
+    if let Some(path) = icon {
+        toast = toast.icon(path, IconCrop::Circular, "");
+    }
+    toast
+}
+
 // ═══════════════════════════════════════════════════════════════
 // AUMID 注册（Windows 通知图标依赖）
 // ═══════════════════════════════════════════════════════════════

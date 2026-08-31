@@ -30,11 +30,6 @@ struct XinputBatteryInformation {
     battery_level: u8,
 }
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn LoadLibraryA(name: *const u8) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
-}
 type XinputGetBatteryInfoFn =
     unsafe extern "system" fn(u32, u32, *mut XinputBatteryInformation) -> u32;
 type RawXinputFn = unsafe extern "system" fn() -> u32;
@@ -46,16 +41,16 @@ fn xinput_module() -> *mut c_void {
     static MODULE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *MODULE.get_or_init(|| unsafe {
         // 优先 xinput1_4.dll（Win8+），xinput9_1_0.dll 为 Vista+ 备选
-        let m = LoadLibraryA(b"xinput1_4.dll\0".as_ptr());
+        let m = crate::process::load_library(b"xinput1_4.dll\0");
         if !m.is_null() {
             return m as usize;
         }
-        LoadLibraryA(b"xinput9_1_0.dll\0".as_ptr()) as usize
+        crate::process::load_library(b"xinput9_1_0.dll\0") as usize
     }) as *mut c_void
 }
 
 unsafe fn xinput_proc(name: &[u8]) -> Option<RawXinputFn> {
-    let ptr = GetProcAddress(xinput_module(), name.as_ptr());
+    let ptr = crate::process::get_proc_address(xinput_module(), name);
     if ptr.is_null() {
         None
     } else {

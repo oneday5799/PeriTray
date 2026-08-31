@@ -269,6 +269,25 @@ pub fn to_wide(s: &str) -> Vec<u16> {
         .collect()
 }
 
+/// 动态加载 DLL 并返回模块句柄（封装 kernel32 LoadLibraryA；name 须以 `\0` 结尾）
+pub unsafe fn load_library(name: &[u8]) -> *mut core::ffi::c_void {
+    LoadLibraryA(name.as_ptr())
+}
+
+/// 按名取 DLL 导出函数地址（封装 kernel32 GetProcAddress；name 须以 `\0` 结尾）
+pub unsafe fn get_proc_address(
+    module: *mut core::ffi::c_void,
+    name: &[u8],
+) -> *mut core::ffi::c_void {
+    GetProcAddress(module, name.as_ptr())
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn LoadLibraryA(name: *const u8) -> *mut core::ffi::c_void;
+    fn GetProcAddress(module: *mut core::ffi::c_void, name: *const u8) -> *mut core::ffi::c_void;
+}
+
 /// 通过 ShellExecuteW 打开文件/URL/命令
 fn shell_open(file: &str, params: Option<&str>) {
     let wide_file = to_wide(file);

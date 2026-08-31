@@ -457,20 +457,15 @@ pub fn set_session_mute(session_id: &str, muted: bool) -> Result<()> {
     Ok(())
 }
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn LoadLibraryA(name: *const u8) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
-}
-
 fn combase_module() -> *mut c_void {
     static COM_BASE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let m = *COM_BASE.get_or_init(|| unsafe { LoadLibraryA(b"combase.dll\0".as_ptr()) as usize });
+    let m = *COM_BASE
+        .get_or_init(|| unsafe { crate::process::load_library(b"combase.dll\0") as usize });
     m as *mut c_void
 }
 
 unsafe fn combase_proc(name: &[u8]) -> *mut c_void {
-    GetProcAddress(combase_module(), name.as_ptr())
+    crate::process::get_proc_address(combase_module(), name)
 }
 
 type RoGetActivationFactoryFn = unsafe extern "system" fn(

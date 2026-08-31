@@ -294,17 +294,18 @@ fn main() {
                                 // Windows 原生通知（带图标 + 点击跳转关于页）
                                 #[cfg(target_os = "windows")]
                                 {
-                                    use tauri_winrt_notification::{IconCrop, Toast};
-
                                     let ico_path = crate::windows::resolve_toast_icon();
                                     let app = app_handle.clone();
-                                    let mut toast = Toast::new(crate::windows::AUMID)
-                                        .title("发现新版本")
-                                        .text1(&format!(
+                                    let toast = crate::windows::build_toast(
+                                        "发现新版本",
+                                        &format!(
                                             "发现新版本 v{}，点击查看详情",
                                             info.latest_version
-                                        ))
-                                        .on_activated(move |_args| {
+                                        ),
+                                        ico_path.as_deref(),
+                                    )
+                                    .on_activated(
+                                        move |_args| {
                                             crate::process::append_log(
                                                 "[update] toast clicked → open about",
                                             );
@@ -313,10 +314,8 @@ fn main() {
                                                 crate::windows::open_settings_tab(&app, "about");
                                             });
                                             Ok(())
-                                        });
-                                    if let Some(ref path) = ico_path {
-                                        toast = toast.icon(path.as_path(), IconCrop::Circular, "");
-                                    }
+                                        },
+                                    );
                                     if let Err(e) = toast.show() {
                                         crate::process::append_log(&format!(
                                             "[update] toast failed: {:?}",

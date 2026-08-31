@@ -62,15 +62,11 @@ pub fn check_battery_notify(devices: &[Device]) {
 
                 #[cfg(target_os = "windows")]
                 {
-                    use tauri_winrt_notification::{IconCrop, Toast};
-
-                    let mut toast = Toast::new(crate::windows::AUMID)
-                        .title("低电量提醒")
-                        .text1(&format!("{} 电量仅剩 {}%", display_name, level));
-
-                    if let Some(ref path) = icon {
-                        toast = toast.icon(path.as_path(), IconCrop::Circular, "");
-                    }
+                    let toast = crate::windows::build_toast(
+                        "低电量提醒",
+                        &format!("{} 电量仅剩 {}%", display_name, level),
+                        icon.as_deref(),
+                    );
 
                     if let Err(e) = toast.show() {
                         crate::process::append_log(&format!(
