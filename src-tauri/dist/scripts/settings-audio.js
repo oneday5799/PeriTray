@@ -116,10 +116,6 @@ function initForceMuteSettings() {
 
   btn.addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (activeSettingsMenu) {
-      hideAllContextMenus();
-      return;
-    }
     let audioDevices = [];
     try {
       audioDevices = await invoke("get_audio_devices");
@@ -131,61 +127,30 @@ function initForceMuteSettings() {
     const selected = new Set(config.force_mute_devices || []);
     const deviceNames = config.device_names || {};
 
-    const menu = document.createElement("div");
-    menu.className = "context-menu";
-    menu.style.maxHeight = "360px";
-    menu.style.overflowY = "auto";
-
-    for (const dev of audioDevices) {
-      if (hidden.includes(dev.name)) continue;
-      const item = document.createElement("div");
-      item.className = "context-menu-item";
-      item.style.display = "flex";
-      item.style.alignItems = "center";
-
-      const leading = document.createElement("span");
-      leading.className = "context-menu-leading";
-      const isChecked = selected.has(dev.name);
-      if (isChecked) {
-        leading.appendChild(createCheckIcon());
-      }
-      item.appendChild(leading);
-
-      const label = document.createElement("span");
-      label.textContent = fmtDevName(deviceNames[dev.name] || dev.name);
-      item.appendChild(label);
-
-      item.addEventListener("click", async (ev) => {
-        ev.stopPropagation();
+    createCheckableMenu({
+      anchor: btn,
+      emptyText: "没有可用的音频设备",
+      items: audioDevices
+        .filter(dev => !hidden.includes(dev.name))
+        .map(dev => ({
+          key: dev.name,
+          label: fmtDevName(deviceNames[dev.name] || dev.name),
+        })),
+      checked: selected,
+      onToggle: async (name) => {
         const list = config.force_mute_devices || [];
-        const idx = list.indexOf(dev.name);
+        const idx = list.indexOf(name);
         if (idx >= 0) {
           list.splice(idx, 1);
+          selected.delete(name);
         } else {
-          list.push(dev.name);
+          list.push(name);
+          selected.add(name);
         }
         config.force_mute_devices = list;
         await saveConfig();
-        leading.innerHTML = "";
-        if (list.indexOf(dev.name) >= 0) {
-          leading.appendChild(createCheckIcon());
-        }
-      });
-
-      menu.appendChild(item);
-    }
-
-    if (menu.childElementCount === 0) {
-      const empty = document.createElement("div");
-      empty.className = "context-menu-item";
-      empty.textContent = "没有可用的音频设备";
-      menu.appendChild(empty);
-    }
-
-    document.body.appendChild(menu);
-    const rect = btn.getBoundingClientRect();
-    clampMenuPosition(menu, rect.right - menu.offsetWidth, rect.bottom + 4);
-    activeSettingsMenu = menu;
+      },
+    });
   });
 }
 

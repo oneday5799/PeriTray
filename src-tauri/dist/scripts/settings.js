@@ -1,9 +1,9 @@
 /* settings.js — 设置页·入口框架：init 装配/导航与 tab 切换/ComboBox 工厂/更新检测横切流程/
  *            NumberBox 焦点装配/材质浮层背景/config-changed 与 settings-tab 监听
  * 加载序 7/7（最后执行，调用各分区脚本提供的 init 系列与刷新函数）
- * 提供：saveConfig/bindToggle/createToggle/createExpandableCard/initComboBox/runUpdateCheck/
- *       copyToClipboard/showUpdateErrorFlyout/renderUpdateInfobar/updateFlyoutBackdrop
- *       等框架级共享函数
+ * 提供：saveConfig/createCheckableMenu/bindToggle/createToggle/createExpandableCard/
+ *       initComboBox/runUpdateCheck/copyToClipboard/showUpdateErrorFlyout/renderUpdateInfobar/
+ *       updateFlyoutBackdrop 等框架级共享函数
  * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/about) */
 let config = null;
 let activeSettingsMenu = null;
@@ -29,6 +29,62 @@ async function saveConfig() {
   } catch (e) {
     console.error("Failed to save config:", e);
   }
+}
+
+// ── 复选型多选菜单（低电量设备 / 强制静音设备共用的右键菜单壳） ─────────
+// 仅负责 DOM 骨架（context-menu + leading 勾选图标 + 定位 + activeSettingsMenu 登记），
+// 数据源/过滤/config 字段/空态文案由调用点注入；onToggle 负责更新 config 并同步 checked。
+function createCheckableMenu({ anchor, items, checked, onToggle, emptyText }) {
+  if (activeSettingsMenu) {
+    hideAllContextMenus();
+    return;
+  }
+
+  const menu = document.createElement("div");
+  menu.className = "context-menu";
+  menu.style.maxHeight = "360px";
+  menu.style.overflowY = "auto";
+
+  for (const { key, label } of items) {
+    const item = document.createElement("div");
+    item.className = "context-menu-item";
+    item.style.display = "flex";
+    item.style.alignItems = "center";
+
+    const leading = document.createElement("span");
+    leading.className = "context-menu-leading";
+    if (checked.has(key)) {
+      leading.appendChild(createCheckIcon());
+    }
+    item.appendChild(leading);
+
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    item.appendChild(labelEl);
+
+    item.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await onToggle(key);
+      leading.innerHTML = "";
+      if (checked.has(key)) {
+        leading.appendChild(createCheckIcon());
+      }
+    });
+
+    menu.appendChild(item);
+  }
+
+  if (menu.childElementCount === 0) {
+    const empty = document.createElement("div");
+    empty.className = "context-menu-item";
+    empty.textContent = emptyText;
+    menu.appendChild(empty);
+  }
+
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  clampMenuPosition(menu, rect.right - menu.offsetWidth, rect.bottom + 4);
+  activeSettingsMenu = menu;
 }
 
 function bindToggle(id, { get, set, onChange }) {

@@ -280,10 +280,6 @@ async function renderLowBatteryContent() {
 
   selectBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (activeSettingsMenu) {
-      hideAllContextMenus();
-      return;
-    }
     let allDevices = [];
     try {
       allDevices = await invoke("get_cached_devices");
@@ -296,59 +292,28 @@ async function renderLowBatteryContent() {
     const selected = new Set(config.low_battery_devices || []);
     const deviceNames = config.device_names || {};
 
-    const menu = document.createElement("div");
-    menu.className = "context-menu";
-    menu.style.maxHeight = "360px";
-    menu.style.overflowY = "auto";
-
-    for (const dev of wireless) {
-      const item = document.createElement("div");
-      item.className = "context-menu-item";
-      item.style.display = "flex";
-      item.style.alignItems = "center";
-
-      const leading = document.createElement("span");
-      leading.className = "context-menu-leading";
-      if (selected.has(dev.name)) {
-        leading.appendChild(createCheckIcon());
-      }
-      item.appendChild(leading);
-
-      const label = document.createElement("span");
-      label.textContent = fmtDevName(deviceNames[dev.name] || dev.name);
-      item.appendChild(label);
-
-      item.addEventListener("click", async (ev) => {
-        ev.stopPropagation();
+    createCheckableMenu({
+      anchor: selectBtn,
+      emptyText: "没有无线设备",
+      items: wireless.map(dev => ({
+        key: dev.name,
+        label: fmtDevName(deviceNames[dev.name] || dev.name),
+      })),
+      checked: selected,
+      onToggle: async (name) => {
         const list = config.low_battery_devices || [];
-        const idx = list.indexOf(dev.name);
+        const idx = list.indexOf(name);
         if (idx >= 0) {
           list.splice(idx, 1);
+          selected.delete(name);
         } else {
-          list.push(dev.name);
+          list.push(name);
+          selected.add(name);
         }
         config.low_battery_devices = list;
         await saveConfig();
-        leading.innerHTML = "";
-        if (list.indexOf(dev.name) >= 0) {
-          leading.appendChild(createCheckIcon());
-        }
-      });
-
-      menu.appendChild(item);
-    }
-
-    if (menu.childElementCount === 0) {
-      const empty = document.createElement("div");
-      empty.className = "context-menu-item";
-      empty.textContent = "没有无线设备";
-      menu.appendChild(empty);
-    }
-
-    document.body.appendChild(menu);
-    const rect = selectBtn.getBoundingClientRect();
-    clampMenuPosition(menu, rect.right - menu.offsetWidth, rect.bottom + 4);
-    activeSettingsMenu = menu;
+      },
+    });
   });
 
   // ── 电量阈值 ──
