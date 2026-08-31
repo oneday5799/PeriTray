@@ -184,6 +184,27 @@ for (const page of PAGES) {
     for (const n of declaredNames(stripLiterals(read(f)))) defined.add(n);
   }
 
+  // ── 跨文件同名全局函数检测 ──────────────────────────────
+  // 经典脚本共享全局作用域，同名顶层 function 声明会互相遮蔽（后加载者
+  // 覆盖先加载者），属静默逻辑错误。判例：updateDeviceCard 在音量页与
+  // 设备信息页同名，volume-changed 事件误调设备信息版函数致滑块永不更新。
+  const fnOwners = new Map();
+  for (const f of pageJs) {
+    const clean = stripLiterals(read(f));
+    for (const m of clean.matchAll(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gm)) {
+      const name = m[1];
+      if (!fnOwners.has(name)) fnOwners.set(name, []);
+      fnOwners.get(name).push(path.basename(f));
+    }
+  }
+  for (const [name, files] of fnOwners) {
+    if (files.length > 1) {
+      errors.push(
+        `${page}: 同名全局函数 "${name}" 在 ${files.join("、")} 中重复定义（后加载会遮蔽前加载）`,
+      );
+    }
+  }
+
   for (const f of pageJs) {
     const clean = stripLiterals(read(f));
     for (const name of calledNames(clean)) {
