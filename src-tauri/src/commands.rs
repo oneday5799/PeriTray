@@ -510,11 +510,11 @@ pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
 /// 设置窗口材质并应用到所有窗口
 #[tauri::command]
 pub fn set_window_material(app: tauri::AppHandle, material: String) -> Result<bool, String> {
-    crate::windows::set_window_material(&app, material)
+    crate::window_material::set_window_material(&app, material)
 }
 
 /// 检查系统是否支持指定材质
 #[tauri::command]
 pub fn check_material_support(material: String) -> Result<bool, String> {
-    Ok(crate::windows::check_material_support(&material))
+    Ok(crate::window_material::check_material_support(&material))
 }

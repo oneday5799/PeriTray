@@ -4,6 +4,7 @@
 mod app_icon;
 mod audio;
 mod audio_notify;
+mod audio_policy;
 mod audio_spatial;
 mod battery_notify;
 mod bluetooth;
@@ -19,6 +20,8 @@ mod shortcut;
 mod state;
 mod tray;
 mod update;
+mod webview;
+mod window_material;
 mod windows;
 mod wireless_24g;
 mod wmi_query;
@@ -220,7 +223,7 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
                 ));
                 if let Some(popup_win) = app_handle.get_webview_window("popup") {
                     let wv: &tauri::Webview = popup_win.as_ref();
-                    crate::windows::resume_webview(wv);
+                    crate::webview::resume_webview(wv);
                 }
             }
 

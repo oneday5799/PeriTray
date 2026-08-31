@@ -3,6 +3,8 @@ use tauri::Emitter;
 use tauri::Manager;
 
 use crate::state::{ANIMATING, POPUP_POS, TRAY_POS};
+use crate::webview;
+use crate::window_material;
 use crate::windows;
 
 /// 弹窗宽度 clamp 下限（窄屏下避免退化为不可用宽度）
@@ -177,7 +179,7 @@ fn show(
 ) {
     // popup 打开前 Resume WebView2 渲染进程（可能因关闭后 Suspend 或系统唤醒处于挂起状态）
     let wv: &tauri::Webview = window.as_ref();
-    windows::resume_webview(wv);
+    webview::resume_webview(wv);
 
     // 按当前工作区动态尺寸调整窗口（换显示器/换分辨率/改档位后尺寸可能变化）
     let _ = window.set_size(tauri::LogicalSize::new(popup_w, popup_h));
@@ -253,9 +255,9 @@ fn create(
                 windows::set_rounded_corners(hwnd.0 as isize);
                 // 应用窗口材质（DWM 层；webview 表面恒透明，COM 一次性设定与材质无关）
                 let material = crate::config::with_config(|c| c.window_material.clone());
-                windows::apply_window_material(hwnd.0 as isize, &material);
+                window_material::apply_window_material(hwnd.0 as isize, &material);
                 let wv: &tauri::Webview = win.as_ref();
-                windows::ensure_webview_bg_transparent(wv);
+                webview::ensure_webview_bg_transparent(wv);
             }
             // 首启即按 show() 语义重设尺寸/位置：窗口先按创建屏 SF 诞生再被移到目标屏，
             // 混合 DPI 下 builder 的 inner_size 用了创建屏 SF，移动后物理尺寸失真；
@@ -347,5 +349,5 @@ fn animate_close(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64
     // - 释放 CPU/内存（渲染进程休眠）
     // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（B 类僵死根治）
     let wv: &tauri::Webview = window.as_ref();
-    windows::suspend_webview(wv);
+    webview::suspend_webview(wv);
 }
