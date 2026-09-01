@@ -4,6 +4,19 @@
   box-sizing: border-box;
 }
 
+/* ── 交互净化：禁用图片拖拽 + 消除默认焦点黑框 ── */
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+*:focus,
+*:focus-visible {
+  outline: none !important;
+}
+
 /*
  * base.css — 主窗口 + 设置页共享样式
  *
