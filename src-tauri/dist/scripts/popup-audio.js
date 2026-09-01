@@ -1,6 +1,6 @@
 /* popup-audio.js — 主窗口·音量控制 tab：设备/会话音量滑块渲染与调节/mute 切换/
  *            滚轮微调与 tooltip/强制静音记账/volume-changed 监听
- * 加载序 2/4 · 提供：loadAudioDevices()/loadAudioSessions()/reconcileCards()（render* 为内部函数）
+ * 加载序 2/4 · 提供：loadAudioDevices()/loadAudioSessions()（render* 为内部函数）
  * 依赖：common.js(getInvoke/describeShortcutError/attachSessionTooltip/showToast/createSubmenuShell/
  *       formatDeviceName/registerContextMenu/clampMenuPosition/hideAllContextMenus/
  *       showRenameDialog/createDialog/closeDialog/bindShortcutRecorder/attachTooltip) */
@@ -461,32 +461,6 @@ async function loadAudioDevices() {
   } catch (e) {
     if (list.querySelectorAll(".card.audio-device").length === 0) {
       list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
-    }
-  }
-}
-
-// 对账式渲染骨架：按 id 差集移除失效卡，已有卡走 update，新增项建卡后追加
-function reconcileCards(list, cardSelector, idProp, items, createCard, updateCard) {
-  const existingCards = new Map();
-  list.querySelectorAll(cardSelector).forEach(card => {
-    existingCards.set(card.dataset[idProp], card);
-  });
-
-  const newIds = new Set(items.map(item => item.id));
-
-  existingCards.forEach((card, id) => {
-    if (!newIds.has(id)) {
-      card.remove();
-    }
-  });
-
-  for (const item of items) {
-    let card = existingCards.get(item.id);
-
-    if (card) {
-      updateCard(card, item);
-    } else {
-      list.appendChild(createCard(item));
     }
   }
 }

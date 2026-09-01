@@ -4,9 +4,7 @@
  *       刷新按钮传 true 走 get_devices_fresh 强制现查 2.4G 电量）；
  *       快照水合与 24g-battery-updated/devices-changed 推送订阅（静默重拉）
  * 依赖：common.js（getInvoke/CATEGORIES/getDisplayName/showToast/registerContextMenu/
- *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell） /
- *       popup-audio.js（reconcileCards 对账式渲染骨架——两页刷新时统一按差集增删、
- *       已有卡原地更新，避免整页 innerHTML 重建导致的闪烁） /
+ *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell/reconcileCards） /
  *       window.__TAURI__.event（后端推送：电量变更/设备增删）
  */
 let allDevices = [];

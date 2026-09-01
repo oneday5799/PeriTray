@@ -7,9 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub(crate) fn cache_path() -> std::path::PathBuf {
-    crate::process::exe_dir()
-        .join("data")
-        .join("24g_battery_cache.json")
+    crate::process::data_dir().join("24g_battery_cache.json")
 }
 
 /// 读盘还原 (vid,pid) → 电量；键非法条目跳过，缺失/损坏返回空表

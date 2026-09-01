@@ -20,6 +20,11 @@ pub fn logs_dir() -> PathBuf {
     exe_dir().join("logs")
 }
 
+/// 获取数据目录（`<exe目录>/data`）
+pub fn data_dir() -> PathBuf {
+    exe_dir().join("data")
+}
+
 /// 创建 Windows 隐藏窗口命令
 #[cfg(target_os = "windows")]
 fn new_hidden_cmd(program: &str) -> Command {

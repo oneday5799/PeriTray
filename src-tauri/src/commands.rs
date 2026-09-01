@@ -212,9 +212,7 @@ pub fn frontend_log(tag: String, msg: String) {
 
 #[tauri::command]
 pub fn open_24g_device_file() -> Result<(), String> {
-    let path = crate::process::exe_dir()
-        .join("data")
-        .join("wireless_24g_devices_user.json");
+    let path = crate::device_data::user_data_path();
     if !path.exists() {
         // 内置 2.4G 库已废除，全新安装环境可能没有 data 目录
         if let Some(dir) = path.parent() {

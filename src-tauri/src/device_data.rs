@@ -29,10 +29,8 @@ static DEVICE_DATA: OnceLock<RwLock<HashMap<String, HashMap<String, DeviceInfo>>
     OnceLock::new();
 static LAST_MTIME: OnceLock<Mutex<Option<Option<SystemTime>>>> = OnceLock::new();
 
-fn user_data_path() -> std::path::PathBuf {
-    crate::process::exe_dir()
-        .join("data")
-        .join("wireless_24g_devices_user.json")
+pub(crate) fn user_data_path() -> std::path::PathBuf {
+    crate::process::data_dir().join("wireless_24g_devices_user.json")
 }
 
 // ── 数据源：用户文件 ─────────────────────────────────────

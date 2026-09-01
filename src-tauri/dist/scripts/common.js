@@ -4,7 +4,7 @@
  *            对话框与 toast/快捷键录制器（码表为本文件内部实现细节，不对外）
  * 加载序 1/N · 提供：window 全局 API —— CATEGORIES/initTheme/applyThemeMode/applyMaterialMode/
  *             getInvoke/getDisplayName/simplifyDeviceName/formatDeviceName/attachTooltip/
- *             attachSessionTooltip/showSessionTip/hideSessionTip/registerContextMenu/
+ *             attachSessionTooltip/showSessionTip/hideSessionTip/reconcileCards/registerContextMenu/
  *             clampMenuPosition/hideAllContextMenus/createSubmenuShell/createCheckIcon/
  *             showRenameDialog/createDialog/closeDialog/showToast/describeShortcutError/
  *             bindShortcutRecorder
@@ -120,6 +120,33 @@ window.formatDeviceName = function (name, customNames, simplify) {
   if (simplify) return window.simplifyDeviceName(name);
   return name;
 };
+
+// ── 对账式渲染骨架（popup 设备/会话列表共用） ────────────
+// 按 id 差集移除失效卡，已有卡走 update，新增项建卡后追加
+function reconcileCards(list, cardSelector, idProp, items, createCard, updateCard) {
+  const existingCards = new Map();
+  list.querySelectorAll(cardSelector).forEach(card => {
+    existingCards.set(card.dataset[idProp], card);
+  });
+
+  const newIds = new Set(items.map(item => item.id));
+
+  existingCards.forEach((card, id) => {
+    if (!newIds.has(id)) {
+      card.remove();
+    }
+  });
+
+  for (const item of items) {
+    let card = existingCards.get(item.id);
+
+    if (card) {
+      updateCard(card, item);
+    } else {
+      list.appendChild(createCard(item));
+    }
+  }
+}
 
 // ── 应用名 tooltip（页面内，超出边界自动避让） ────────────
 let sessionTipTimer = null;
