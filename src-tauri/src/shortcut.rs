@@ -180,9 +180,27 @@ pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str, key
     match action {
         "devices" => crate::popup::open_popup(app, "devices"),
         "volume" => crate::popup::open_popup(app, "volume"),
-        "volume_up" => crate::audio::adjust_default_volume_up(),
-        "volume_down" => crate::audio::adjust_default_volume_down(),
-        "volume_mute" => crate::audio::toggle_default_mute(),
+        "volume_up" => {
+            crate::process::append_log(&format!(
+                "[hotkey] volume action: {} (key={})",
+                action, key
+            ));
+            crate::audio::adjust_default_volume_up()
+        }
+        "volume_down" => {
+            crate::process::append_log(&format!(
+                "[hotkey] volume action: {} (key={})",
+                action, key
+            ));
+            crate::audio::adjust_default_volume_down()
+        }
+        "volume_mute" => {
+            crate::process::append_log(&format!(
+                "[hotkey] volume action: {} (key={})",
+                action, key
+            ));
+            crate::audio::toggle_default_mute()
+        }
         _ => {}
     }
 }

@@ -167,6 +167,7 @@ pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) 
 
 #[tauri::command]
 pub fn change_device_group(app: tauri::AppHandle, name: String, group: String) {
+    crate::process::append_log(&format!("[cmd] change_device_group: {} -> {}", name, group));
     config::with_config_mut(|c| {
         if group.is_empty() {
             c.device_groups.remove(&name);
@@ -179,6 +180,7 @@ pub fn change_device_group(app: tauri::AppHandle, name: String, group: String) {
 
 #[tauri::command]
 pub fn toggle_group_hidden(app: tauri::AppHandle, group: String) {
+    crate::process::append_log(&format!("[cmd] toggle_group_hidden: {}", group));
     config::with_config_mut(|c| toggle_vec_item(&mut c.hidden_groups, &group));
     let _ = app.emit("config-changed", ());
 }
@@ -230,8 +232,13 @@ pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(
     let (already_added, count) =
         config::with_config(|c| (c.tray_devices.contains(&name), c.tray_devices.len()));
     if !already_added && count >= TRAY_DEVICE_LIMIT {
+        crate::process::append_log(&format!(
+            "[cmd] toggle_device_tray: {} 达上限({})拒绝",
+            name, TRAY_DEVICE_LIMIT
+        ));
         return Err(format!("托盘最多添加 {} 个设备", TRAY_DEVICE_LIMIT));
     }
+    crate::process::append_log(&format!("[cmd] toggle_device_tray: {}", name));
     run_blocking(move || {
         config::with_config_mut(|c| toggle_vec_item(&mut c.tray_devices, &name));
     })
@@ -469,6 +476,11 @@ pub fn set_device_shortcut(
             }
         }
     }
+    crate::process::append_log(&format!(
+        "[hotkey] set_device_shortcut: {} key={}",
+        name,
+        key.as_deref().unwrap_or("None")
+    ));
     set_device_shortcut_key(&device_id, &name, key);
     crate::shortcut::sync_device_shortcuts(&app);
     let _ = app.emit("config-changed", ());
@@ -494,6 +506,7 @@ fn set_device_shortcut_key(device_id: &str, name: &str, key: Option<String>) {
 
 #[tauri::command]
 pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
+    crate::process::append_log(&format!("[hotkey] remove_device_shortcut: {}", device_id));
     config::with_config_mut(|c| {
         c.device_shortcuts.remove(&device_id);
     });

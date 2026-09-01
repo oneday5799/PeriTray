@@ -138,6 +138,10 @@ unsafe fn get_device_name(device: &IMMDevice) -> Result<String> {
 }
 
 pub fn set_device_volume(device_id: &str, volume: f32) -> Result<()> {
+    crate::process::append_verbose_log(&format!(
+        "[audio] set_device_volume {} {}",
+        device_id, volume
+    ));
     let mute_lock = crate::config::with_config(|c| c.mute_lock);
     unsafe {
         with_enumerator(|enumerator| -> Result<()> {
@@ -193,6 +197,10 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
             let current = endpoint.GetMute()?;
             new_muted = !current.as_bool();
             let name = get_device_name(&device).unwrap_or_default();
+            crate::process::append_log(&format!(
+                "[audio] toggle_device_mute '{}' -> {}",
+                name, new_muted
+            ));
             let force_mute =
                 crate::config::with_config(|c| c.force_mute_devices.iter().any(|n| n == &name));
             if new_muted {
@@ -231,6 +239,10 @@ fn force_mute_prev_volume() -> &'static std::sync::Mutex<std::collections::HashM
 }
 
 pub fn set_device_mute(device_id: &str, muted: bool) -> Result<()> {
+    crate::process::append_log(&format!(
+        "[audio] set_device_mute {} muted={}",
+        device_id, muted
+    ));
     unsafe {
         with_enumerator(|enumerator| -> Result<()> {
             let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
@@ -362,6 +374,10 @@ unsafe fn find_session_volume(session_id: &str) -> Result<ISimpleAudioVolume> {
 }
 
 pub fn set_session_volume(session_id: &str, volume: f32) -> Result<()> {
+    crate::process::append_verbose_log(&format!(
+        "[audio] set_session_volume {} {}",
+        session_id, volume
+    ));
     unsafe {
         let sv = find_session_volume(session_id)?;
         sv.SetMasterVolume(volume.max(0.0).min(1.0), ptr::null())?;
@@ -370,6 +386,10 @@ pub fn set_session_volume(session_id: &str, volume: f32) -> Result<()> {
 }
 
 pub fn set_session_mute(session_id: &str, muted: bool) -> Result<()> {
+    crate::process::append_log(&format!(
+        "[audio] set_session_mute {} muted={}",
+        session_id, muted
+    ));
     unsafe {
         let sv = find_session_volume(session_id)?;
         sv.SetMute(muted, ptr::null())?;

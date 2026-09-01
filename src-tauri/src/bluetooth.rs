@@ -330,14 +330,24 @@ fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
 pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
     let _guard = crate::state::lock_unpoisoned(&BT_LOCK);
 
-    let header = format!("[bt] {} device='{}'", action.to_uppercase(), name);
-    crate::process::append_log(&header);
+    let action_upper = action.to_uppercase();
+    crate::process::append_log(&format!("[bt] {} device='{}'", action_upper, name));
 
-    let result = bt_action_native(name, action)?;
-
-    crate::process::append_log(&format!("[bt] result: {}", result));
-
-    Ok(result)
+    match bt_action_native(name, action) {
+        Ok(result) => {
+            crate::process::append_log(&format!("[bt] {} 完成", action_upper));
+            crate::process::append_verbose_log(&format!("[bt:dbg] {}:\n{}", action_upper, result));
+            Ok(result)
+        }
+        Err(e) => {
+            crate::process::append_log(&format!("[bt] {} 失败", action_upper));
+            crate::process::append_verbose_log(&format!(
+                "[bt:dbg] {} 失败详情:\n{}",
+                action_upper, e
+            ));
+            Err(e)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -220,6 +220,15 @@ fn unpack_device_id(packed: &str) -> String {
 
 /// 设置某进程（应用）的音频输出/输入设备。device_id 为空表示恢复系统默认
 pub fn set_session_device(pid: u32, direction: &str, device_id: &str) -> Result<()> {
+    let target = if device_id.is_empty() {
+        "default"
+    } else {
+        device_id
+    };
+    crate::process::append_log(&format!(
+        "[audio] set_session_device pid={} dir={} device={}",
+        pid, direction, target
+    ));
     let flow = direction_flow(direction);
     unsafe {
         let factory = create_policy_config_factory()?;
