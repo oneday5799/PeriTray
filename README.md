@@ -127,7 +127,7 @@ PeriphMonitor/
 
 完整设备清单见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
 
-**其中 Orochi V2 经实机验证，其余型号基于同族协议移植、尚未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
+**其中仅部分设备经实机验证，并未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
 
 ### 自定义设备
 
@@ -146,13 +146,6 @@ PeriphMonitor/
 ### 扩展支持
 
 新品牌需在 `src-tauri/src/wireless_24g/drivers/` 下按协议族新增驱动文件（实现 `BatteryDriver` trait）。若想自行逆向其它品牌协议，可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的方法论。**欢迎贡献代码或思路。**
-
-## 设备过滤
-
-1. PNPClass 白名单
-2. PNPDeviceID 结构过滤
-3. 可配置的正则表达式过滤
-4. 设备去重（核心名称 + 连接类型）
 
 ## 构建
 
@@ -187,16 +180,23 @@ git tag v1.1.0 && git push origin v1.1.0
 
 ## 许可证
 
-[GPL-3.0](LICENSE)
+[GPL-3.0 LICENSE](LICENSE)
 
 ## 致谢
 
-- [EarTrumpet](https://github.com/File-New-Project/EarTrumpet) — 托盘音量入口参考
-- [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量方案参考，windows_pnp 来源
 - [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接方案参考
-- [OpenRazer](https://github.com/openrazer/openrazer) — 雷蛇私有协议参考
-- [2.4G-wireless-device-battery](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) — 2.4G 私有协议逆向方法论
+- [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量方案参考，windows_pnp 来源
+- [EarTrumpet](https://github.com/File-New-Project/EarTrumpet) — 托盘音量入口参考
 - [win11React](https://github.com/blueedgetechno/win11React) — WinUI 样式参考
 - [WinUIonWeb](https://github.com/Furry-Xiyi/WinUIonWeb) — WinUI 样式参考
-- [OpenLogi](https://github.com/AprilNEA/OpenLogi) — 罗技 HID++ Rust 参考实现
+- [2.4G-wireless-device-battery](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) — 2.4G 私有协议逆向方法论
+- [OpenRazer](https://github.com/openrazer/openrazer) — 雷蛇私有协议参考
 - [Solaar](https://github.com/pwr-Solaar/Solaar) — 罗技电量读取路径参考
+- [OpenLogi](https://github.com/AprilNEA/OpenLogi) — 罗技 HID++ Rust 参考实现
+
+## 支持
+
+如果觉得本项目的确对你有帮助，欢迎支持本项目。
+
+<img width="240" src="https://github.com/user-attachments/assets/9cf3808b-5239-498f-99bc-2e5f975f0729" />
+<img width="240" src="https://github.com/user-attachments/assets/bc40b2cb-97a1-43ba-a268-f2587d74ae39" />
