@@ -256,7 +256,7 @@ for (const dirName of ["scripts"]) {
 }
 
 // ── 版本号一致性：五处须为同一版本 ─────────────────────────
-// tauri.conf.json / Cargo.toml [package] / Cargo.lock(PeriphMonitor) /
+// tauri.conf.json / Cargo.toml [package] / Cargo.lock(PeriTray) /
 // package.json / settings.html 关于页占位文案
 {
   const versions = {
@@ -267,7 +267,7 @@ for (const dirName of ["scripts"]) {
     "Cargo.toml": read(path.join(ROOT, "src-tauri", "Cargo.toml"))
       .match(/^version\s*=\s*"([^"]+)"/m)?.[1],
     "Cargo.lock": read(path.join(ROOT, "src-tauri", "Cargo.lock"))
-      .match(/name = "PeriphMonitor"\s*\nversion = "([^"]+)"/)?.[1],
+      .match(/name = "PeriTray"\s*\nversion = "([^"]+)"/)?.[1],
     "package.json": (() => {
       try { return JSON.parse(read(path.join(ROOT, "package.json"))).version; }
       catch { return undefined; }

@@ -1,8 +1,10 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128@2x.png" width="128" alt="PeriphMonitor Logo">
+  <img src="src-tauri/icons/128x128@2x.png" width="128" alt="PeriTray Logo">
 </p>
 
-<h1 align="center">PeriphMonitor</h1>
+<h1 align="center">PeriTray</h1>
+
+> 本项目原名为 PeriphMonitor，现更名为 PeriTray。
 
 <p align="center">
   一款轻量级的 Windows 系统托盘外设监控工具，实时显示所有连接设备的状态信息。
@@ -19,7 +21,7 @@
 
 ## 简介
 
-PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控工具，实时检测音频、USB、蓝牙、电池、显示器等设备状态，并提供音量控制、蓝牙管理、全局快捷键等功能。
+PeriTray 是一款运行在 Windows 系统托盘中的轻量级外设监控工具，实时检测音频、USB、蓝牙、电池、显示器等设备状态，并提供音量控制、蓝牙管理、全局快捷键等功能。
 
 基于 Tauri v2 构建（Rust 后端 + 原生 HTML/CSS/JS 前端），界面采用 WinUI 风格，支持深浅主题。
 
@@ -97,7 +99,7 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 ## 项目结构
 
 ```
-PeriphMonitor/
+PeriTray/
 ├── libs/windows_pnp/                # Windows PnP 设备枚举库
 ├── tools/check.mjs                  # 前端完整性守护脚本（pre-commit 调用）
 ├── src-tauri/
@@ -125,7 +127,7 @@ PeriphMonitor/
 | 飞智 | Vader 4 Pro |
 | 狼蛛 | F75 Max（仅 2.4G 接收器模式） |
 
-完整设备清单见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
+完整设备清单见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriTray/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
 
 **其中仅部分设备经实机验证，并未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
 
@@ -164,11 +166,11 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
 也可手动自检：`node tools/check.mjs`。详见 [AGENTS.md](AGENTS.md)。
 
-架构、模块详解与开发指南见 [项目 Wiki](https://github.com/oneday5799/PeriphMonitor/wiki)。
+架构、模块详解与开发指南见 [项目 Wiki](https://github.com/oneday5799/PeriTray/wiki)。
 
 ## 下载
 
-从 [Releases](https://github.com/oneday5799/PeriphMonitor/releases) 页面下载最新版本，支持 x64 和 ARM64 架构。
+从 [Releases](https://github.com/oneday5799/PeriTray/releases) 页面下载最新版本，支持 x64 和 ARM64 架构。
 
 ## CI/CD
 

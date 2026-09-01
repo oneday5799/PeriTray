@@ -526,7 +526,7 @@ const UPDATE_ICONS = {
   error: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11zm2.03-8.53L8 6.94 5.97 4.97 4.97 5.97 6.94 8l-1.97 2.03 1 1L8 9.06l2.03 1.97 1-1L9.06 8l1.97-2.03-1-1z"/></svg>'
 };
 
-const RELEASES_URL = "https://github.com/oneday5799/PeriphMonitor/releases";
+const RELEASES_URL = "https://github.com/oneday5799/PeriTray/releases";
 
 function hideUpdateErrorFlyout() {
   const flyout = document.getElementById("about-update-flyout");

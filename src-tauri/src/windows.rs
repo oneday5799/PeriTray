@@ -417,7 +417,7 @@ pub fn build_toast(
 // AUMID 注册（Windows 通知图标依赖）
 // ═══════════════════════════════════════════════════════════════
 
-pub(crate) const AUMID: &str = "com.periph.monitor";
+pub(crate) const AUMID: &str = "com.peri.tray";
 
 /// 注册 AUMID 到开始菜单快捷方式，使 Windows 通知显示应用图标。
 /// 已存在同名快捷方式时跳过。
@@ -452,7 +452,7 @@ pub fn register_aumid() {
     let ps = format!(
         r#"
 $programs = [Environment]::GetFolderPath('Programs')
-$shortcutPath = Join-Path $programs 'PeriphMonitor.lnk'
+$shortcutPath = Join-Path $programs 'PeriTray.lnk'
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = '{exe}'

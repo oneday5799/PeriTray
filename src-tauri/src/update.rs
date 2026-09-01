@@ -104,7 +104,7 @@ struct GitHubRelease {
 
 /// WinHTTP GET request, returns response body as String
 fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
-    let user_agent = crate::process::to_wide("PeriphMonitor");
+    let user_agent = crate::process::to_wide("PeriTray");
     let host_wide = crate::process::to_wide(host);
     let path_wide = crate::process::to_wide(path);
     let verb = crate::process::to_wide("GET");
@@ -271,7 +271,7 @@ fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<U
         current_version, include_prerelease
     ));
 
-    let body = winhttp_get("api.github.com", "/repos/oneday5799/PeriphMonitor/releases")?;
+    let body = winhttp_get("api.github.com", "/repos/oneday5799/PeriTray/releases")?;
 
     let releases: Vec<GitHubRelease> =
         serde_json::from_str(&body).map_err(|_| "响应数据解析失败".to_string())?;

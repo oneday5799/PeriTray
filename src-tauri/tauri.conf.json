@@ -1,9 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickelpack/tauri-v2-docs/main/tauri.conf.schema.json",
-  "productName": "PeriphMonitor",
+  "productName": "PeriTray",
   "version": "1.3.3",
-  "identifier": "com.periph.monitor",
-  "mainBinaryName": "PeriphMonitor",
+  "identifier": "com.peri.tray",
+  "mainBinaryName": "PeriTray",
   "build": {
     "frontendDist": "dist",
     "beforeDevCommand": "",
@@ -20,7 +20,7 @@
     "active": true,
     "targets": ["nsis"],
     "publisher": "oneday5799",
-    "homepage": "https://github.com/oneday5799/PeriphMonitor",
+    "homepage": "https://github.com/oneday5799/PeriTray",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,5 +1,5 @@
 {
-  "name": "periph-monitor",
+  "name": "peri-tray",
   "version": "1.3.3",
   "description": "外设监控 - 系统托盘外设管理工具",
   "scripts": {

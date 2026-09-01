@@ -84,7 +84,7 @@
 2. notes 写入临时文件经 `--notes-file` 传入（避免 shell 转义问题）
 3. 创建发布：
    ```bash
-   gh release create v<ver> --target <完整SHA> --title "PeriphMonitor v<ver>" \
+   gh release create v<ver> --target <完整SHA> --title "PeriTray v<ver>" \
      --notes-file <notes文件> --latest
    ```
    （--target 必须传完整 SHA，短 SHA 会 422）；tag 含 `-`（如 v1.2.9-beta.1）
@@ -143,7 +143,7 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
 ## 项目 Wiki 维护
 
-开发者知识库位于 GitHub Wiki（独立仓库，页面即 `PeriphMonitor.wiki.git`），
+开发者知识库位于 GitHub Wiki（独立仓库，页面即 `PeriTray.wiki.git`），
 主仓内不存副本。完整规范见 WIKI「Wiki-维护规范」页，此处仅列强制义务：
 
 - **不随 commit / push 同步**；以下七类变更落地时必须同步更新对应 Wiki 页
@@ -151,7 +151,7 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   否决路线状态变化→09、工具链变化→08、新前端页面→04），AGENTS.md 与 Wiki
   双处内容以 AGENTS.md 为权威源回改
 - 发版走「发布流程」第 5 步校准轮（正式版必做）
-- wiki 工作区固定在主仓并列目录 `../PeriphMonitor.wiki`，勿用系统临时目录；
+- wiki 工作区固定在主仓并列目录 `../PeriTray.wiki`，勿用系统临时目录；
   推送前自检清单见 WIKI 规范 §5
 
 ## 开发与调试

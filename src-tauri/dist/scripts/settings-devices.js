@@ -221,7 +221,7 @@ function initDeviceFilterTab() {
   // Help link for 2.4G device
   document.getElementById("help-24g").addEventListener("click", async () => {
     try {
-      await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor#24g-%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81" });
+      await invoke("open_url", { url: "https://github.com/oneday5799/PeriTray#24g-%E8%AE%BE%E5%A4%87%E6%94%AF%E6%8C%81" });
     } catch (e) {
       console.error("Failed to open URL:", e);
     }
