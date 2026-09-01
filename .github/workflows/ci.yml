@@ -29,8 +29,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ${{ runner.os }}-ci-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-ci-cargo-
+          key: ${{ runner.os }}-ci-cargo-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-ci-cargo-v2-
 
       - name: Frontend integrity checks
         run: node tools/check.mjs
