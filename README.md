@@ -25,7 +25,7 @@ PeriTray 是一款运行在 Windows 系统托盘中的轻量级外设监控工�
 
 基于 Tauri v2 构建（Rust 后端 + 原生 HTML/CSS/JS 前端），界面采用 WinUI 风格，支持深浅主题。
 
-## ⚠️ 升级提醒
+## 升级提醒
 
 **v1.3.4-beta.1 之前的版本建议卸载后重新安装**，原因：
 - 项目从 PeriphMonitor 更名为 PeriTray，GitHub 仓库地址变更导致自动更新失效，安装路径和注册表键名变化，直接覆盖安装可能导致残留
@@ -204,10 +204,3 @@ git tag v1.1.0 && git push origin v1.1.0
 - [OpenRazer](https://github.com/openrazer/openrazer) — 雷蛇私有协议参考
 - [Solaar](https://github.com/pwr-Solaar/Solaar) — 罗技电量读取路径参考
 - [OpenLogi](https://github.com/AprilNEA/OpenLogi) — 罗技 HID++ Rust 参考实现
-
-## 支持
-
-如果觉得本项目的确对你有帮助，欢迎支持本项目。
-
-<img width="240" src="https://github.com/user-attachments/assets/9cf3808b-5239-498f-99bc-2e5f975f0729" />
-<img width="240" src="https://github.com/user-attachments/assets/bc40b2cb-97a1-43ba-a268-f2587d74ae39" />
