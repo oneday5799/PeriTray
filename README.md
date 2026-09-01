@@ -28,8 +28,7 @@ PeriTray 是一款运行在 Windows 系统托盘中的轻量级外设监控工�
 ## ⚠️ 升级提醒
 
 **v1.3.4-beta.1 之前的版本建议卸载后重新安装**，原因：
-- 项目从 PeriphMonitor 更名为 PeriTray，GitHub 仓库地址变更导致自动更新失效
-- 应用标识符从 `com.periph.monitor` 改为 `com.peri.tray`，安装路径和注册表键名变化，直接覆盖安装可能导致残留
+- 项目从 PeriphMonitor 更名为 PeriTray，GitHub 仓库地址变更导致自动更新失效，安装路径和注册表键名变化，直接覆盖安装可能导致残留
 
 建议操作：
 1. 卸载旧版本（控制面板 → 程序和功能）
