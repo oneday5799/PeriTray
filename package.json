@@ -1,6 +1,6 @@
 {
   "name": "peri-tray",
-  "version": "1.3.3",
+  "version": "1.3.4-beta.1",
   "description": "外设监控 - 系统托盘外设管理工具",
   "scripts": {
     "tauri": "tauri",
