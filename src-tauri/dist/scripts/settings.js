@@ -137,8 +137,6 @@ function createExpandableCard(items, arrow) {
       requestAnimationFrame(() => { items.style.transition = ""; });
     },
 
-    isExpanded() { return items.classList.contains("show"); },
-
     // 绑定"点击卡片头部切换"。extraGuards：额外点击排除选择器（如 .toggle/button/a/input）。
     // onChanged(newExpanded)：切换后的附加动作（状态记忆、联动刷新等）。
     bindHeaderClick(card, { extraGuards = [], expandHeight = "999px", onChanged } = {}) {

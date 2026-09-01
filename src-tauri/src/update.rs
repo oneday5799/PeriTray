@@ -265,10 +265,7 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 }
 
 /// 检测 GitHub 是否有新版本
-pub fn check_for_update(
-    current_version: &str,
-    include_prerelease: bool,
-) -> Result<UpdateInfo, String> {
+fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<UpdateInfo, String> {
     crate::process::append_log(&format!(
         "[update] checking for update: current={} include_prerelease={}",
         current_version, include_prerelease

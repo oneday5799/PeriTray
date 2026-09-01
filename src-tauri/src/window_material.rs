@@ -27,6 +27,14 @@ mod material {
         animation_id: u32,
     }
 
+    #[repr(C)]
+    struct DwmMargins {
+        cx_left: i32,
+        cx_right: i32,
+        cy_top: i32,
+        cy_bottom: i32,
+    }
+
     type SetWindowCompositionAttrFn =
         unsafe extern "system" fn(*mut core::ffi::c_void, *const AccentPolicy) -> i32;
 
@@ -79,13 +87,6 @@ mod material {
             return true;
         }
 
-        #[repr(C)]
-        struct DwmMargins {
-            cx_left: i32,
-            cx_right: i32,
-            cy_top: i32,
-            cy_bottom: i32,
-        }
         let margins = DwmMargins {
             cx_left: -1,
             cx_right: -1,
@@ -139,13 +140,6 @@ mod material {
     }
 
     pub unsafe fn remove(hwnd: isize) {
-        #[repr(C)]
-        struct DwmMargins {
-            cx_left: i32,
-            cx_right: i32,
-            cy_top: i32,
-            cy_bottom: i32,
-        }
         let margins = DwmMargins {
             cx_left: 0,
             cx_right: 0,

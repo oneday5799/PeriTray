@@ -270,8 +270,6 @@ function createSliderTooltip(slider) {
     slider.value = val;
     slider.dispatchEvent(new Event("input"));
   }, { passive: false });
-
-  return tooltip;
 }
 
 let audioMenuToken = 0;

@@ -104,7 +104,7 @@ pub fn scale_factor(app: &tauri::AppHandle) -> f64 {
 }
 
 /// 物理坐标所在的显示器（`monitor_from_point` 参数为物理像素坐标）
-pub fn monitor_at_point(app: &tauri::AppHandle, x: f64, y: f64) -> Option<tauri::Monitor> {
+fn monitor_at_point(app: &tauri::AppHandle, x: f64, y: f64) -> Option<tauri::Monitor> {
     app.monitor_from_point(x, y).ok().flatten()
 }
 
@@ -195,7 +195,7 @@ pub fn monitor_info_of_taskbar(
 
 /// 将窗口尺寸/位置钳制到其所在显示器工作区内（防跨分辨率/DPI 恢复越界）。
 /// 尺寸走 inner 语义（`set_size` 即 inner），位置走 outer 左上角（`set_position` 即 outer）。
-pub fn clamp_window_to_work_area(win: &tauri::WebviewWindow) {
+fn clamp_window_to_work_area(win: &tauri::WebviewWindow) {
     if win.is_maximized().unwrap_or(false) || win.is_minimized().unwrap_or(false) {
         return;
     }

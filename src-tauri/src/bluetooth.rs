@@ -281,12 +281,7 @@ fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
             return Err(log.join("\n"));
         }
     };
-    let mac = device_id
-        .rsplit('-')
-        .next()
-        .unwrap_or("")
-        .to_uppercase()
-        .replace(':', "");
+    let mac = normalize_mac(&device_id).unwrap_or_default();
     log.push(format!("MAC:{} device_id={}", mac, device_id));
 
     let mut r_params: BLUETOOTH_FIND_RADIO_PARAMS = unsafe { mem::zeroed() };
@@ -447,9 +442,15 @@ pub fn check_device_connection(name: &str) -> Option<bool> {
         .map(|(_, connected, _, _)| connected)
 }
 
-fn read_btc_battery_from_device_id(device_id: &str) -> Option<u8> {
+/// 从设备 ID 末尾 "-" 段提取蓝牙 MAC，规整为大写并去掉冒号；
+/// 无 "-" 段时返回 None。蓝牙原生连接与 WinRT 电量查询两条路径共用。
+fn normalize_mac(device_id: &str) -> Option<String> {
     let mac = device_id.rsplit('-').next()?;
-    let mac_upper = mac.to_uppercase().replace(':', "");
+    Some(mac.to_uppercase().replace(':', ""))
+}
+
+fn read_btc_battery_from_device_id(device_id: &str) -> Option<u8> {
+    let mac_upper = normalize_mac(device_id)?;
 
     let class_guid = windows_sys::Win32::Devices::DeviceAndDriverInstallation::GUID_DEVCLASS_SYSTEM;
     let filter = windows_pnp::PnpFilter::Contains(&["BTHENUM\\".to_string(), mac_upper.clone()]);

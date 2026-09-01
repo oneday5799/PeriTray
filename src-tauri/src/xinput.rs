@@ -88,7 +88,7 @@ fn battery_type_has_percentage(t: u8) -> bool {
 
 /// 读取指定控制器索引的电池百分比。
 /// Ok(Some(%))=无线手柄有电；Ok(None)=有线供电（无百分比）；Err=不可用
-pub fn read_battery(controller_index: u32) -> Result<Option<i32>, String> {
+fn read_battery(controller_index: u32) -> Result<Option<i32>, String> {
     if controller_index > 3 {
         return Err("控制器索引超出范围（XInput 仅支持 0-3）".into());
     }
