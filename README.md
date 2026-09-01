@@ -19,18 +19,50 @@
 
 ## 简介
 
-PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控工具。通过 WMI 查询、WinRT 蓝牙 API 和 windows_pnp 库实时检测音频、USB、蓝牙、电池、显示器等外设设备，以分类列表展示状态，并提供音量控制、蓝牙连接管理、全局快捷键等功能。界面采用 WinUI 风格设计，主窗口与设置页共享统一组件与深浅主题。
+PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控工具，实时检测音频、USB、蓝牙、电池、显示器等设备状态，并提供音量控制、蓝牙管理、全局快捷键等功能。
+
+基于 Tauri v2 构建（Rust 后端 + 原生 HTML/CSS/JS 前端），界面采用 WinUI 风格，支持深浅主题。
 
 ## 功能
 
-- **设备监控**：实时检测音频、USB、蓝牙、电池、显示器等设备，显示连接状态、电量与连接类型标签（蓝牙/2.4G）；支持重命名、隐藏、正则过滤、去重与自定义分组
-- **2.4G 设备电量**：通过接收器的厂商 HID 私有协议查询无线设备电量并显示在设备列表，后台缓存自动刷新（重启后先显上次电量、随后静默更正）；点击设备信息页刷新按钮可强制即时刷新连接状态与电量，当前支持 Razer Orochi V2 等雷蛇接收器与罗技接收器
-- **蓝牙**：显示连接/配对状态与电量（BLE 走 GATT Battery Service，BTC 走 windows_pnp），支持连接/断开及跳转系统蓝牙设置
-- **音量控制**：切换默认输出设备、调节音量、静音；音量精细调节开启后滑块拖动与滚轮均按 0.1 步进微调；静音锁定开关开启后，点击静音图标即锁定静音（红色图标），锁定期间拖动音量条不会改变静音状态，需再次点击图标解除；强制静音可将需多次点击才能静音的设备（如部分智能音箱）一次直接静音；按应用调节会话音量，滑块支持实时数值 tooltip；设备右键菜单支持重命名、隐藏、空间音效（关/Windows Sonic/Dolby Atmos/DTS，需系统已安装对应格式）与录制全局快捷键；支持为每个应用单独指定音频输出/输入设备（通过 SetPersistedDefaultAudioEndpoint API）
-- **全局快捷键**：支持录制音量控制（提高/降低/静音）与输出设备切换快捷键；可开启共享循环切换（多个设备共用同一快捷键，按下时循环切换默认输出设备）
-- **系统托盘**：左键弹出主窗口（顶部导航切换设备信息/音量控制），右键菜单提供设备信息、音量控制、音频设备切换、声音设置、开机自启、设置、关于等入口；图标悬停显示设备状态；托盘菜单中的音频设备名称支持简化显示（仅显示括号内内容）
-- **设置页**：涵盖通用（开机自启、默认打开页面、硬件加速、窗口材质、日志、关机音量、更新检测）、快捷键、设备信息（过滤/去重/分组）、音量控制（音量精细调节/静音锁定/强制静音/空间音效/简化设备名称/设备列表）等设置，支持深色主题与窗口背景材质（云母 Mica / 亚克力 Acrylic，Win11 22H2+ 生效，主窗口与设置页实时联动）
-- **更新检测**：启动时自动检测 GitHub 新版本，toast 通知并可点击跳转下载页，支持测试版开关与手动检测
+- **设备监控**
+  - 实时检测音频、USB、蓝牙、电池、显示器等设备
+  - 显示连接状态、电量、连接类型标签（蓝牙/2.4G）
+  - 支持重命名、隐藏、正则过滤、去重、自定义分组
+
+- **2.4G 设备电量**
+  - 通过接收器厂商 HID 私有协议查询电量，后台缓存自动刷新
+  - 点击刷新按钮可强制即时查询连接状态与电量
+  - 支持雷蛇、罗技、飞智、狼蛛 接收器
+
+- **蓝牙**
+  - 显示连接/配对状态与电量（BLE GATT / BTC 两种路径）
+  - 支持连接/断开，可跳转系统蓝牙设置
+
+- **音量控制**
+  - 切换默认输出设备、调节音量、静音
+  - 音量精细调节：滑块与滚轮按 0.1 步进微调
+  - 静音锁定：点击图标锁定静音，拖动音量条不改变状态
+  - 强制静音：一次操作直接静音需多次点击的设备
+  - 空间音效：Windows Sonic / Dolby Atmos / DTS
+  - 按应用调节音量，支持为每个应用指定音频输出/输入设备
+  - 设备右键菜单支持重命名、隐藏、空间音效设置
+
+- **全局快捷键**
+  - 录制音量控制（提高/降低/静音）与输出设备切换快捷键
+  - 可开启共享循环切换（多设备共用快捷键循环切换）
+
+- **系统托盘**
+  - 左键弹出主窗口（设备信息 / 音量控制双页）
+  - 右键菜单提供各功能入口
+  - 图标悬停显示设备状态
+
+- **设置页**
+  - 通用设置、快捷键、设备信息、音量控制等分类
+  - 深色主题与窗口背景材质（Mica / Acrylic，Win11 22H2+）
+
+- **更新检测**
+  - 启动时自动检测 GitHub 新版本，支持测试版开关与手动检测
 
 ## 截图
 
@@ -48,7 +80,7 @@ PeriphMonitor 是一款运行在 Windows 系统托盘中的轻量级外设监控
 
 - 设置页面
 
-  <img width="300" alt="托盘提示" src="https://github.com/user-attachments/assets/d2958924-e1b3-40dd-9252-b59c7c7d6ae8" />
+  <img width="300" alt="设置页面" src="https://github.com/user-attachments/assets/d2958924-e1b3-40dd-9252-b59c7c7d6ae8" />
 
 
 ## 技术栈
@@ -82,26 +114,24 @@ PeriphMonitor/
 
 ## 2.4G 设备支持
 
-当前版本支持显示 2.4G 无线设备（按设备类型归入对应分组）。
+通过接收器暴露的厂商自定义 HID 接口（Feature Report）查询设备电量，后台缓存刷新、不阻塞设备列表；点击设备信息页顶部的刷新按钮可强制现查连接状态与电量（设备休眠时可能需数秒）。
 
-**电量获取**：应用会通过接收器暴露的厂商自定义 HID 接口（Feature Report）查询设备电量，后台缓存刷新、不阻塞设备列表；点击设备信息页顶部的刷新按钮会绕过缓存强制现查连接状态与电量（设备休眠时可能需数秒）。
+### 已支持品牌
 
-已收录雷蛇全系支持电量上报的无线设备（共 76 个 VID/PID）：
+| 品牌 | 说明 |
+|------|------|
+| 雷蛇 | 鼠标、键盘共 76 个 VID/PID（Orochi V2 经实机验证，其余基于同族协议移植） |
+| 罗技 | Unifying / Lightspeed / Bolt / Nano 接收器（PID 范围启发识别，单下游设备时显示名称与电量） |
+| 飞智 | Vader 4 Pro |
+| 狼蛛 | F75 Max（仅 2.4G 接收器模式） |
 
-- **鼠标**（64 个 PID）：Orochi V2、Atheris、Pro Click 全系、Viper V2/V3 Pro、Viper V3 HyperSpeed、Viper Mini SE、Viper Ultimate、DeathAdder V2-V4 Pro、DeathAdder V3 HyperSpeed、Basilisk V3 Pro/X HyperSpeed/35K 系列、Naga Pro/V2 Pro/V2 HyperSpeed、Cobra Pro、Mamba/Lancehead/Mamba 2012 等系列的有线与 2.4G 形态
-- **键盘**（12 个 PID）：BlackWidow V3/V4 Mini HyperSpeed、BlackWidow V3 Pro、BlackWidow V4 Tenkeyless HyperSpeed、DeathStalker V2 Pro（含 TKL 版）的有线与 2.4G 形态
-
-**罗技接收器**（Unifying/Lightspeed/Bolt/Nano，PID 范围启发识别）：采用单下游简化——接收器仅有一台在线设备时显示其名称与电量；多设备接收器暂不支持。下游设备为运行期动态枚举，不逐型号列出。
-
-**AULA 键盘**（F75 Max / F99 Pro·X99 Pro 无线模式）：仅支持 2.4G 接收器模式的电量读取；F75 Max dongle（05AC:024F）与 F99 Pro 系接收器（3554:FA09）均为专用单设备，卡片即键盘本体。有线模式固件不支持电量，不收录。
-
-完整逐设备清单（含各形态 VID:PID 与验证状态）见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
+完整设备清单见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriphMonitor/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。
 
 **其中 Orochi V2 经实机验证，其余型号基于同族协议移植、尚未逐一实测**——若你的型号显示异常，欢迎提 Issue 并附 debug.log 中 `[24g]` 开头的日志行。
 
-不同品牌接收器的私有协议各不相同，无法统一获取。新品牌的接入方式：在 `src-tauri/src/wireless_24g/drivers/` 下按协议族新增一个驱动文件（实现 `BatteryDriver` trait，登记设备身份与协议参数并注册）。临时添加未收录设备可编辑用户自定义文件（见下）。若想自行抓包逆向其它品牌的协议，可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的方法论。**欢迎有能力的开发者贡献代码或思路，帮助扩展对这些设备的支持。**
+### 自定义设备
 
-可在设置页点击「打开」编辑 `wireless_24g_devices_user.json` 添加自定义设备（应用更新时不会覆盖），同 VID/PID 时用户条目优先。VID/PID 可通过 [USB 设备查看器](https://www.codertools.net/tools/usb-device-viewer.php?lang=zh) 获取：
+在设置页点击「打开」编辑 `wireless_24g_devices_user.json` 添加未收录设备（应用更新时不会覆盖），同 VID/PID 时用户条目优先。VID/PID 可通过 [USB 设备查看器](https://www.codertools.net/tools/usb-device-viewer.php?lang=zh) 获取：
 
 ```json
 {
@@ -112,6 +142,10 @@ PeriphMonitor/
 ```
 
 其中 `mouse`/`keyboard` 归入输入设备，`audio` 归入音频设备，`other` 或空归入其他设备。
+
+### 扩展支持
+
+新品牌需在 `src-tauri/src/wireless_24g/drivers/` 下按协议族新增驱动文件（实现 `BatteryDriver` trait）。若想自行逆向其它品牌协议，可参考 [2.4G 无线设备电量获取项目](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) 的方法论。**欢迎贡献代码或思路。**
 
 ## 设备过滤
 
@@ -129,15 +163,15 @@ npm run tauri dev
 
 ## 开发须知
 
-前端位于 `src-tauri/dist/`（无构建流程，直接编辑，`cargo build` 时嵌入二进制）。提交涉及 `dist/` 的改动会自动经过完整性守护脚本（引用一致性 / 未定义调用 / 语法机检 / BOM 扫描），重新克隆后请先安装钩子：
+前端位于 `src-tauri/dist/`（无构建流程，直接编辑）。提交涉及 `dist/` 的改动会自动经过完整性守护脚本校验。重新克隆后安装钩子：
 
 ```bash
 cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 ```
 
-也可随时手动自检：`node tools/check.mjs`。详见 [AGENTS.md](AGENTS.md)。
+也可手动自检：`node tools/check.mjs`。详见 [AGENTS.md](AGENTS.md)。
 
-项目架构、模块详解、踩坑复盘（假死问题、高频回归等）与开发指南见 [项目 Wiki](https://github.com/oneday5799/PeriphMonitor/wiki)。
+架构、模块详解与开发指南见 [项目 Wiki](https://github.com/oneday5799/PeriphMonitor/wiki)。
 
 ## 下载
 
@@ -148,8 +182,7 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 推送 `v*` 格式的 tag 时自动构建 x64 / ARM64 安装包并创建 GitHub Release（tag 名含 `-` 时标记为 Pre-release）：
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.0 && git push origin v1.1.0
 ```
 
 ## 许可证
@@ -158,12 +191,12 @@ git push origin v1.1.0
 
 ## 致谢
 
-- [EarTrumpet](https://github.com/File-New-Project/EarTrumpet) — 托盘声音设置入口实现参考
-- [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量读取方案参考，windows_pnp 库来源
-- [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接/断开方案参考
-- [OpenRazer](https://github.com/openrazer/openrazer) — 雷蛇接收器私有协议参考（报文格式/命令字/CRC/时序），本项目为 Windows 用户态独立实现，运行时不依赖
-- [2.4G 无线设备电量获取](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) — 各品牌 2.4G 私有协议逆向方法论参考
-- [win11React](https://github.com/blueedgetechno/win11React) — WinUI 风格样式参考
-- [WinUIonWeb](https://github.com/Furry-Xiyi/WinUIonWeb) — WinUI 风格样式参考
-- [OpenLogi](https://github.com/AprilNEA/OpenLogi) — 罗技 HID++ 协议 Rust 参考实现（电量特性与 Windows 收发细节）
-- [Solaar](https://github.com/pwr-Solaar/Solaar) — 罗技电量读取路径的权威参考（特性优先级与电压换算表）
+- [EarTrumpet](https://github.com/File-New-Project/EarTrumpet) — 托盘音量入口参考
+- [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量方案参考，windows_pnp 来源
+- [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接方案参考
+- [OpenRazer](https://github.com/openrazer/openrazer) — 雷蛇私有协议参考
+- [2.4G-wireless-device-battery](https://github.com/Rainbow132/2.4G-wireless-device-battery-level-acquisition) — 2.4G 私有协议逆向方法论
+- [win11React](https://github.com/blueedgetechno/win11React) — WinUI 样式参考
+- [WinUIonWeb](https://github.com/Furry-Xiyi/WinUIonWeb) — WinUI 样式参考
+- [OpenLogi](https://github.com/AprilNEA/OpenLogi) — 罗技 HID++ Rust 参考实现
+- [Solaar](https://github.com/pwr-Solaar/Solaar) — 罗技电量读取路径参考
