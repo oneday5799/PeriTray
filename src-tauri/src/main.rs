@@ -321,7 +321,7 @@ fn main() {
     install_panic_hook();
 
     // Init COM with apartment-threaded mode (same as Tauri) BEFORE Tauri starts.
-    // This lets wmi use COMLibrary::assume_initialized() instead of re-initializing.
+    // 供 bluetooth/audio 等 WinRT 消费方使用；wmi 0.18 已在查询侧经 CoIncrementMTAUsage 自行初始化
     unsafe {
         let hr = windows_sys::Win32::System::Com::CoInitializeEx(
             std::ptr::null(),

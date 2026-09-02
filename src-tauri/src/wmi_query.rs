@@ -76,8 +76,7 @@ pub fn query_devices(fresh: bool) -> Result<Vec<Device>, String> {
     };
     let re_ref = re.as_deref();
 
-    let com = unsafe { wmi::COMLibrary::assume_initialized() };
-    let con = match WMIConnection::new(com) {
+    let con = match WMIConnection::new() {
         Ok(c) => c,
         Err(_) => {
             crate::process::append_log("[wmi] WMIConnection::new failed");
