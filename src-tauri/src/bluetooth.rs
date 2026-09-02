@@ -7,7 +7,13 @@ use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
 use windows_sys::core::GUID;
 use windows_sys::Win32::Devices::Bluetooth::*;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+    SetupDiGetDeviceInstanceIdW, SetupDiGetDevicePropertyW, DIGCF_PRESENT, GUID_DEVCLASS_SYSTEM,
+    HDEVINFO, SP_DEVINFO_DATA,
+};
+use windows_sys::Win32::Devices::Properties::DEVPROP_TYPE_BYTE;
+use windows_sys::Win32::Foundation::{CloseHandle, DEVPROPKEY, HANDLE, INVALID_HANDLE_VALUE};
 
 use tauri::Emitter;
 
@@ -91,6 +97,16 @@ impl Drop for RadioHandle {
     fn drop(&mut self) {
         unsafe {
             CloseHandle(self.0);
+        }
+    }
+}
+
+/// SetupDiGetClassDevsW 返回的设备信息集句柄；Drop 时释放
+struct DeviceInfoSetHandle(HDEVINFO);
+impl Drop for DeviceInfoSetHandle {
+    fn drop(&mut self) {
+        unsafe {
+            SetupDiDestroyDeviceInfoList(self.0);
         }
     }
 }
@@ -663,34 +679,117 @@ fn normalize_mac(device_id: &str) -> Option<String> {
 fn read_btc_battery_from_device_id(device_id: &str) -> Option<u8> {
     let mac_upper = normalize_mac(device_id)?;
 
-    let class_guid = windows_sys::Win32::Devices::DeviceAndDriverInstallation::GUID_DEVCLASS_SYSTEM;
-    let filter = windows_pnp::PnpFilter::Contains(&["BTHENUM\\".to_string(), mac_upper.clone()]);
-    let devices =
-        windows_pnp::PnpEnumerator::enumerate_present_devices_and_filter_by_device_setup_class(
-            class_guid, filter,
+    // 打开系统设备类设备信息集（仅当前存在设备）
+    let handle = unsafe {
+        SetupDiGetClassDevsW(
+            &GUID_DEVCLASS_SYSTEM,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            DIGCF_PRESENT,
         )
-        .ok()?;
+    };
+    if handle == INVALID_HANDLE_VALUE as isize {
+        return None;
+    }
+    let _info_set = DeviceInfoSetHandle(handle);
 
-    let battery_key = windows_pnp::PnpDevicePropertyKey {
-        fmtid: windows_pnp_uuid::Uuid::from_u128(0x104EA319_6EE2_4701_BD47_8DDBF425BBE5),
+    // Windows 内置的经典蓝牙电量 DEVPKEY_Device_BatteryLevel（PID 2）
+    let battery_key = DEVPROPKEY {
+        fmtid: GUID::from_u128(0x104EA319_6EE2_4701_BD47_8DDBF425BBE5),
         pid: 2,
     };
 
-    for device in devices {
-        let instance_id = &device.device_instance_id;
-        if !instance_id.contains("BTHENUM\\") || !instance_id.to_uppercase().contains(&mac_upper) {
+    for index in 0..u32::MAX {
+        let mut devinfo = SP_DEVINFO_DATA::default();
+        devinfo.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+
+        let ok = unsafe { SetupDiEnumDeviceInfo(handle, index, &mut devinfo) };
+        if ok == 0 {
+            break;
+        }
+
+        // 实例 ID 须同时含 "BTHENUM\" 与目标 MAC（大小写不敏感）
+        let Some(instance_id) = setupdi_get_device_instance_id(handle, &devinfo) else {
+            continue;
+        };
+        let instance_upper = instance_id.to_uppercase();
+        if !instance_upper.contains("BTHENUM\\") || !instance_upper.contains(&mac_upper) {
             continue;
         }
 
-        if let Some(props) = &device.device_instance_properties {
-            if let Some(windows_pnp::PnpDevicePropertyValue::Byte(battery)) =
-                props.get(&battery_key)
-            {
-                return Some(*battery);
-            }
+        if let Some(battery) = setupdi_get_battery_byte(handle, &devinfo, &battery_key) {
+            return Some(battery);
         }
     }
     None
+}
+
+/// 读取设备实例 ID 字符串（两次调用：先取长度，再取内容）
+fn setupdi_get_device_instance_id(handle: HDEVINFO, devinfo: &SP_DEVINFO_DATA) -> Option<String> {
+    let mut required_size: u32 = 0;
+    unsafe {
+        SetupDiGetDeviceInstanceIdW(handle, devinfo, std::ptr::null_mut(), 0, &mut required_size);
+    }
+    if required_size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; required_size as usize];
+    let ok = unsafe {
+        SetupDiGetDeviceInstanceIdW(
+            handle,
+            devinfo,
+            buffer.as_mut_ptr(),
+            required_size,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    Some(String::from_utf16_lossy(&buffer[..len]))
+}
+
+/// 读取设备实例的 BYTE 型电池属性值（两次调用：先取类型与长度，再取值）
+fn setupdi_get_battery_byte(
+    handle: HDEVINFO,
+    devinfo: &SP_DEVINFO_DATA,
+    key: &DEVPROPKEY,
+) -> Option<u8> {
+    let mut property_type: u32 = 0;
+    let mut required_size: u32 = 0;
+    unsafe {
+        SetupDiGetDevicePropertyW(
+            handle,
+            devinfo,
+            key,
+            &mut property_type,
+            std::ptr::null_mut(),
+            0,
+            &mut required_size,
+            0,
+        );
+    }
+    if property_type != DEVPROP_TYPE_BYTE || required_size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u8; required_size as usize];
+    let ok = unsafe {
+        SetupDiGetDevicePropertyW(
+            handle,
+            devinfo,
+            key,
+            &mut property_type,
+            buffer.as_mut_ptr(),
+            required_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    buffer.first().copied()
 }
 
 #[cfg(test)]

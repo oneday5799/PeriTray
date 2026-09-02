@@ -99,17 +99,16 @@ PeriTray 是一款运行在 Windows 系统托盘中的轻量级外设监控工�
 | 组件 | 技术 |
 |------|------|
 | 框架 | Tauri v2（Rust 后端 + 纯 HTML/CSS/JS 前端） |
-| 设备检测 | WMI + WinRT Bluetooth + windows_pnp |
+| 设备检测 | WMI + WinRT Bluetooth + Win32 SetupDi |
 | 音量控制 | Windows Core Audio API（事件驱动） |
 | 2.4G 识别 | USB VID/PID 匹配（驱动内置声明 + 用户自定义文件） |
-| 电量 | BLE GATT Battery Service / BTC windows_pnp / HID Feature Report（hidapi） |
+| 电量 | BLE GATT Battery Service / BTC SetupDi 设备属性 / HID Feature Report（hidapi） |
 | 异步 / 网络 | tokio / WinHTTP |
 
 ## 项目结构
 
 ```
 PeriTray/
-├── libs/windows_pnp/                # Windows PnP 设备枚举库
 ├── tools/check.mjs                  # 前端完整性守护脚本（pre-commit 调用）
 ├── src-tauri/
 │   ├── src/                         # Rust 后端（音频、蓝牙、托盘、快捷键、材质、更新检测等）
@@ -196,7 +195,7 @@ git tag v1.1.0 && git push origin v1.1.0
 ## 致谢
 
 - [BluetoothAutoConnect](https://github.com/lvusyy/BluetoothAutoConnect) — 蓝牙连接方案参考
-- [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量方案参考，windows_pnp 来源
+- [BlueGauge](https://github.com/iKineticate/BlueGauge) — 蓝牙电量方案参考（PnP 设备属性读取）
 - [EarTrumpet](https://github.com/File-New-Project/EarTrumpet) — 托盘音量入口参考
 - [win11React](https://github.com/blueedgetechno/win11React) — WinUI 样式参考
 - [WinUIonWeb](https://github.com/Furry-Xiyi/WinUIonWeb) — WinUI 样式参考

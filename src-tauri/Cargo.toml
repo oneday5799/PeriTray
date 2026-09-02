@@ -21,8 +21,6 @@ lru = "0.18"
 base64 = "0.23"
 ntapi = "0.4"
 hidapi = "2"
-windows_pnp = { path = "../libs/windows_pnp" }
-windows_pnp_uuid = { path = "../libs/windows_pnp/libs/windows_pnp_uuid" }
 windows-core = "0.62"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
@@ -30,6 +28,8 @@ windows-sys = { version = "0.61.2", features = [
     # 注意：Win32_Security 并无直接 use，但 CreateEventW（Threading，tray.rs 事件线程）
     # 的签名引用 SECURITY_ATTRIBUTES，绑定存在性依赖此 feature，勿删
     "Win32_Devices_Bluetooth",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
     "Win32_Graphics_Dwm",
     "Win32_Networking_WinHttp",
     "Win32_System_Com",
