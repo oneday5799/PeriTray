@@ -5,25 +5,69 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+
+/// 成功电量缓存的最大保留时长：超过该时长未再成功查询的条目在加载时淘汰。
+const MAX_AGE_SECS: u64 = 30 * 24 * 3600;
+
+/// 当前墙钟 Unix 秒（超龄淘汰与 seeen 时间戳共用）。
+pub(crate) fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// 新格式落盘条目：level + 最后成功查询时间。
+#[derive(Serialize, Deserialize)]
+struct Entry {
+    level: i32,
+    #[serde(default)]
+    seen: u64,
+}
+
+/// 容忍历史旧格式（裸整数电量）的取值：旧值按当前时间补 seen，保留一周期后重写。
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawValue {
+    Level(i32),
+    Entry(Entry),
+}
 
 pub(crate) fn cache_path() -> std::path::PathBuf {
     crate::process::data_dir().join("24g_battery_cache.json")
 }
 
-/// 读盘还原 (vid,pid) → 电量；键非法条目跳过，缺失/损坏返回空表
-pub(crate) fn load(path: &Path) -> HashMap<(String, String), i32> {
+/// 读盘还原 (vid,pid) → (电量, last_seen)；键非法条目跳过，缺失/损坏返回空表，
+/// 超龄（MAX_AGE_SECS 内未再成功查询）条目淘汰。
+pub(crate) fn load(path: &Path) -> HashMap<(String, String), (i32, u64)> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         // 文件不存在属正常态（首次运行或从未查到过电量）
         Err(_) => return HashMap::new(),
     };
-    match serde_json::from_str::<HashMap<String, i32>>(&content) {
+    match serde_json::from_str::<HashMap<String, RawValue>>(&content) {
         Ok(raw) => {
+            let now = now_unix();
             let mut result = HashMap::new();
-            for (key, level) in raw {
-                if let Some(pair) = parse_key(&key) {
-                    result.insert(pair, level);
+            for (key, value) in raw {
+                let Some(pair) = parse_key(&key) else {
+                    continue;
+                };
+                let (level, seen) = match value {
+                    // 旧格式裸整数：无时间戳，按当前时间补 seen（保留一周期）
+                    RawValue::Level(lv) => (lv, now),
+                    // 新格式：seen==0 视为旧值，同样按当前时间补齐
+                    RawValue::Entry(Entry { level, seen }) if seen == 0 => (level, now),
+                    RawValue::Entry(Entry { level, seen }) => (level, seen),
+                };
+                if now.saturating_sub(seen) > MAX_AGE_SECS {
+                    crate::process::append_log(&format!("[24g] 淘汰超龄电量缓存条目 {}", key));
+                    continue;
                 }
+                result.insert(pair, (level, seen));
             }
             result
         }
@@ -47,11 +91,11 @@ fn parse_key(key: &str) -> Option<(String, String)> {
     Some((vid.to_string(), pid.to_string()))
 }
 
-/// 内存缓存中的全部成功值快照（锁内收集，调用方在锁外落盘）
-fn collect_successes() -> HashMap<(String, String), i32> {
+/// 内存缓存中的全部成功值快照（锁内收集，调用方在锁外落盘），含 last_seen 时间戳
+fn collect_successes() -> HashMap<(String, String), (i32, u64)> {
     crate::state::lock_unpoisoned(super::cache())
         .iter()
-        .filter_map(|(k, e)| e.level.map(|lv| (k.clone(), lv)))
+        .filter_map(|(k, e)| e.level.map(|lv| (k.clone(), (lv, e.seen))))
         .collect()
 }
 
@@ -66,13 +110,21 @@ pub(crate) fn flush() {
     }
 }
 
-fn save(map: &HashMap<(String, String), i32>, path: &Path) -> std::io::Result<()> {
+fn save(map: &HashMap<(String, String), (i32, u64)>, path: &Path) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let raw: HashMap<String, i32> = map
+    let raw: HashMap<String, Entry> = map
         .iter()
-        .map(|((v, p), lv)| (format!("{}:{}", v, p), *lv))
+        .map(|((v, p), (lv, seen))| {
+            (
+                format!("{}:{}", v, p),
+                Entry {
+                    level: *lv,
+                    seen: *seen,
+                },
+            )
+        })
         .collect();
     std::fs::write(path, serde_json::to_string_pretty(&raw).unwrap_or_default())
 }
@@ -89,10 +141,11 @@ mod tests {
         ))
     }
 
-    fn sample() -> HashMap<(String, String), i32> {
+    fn sample() -> HashMap<(String, String), (i32, u64)> {
+        let now = now_unix();
         HashMap::from([
-            (("1532".into(), "0094".into()), 85),
-            (("046D".into(), "C52B".into()), 37),
+            (("1532".into(), "0094".into()), (85, now)),
+            (("046D".into(), "C52B".into()), (37, now)),
         ])
     }
 
@@ -102,8 +155,8 @@ mod tests {
         save(&sample(), &path).unwrap();
         let loaded = load(&path);
         assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded[&("1532".to_string(), "0094".to_string())], 85);
-        assert_eq!(loaded[&("046D".to_string(), "C52B".to_string())], 37);
+        assert_eq!(loaded[&("1532".to_string(), "0094".to_string())].0, 85);
+        assert_eq!(loaded[&("046D".to_string(), "C52B".to_string())].0, 37);
         std::fs::remove_file(&path).ok();
     }
 
@@ -129,7 +182,30 @@ mod tests {
         std::fs::write(&path, r#"{"NOSEP": 50, ":": 60, "046D:C52B": 42}"#).unwrap();
         let loaded = load(&path);
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[&("046D".to_string(), "C52B".to_string())], 42);
+        assert_eq!(loaded[&("046D".to_string(), "C52B".to_string())].0, 42);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn legacy_int_format_is_accepted() {
+        let path = tmp_path("legacy");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"046D:C52B": 42}"#).unwrap();
+        let loaded = load(&path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[&("046D".to_string(), "C52B".to_string())].0, 42);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn aged_entry_is_evicted() {
+        let path = tmp_path("aged");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let stale = now_unix() - (MAX_AGE_SECS + 3600);
+        let json = format!(r#"{{"046D:C52B":{{"level":42,"seen":{stale}}}}}"#);
+        std::fs::write(&path, json).unwrap();
+        let loaded = load(&path);
+        assert!(loaded.is_empty(), "超龄条目应在加载时被淘汰");
         std::fs::remove_file(&path).ok();
     }
 }

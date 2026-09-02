@@ -42,6 +42,8 @@ struct CacheEntry {
     level: Option<i32>,
     /// 最近一次尝试时刻（成功与失败均推进，作为刷新/负缓存时钟）
     at: Instant,
+    /// 最后一次成功查询的墙钟时间（Unix 秒）；失败不刷新，用于落盘超龄淘汰
+    seen: u64,
 }
 
 // ── 对外入口 ────────────────────────────────────────────
@@ -57,12 +59,13 @@ fn cache() -> &'static Mutex<HashMap<(String, String), CacheEntry>> {
             .unwrap_or_else(Instant::now);
         let map: HashMap<_, _> = persist::load(&persist::cache_path())
             .into_iter()
-            .map(|(k, lv)| {
+            .map(|(k, (lv, seen))| {
                 (
                     k,
                     CacheEntry {
                         level: Some(lv),
                         at: stale_at,
+                        seen,
                     },
                 )
             })
@@ -220,10 +223,16 @@ fn apply_result(old: Option<&CacheEntry>, result: &Result<i32, String>) -> (Cach
     };
     let old_level = old.and_then(|e| e.level);
     let changed = old_level != level;
+    // 仅成功查询刷新 seen；失败保留旧值，使持续离线的设备在超龄后自然淘汰
+    let seen = match result {
+        Ok(_) => persist::now_unix(),
+        Err(_) => old.map(|e| e.seen).unwrap_or(0),
+    };
     (
         CacheEntry {
             level,
             at: Instant::now(),
+            seen,
         },
         changed,
     )
@@ -390,6 +399,7 @@ mod tests {
         CacheEntry {
             level,
             at: Instant::now(),
+            seen: persist::now_unix(),
         }
     }
 
@@ -413,5 +423,21 @@ mod tests {
         let (e, changed) = apply_result(None, &Err("离线".into()));
         assert_eq!(e.level, None);
         assert!(!changed);
+    }
+
+    #[test]
+    fn apply_result_success_refreshes_seen() {
+        // 成功查询推进 seen，保证持续在线的设备不被超龄淘汰
+        let old = entry(Some(9));
+        let (e, _) = apply_result(Some(&old), &Ok(12));
+        assert!(e.seen >= old.seen, "成功查询应刷新 last_seen");
+    }
+
+    #[test]
+    fn apply_result_failure_preserves_seen() {
+        // 失败保留旧 seen，使持续离线的设备在超龄后能被自然淘汰
+        let old = entry(Some(9));
+        let (e, _) = apply_result(Some(&old), &Err("离线".into()));
+        assert_eq!(e.seen, old.seen, "失败查询不应刷新 last_seen");
     }
 }
