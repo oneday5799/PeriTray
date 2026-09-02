@@ -282,6 +282,7 @@ pub async fn set_device_mute(device_id: String, muted: bool) -> Result<(), Strin
 pub async fn get_audio_sessions(
     device_id: String,
 ) -> Result<Vec<crate::audio::AudioSession>, String> {
+    crate::audio_notify::request_session_sync();
     run_blocking(move || crate::audio::enumerate_audio_sessions(&device_id))
         .await?
         .map_err(|e| e.to_string())

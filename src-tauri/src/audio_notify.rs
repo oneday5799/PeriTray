@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::Emitter;
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -12,8 +12,11 @@ use windows_core::implement;
 use crate::audio::VolumeChangeEvent;
 
 const WM_SYNC_CALLBACKS: u32 = 0x0400;
-const SESSION_TIMER_ID: usize = 1;
-const SESSION_TIMER_MS: u32 = 3000;
+const WM_SYNC_SESSIONS: u32 = 0x0401;
+
+/// 音频通知消息窗口句柄（STA 线程创建后写入，供外部线程按需投递会话同步请求）。
+/// 存 isize 而非 HWND：裸指针非 Send，无法放入 static OnceLock。
+static NOTIFY_HWND: OnceLock<isize> = OnceLock::new();
 
 // ── 音量回调实现 ──────────────────────────────────────────
 
@@ -468,6 +471,7 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
                 return;
             }
         };
+        NOTIFY_HWND.set(hwnd.0 as isize).ok();
 
         let mut monitor = match AudioMonitor::new(hwnd, app_handle) {
             Ok(m) => m,
@@ -488,8 +492,6 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
             monitor_ptr as *mut AudioMonitor as isize,
         );
 
-        SetTimer(Some(hwnd), SESSION_TIMER_ID, SESSION_TIMER_MS, None);
-
         crate::process::append_log("[audio_notify] STA thread started");
 
         let mut msg = MSG::default();
@@ -500,6 +502,26 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
 
         crate::process::append_log("[audio_notify] STA thread stopped");
     });
+}
+
+/// 按需触发会话音量回调同步：音量控制页渲染会话音量前调用（如 get_audio_sessions 命令），
+/// 投递 WM_SYNC_SESSIONS 到 STA 线程，确保当前会话的 IAudioSessionEvents 回调已注册，
+/// 使会话音量变化能实时推送 volume-changed。会话本身无增删系统推送，故仅在需要时主动同步。
+pub fn request_session_sync() {
+    let Some(&hwnd) = NOTIFY_HWND.get() else {
+        return;
+    };
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let _ = PostMessageW(
+            Some(HWND(hwnd as *mut core::ffi::c_void)),
+            WM_SYNC_SESSIONS,
+            WPARAM(0),
+            LPARAM(0),
+        );
+    }
 }
 
 extern "system" fn audio_msg_wnd_proc(
@@ -518,13 +540,11 @@ extern "system" fn audio_msg_wnd_proc(
                 }
                 LRESULT(0)
             }
-            WM_TIMER => {
-                if wparam.0 == SESSION_TIMER_ID {
-                    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                    if ptr != 0 {
-                        let monitor = &mut *(ptr as *mut AudioMonitor);
-                        monitor.sync_session_callbacks();
-                    }
+            WM_SYNC_SESSIONS => {
+                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if ptr != 0 {
+                    let monitor = &mut *(ptr as *mut AudioMonitor);
+                    monitor.sync_session_callbacks();
                 }
                 LRESULT(0)
             }
@@ -551,7 +571,6 @@ extern "system" fn audio_msg_wnd_proc(
             WM_DESTROY => {
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if ptr != 0 {
-                    let _ = KillTimer(Some(hwnd), SESSION_TIMER_ID);
                     drop(Box::from_raw(ptr as *mut AudioMonitor));
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 }
