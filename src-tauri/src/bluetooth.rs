@@ -31,6 +31,8 @@ enum BtKind {
 const BT_BATTERY_TTL: Duration = Duration::from_secs(5 * 60);
 /// 从未成功过（负缓存）的重试间隔，避免对休眠/离线设备反复敲门
 const BT_BATTERY_NEG_TTL: Duration = Duration::from_secs(60);
+/// bt_cache 条目最大保留时长：超过该时长未再查询的条目定期淘汰（对齐 24g 缓存超龄语义）
+const BT_BATTERY_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 
 /// 蓝牙电量缓存：device_id → 最近读数（内存态，跨重启不驻留）
 static BT_BATTERY: OnceLock<Mutex<HashMap<String, BtBatteryEntry>>> = OnceLock::new();
@@ -48,6 +50,18 @@ struct BtBatteryEntry {
 
 fn bt_cache() -> &'static Mutex<HashMap<String, BtBatteryEntry>> {
     BT_BATTERY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 淘汰超过 BT_BATTERY_MAX_AGE 未再查询的条目（仅内存清理无 IO；条目极少，锁内 retain 延迟可忽略）
+fn evict_stale_bt_entries() {
+    let now = Instant::now();
+    let mut guard = crate::state::lock_unpoisoned(bt_cache());
+    let before = guard.len();
+    guard.retain(|_, e| now.duration_since(e.at) < BT_BATTERY_MAX_AGE);
+    let evicted = before - guard.len();
+    if evicted > 0 {
+        crate::process::append_log(&format!("[bt] 淘汰 {} 条过期电量缓存", evicted));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +439,9 @@ fn ble_device_from_info(
 pub fn find_paired_bluetooth_devices(
     fresh: bool,
 ) -> Result<Vec<(String, bool, Option<u8>, String)>, Box<dyn std::error::Error>> {
+    // 每次枚举入口顺手淘汰超龄条目，防止 device_id 长期累积
+    evict_stale_bt_entries();
+
     // 单飞协调：仅当抢到 flag 才真正同步现查；后台补查进行中则整段降级为读缓存
     let force = fresh
         && BT_BATTERY_REFRESHING
