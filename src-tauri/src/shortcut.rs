@@ -75,8 +75,7 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
             }
         };
         let action = format!("device_shortcut_key:{}", key);
-        let action: &'static str = Box::leak(action.into_boxed_str());
-        let key_str: &'static str = Box::leak(key.clone().into_boxed_str());
+        let key_str = key.clone();
         crate::process::append_log(&format!("[shortcut] registered {} -> {}", key, action));
         let _ = app
             .global_shortcut()
@@ -84,7 +83,7 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
-                dispatch_shortcut_action(_app, action, key_str);
+                dispatch_shortcut_action(_app, &action, &key_str);
             });
         registered.insert(key.clone());
     }
