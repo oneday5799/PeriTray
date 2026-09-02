@@ -8,6 +8,7 @@ pub(crate) mod f75max;
 pub(crate) mod f99pro;
 
 use super::{BatteryDriver, DeviceIdentity};
+use crate::wireless_24g::hid_link::HidLink;
 
 /// 已知 AULA 无线设备身份（识别注册表数据源）
 const DEVICES: &[(&str, u16, u16)] = &[
@@ -24,12 +25,11 @@ impl BatteryDriver for AulaDriver {
         DEVICES.iter().any(|(_, v, p)| *v == vid && *p == pid)
     }
 
-    fn read_battery(&self, vid: u16, pid: u16) -> Result<i32, String> {
-        let link = crate::wireless_24g::hid_link::HidLink::new()?;
+    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
         // 按 VID 分发至对应协议实现；None=非无线连接态，统一转 Err 走负缓存
         let percent = match (vid, pid) {
-            (f99pro::VID, f99pro::PID) => f99pro::read_battery_percent(&link)?,
-            (f75max::VID, f75max::PID) => f75max::read_battery_percent(&link)?,
+            (f99pro::VID, f99pro::PID) => f99pro::read_battery_percent(link)?,
+            (f75max::VID, f75max::PID) => f75max::read_battery_percent(link)?,
             _ => return Err(format!("未收录的 AULA 设备 {:04X}:{:04X}", vid, pid)),
         };
         percent.ok_or_else(|| "非无线连接态，电量不可用".to_string())

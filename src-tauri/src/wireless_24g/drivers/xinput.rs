@@ -5,6 +5,7 @@
 // 此驱动的 read_battery 始终返回 Err（不走 HID 通道）。
 
 use super::{BatteryDriver, DeviceIdentity};
+use crate::wireless_24g::hid_link::HidLink;
 
 const DEVICES: &[(&str, u16, u16)] = &[
     ("Xbox 360 Controller", 0x045E, 0x028E),
@@ -20,7 +21,7 @@ impl BatteryDriver for XInputDriver {
         DEVICES.iter().any(|(_, v, p)| *v == vid && *p == pid)
     }
 
-    fn read_battery(&self, _vid: u16, _pid: u16) -> Result<i32, String> {
+    fn read_battery(&self, _link: &HidLink, _vid: u16, _pid: u16) -> Result<i32, String> {
         // XInput 电量由 wireless_24g::query_and_cache 中的 XInput 兜底读取，
         // 不走 HID 通道；此处仅声明设备身份
         Err("XInput 电量由上层兜底读取".into())

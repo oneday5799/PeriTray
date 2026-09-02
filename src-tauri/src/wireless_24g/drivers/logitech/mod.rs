@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use super::{BatteryDriver, DeviceIdentity};
+use crate::wireless_24g::hid_link::HidLink;
 
 /// 已知罗技接收器身份（识别注册表数据源）。
 /// 下游设备名称为动态枚举（HID++ 特性 0x0005），不经由此表。
@@ -58,12 +59,11 @@ impl BatteryDriver for LogitechDriver {
         vid == 0x046D && RECEIVERS.iter().any(|(_, p)| *p == pid)
     }
 
-    fn read_battery(&self, vid: u16, pid: u16) -> Result<i32, String> {
+    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
         if !self.matches(vid, pid) {
             return Err(format!("非罗技接收器设备 {:04X}:{:04X}", vid, pid));
         }
 
-        let link = crate::wireless_24g::hid_link::HidLink::new()?;
         let paths = link.enumerate_paths(vid, pid)?;
         let mut last_err = String::from("无可用候选集合");
 

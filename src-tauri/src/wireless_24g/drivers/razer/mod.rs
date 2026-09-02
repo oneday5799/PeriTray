@@ -62,8 +62,13 @@ const WAIT_KBD_WL_MS: u64 = 5;
 /// 完整电量查询流程：枚举 HID 集合 → 组包收发 → 校验解析，
 /// 含重试（与 OpenRazer 一致）。鼠标/键盘域共用。
 /// 标准级输出枚举摘要；详细级输出逐路径尝试、重试轮次与成功响应原文。
-fn read_battery_level(vid: u16, pid: u16, txid: u8, wait_ms: u64) -> Result<i32, String> {
-    let link = HidLink::new()?;
+fn read_battery_level(
+    link: &HidLink,
+    vid: u16,
+    pid: u16,
+    txid: u8,
+    wait_ms: u64,
+) -> Result<i32, String> {
     let paths = link.enumerate_paths(vid, pid)?;
     crate::process::append_log(&format!(
         "[24g] {:04X}:{:04X} 枚举到 {} 个候选集合",

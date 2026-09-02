@@ -10,6 +10,7 @@ use super::{
     read_battery_level, TXID_LEGACY, TXID_MID, TXID_NEW, WAIT_ATHERIS_MS, WAIT_DEFAULT_MS,
     WAIT_NEW_MS, WAIT_VIPER_MS,
 };
+use crate::wireless_24g::hid_link::HidLink;
 
 // ── 设备能力表 ───────────────────────────────────────────
 // 蓝牙形态 PID 不收录（电量归系统蓝牙栈）；
@@ -185,12 +186,12 @@ impl BatteryDriver for RazerMouseDriver {
         DEVICES.iter().any(|d| d.vid_pid == (vid, pid))
     }
 
-    fn read_battery(&self, vid: u16, pid: u16) -> Result<i32, String> {
+    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
         let dev = DEVICES
             .iter()
             .find(|d| d.vid_pid == (vid, pid))
             .ok_or_else(|| format!("未收录的雷蛇设备 {:04X}:{:04X}", vid, pid))?;
-        read_battery_level(vid, pid, dev.txid, dev.wait_ms)
+        read_battery_level(link, vid, pid, dev.txid, dev.wait_ms)
     }
 
     fn identities(&self) -> Vec<DeviceIdentity> {

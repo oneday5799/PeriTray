@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 
 use tauri::Emitter;
 
+use hid_link::HidLink;
+
 /// 成功电量的缓存有效期
 const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 /// 失败负缓存的有效期（避免对休眠设备反复敲门）
@@ -249,7 +251,7 @@ struct QueryOutcome {
 }
 
 /// 查询单台设备并写回缓存
-fn query_and_cache(key: &(String, String)) -> QueryOutcome {
+fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutcome {
     let invalid = QueryOutcome {
         level: None,
         changed: false,
@@ -286,13 +288,16 @@ fn query_and_cache(key: &(String, String)) -> QueryOutcome {
         return outcome;
     }
 
-    // 标准 HID 驱动查找
+    // 标准 HID 驱动查找（link 为空表示 HID 会话初始化失败，按负缓存处理）
+    let Some(link) = link else {
+        return invalid;
+    };
     if let Some(driver) = drivers::find_driver(v, p) {
         let label = match driver.device_name(v, p) {
             Some(name) => format!("{} ({:04X}:{:04X})", name, v, p),
             None => format!("{:04X}:{:04X}", v, p),
         };
-        let result = driver.read_battery(v, p);
+        let result = driver.read_battery(link, v, p);
         match &result {
             Ok(lv) => crate::process::append_log(&format!("[24g] {} 电量 {}%", label, lv)),
             Err(e) => crate::process::append_log(&format!("[24g] {} 查询失败: {}", label, e)),
@@ -335,12 +340,13 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
 
     crate::process::append_log(&format!("[24g] 强制刷新开始: {} 台", pairs.len()));
     let started = std::time::Instant::now();
+    let link = HidLink::new().ok();
     let mut result = HashMap::new();
     let (mut ok, mut fail) = (0, 0);
     let mut any_changed = false;
     let mut any_queried_ok = false;
     for key in &pairs {
-        let o = query_and_cache(key);
+        let o = query_and_cache(link.as_ref(), key);
         match o.level {
             Some(_) => ok += 1,
             None => fail += 1,
@@ -369,11 +375,12 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
 /// 后台线程体：逐台查询并写回缓存（成功与失败均记录，便于诊断休眠/离线）；
 /// 本轮存在实质变化时推送前端，查到过成功值时收尾落盘一次
 fn refresh_worker(pairs: Vec<(String, String)>) {
+    let link = HidLink::new().ok();
     let (mut ok, mut fail) = (0, 0);
     let mut any_changed = false;
     let mut any_queried_ok = false;
     for key in &pairs {
-        let o = query_and_cache(key);
+        let o = query_and_cache(link.as_ref(), key);
         match o.level {
             Some(_) => ok += 1,
             None => fail += 1,

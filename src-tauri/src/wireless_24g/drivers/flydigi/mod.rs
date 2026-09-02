@@ -7,6 +7,7 @@
 pub(crate) mod vader4pro;
 
 use super::{BatteryDriver, DeviceIdentity};
+use crate::wireless_24g::hid_link::HidLink;
 
 /// 已知 Flydigi 无线设备身份（识别注册表数据源）
 const DEVICES: &[(&str, u16, u16)] = &[("Flydigi Vader 4 Pro", vader4pro::VID, vader4pro::PID)];
@@ -20,10 +21,9 @@ impl BatteryDriver for FlydigiDriver {
         DEVICES.iter().any(|(_, v, p)| *v == vid && *p == pid)
     }
 
-    fn read_battery(&self, vid: u16, pid: u16) -> Result<i32, String> {
-        let link = crate::wireless_24g::hid_link::HidLink::new()?;
+    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
         let percent = match (vid, pid) {
-            (vader4pro::VID, vader4pro::PID) => vader4pro::read_battery_percent(&link)?,
+            (vader4pro::VID, vader4pro::PID) => vader4pro::read_battery_percent(link)?,
             _ => return Err(format!("未收录的 Flydigi 设备 {:04X}:{:04X}", vid, pid)),
         };
         percent.ok_or_else(|| "充电中或无效电量值".to_string())

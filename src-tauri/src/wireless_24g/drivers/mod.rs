@@ -11,6 +11,8 @@ pub(crate) mod logitech;
 pub(crate) mod razer;
 pub(crate) mod xinput;
 
+use crate::wireless_24g::hid_link::HidLink;
+
 /// 驱动声明的设备身份：识别注册表的编译期内置数据源。
 /// dev_type 与历史 JSON 口径一致："mouse"/"keyboard"/"audio"/"other"
 pub struct DeviceIdentity {
@@ -24,8 +26,9 @@ pub struct DeviceIdentity {
 pub trait BatteryDriver: Sync {
     /// 是否支持该 VID/PID（实现应直接扫描自身设备表，保持热路径零分配）
     fn matches(&self, vid: u16, pid: u16) -> bool;
-    /// 查询电量百分比（0-100）；设备休眠/离线/未收录时返回 Err，由上层走负缓存
-    fn read_battery(&self, vid: u16, pid: u16) -> Result<i32, String>;
+    /// 查询电量百分比（0-100）；设备休眠/离线/未收录时返回 Err，由上层走负缓存。
+    /// link 为批内复用的 HID 会话（由上层每批建一次，避免每台设备重复初始化）
+    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String>;
     /// 声明收录设备的身份列表（识别注册表构建期调用一次，非热路径）
     fn identities(&self) -> Vec<DeviceIdentity>;
     /// 设备显示名（日志用，零分配；动态名经 display_override 通道）
