@@ -436,6 +436,7 @@ function scheduleSilentRefresh() {
 
 if (window.__TAURI__ && window.__TAURI__.event) {
   window.__TAURI__.event.listen("24g-battery-updated", scheduleSilentRefresh);
+  window.__TAURI__.event.listen("bt-battery-updated", scheduleSilentRefresh);
   window.__TAURI__.event.listen("devices-changed", scheduleSilentRefresh);
 }
 

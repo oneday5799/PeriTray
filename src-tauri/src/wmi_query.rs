@@ -48,10 +48,10 @@ struct BatteryDevice {
     estimated_charge_remaining: Option<i32>,
 }
 
-/// fresh_24g=true 时强制现查 2.4G 接收器电量（设备列表手动刷新入口），否则走缓存。
-/// Err 表示主查询通道不可信（COM/WMI 连接失败或 PnP 主查询失败），
-/// 调用方应保留既有数据而非应用残缺结果。
-pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
+/// fresh=true 时强制现查 2.4G 接收器与蓝牙设备电量（设备列表手动刷新入口），
+/// 否则两者均走各自的 SWR 缓存。Err 表示主查询通道不可信（COM/WMI 连接失败或
+/// PnP 主查询失败），调用方应保留既有数据而非应用残缺结果。
+pub fn query_devices(fresh: bool) -> Result<Vec<Device>, String> {
     let mut all = vec![];
     let mut seen = HashSet::new();
     let mut cn_index: HashMap<String, Vec<usize>> = HashMap::new();
@@ -108,6 +108,7 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
         &mut all,
         &mut bt_names,
         &mut cn_index,
+        fresh,
     );
     // 电池查询：wireless_only 时跳过（电池设备均为有线 USB）
     if !wireless_only {
@@ -129,7 +130,7 @@ pub fn query_devices(fresh_24g: bool) -> Result<Vec<Device>, String> {
     }
 
     // 2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
-    fill_24g_battery(&mut all, pnp_24g_pairs, fresh_24g);
+    fill_24g_battery(&mut all, pnp_24g_pairs, fresh);
 
     crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
     Ok(all)
@@ -261,8 +262,9 @@ fn query_bt_devices(
     all: &mut Vec<Device>,
     bt_names: &mut HashSet<String>,
     cn_index: &mut HashMap<String, Vec<usize>>,
+    fresh: bool,
 ) {
-    let btc_devices = match find_paired_bluetooth_devices() {
+    let btc_devices = match find_paired_bluetooth_devices(fresh) {
         Ok(d) => d,
         Err(_) => return,
     };

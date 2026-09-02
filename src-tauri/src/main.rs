@@ -429,6 +429,8 @@ fn main() {
             process::append_log("[main] audio_notify initialized");
             // 2.4G 电量变更事件推送句柄
             crate::wireless_24g::init_event_handle(app.handle());
+            // 蓝牙电量变更事件推送句柄
+            crate::bluetooth::init_bt_event_handle(app.handle());
             crate::shortcut::register_shortcuts(app.handle());
             if !is_autostart {
                 popup::open_popup(app.handle(), "devices");
