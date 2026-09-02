@@ -31,6 +31,7 @@ use std::panic;
 
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::RunEvent;
 
 /// 安装 panic hook：捕获 panic 后弹 MessageBox 再退出（避免 release 模式静默闪退）
 fn install_panic_hook() {
@@ -455,5 +456,9 @@ fn main() {
             std::process::exit(1);
         }
     };
-    app.run(|_app_handle, _event| {});
+    app.run(|_app_handle, event| {
+        if let RunEvent::ExitRequested { .. } = event {
+            crate::audio_notify::request_shutdown();
+        }
+    });
 }

@@ -524,6 +524,26 @@ pub fn request_session_sync() {
     }
 }
 
+/// 退出前投递 WM_CLOSE：触发消息窗口销毁 → WM_DESTROY → drop AudioMonitor
+/// （反注册 IMMNotificationClient 与各设备/会话回调）→ STA 线程退出。
+/// best-effort：仅覆盖正常退出路径（app.exit）；watchdog/panic 的 process::exit 不触发。
+pub fn request_shutdown() {
+    let Some(&hwnd) = NOTIFY_HWND.get() else {
+        return;
+    };
+    if hwnd == 0 {
+        return;
+    }
+    unsafe {
+        let _ = PostMessageW(
+            Some(HWND(hwnd as *mut core::ffi::c_void)),
+            WM_CLOSE,
+            WPARAM(0),
+            LPARAM(0),
+        );
+    }
+}
+
 extern "system" fn audio_msg_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -546,6 +566,11 @@ extern "system" fn audio_msg_wnd_proc(
                     let monitor = &mut *(ptr as *mut AudioMonitor);
                     monitor.sync_session_callbacks();
                 }
+                LRESULT(0)
+            }
+            WM_CLOSE => {
+                // 退出路径：销毁消息窗口 → WM_DESTROY → drop AudioMonitor（反注册回调）→ 线程退出
+                let _ = DestroyWindow(hwnd);
                 LRESULT(0)
             }
             WM_ENDSESSION => {
