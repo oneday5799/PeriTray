@@ -52,6 +52,18 @@ struct BatteryDevice {
 /// 否则两者均走各自的 SWR 缓存。Err 表示主查询通道不可信（COM/WMI 连接失败或
 /// PnP 主查询失败），调用方应保留既有数据而非应用残缺结果。
 pub fn query_devices(fresh: bool) -> Result<Vec<Device>, String> {
+    let con = match WMIConnection::new() {
+        Ok(c) => c,
+        Err(_) => {
+            crate::process::append_log("[wmi] WMIConnection::new failed");
+            return Err("wmi connection failed".to_string());
+        }
+    };
+    query_devices_with(&con, fresh)
+}
+
+/// 使用调用方持有的连接查询设备列表（供后台轮询线程复用连接，规避每轮 ConnectServer）。
+pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device>, String> {
     let mut all = vec![];
     let mut seen = HashSet::new();
     let mut cn_index: HashMap<String, Vec<usize>> = HashMap::new();
@@ -76,19 +88,11 @@ pub fn query_devices(fresh: bool) -> Result<Vec<Device>, String> {
     };
     let re_ref = re.as_deref();
 
-    let con = match WMIConnection::new() {
-        Ok(c) => c,
-        Err(_) => {
-            crate::process::append_log("[wmi] WMIConnection::new failed");
-            return Err("wmi connection failed".to_string());
-        }
-    };
-
     let mut bt_names = HashSet::new();
     let mut pnp_24g_pairs = vec![];
 
     if let Err(e) = query_pnp_devices(
-        &con,
+        con,
         dedup_enabled,
         re_ref,
         wireless_only,
@@ -112,7 +116,7 @@ pub fn query_devices(fresh: bool) -> Result<Vec<Device>, String> {
     // 电池查询：wireless_only 时跳过（电池设备均为有线 USB）
     if !wireless_only {
         query_battery_devices(
-            &con,
+            con,
             dedup_enabled,
             re_ref,
             &mut seen,
@@ -156,7 +160,7 @@ fn query_pnp_devices(
     ];
 
     let rows = match con.raw_query::<HashMap<String, wmi::Variant>>(
-        "SELECT Name, Status, PNPDeviceID, Caption, PNPClass, ConfigManagerErrorCode FROM Win32_PnPEntity",
+        "SELECT Name, Status, PNPDeviceID, Caption, PNPClass, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE PNPClass = 'AudioEndpoint' OR PNPClass = 'Bluetooth' OR PNPClass = 'HIDClass' OR PNPClass = 'Keyboard' OR PNPClass = 'MEDIA' OR PNPClass = 'Mouse' OR PNPClass = 'Monitor'",
     ) {
         Ok(r) => r,
         Err(e) => {

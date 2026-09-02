@@ -15,18 +15,9 @@ use crate::windows;
 
 static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new();
 
-/// 刷新设备缓存，返回是否发生变化。
-/// 查询失败（WMI 不可信态）时跳过本轮，保留旧缓存避免 tooltip 抖动
-fn refresh_devices_cache() -> bool {
-    let new_devices = match crate::wmi_query::query_devices(false) {
-        Ok(d) => d,
-        Err(e) => {
-            crate::process::append_log(&format!("[tray] skip cache refresh: {}", e));
-            return false;
-        }
-    };
+/// 将查询结果写回设备缓存，返回是否发生变化（新旧列表比较）。
+fn apply_devices_cache(new_devices: Vec<crate::device::Device>) -> bool {
     let cache = get_devices_cache();
-
     if let Ok(mut guard) = cache.lock() {
         if *guard != new_devices {
             *guard = new_devices;
@@ -36,6 +27,18 @@ fn refresh_devices_cache() -> bool {
         }
     } else {
         false
+    }
+}
+
+/// 刷新设备缓存，返回是否发生变化。
+/// 查询失败（WMI 不可信态）时跳过本轮，保留旧缓存避免 tooltip 抖动
+fn refresh_devices_cache() -> bool {
+    match crate::wmi_query::query_devices(false) {
+        Ok(d) => apply_devices_cache(d),
+        Err(e) => {
+            crate::process::append_log(&format!("[tray] skip cache refresh: {}", e));
+            false
+        }
     }
 }
 
@@ -87,27 +90,46 @@ fn start_device_watcher(app: &tauri::AppHandle) {
 
     let handle = app.clone();
     std::thread::spawn(move || loop {
-        // 每轮重新读取间隔（支持运行时修改）
-        let secs = config::with_config(|c| c.low_battery_refresh_secs.max(10));
-        std::thread::sleep(std::time::Duration::from_secs(secs as u64));
+        // 连接在线程内建立一次并复用（WMIConnection 为 !Send，须在此线程内持有）；
+        // 建立失败退避重试，查询失败跳出重建连接以自愈
+        let con = match wmi::WMIConnection::new() {
+            Ok(c) => c,
+            Err(e) => {
+                crate::process::append_log(&format!("[tray] WMIConnection::new failed: {}", e));
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                continue;
+            }
+        };
 
-        let has_tray = config::with_config(|c| !c.tray_devices.is_empty());
-        let has_battery_notify = config::with_config(|c| c.low_battery_notify);
-        if !has_tray && !has_battery_notify {
-            continue;
-        }
+        loop {
+            // 每轮重新读取间隔（支持运行时修改）
+            let secs = config::with_config(|c| c.low_battery_refresh_secs.max(10));
+            std::thread::sleep(std::time::Duration::from_secs(secs as u64));
 
-        let changed = refresh_devices_cache();
-        if has_tray && changed {
-            std::thread::spawn(move || update_tooltip());
-            let _ = handle.emit("devices-changed", ());
-        }
+            let has_tray = config::with_config(|c| !c.tray_devices.is_empty());
+            let has_battery_notify = config::with_config(|c| c.low_battery_notify);
+            if !has_tray && !has_battery_notify {
+                continue;
+            }
 
-        // 低电量通知检查
-        if has_battery_notify {
-            let cache = get_devices_cache();
-            if let Ok(guard) = cache.lock() {
-                crate::battery_notify::check_battery_notify(&guard);
+            let changed = match crate::wmi_query::query_devices_with(&con, false) {
+                Ok(d) => apply_devices_cache(d),
+                Err(e) => {
+                    crate::process::append_log(&format!("[tray] skip cache refresh: {}", e));
+                    break; // 连接可能失效，跳出重建
+                }
+            };
+            if has_tray && changed {
+                std::thread::spawn(move || update_tooltip());
+                let _ = handle.emit("devices-changed", ());
+            }
+
+            // 低电量通知检查
+            if has_battery_notify {
+                let cache = get_devices_cache();
+                if let Ok(guard) = cache.lock() {
+                    crate::battery_notify::check_battery_notify(&guard);
+                }
             }
         }
     });
