@@ -9,7 +9,7 @@ use windows::Win32::System::Com::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_core::implement;
 
-use crate::audio::VolumeChangeEvent;
+use crate::audio::{pwstr_to_string, VolumeChangeEvent};
 
 const WM_SYNC_CALLBACKS: u32 = 0x0400;
 const WM_SYNC_SESSIONS: u32 = 0x0401;
@@ -261,7 +261,7 @@ impl AudioMonitor {
             for i in 0..count {
                 if let Ok(device) = collection.Item(i) {
                     if let Ok(id) = device.GetId() {
-                        let id_str = id.to_string().unwrap_or_default();
+                        let id_str = pwstr_to_string(id).unwrap_or_default();
                         current_ids.push(id_str.clone());
 
                         if !self.callbacks.contains_key(&id_str) {
@@ -342,7 +342,7 @@ impl AudioMonitor {
                                 continue;
                             }
                             let session_id = match session_control2.GetSessionInstanceIdentifier() {
-                                Ok(id) => match id.to_string() {
+                                Ok(id) => match pwstr_to_string(id) {
                                     Ok(s) => s,
                                     Err(_) => continue,
                                 },

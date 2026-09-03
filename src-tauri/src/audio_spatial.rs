@@ -148,7 +148,6 @@ pub fn set_spatial_sound(
                 // 状态编码校验仅作记录不作硬闸门：激活中的格式被卸载后端点会停留在
                 // 非标准过渡态，但系统设置器在此状态下同样接受写入并归一化；
                 // 槽位漂移的真正防线是写后读回（错位调用必然读回不匹配）
-                CoTaskMemFree(Some(fmt_ptr as *const c_void));
                 let layout_trusted = validate_state_encoding(&cur_state);
                 if !layout_trusted {
                     crate::process::append_log(
@@ -156,6 +155,7 @@ pub fn set_spatial_sound(
                     );
                 }
                 let hr = client.try_set_state(wide.as_ptr(), &new_state, fmt_ptr);
+                CoTaskMemFree(Some(fmt_ptr as *const c_void));
                 if hr < 0 {
                     return Err(format!("设置空间音效失败（hr={:#010x}）", hr as u32));
                 }

@@ -2,6 +2,7 @@
 //! 应用级设备路由与默认设备切换见 audio_policy 模块。
 
 use serde::Serialize;
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::Arc;
 use windows::core::*;
@@ -65,6 +66,14 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
     Ok(f(&enumerator))
 }
 
+/// 读取 COM 分配的 PWSTR 到 Rust String 后释放 CoTaskMem 内存。
+/// 用于 GetId / GetDisplayName / GetSessionInstanceIdentifier 等返回 PWSTR 的 API。
+pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
+    let s = pwstr.to_string()?;
+    CoTaskMemFree(Some(pwstr.as_ptr() as *const c_void));
+    Ok(s)
+}
+
 /// 枚举指定方向的音频设备（output=eRender / input=eCapture），并标记系统默认
 fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
     unsafe {
@@ -73,7 +82,7 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
                 .GetDefaultAudioEndpoint(flow, eMultimedia)
                 .ok()
                 .and_then(|d| d.GetId().ok())
-                .map(|id| id.to_string().unwrap_or_default())
+                .map(|id| pwstr_to_string(id).unwrap_or_default())
                 .unwrap_or_default();
             let collection = enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)?;
             let count = collection.GetCount()?;
@@ -81,7 +90,7 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
             for i in 0..count {
                 if let Ok(device) = collection.Item(i) {
                     if let Ok(id) = device.GetId() {
-                        let id_str = id.to_string()?;
+                        let id_str = pwstr_to_string(id)?;
                         let name = get_device_name(&device)
                             .unwrap_or_else(|_| "Unknown Device".to_string());
                         let (volume, is_muted) =
@@ -264,7 +273,7 @@ pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
                 if let Ok(device) = collection.Item(di) {
                     let dev_id = device
                         .GetId()
-                        .map(|id| id.to_string().unwrap_or_default())
+                        .map(|id| pwstr_to_string(id).unwrap_or_default())
                         .unwrap_or_default();
                     let session_manager: IAudioSessionManager2 =
                         match device.Activate(CLSCTX_ALL, None) {
@@ -431,16 +440,15 @@ pub fn resolve_session_device_names(
 }
 
 unsafe fn get_session_display_name(session: &IAudioSessionControl) -> Result<String> {
-    let display_name = session.GetDisplayName()?;
+    let display_name = pwstr_to_string(session.GetDisplayName()?)?;
     if display_name.is_empty() {
         return Ok("Unknown App".to_string());
     }
-    Ok(display_name.to_string()?)
+    Ok(display_name)
 }
 
 unsafe fn get_session_id(session: &IAudioSessionControl2) -> Result<String> {
-    let id = session.GetSessionInstanceIdentifier()?;
-    Ok(id.to_string()?)
+    pwstr_to_string(session.GetSessionInstanceIdentifier()?)
 }
 
 fn simulate_media_key(vk: u16) {
