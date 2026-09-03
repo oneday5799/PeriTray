@@ -434,6 +434,8 @@ fn main() {
             crate::bluetooth::init_bt_event_handle(app.handle());
             // 蓝牙适配器状态监听（开关蓝牙立即刷新设备列表）
             crate::bluetooth::init_radio_watcher(app.handle());
+            process::append_log("[main] bt_event_handle initialized");
+            process::append_log("[main] radio_watcher initialized");
             crate::shortcut::register_shortcuts(app.handle());
             if !is_autostart {
                 popup::open_popup(app.handle(), "devices");

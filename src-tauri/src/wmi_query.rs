@@ -135,6 +135,10 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
     // 2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
     fill_24g_battery(&mut all, pnp_24g_pairs, fresh);
 
+    crate::process::append_verbose_log(&format!(
+        "[wmi:dbg] query_devices: fresh={}, wireless_only={}",
+        fresh, wireless_only
+    ));
     crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
     Ok(all)
 }

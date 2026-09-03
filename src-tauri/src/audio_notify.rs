@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -13,6 +14,22 @@ use crate::audio::{pwstr_to_string, VolumeChangeEvent};
 
 const WM_SYNC_CALLBACKS: u32 = 0x0400;
 const WM_SYNC_SESSIONS: u32 = 0x0401;
+
+/// 属性变更节流：同一设备 2s 内只记录一次，避免日志噪音
+static LAST_PROP_LOG: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+
+fn log_throttle_property(id: &str) {
+    let lock = LAST_PROP_LOG.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = lock.lock().unwrap();
+    let now = Instant::now();
+    if let Some(last) = map.get(id) {
+        if now.duration_since(*last) < Duration::from_secs(2) {
+            return;
+        }
+    }
+    map.insert(id.to_string(), now);
+    crate::process::append_verbose_log(&format!("[audio_notify] OnPropertyValueChanged id={}", id));
+}
 
 /// 音频通知消息窗口句柄（STA 线程创建后写入，供外部线程按需投递会话同步请求）。
 /// 存 isize 而非 HWND：裸指针非 Send，无法放入 static OnceLock。
@@ -190,12 +207,7 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
     }
 
     fn OnPropertyValueChanged(&self, pwstrdeviceid: &PCWSTR, _key: &PROPERTYKEY) -> Result<()> {
-        unsafe {
-            crate::process::append_verbose_log(&format!(
-                "[audio_notify] OnPropertyValueChanged id={}",
-                (*pwstrdeviceid).to_string().unwrap_or_default()
-            ));
-        }
+        log_throttle_property(&unsafe { (*pwstrdeviceid).to_string().unwrap_or_default() });
         Ok(())
     }
 }
