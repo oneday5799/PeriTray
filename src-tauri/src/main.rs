@@ -432,6 +432,8 @@ fn main() {
             crate::wireless_24g::init_event_handle(app.handle());
             // 蓝牙电量变更事件推送句柄
             crate::bluetooth::init_bt_event_handle(app.handle());
+            // 蓝牙适配器状态监听（开关蓝牙立即刷新设备列表）
+            crate::bluetooth::init_radio_watcher(app.handle());
             crate::shortcut::register_shortcuts(app.handle());
             if !is_autostart {
                 popup::open_popup(app.handle(), "devices");

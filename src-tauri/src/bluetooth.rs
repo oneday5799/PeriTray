@@ -5,6 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
+use windows::Devices::Radios::{Radio, RadioKind};
 use windows_sys::core::GUID;
 use windows_sys::Win32::Devices::Bluetooth::*;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
@@ -812,6 +813,71 @@ fn setupdi_get_battery_byte(
         return None;
     }
     buffer.first().copied()
+}
+
+// ---------------------------------------------------------------------------
+// 蓝牙适配器状态监听
+// ---------------------------------------------------------------------------
+
+static RADIO_WATCHER_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// 初始化蓝牙适配器状态监听（main setup 调用一次）
+pub fn init_radio_watcher(app: &tauri::AppHandle) {
+    RADIO_WATCHER_HANDLE.set(app.clone()).ok();
+    std::thread::spawn(|| {
+        if let Err(e) = watch_radio_state() {
+            crate::process::append_log(&format!("[bt] radio watcher failed: {}", e));
+        }
+    });
+}
+
+fn watch_radio_state() -> Result<(), String> {
+    let radios = Radio::GetRadiosAsync()
+        .map_err(|e| format!("GetRadiosAsync error: {}", e))?
+        .join()
+        .map_err(|e| format!("GetRadiosAsync join error: {}", e))?;
+
+    let mut bt_radio = None;
+    // IVectorView 无 len()，逐个尝试直到失败
+    for i in 0.. {
+        match radios.GetAt(i) {
+            Ok(radio) => {
+                if radio.Kind().unwrap_or(RadioKind::Other) == RadioKind::Bluetooth {
+                    bt_radio = Some(radio);
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let radio = bt_radio.ok_or("no bluetooth radio found")?;
+    let state = radio.State().map_err(|e| format!("State error: {}", e))?;
+    crate::process::append_log(&format!("[bt] radio watcher started, state={:?}", state));
+
+    // 使用 TypedEventHandler 显式类型避免 windows_core 版本冲突
+    use windows::Foundation::TypedEventHandler;
+    let handler =
+        TypedEventHandler::<Radio, windows::core::IInspectable>::new(move |_sender, _args| {
+            handle_radio_state();
+            Ok(())
+        });
+    radio
+        .StateChanged(&handler)
+        .map_err(|e| format!("StateChanged error: {}", e))?;
+
+    // 阻塞线程保持监听
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+fn handle_radio_state() {
+    let Some(app) = RADIO_WATCHER_HANDLE.get() else {
+        return;
+    };
+    crate::process::append_log("[bt] radio state changed, refreshing device list");
+    let _ = app.emit("devices-changed", ());
 }
 
 #[cfg(test)]

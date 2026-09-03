@@ -47,6 +47,7 @@ features = [
     "Devices_Bluetooth",
     "Devices_Bluetooth_GenericAttributeProfile",
     "Devices_Enumeration",
+    "Devices_Radios",
     "ApplicationModel",
     "Foundation_Collections",
     "Management_Deployment",
