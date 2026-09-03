@@ -329,7 +329,12 @@ function createDeviceCard(dev) {
 function updateDeviceCard(card, dev) {
   card._dev = dev;
   card.querySelector(".device-name").textContent = getDisplayName(dev, deviceNames);
-  fillStatusRow(card.querySelector(".card-tags"), dev);
+  // 连接/断开操作进行中（btn-loading）时跳过状态标签更新，
+  // 避免后端推送或焦点刷新将"正在连接.../正在断开..."覆盖为实际状态
+  const connectBtn = card.querySelector(".connect-btn");
+  if (!connectBtn || !connectBtn.classList.contains("btn-loading")) {
+    fillStatusRow(card.querySelector(".card-tags"), dev);
+  }
   syncActionsEl(card);
 }
 
