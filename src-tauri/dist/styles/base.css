@@ -946,7 +946,8 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
 
 .tooltip-content {
   display: none;
-  position: absolute;  bottom: calc(100% + 8px);
+  position: absolute;
+  bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
   width: max-content;
