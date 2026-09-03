@@ -42,6 +42,7 @@ pub fn store_device_ids(devices: &[Device]) {
                 ids.insert(dev.name.clone(), (device_id.clone(), dev.is_ble));
             }
         }
+        crate::process::append_log(&format!("[device] 更新设备 ID 映射: {} 条", ids.len()));
     }
 }
 

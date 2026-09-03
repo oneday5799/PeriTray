@@ -61,6 +61,9 @@ pub fn append_verbose_log(msg: &str) {
     write_log(msg);
 }
 
+/// 落盘失败计数：首次失败告警，后续静默（防止高频日志重复刷屏）
+static LOG_WRITE_FAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn write_log(msg: &str) {
     use std::io::Write;
     let timestamp = chrono_str();
@@ -69,12 +72,17 @@ fn write_log(msg: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    let mut ok = false;
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
     {
-        let _ = file.write_all(line.as_bytes());
+        ok = file.write_all(line.as_bytes()).is_ok();
+    }
+    // 首次落盘失败时 stderr 直出告警，防止日志丢失无感知
+    if !ok && !LOG_WRITE_FAILS.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        eprintln!("[process] 日志写入失败，日志可能丢失: {:?}", path);
     }
 }
 
@@ -225,8 +233,8 @@ fn chrono_str() -> String {
         let mut st: SYSTEMTIME = unsafe { std::mem::zeroed() };
         unsafe { GetLocalTime(&mut st) };
         return format!(
-            "{:04}.{:02}.{:02} {:02}:{:02}:{:02}",
-            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+            "{:04}.{:02}.{:02} {:02}:{:02}:{:02}.{:03}",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds
         );
     }
     #[cfg(not(target_os = "windows"))]

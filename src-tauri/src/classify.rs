@@ -5,6 +5,15 @@ use crate::device_data;
 pub(crate) fn classify_device(name: &str, pnp_class: &str, pnp_id: &str, caption: &str) -> DevType {
     let lower_combined = format!("{} {}", name, caption).to_lowercase();
 
+    let result = classify_device_inner(&lower_combined, pnp_class, pnp_id);
+    crate::process::append_verbose_log(&format!(
+        "[classify] classify_device: {} -> {:?} (pnp_class={}, pnp_id={})",
+        name, result, pnp_class, pnp_id
+    ));
+    result
+}
+
+fn classify_device_inner(lower_combined: &str, pnp_class: &str, pnp_id: &str) -> DevType {
     // 按 VID/PID 检测 2.4G 无线设备并路由到对应类型
     if pnp_id.starts_with("USB\\") && is_wireless_24g_by_vid_pid(pnp_id) {
         if let Some((vid, pid)) = device_data::extract_vid_pid(pnp_id) {
@@ -31,30 +40,39 @@ pub(crate) fn classify_device(name: &str, pnp_class: &str, pnp_id: &str, caption
         || pnp_id.starts_with("BTHENUM\\")
         || pnp_id.starts_with("SWD\\")
     {
-        if is_audio(&lower_combined) {
+        if is_audio(lower_combined) {
             return DevType::Audio;
         }
-        if match_usb_keyword(&lower_combined) {
+        if match_usb_keyword(lower_combined) {
             return DevType::Usb;
         }
         return DevType::Other;
     }
     if pnp_class.eq_ignore_ascii_case("HIDClass") {
-        if is_audio(&lower_combined) {
+        if is_audio(lower_combined) {
             return DevType::Audio;
         }
-        if match_usb_keyword(&lower_combined) {
+        if match_usb_keyword(lower_combined) {
             return DevType::Usb;
         }
         return DevType::Other;
     }
-    if pnp_id.starts_with("USB\\") && match_usb_keyword(&lower_combined) {
+    if pnp_id.starts_with("USB\\") && match_usb_keyword(lower_combined) {
         return DevType::Usb;
     }
     DevType::Other
 }
 
 pub(crate) fn classify_bluetooth(name: &str) -> Option<DevType> {
+    let result = classify_bluetooth_inner(name);
+    crate::process::append_verbose_log(&format!(
+        "[classify] classify_bluetooth: {} -> {:?}",
+        name, result
+    ));
+    result
+}
+
+fn classify_bluetooth_inner(name: &str) -> Option<DevType> {
     // MAC-address-only BLE devices (e.g. "Bluetooth e0:cc:f8:7f:d9:eb")
     if name.starts_with("Bluetooth ") && name.len() == 27 && name.as_bytes()[12] == b':' {
         if config::with_config(|c| c.show_unnamed_bt) {

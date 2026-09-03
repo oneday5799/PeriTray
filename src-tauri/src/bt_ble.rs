@@ -39,6 +39,8 @@ pub fn ble_action(device_id: &str, action: &str) -> Result<String, String> {
 // ── 连接 ──
 
 fn ble_connect(device_id: &str) -> Result<String, String> {
+    crate::process::append_log(&format!("[bt] BLE connect: {}", device_id));
+
     // 若已有连接且是同一设备，直接返回
     {
         let guard = ble_conn().lock().map_err(|e| e.to_string())?;
@@ -137,12 +139,14 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
     *ble_conn().lock().map_err(|e| e.to_string())? = Some(conn);
 
     crate::process::append_verbose_log("[bt:dbg] ble_connect: done");
+    crate::process::append_log("[bt] BLE connect 完成");
     Ok("connected".into())
 }
 
 // ── 断开 ──
 
 fn ble_disconnect(device_id: &str) -> Result<String, String> {
+    crate::process::append_log(&format!("[bt] BLE disconnect: {}", device_id));
     let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
 
     if let Some(conn) = guard.take() {
@@ -157,6 +161,7 @@ fn ble_disconnect(device_id: &str) -> Result<String, String> {
             drop(conn.session);
             drop(conn.device);
             crate::process::append_verbose_log("[bt:dbg] ble_disconnect: done");
+            crate::process::append_log("[bt] BLE disconnect 完成");
             Ok("disconnected".into())
         } else {
             let cached_id = conn.device_id.clone();

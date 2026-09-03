@@ -20,6 +20,11 @@ pub fn check_battery_notify(devices: &[Device]) {
     });
 
     if !enabled || thresholds.is_empty() {
+        crate::process::append_verbose_log(&format!(
+            "[battery-notify] 跳过：enabled={}, thresholds={}",
+            enabled,
+            thresholds.len()
+        ));
         return;
     }
 
@@ -28,16 +33,25 @@ pub fn check_battery_notify(devices: &[Device]) {
 
     for d in devices {
         let Some(level) = d.battery else {
+            crate::process::append_verbose_log(&format!(
+                "[battery-notify] 跳过 {}：无电量数据",
+                d.name
+            ));
             continue;
         };
 
         // 未选择任何设备 → 不通知
         if selected.is_empty() {
+            crate::process::append_verbose_log("[battery-notify] 跳过：未选择任何设备");
             continue;
         }
 
         // 指定了设备列表但当前设备不在其中 → 跳过
         if !selected.contains(&d.name) {
+            crate::process::append_verbose_log(&format!(
+                "[battery-notify] 跳过 {}：不在选中列表",
+                d.name
+            ));
             continue;
         }
 
@@ -57,6 +71,10 @@ pub fn check_battery_notify(devices: &[Device]) {
                     .unwrap_or_else(|e| e.into_inner())
                     .insert((d.name.clone(), threshold))
                 {
+                    crate::process::append_verbose_log(&format!(
+                        "[battery-notify] 跳过 {}：阈值 {}% 已通知过",
+                        d.name, threshold
+                    ));
                     continue;
                 }
 

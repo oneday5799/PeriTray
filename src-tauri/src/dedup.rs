@@ -37,10 +37,22 @@ pub fn core_name(n: &str) -> String {
         " 音频网关服务",
     ] {
         if let Some(pos) = base.strip_suffix(suffix) {
-            return pos.to_string();
+            let result = pos.to_string();
+            crate::process::append_verbose_log(&format!(
+                "[dedup] core_name: {} -> {}（剥离后缀）",
+                n, result
+            ));
+            return result;
         }
     }
-    base.to_string()
+    let result = base.to_string();
+    if result != n {
+        crate::process::append_verbose_log(&format!(
+            "[dedup] core_name: {} -> {}（括号提取）",
+            n, result
+        ));
+    }
+    result
 }
 
 pub fn try_insert(
@@ -129,6 +141,9 @@ pub fn try_insert(
                 existing.is_bluetooth = existing.is_bluetooth || is_bluetooth;
                 existing.is_wireless_24g = existing.is_wireless_24g || is_wireless_24g;
                 existing.is_ble = existing.is_ble || is_ble;
+                crate::process::append_verbose_log(&format!(
+                    "[dedup] 合并 {name} 到现有条目（cn={cn}, conn={conn_tag}）"
+                ));
             }
         }
         return;

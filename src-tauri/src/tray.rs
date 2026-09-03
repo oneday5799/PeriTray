@@ -120,6 +120,7 @@ fn start_device_watcher(app: &tauri::AppHandle) {
                 }
             };
             if has_tray && changed {
+                crate::process::append_verbose_log("[tray] 设备缓存变化，更新 tooltip");
                 std::thread::spawn(move || update_tooltip());
                 let _ = handle.emit("devices-changed", ());
             }
