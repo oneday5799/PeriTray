@@ -8,6 +8,7 @@ mod audio_policy;
 mod audio_spatial;
 mod battery_notify;
 mod bluetooth;
+mod bt_ble;
 mod classify;
 mod commands;
 mod config;

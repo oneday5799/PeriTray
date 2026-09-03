@@ -52,6 +52,7 @@ pub fn try_insert(
     device_id: Option<String>,
     is_bluetooth: bool,
     is_wireless_24g: bool,
+    is_ble: bool,
     dedup: bool,
     re: Option<&Regex>,
     seen: &mut HashSet<String>,
@@ -127,6 +128,7 @@ pub fn try_insert(
                 }
                 existing.is_bluetooth = existing.is_bluetooth || is_bluetooth;
                 existing.is_wireless_24g = existing.is_wireless_24g || is_wireless_24g;
+                existing.is_ble = existing.is_ble || is_ble;
             }
         }
         return;
@@ -140,6 +142,7 @@ pub fn try_insert(
         device_id,
         is_bluetooth,
         is_wireless_24g,
+        is_ble,
     });
     cn_index.entry(cn).or_default().push(idx);
 }

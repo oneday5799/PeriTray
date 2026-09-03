@@ -402,6 +402,28 @@ pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
     let action_upper = action.to_uppercase();
     crate::process::append_log(&format!("[bt] {} device='{}'", action_upper, name));
 
+    // ── BLE 路径：WinRT 优先，失败 fallback 到 Win32 ──
+    if crate::device::is_ble_device(name) {
+        if let Some(device_id) = crate::device::get_device_id_by_name(name) {
+            match crate::bt_ble::ble_action(&device_id, action) {
+                Ok(result) => {
+                    crate::process::append_log(&format!(
+                        "[bt] {} 完成（WinRT, {}）",
+                        action_upper, result
+                    ));
+                    return Ok(result);
+                }
+                Err(e) => {
+                    crate::process::append_verbose_log(&format!(
+                        "[bt:dbg] {} WinRT 失败: {}，尝试 fallback",
+                        action_upper, e
+                    ));
+                }
+            }
+        }
+    }
+
+    // ── 经典 BT 路径（现有逻辑不变）──
     match bt_action_native(name, action) {
         Ok(result) => {
             crate::process::append_log(&format!("[bt] {} 完成", action_upper));
@@ -454,7 +476,7 @@ fn ble_device_from_info(
 /// 设备对象（避免二次 FromIdAsync），与后台补查互斥（后台在跑则降级读缓存）。
 pub fn find_paired_bluetooth_devices(
     fresh: bool,
-) -> Result<Vec<(String, bool, Option<u8>, String)>, Box<dyn std::error::Error>> {
+) -> Result<Vec<(String, bool, Option<u8>, String, bool)>, Box<dyn std::error::Error>> {
     // 每次枚举入口顺手淘汰超龄条目，防止 device_id 长期累积
     evict_stale_bt_entries();
 
@@ -478,7 +500,7 @@ pub fn find_paired_bluetooth_devices(
             } else {
                 battery_cached(&device_id, BtKind::Classic)
             };
-            result.push((name, connected, battery, device_id));
+            result.push((name, connected, battery, device_id, false));
         }
     }
 
@@ -494,7 +516,7 @@ pub fn find_paired_bluetooth_devices(
             } else {
                 battery_cached(&device_id, BtKind::Ble)
             };
-            result.push((name, connected, battery, device_id));
+            result.push((name, connected, battery, device_id, true));
         }
     }
 
@@ -665,8 +687,8 @@ pub fn check_device_connection(name: &str) -> Option<bool> {
     find_paired_bluetooth_devices(false)
         .ok()?
         .into_iter()
-        .find(|(n, _, _, _)| crate::dedup::core_name(n) == cn)
-        .map(|(_, connected, _, _)| connected)
+        .find(|(n, _, _, _, _)| crate::dedup::core_name(n) == cn)
+        .map(|(_, connected, _, _, _)| connected)
 }
 
 /// 从设备 ID 末尾 "-" 段提取蓝牙 MAC，规整为大写并去掉冒号；

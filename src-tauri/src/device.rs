@@ -23,12 +23,14 @@ pub struct Device {
     pub is_bluetooth: bool,
     #[serde(default)]
     pub is_wireless_24g: bool,
+    #[serde(default)]
+    pub is_ble: bool,
 }
 
 // 设备ID存储 — 用于蓝牙连接/断开操作
-static DEVICE_IDS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static DEVICE_IDS: OnceLock<Mutex<HashMap<String, (String, bool)>>> = OnceLock::new();
 
-fn get_device_ids() -> &'static Mutex<HashMap<String, String>> {
+fn get_device_ids() -> &'static Mutex<HashMap<String, (String, bool)>> {
     DEVICE_IDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -37,12 +39,24 @@ pub fn store_device_ids(devices: &[Device]) {
         ids.clear();
         for dev in devices {
             if let Some(ref device_id) = dev.device_id {
-                ids.insert(dev.name.clone(), device_id.clone());
+                ids.insert(dev.name.clone(), (device_id.clone(), dev.is_ble));
             }
         }
     }
 }
 
 pub fn get_device_id_by_name(name: &str) -> Option<String> {
-    get_device_ids().lock().ok()?.get(name).cloned()
+    get_device_ids()
+        .lock()
+        .ok()?
+        .get(name)
+        .map(|(id, _)| id.clone())
+}
+
+pub fn is_ble_device(name: &str) -> bool {
+    get_device_ids()
+        .lock()
+        .ok()
+        .and_then(|ids| ids.get(name).map(|(_, ble)| *ble))
+        .unwrap_or(false)
 }

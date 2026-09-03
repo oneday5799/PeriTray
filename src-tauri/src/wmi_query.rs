@@ -248,6 +248,7 @@ fn query_pnp_devices(
             None,
             false,
             is_24g,
+            false,
             dedup,
             re,
             seen,
@@ -272,7 +273,7 @@ fn query_bt_devices(
         Err(_) => return,
     };
 
-    for (name, connected, battery, device_id) in btc_devices {
+    for (name, connected, battery, device_id, is_ble) in btc_devices {
         if name.is_empty() {
             continue;
         }
@@ -304,6 +305,7 @@ fn query_bt_devices(
             if existing.device_id.is_none() {
                 existing.device_id = Some(device_id);
             }
+            existing.is_ble = existing.is_ble || is_ble;
         } else {
             try_insert(
                 &name,
@@ -314,6 +316,7 @@ fn query_bt_devices(
                 Some(device_id),
                 true,
                 false,
+                is_ble,
                 dedup,
                 re,
                 seen,
@@ -358,6 +361,7 @@ fn query_battery_devices(
                 device_id: None,
                 is_bluetooth: false,
                 is_wireless_24g: false,
+                is_ble: false,
             });
             cn_index.entry(cn).or_default().push(idx);
         }

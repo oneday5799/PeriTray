@@ -205,9 +205,11 @@ function buildActionsEl(card) {
     const expectedConnected = isConnect;
     let newStatus = oldStatus;
     let statusChanged = false;
-    const initialDelay = isConnect ? 800 : 100;
+    const isBle = dev.is_ble;
+    const initialDelay = isConnect ? (isBle ? 200 : 800) : 100;
     await new Promise(r => setTimeout(r, initialDelay));
     const maxAttempts = 10;
+    const pollInterval = isBle ? 200 : 400;
     for (let i = 0; i < maxAttempts; i++) {
       try {
         const connected = await invoke("check_bt_connection", { name: dev.name });
@@ -222,7 +224,7 @@ function buildActionsEl(card) {
         console.error("Check connection failed:", err);
         break;
       }
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, pollInterval));
     }
 
     try {
