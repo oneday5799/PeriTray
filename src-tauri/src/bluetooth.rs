@@ -435,7 +435,30 @@ pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
                     "[bt:dbg] {}:\n{}",
                     action_upper, result
                 ));
-                return Ok(result);
+                // KSPROPERTY_ONESHOT_DISCONNECT 只断开音频 Profile，不断开底层 BT 链路；
+                // 需验证 WinRT BluetoothConnectionStatus，仍连接时 fallback 到 native。
+                if action == "disconnect" {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    match check_device_connection(name) {
+                        Some(false) => {
+                            crate::process::append_verbose_log("[bt:dbg] disconnect 验证: 已断开");
+                            return Ok(result);
+                        }
+                        Some(true) => {
+                            crate::process::append_verbose_log(
+                                "[bt:dbg] disconnect 验证: 仍连接，fallback 到 native",
+                            );
+                        }
+                        None => {
+                            crate::process::append_verbose_log(
+                                "[bt:dbg] disconnect 验证: 设备未找到",
+                            );
+                            return Ok(result);
+                        }
+                    }
+                } else {
+                    return Ok(result);
+                }
             }
             Err(e) => {
                 crate::process::append_verbose_log(&format!("[bt:dbg] IKsControl 降级: {}", e));
