@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -14,6 +15,11 @@ use crate::audio::{pwstr_to_string, VolumeChangeEvent};
 
 const WM_SYNC_CALLBACKS: u32 = 0x0400;
 const WM_SYNC_SESSIONS: u32 = 0x0401;
+const ID_SYNC_DEBOUNCE: usize = 1;
+const SYNC_DEBOUNCE_MS: u32 = 300;
+
+/// sync_callbacks 防抖标志：避免音频状态风暴期间连续重枚举
+static SYNC_DEBOUNCE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// 属性变更节流：同一设备 2s 内只记录一次，避免日志噪音
 static LAST_PROP_LOG: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
@@ -162,7 +168,9 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 (*pwstrdeviceid).to_string().unwrap_or_default(),
                 dwnewstate.0
             ));
-            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            if !SYNC_DEBOUNCE_ACTIVE.swap(true, Ordering::Relaxed) {
+                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -173,7 +181,9 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceAdded id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             ));
-            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            if !SYNC_DEBOUNCE_ACTIVE.swap(true, Ordering::Relaxed) {
+                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -184,7 +194,9 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceRemoved id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             ));
-            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            if !SYNC_DEBOUNCE_ACTIVE.swap(true, Ordering::Relaxed) {
+                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -565,11 +577,8 @@ extern "system" fn audio_msg_wnd_proc(
     unsafe {
         match msg {
             WM_SYNC_CALLBACKS => {
-                let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if ptr != 0 {
-                    let monitor = &mut *(ptr as *mut AudioMonitor);
-                    monitor.sync_callbacks();
-                }
+                SYNC_DEBOUNCE_ACTIVE.store(false, Ordering::Relaxed);
+                SetTimer(Some(hwnd), ID_SYNC_DEBOUNCE, SYNC_DEBOUNCE_MS, None);
                 LRESULT(0)
             }
             WM_SYNC_SESSIONS => {
@@ -577,6 +586,20 @@ extern "system" fn audio_msg_wnd_proc(
                 if ptr != 0 {
                     let monitor = &mut *(ptr as *mut AudioMonitor);
                     monitor.sync_session_callbacks();
+                }
+                LRESULT(0)
+            }
+            WM_TIMER => {
+                if wparam.0 == ID_SYNC_DEBOUNCE {
+                    let _ = KillTimer(Some(hwnd), ID_SYNC_DEBOUNCE);
+                    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                    if ptr != 0 {
+                        let monitor = &mut *(ptr as *mut AudioMonitor);
+                        monitor.sync_callbacks();
+                    }
+                    if SYNC_DEBOUNCE_ACTIVE.load(Ordering::Relaxed) {
+                        let _ = PostMessageW(Some(hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+                    }
                 }
                 LRESULT(0)
             }
