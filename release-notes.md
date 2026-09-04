@@ -20,6 +20,7 @@
 - 2.4G 电量驱动批内复用 HidLink，消除每台设备重复 HID 枚举
 - 音频会话音量同步改为按需触发，移除 3s 轮询定时器
 - 退出时优雅反注册音频回调并关闭消息窗口
-- 升级 wmi/toml/lru/base64/tauri-winrt-notification 至最新版本
+- 补全业务日志盲区，完善 BT 初始化、音频属性变更节流、WMI 查询参数日志
+- 前端 CSS 格式规范化
 
-**完整变更列表**：https://github.com/oneday5799/PeriTray/compare/v1.3.4-beta.1...v1.3.4-beta.2
+**完整变更列表**：https://github.com/oneday5799/PeriTray/releases/tag/v1.3.4
