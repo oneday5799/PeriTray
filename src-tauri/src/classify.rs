@@ -97,7 +97,7 @@ pub(crate) fn is_wireless_24g_by_vid_pid(pnp_id: &str) -> bool {
     }
 }
 
-fn is_audio(lower: &str) -> bool {
+pub(crate) fn is_audio(lower: &str) -> bool {
     [
         "headphone",
         "headset",

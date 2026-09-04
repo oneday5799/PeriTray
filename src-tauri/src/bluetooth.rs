@@ -424,7 +424,25 @@ pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
         }
     }
 
-    // ── 经典 BT 路径（现有逻辑不变）──
+    // ── 经典 BT 路径 ──
+
+    // 先尝试 IKsControl 快速路径（蓝牙音频设备 <100ms）
+    if !crate::device::is_ble_device(name) {
+        match crate::bt_audio::bt_action_ks(name, action) {
+            Ok(result) => {
+                crate::process::append_log(&format!("[bt] {} 完成（IKsControl）", action_upper));
+                crate::process::append_verbose_log(&format!(
+                    "[bt:dbg] {}:\n{}",
+                    action_upper, result
+                ));
+                return Ok(result);
+            }
+            Err(e) => {
+                crate::process::append_verbose_log(&format!("[bt:dbg] IKsControl 降级: {}", e));
+            }
+        }
+    }
+
     match bt_action_native(name, action) {
         Ok(result) => {
             crate::process::append_log(&format!("[bt] {} 完成", action_upper));
