@@ -449,6 +449,8 @@ pub fn set_hotkey_config(
             .map_err(|e| e.to_string())?;
     }
     set_config_key(&action, key);
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
     Ok(())
 }
 

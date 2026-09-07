@@ -31,11 +31,16 @@ function initShortcutSettings() {
       () => config[keyField],
       (display, shortcut) => {
         if (shortcut === "") {
-          invoke("set_hotkey_config", { action: action.id, key: null }).catch(() => {});
-          config[keyField] = null;
-          input.value = "";
-          clearBtn.style.display = "none";
-          input.placeholder = "点击录制快捷键";
+          invoke("set_hotkey_config", { action: action.id, key: null })
+            .then(() => {
+              config[keyField] = null;
+              input.value = "";
+              clearBtn.style.display = "none";
+              input.placeholder = "点击录制快捷键";
+            })
+            .catch((err) => {
+              showToast(describeShortcutError(err, display), null, true);
+            });
           return;
         }
         invoke("set_hotkey_config", { action: action.id, key: shortcut })

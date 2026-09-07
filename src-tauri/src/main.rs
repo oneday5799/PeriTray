@@ -291,6 +291,10 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             } else if label == "popup" {
                 api.prevent_close();
                 let _ = window.hide();
+                if let Some(popup_wv) = window.app_handle().get_webview_window("popup") {
+                    let wv: &tauri::Webview = popup_wv.as_ref();
+                    crate::webview::suspend_webview(wv);
+                }
             }
         }
         _ => {}

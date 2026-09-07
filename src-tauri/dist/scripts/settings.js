@@ -321,9 +321,15 @@ function initComboBox(comboId, selectedValue, onChange) {
   items.forEach(item => {
     item.addEventListener("click", (e) => {
       e.stopPropagation();
+      const oldValue = currentValue;
       selectItem(item.dataset.value);
       closeFlyout();
-      if (onChange) onChange(currentValue);
+      if (onChange) {
+        const result = onChange(currentValue);
+        if (result && typeof result.then === "function") {
+          result.catch(() => selectItem(oldValue));
+        }
+      }
     });
   });
 
