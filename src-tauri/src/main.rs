@@ -19,6 +19,8 @@ mod popup;
 mod process;
 mod shortcut;
 mod state;
+#[cfg(target_os = "windows")]
+mod toast;
 mod tray;
 mod update;
 mod webview;

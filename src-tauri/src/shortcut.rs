@@ -160,6 +160,28 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
     ));
     if let Err(e) = crate::audio::set_default_device(&next.id) {
         crate::process::append_log(&format!("[hotkey] set default device failed: {}", e));
+    } else {
+        let notify = crate::config::with_config(|c| c.shortcut_switch_notify);
+        if notify {
+            let display = crate::config::with_config(|c| {
+                c.device_names.get(&next.name).cloned().unwrap_or_else(|| {
+                    if c.simplify_device_names {
+                        crate::tray::simplify_device_name(&next.name).to_string()
+                    } else {
+                        next.name.clone()
+                    }
+                })
+            });
+            #[cfg(target_os = "windows")]
+            {
+                let icon = crate::windows::resolve_toast_icon();
+                crate::toast::show_toast(
+                    "音频设备切换提示",
+                    &format!("音频设备已切换到「{}」", display),
+                    icon.as_deref(),
+                );
+            }
+        }
     }
     let _ = app.emit("audio-devices-changed", ());
 }

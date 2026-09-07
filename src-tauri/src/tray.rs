@@ -494,7 +494,7 @@ fn update_tray_icon() {
 
 /// 简化设备名称：仅保留括号内内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
 /// 注意：与 dedup::core_name 语义不同——本函数不剥协议后缀、返回 &str，两者勿互相替换。
-fn simplify_device_name(name: &str) -> &str {
+pub(crate) fn simplify_device_name(name: &str) -> &str {
     if let Some(open) = name.find('(') {
         if let Some(close) = name.rfind(')') {
             if close > open {

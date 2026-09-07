@@ -80,18 +80,11 @@ pub fn check_battery_notify(devices: &[Device]) {
 
                 #[cfg(target_os = "windows")]
                 {
-                    let toast = crate::windows::build_toast(
+                    crate::toast::show_toast(
                         "低电量提醒",
                         &format!("{} 电量仅剩 {}%", display_name, level),
                         icon.as_deref(),
                     );
-
-                    if let Err(e) = toast.show() {
-                        crate::process::append_log(&format!(
-                            "[battery-notify] toast failed: {:?}",
-                            e
-                        ));
-                    }
                 }
 
                 crate::process::append_log(&format!(
