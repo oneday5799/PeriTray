@@ -126,8 +126,12 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
     }
     if !gatt_ok {
         crate::process::append_verbose_log(
-            "[bt:dbg] ble_connect: GATT request not confirmed, caching anyway",
+            "[bt:dbg] ble_connect: GATT request not confirmed, not caching",
         );
+        // 释放资源，不缓存幽灵连接
+        let _ = session.as_ref().map(|s| s.Close());
+        let _ = device.Close();
+        return Err("GATT request failed after 3 attempts".into());
     }
 
     // 5. 缓存连接

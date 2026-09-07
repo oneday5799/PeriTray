@@ -138,6 +138,9 @@ pub fn try_insert(
                 if existing.device_id.is_none() {
                     existing.device_id = device_id;
                 }
+                if battery.is_some() {
+                    existing.battery = battery;
+                }
                 existing.is_bluetooth = existing.is_bluetooth || is_bluetooth;
                 existing.is_wireless_24g = existing.is_wireless_24g || is_wireless_24g;
                 existing.is_ble = existing.is_ble || is_ble;

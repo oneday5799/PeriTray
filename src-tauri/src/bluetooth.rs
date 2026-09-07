@@ -486,7 +486,8 @@ pub fn find_paired_bluetooth_devices(
         && BT_BATTERY_REFRESHING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok();
-    let _force_guard = BtForceGuard(force);
+    // 注意：此处不使用 RAII guard，因为函数结束时需要复位标志
+    // 后台补查线程使用 SingleFlightGuard 保证 panic 安全
 
     let mut result = Vec::new();
 
@@ -526,16 +527,35 @@ pub fn find_paired_bluetooth_devices(
         result.len(),
         force
     ));
+    if force {
+        BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
+    }
     Ok(result)
 }
 
-/// 单飞 flag 的 RAII 释放：正常/早期返回均复位，避免后台补查被永久锁死
-struct BtForceGuard(bool);
-impl Drop for BtForceGuard {
-    fn drop(&mut self) {
-        if self.0 {
-            BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
+/// 单飞标志的 RAII 释放：正常/panic均复位，避免后台补查被永久锁死
+/// 用于后台线程路径（enqueue_bt_refresh）
+struct SingleFlightGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> SingleFlightGuard<'a> {
+    /// CAS 获取标志；成功返回 guard，失败返回 None（已有补查在跑）
+    fn new(flag: &'a AtomicBool) -> Option<Self> {
+        if flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            Some(Self { flag })
+        } else {
+            None
         }
+    }
+}
+
+impl Drop for SingleFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
     }
 }
 
@@ -649,24 +669,22 @@ fn enqueue_bt_refresh(queue: Vec<(String, BtKind)>) {
     if queue.is_empty() {
         return;
     }
-    if BT_BATTERY_REFRESHING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    let Some(_guard) = SingleFlightGuard::new(&BT_BATTERY_REFRESHING) else {
         return;
-    }
+    };
     crate::process::append_log(&format!("[bt] 后台电量补查开始: {} 台", queue.len()));
+    // guard 移入闭包，panic 时 Drop 自动复位标志
     std::thread::spawn(move || {
         let mut any_changed = false;
         for (device_id, kind) in &queue {
             let lv = read_battery_by_kind(*kind, device_id);
             any_changed |= apply_battery(device_id, lv);
         }
-        BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
         crate::process::append_log("[bt] 后台电量补查结束");
         if any_changed {
             notify_bt_battery_changed();
         }
+        // guard 在此 drop，自动复位 BT_BATTERY_REFRESHING
     });
 }
 

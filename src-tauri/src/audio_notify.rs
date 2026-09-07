@@ -202,6 +202,7 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 erender.0,
                 (*pwstrdefaultdeviceid).to_string().unwrap_or_default()
             ));
+            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
         }
         Ok(())
     }

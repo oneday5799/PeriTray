@@ -236,7 +236,7 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
 }
 
 /// 比较版本号：返回 latest > current
-/// 遵循 semver 预发布规则：数字部分相同且 latest 有预发布后缀时，按后缀字典序比较
+/// 遵循 semver 预发布规则：数字部分相同且 latest 有预发布后缀时，按后缀分段数值比较
 fn compare_versions(current: &str, latest: &str) -> bool {
     fn split_version(v: &str) -> (Vec<u32>, &str) {
         let v = v.trim_start_matches('v');
@@ -246,6 +246,22 @@ fn compare_versions(current: &str, latest: &str) -> bool {
         };
         let nums: Vec<u32> = base.split('.').filter_map(|s| s.parse().ok()).collect();
         (nums, pre)
+    }
+
+    /// 按 semver 规范比较预发布标识符：按 `.` 分段，数字段数值比较，非数字段字符串比较
+    fn compare_prerelease(a: &str, b: &str) -> std::cmp::Ordering {
+        let a_parts: Vec<&str> = a.split('.').collect();
+        let b_parts: Vec<&str> = b.split('.').collect();
+        for (ap, bp) in a_parts.iter().zip(b_parts.iter()) {
+            let ord = match (ap.parse::<u32>(), bp.parse::<u32>()) {
+                (Ok(an), Ok(bn)) => an.cmp(&bn),
+                _ => ap.cmp(bp),
+            };
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        }
+        a_parts.len().cmp(&b_parts.len())
     }
 
     let (cur_nums, cur_pre) = split_version(current);
@@ -260,7 +276,7 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     match (cur_pre.is_empty(), lat_pre.is_empty()) {
         (true, false) => false, // current 是正式版，latest 是预发布 → latest 不更新
         (false, true) => true,  // current 是预发布，latest 是正式版 → latest 更新
-        _ => cur_pre < lat_pre, // 都是预发布或都是正式版，按后缀/相等比较
+        _ => compare_prerelease(cur_pre, lat_pre) == std::cmp::Ordering::Less,
     }
 }
 
@@ -276,15 +292,30 @@ fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<U
     let releases: Vec<GitHubRelease> =
         serde_json::from_str(&body).map_err(|_| "响应数据解析失败".to_string())?;
 
-    let latest = releases.iter().find(|r| {
-        if r.draft {
-            return false;
-        }
-        if r.prerelease && !include_prerelease {
-            return false;
-        }
-        true
-    });
+    // 按版本号排序取最大（而非依赖 API 返回顺序）
+    let latest = releases
+        .iter()
+        .filter(|r| {
+            if r.draft {
+                return false;
+            }
+            if r.prerelease && !include_prerelease {
+                return false;
+            }
+            true
+        })
+        .max_by(|a, b| {
+            let a_ver = a.tag_name.trim_start_matches('v');
+            let b_ver = b.tag_name.trim_start_matches('v');
+            // compare_versions 返回 latest > current，这里反转用于排序
+            if compare_versions(a_ver, b_ver) {
+                std::cmp::Ordering::Greater
+            } else if compare_versions(b_ver, a_ver) {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
 
     match latest {
         Some(release) => {

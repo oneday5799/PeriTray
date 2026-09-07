@@ -241,6 +241,7 @@ async function renderShutdownVolumeDevices() {
 
       function clamp(v) { return Math.max(0, Math.min(100, v)); }
       function setNumberBoxValue(v) {
+        if (isNaN(v)) v = 0;
         const val = clamp(Math.round(v));
         input.value = val;
         btnUp.disabled = val >= 100;

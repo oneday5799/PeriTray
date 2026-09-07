@@ -327,10 +327,20 @@ where
     let result = f(&mut guard);
     if let Ok(content) = toml::to_string_pretty(&*guard) {
         use std::io::Write;
-        if let Err(e) =
-            std::fs::File::create(&config_path()).and_then(|mut f| f.write_all(content.as_bytes()))
-        {
+        // 原子写入：先写临时文件，再 rename 替换（同卷原子操作）
+        let cfg_path = config_path();
+        let tmp_path = cfg_path.with_extension("toml.tmp");
+        let write_result = std::fs::File::create(&tmp_path)
+            .and_then(|mut f| {
+                f.write_all(content.as_bytes())?;
+                f.sync_all()?;
+                Ok(())
+            })
+            .and_then(|_| std::fs::rename(&tmp_path, &cfg_path));
+        if let Err(e) = write_result {
             crate::process::append_log(&format!("[config] save failed: {}", e));
+            // 清理临时文件（如果 rename 失败）
+            let _ = std::fs::remove_file(&tmp_path);
         }
     }
     sync_log_cache(&guard);
