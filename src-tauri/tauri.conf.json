@@ -19,7 +19,6 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "resources": ["dist/icon.png"],
     "publisher": "oneday5799",
     "homepage": "https://github.com/oneday5799/PeriTray",
     "icon": [
