@@ -82,7 +82,10 @@ function initDeviceShortcutSettings() {
 
       const label = document.createElement("span");
       label.className = "card-title device-shortcut-label";
-      label.textContent = entry.name;
+      const displayName = window.formatDeviceName(
+        entry.name, config.device_names || {}, config.simplify_device_names !== false
+      );
+      label.textContent = displayName;
       window.attachTooltip(label, entry.name, "start");
       left.appendChild(label);
       item.appendChild(left);
