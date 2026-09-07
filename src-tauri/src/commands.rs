@@ -282,22 +282,33 @@ pub async fn set_device_mute(device_id: String, muted: bool) -> Result<(), Strin
 pub async fn get_audio_sessions(
     device_id: String,
 ) -> Result<Vec<crate::audio::AudioSession>, String> {
-    crate::audio_notify::request_session_sync();
-    run_blocking(move || crate::audio::enumerate_audio_sessions(&device_id))
+    run_blocking(move || {
+        // 同步等待 STA 线程完成会话回调注册，确保后续枚举能获取实时音量变化
+        crate::audio_notify::request_session_sync_blocking();
+        crate::audio::enumerate_audio_sessions(&device_id)
+    })
+    .await?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub async fn set_session_volume(
+    session_id: String,
+    device_id: String,
+    volume: f32,
+) -> Result<(), String> {
+    run_blocking(move || crate::audio::set_session_volume(&session_id, &device_id, volume))
         .await?
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
-pub async fn set_session_volume(session_id: String, volume: f32) -> Result<(), String> {
-    run_blocking(move || crate::audio::set_session_volume(&session_id, volume))
-        .await?
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command(async)]
-pub async fn set_session_mute(session_id: String, muted: bool) -> Result<(), String> {
-    run_blocking(move || crate::audio::set_session_mute(&session_id, muted))
+pub async fn set_session_mute(
+    session_id: String,
+    device_id: String,
+    muted: bool,
+) -> Result<(), String> {
+    run_blocking(move || crate::audio::set_session_mute(&session_id, &device_id, muted))
         .await?
         .map_err(|e| e.to_string())
 }

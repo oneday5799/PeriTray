@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -17,6 +18,9 @@ const WM_SYNC_SESSIONS: u32 = 0x0401;
 
 /// 属性变更节流：同一设备 2s 内只记录一次，避免日志噪音
 static LAST_PROP_LOG: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+
+/// WM_SYNC_CALLBACKS 合并标志：已排队则跳过，处理时复位
+static SYNC_CALLBACKS_PENDING: AtomicBool = AtomicBool::new(false);
 
 fn log_throttle_property(id: &str) {
     let lock = LAST_PROP_LOG.get_or_init(|| Mutex::new(HashMap::new()));
@@ -162,7 +166,13 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 (*pwstrdeviceid).to_string().unwrap_or_default(),
                 dwnewstate.0
             ));
-            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            // 合并：已排队则跳过
+            if SYNC_CALLBACKS_PENDING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -173,7 +183,13 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceAdded id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             ));
-            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            // 合并：已排队则跳过
+            if SYNC_CALLBACKS_PENDING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -184,7 +200,13 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceRemoved id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             ));
-            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            // 合并：已排队则跳过
+            if SYNC_CALLBACKS_PENDING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -202,7 +224,13 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 erender.0,
                 (*pwstrdefaultdeviceid).to_string().unwrap_or_default()
             ));
-            let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            // 合并：已排队则跳过
+            if SYNC_CALLBACKS_PENDING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
+            }
         }
         Ok(())
     }
@@ -517,10 +545,9 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
     });
 }
 
-/// 按需触发会话音量回调同步：音量控制页渲染会话音量前调用（如 get_audio_sessions 命令），
-/// 投递 WM_SYNC_SESSIONS 到 STA 线程，确保当前会话的 IAudioSessionEvents 回调已注册，
-/// 使会话音量变化能实时推送 volume-changed。会话本身无增删系统推送，故仅在需要时主动同步。
-pub fn request_session_sync() {
+/// 同步版本：等待 STA 线程完成会话同步后再返回（用于 get_audio_sessions 命令）
+/// 注意：必须在非 STA 线程中调用，否则 SendMessageW 会死锁
+pub fn request_session_sync_blocking() {
     let Some(&hwnd) = NOTIFY_HWND.get() else {
         return;
     };
@@ -528,11 +555,11 @@ pub fn request_session_sync() {
         return;
     }
     unsafe {
-        let _ = PostMessageW(
-            Some(HWND(hwnd as *mut core::ffi::c_void)),
+        let _ = SendMessageW(
+            HWND(hwnd as *mut core::ffi::c_void),
             WM_SYNC_SESSIONS,
-            WPARAM(0),
-            LPARAM(0),
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
         );
     }
 }
@@ -566,6 +593,8 @@ extern "system" fn audio_msg_wnd_proc(
     unsafe {
         match msg {
             WM_SYNC_CALLBACKS => {
+                // 复位合并标志，允许后续消息再次排队
+                SYNC_CALLBACKS_PENDING.store(false, Ordering::SeqCst);
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
                 if ptr != 0 {
                     let monitor = &mut *(ptr as *mut AudioMonitor);

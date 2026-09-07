@@ -726,11 +726,11 @@ function createAudioSessionCard(session) {
       const targetMuted = value <= 0;
       if (targetMuted !== wasMuted) {
         sess.is_muted = targetMuted;
-        setSessionMute(sess.id, targetMuted);
+        setSessionMute(sess.id, sess.device_id, targetMuted);
       }
     }
     updateMuteButton(muteBtn, sess.is_muted, sess.volume, sess.permanentMute);
-    throttledSetSessionVolume(sess.id, value);
+    throttledSetSessionVolume(sess.id, sess.device_id, value);
   });
   slider.addEventListener("change", () => {
     setTimeout(() => slider.blur(), 100);
@@ -752,7 +752,7 @@ function createAudioSessionCard(session) {
     if (!sess) return;
     const targetMuted = !sess.is_muted;
     try {
-      await setSessionMute(sessionId, targetMuted);
+      await setSessionMute(sessionId, sess.device_id, targetMuted);
       sess.is_muted = targetMuted;
       sess.permanentMute = muteLockEnabled && targetMuted;
       updateMuteButton(muteBtn, sess.is_muted, sess.volume, sess.permanentMute);
@@ -939,17 +939,17 @@ async function toggleDeviceMute(deviceId) {
   }
 }
 
-async function setSessionMute(sessionId, muted) {
+async function setSessionMute(sessionId, deviceId, muted) {
   const invoke = getInvoke();
   if (!invoke) return;
-  await invoke("set_session_mute", { sessionId, muted });
+  await invoke("set_session_mute", { sessionId, deviceId, muted });
 }
 
-async function setSessionVolume(sessionId, volume) {
+async function setSessionVolume(sessionId, deviceId, volume) {
   const invoke = getInvoke();
   if (!invoke) return;
   try {
-    await invoke("set_session_volume", { sessionId, volume });
+    await invoke("set_session_volume", { sessionId, deviceId, volume });
   } catch (e) {
     console.error("Failed to set session volume:", e);
   }
