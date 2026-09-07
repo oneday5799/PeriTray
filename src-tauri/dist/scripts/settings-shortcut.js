@@ -3,6 +3,10 @@
  * 依赖：common.js(invoke/bindShortcutRecorder/describeShortcutError/attachTooltip) /
  *       settings.js(config/bindToggle/saveConfig/showToast) */
 function initShortcutSettings() {
+  bindToggle("toggle-shortcut-switch-notify", {
+    get: () => config.shortcut_switch_notify,
+    set: (v) => { config.shortcut_switch_notify = v; }
+  });
   bindToggle("toggle-device-shortcut-cycle", {
     get: () => config.enable_device_shortcut_cycle,
     set: (v) => { config.enable_device_shortcut_cycle = v; }

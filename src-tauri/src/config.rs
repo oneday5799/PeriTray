@@ -122,6 +122,8 @@ pub struct Config {
     pub device_shortcuts: std::collections::HashMap<String, DeviceShortcut>,
     #[serde(default)]
     pub enable_device_shortcut_cycle: bool,
+    #[serde(default)]
+    pub shortcut_switch_notify: bool,
     #[serde(default = "default_theme_mode")]
     pub theme_mode: String,
     #[serde(default = "default_window_material")]
@@ -196,6 +198,7 @@ impl Default for Config {
             popup_size: default_popup_size(),
             device_shortcuts: std::collections::HashMap::new(),
             enable_device_shortcut_cycle: false,
+            shortcut_switch_notify: false,
             theme_mode: default_theme_mode(),
             window_material: default_window_material(),
             low_battery_notify: false,
