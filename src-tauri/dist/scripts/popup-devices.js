@@ -113,9 +113,9 @@ function getDeviceGroup(dev) {
 
 // ── 设备卡构建与原地更新 ────────────────────────────────
 
-// 设备卡唯一键：同名设备的多形态（蓝牙/2.4G/USB）并存时可区分
+// 设备卡唯一键：同名设备的多形态（蓝牙/2.4G/USB/BLE）并存时可区分
 function deviceKey(dev) {
-  return `${dev.name}|${dev.is_bluetooth ? "bt" : ""}${dev.is_wireless_24g ? "24g" : ""}`;
+  return `${dev.name}|${dev.is_bluetooth ? "bt" : ""}${dev.is_wireless_24g ? "24g" : ""}${dev.is_ble ? "ble" : ""}`;
 }
 
 // 填充状态标签行（创建与原地更新共用，保证动态部分单一来源）

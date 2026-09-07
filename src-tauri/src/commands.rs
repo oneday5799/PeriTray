@@ -95,7 +95,9 @@ pub fn update_config(app: tauri::AppHandle, mut new_config: Config) {
     config::with_config_mut(|c| {
         *c = new_config;
     });
-    let _ = app.emit("config-changed", ());
+    // 传递完整 config 快照，前端无需再调用 get_config
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
     if retention_changed {
         process::clean_old_logs();
     }
@@ -128,14 +130,16 @@ fn clear_shared_device_shortcuts(c: &mut Config) {
 pub fn toggle_device_hidden(app: tauri::AppHandle, name: String) {
     crate::process::append_log(&format!("[cmd] toggle_device_hidden: {}", name));
     config::with_config_mut(|c| toggle_vec_item(&mut c.hidden_devices, &name));
-    let _ = app.emit("config-changed", ());
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
 }
 
 #[tauri::command]
 pub fn toggle_audio_device_hidden(app: tauri::AppHandle, name: String) {
     crate::process::append_log(&format!("[cmd] toggle_audio_device_hidden: {}", name));
     config::with_config_mut(|c| toggle_vec_item(&mut c.hidden_audio_devices, &name));
-    let _ = app.emit("config-changed", ());
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
     let _ = app.emit("audio-devices-changed", ());
 }
 
@@ -162,6 +166,8 @@ pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) 
             c.device_names.insert(original, new_name);
         }
     });
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
     let _ = app.emit("audio-devices-changed", ());
 }
 
@@ -175,14 +181,16 @@ pub fn change_device_group(app: tauri::AppHandle, name: String, group: String) {
             c.device_groups.insert(name, group);
         }
     });
-    let _ = app.emit("config-changed", ());
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
 }
 
 #[tauri::command]
 pub fn toggle_group_hidden(app: tauri::AppHandle, group: String) {
     crate::process::append_log(&format!("[cmd] toggle_group_hidden: {}", group));
     config::with_config_mut(|c| toggle_vec_item(&mut c.hidden_groups, &group));
-    let _ = app.emit("config-changed", ());
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
 }
 
 #[tauri::command(async)]
@@ -244,6 +252,8 @@ pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(
     })
     .await?;
     crate::tray::refresh_tray_tooltip(&app);
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
     let _ = app.emit("tray-devices-changed", ());
     Ok(())
 }
@@ -495,7 +505,8 @@ pub fn set_device_shortcut(
     ));
     set_device_shortcut_key(&device_id, &name, key);
     crate::shortcut::sync_device_shortcuts(&app);
-    let _ = app.emit("config-changed", ());
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
     Ok(())
 }
 
@@ -523,7 +534,8 @@ pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
         c.device_shortcuts.remove(&device_id);
     });
     crate::shortcut::sync_device_shortcuts(&app);
-    let _ = app.emit("config-changed", ());
+    let config_snapshot = config::with_config(|c| c.clone());
+    let _ = app.emit("config-changed", config_snapshot);
 }
 
 // ═══════════════════════════════════════════════════════════════

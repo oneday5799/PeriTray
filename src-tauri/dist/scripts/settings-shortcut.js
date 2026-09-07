@@ -58,10 +58,19 @@ function initShortcutSettings() {
 
 function initDeviceShortcutSettings() {
   const listEl = document.getElementById("device-shortcut-list");
+  // 存储所有 recorder 的 dispose 函数，用于清 DOM 前移除
+  const disposers = [];
 
   function render() {
     const shortcuts = config.device_shortcuts || {};
     const ids = Object.keys(shortcuts);
+
+    // 清 DOM 前移除所有旧的 recorder
+    for (const dispose of disposers) {
+      dispose();
+    }
+    disposers.length = 0;
+
     listEl.innerHTML = "";
 
     if (ids.length === 0) {
@@ -132,7 +141,7 @@ function initDeviceShortcutSettings() {
       item.appendChild(actions);
       listEl.appendChild(item);
 
-      bindShortcutRecorder(
+      const { dispose } = bindShortcutRecorder(
         input,
         clearBtn,
         () => (config.device_shortcuts[id] || {}).shortcut || null,
@@ -158,6 +167,7 @@ function initDeviceShortcutSettings() {
             });
         }
       );
+      disposers.push(dispose);
     }
   }
 

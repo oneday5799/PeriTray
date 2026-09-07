@@ -118,9 +118,16 @@ if (window.__TAURI__ && window.__TAURI__.event) {
     loadAudioDevices();
   });
 
-  window.__TAURI__.event.listen("config-changed", async () => {
+  window.__TAURI__.event.listen("config-changed", async (event) => {
     try {
-      const cfg = await getInvoke()("get_config");
+      // 后端传递完整 config 快照，直接使用
+      let cfg;
+      if (event.payload) {
+        cfg = event.payload;
+      } else {
+        // 向后兼容：旧版后端可能传递空 payload
+        cfg = await getInvoke()("get_config");
+      }
       applyAudioRuntimeConfig(cfg);
       for (const d of audioDevices) {
         d.permanentMute = muteLockEnabled && buttonMutedDevices.has(d.id);
@@ -398,12 +405,18 @@ function showDeviceShortcutDialog(device) {
   buttons.push({
     text: "取消",
     className: "cancel",
-    onClick: () => closeDialog(overlay),
+    onClick: () => {
+      if (recorderDispose) recorderDispose();
+      closeDialog(overlay);
+    },
   });
   buttons.push({
     text: "完成",
     className: "confirm",
-    onClick: () => closeDialog(overlay),
+    onClick: () => {
+      if (recorderDispose) recorderDispose();
+      closeDialog(overlay);
+    },
   });
 
   const overlay = createDialog({
@@ -415,7 +428,8 @@ function showDeviceShortcutDialog(device) {
   clearBtn = overlay.querySelector(".dialog-btn.danger");
   if (clearBtn) clearBtn.disabled = !savedShortcut;
 
-  bindShortcutRecorder(
+  let recorderDispose = null;
+  const { dispose } = bindShortcutRecorder(
     input,
     null,
     () => savedShortcut,
@@ -438,6 +452,7 @@ function showDeviceShortcutDialog(device) {
         });
     }
   );
+  recorderDispose = dispose;
 }
 
 async function loadAudioDevices() {
@@ -898,11 +913,11 @@ async function setDeviceMute(deviceId, muted) {
 async function toggleDeviceMute(deviceId) {
   const invoke = getInvoke();
   if (!invoke) return;
+  const cur = audioDevices.find(d => d.id === deviceId);
+  const prevVolume = cur ? cur.volume : null;
+  const devName = cur ? cur.name : "";
+  const isForceMute = forceMuteDevices.includes(devName);
   try {
-    const cur = audioDevices.find(d => d.id === deviceId);
-    const prevVolume = cur ? cur.volume : null;
-    const devName = cur ? cur.name : "";
-    const isForceMute = forceMuteDevices.includes(devName);
     const wasLocked = !!(cur && cur.permanentMute);
     if (isForceMute) {
       forceMuteHold[devName] = { muted: !(cur && cur.is_muted), volume: prevVolume };
@@ -936,6 +951,8 @@ async function toggleDeviceMute(deviceId) {
     renderAudioDevices();
   } catch (e) {
     console.error("Failed to toggle mute:", e);
+    // toggle 失败时清理 forceMuteHold，防止脏 hold 常驻
+    if (isForceMute) delete forceMuteHold[devName];
   }
 }
 

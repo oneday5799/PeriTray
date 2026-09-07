@@ -710,9 +710,15 @@ async function init() {
   }
 }
 
-// config-changed: reload config and refresh all dynamic lists
-window.__TAURI__.event.listen("config-changed", async () => {
-  config = await invoke("get_config");
+// config-changed: 使用 payload 中的 config 快照，无需再调用 get_config
+window.__TAURI__.event.listen("config-changed", async (event) => {
+  // 后端传递完整 config 快照，直接使用
+  if (event.payload) {
+    config = event.payload;
+  } else {
+    // 向后兼容：旧版后端可能传递空 payload
+    config = await invoke("get_config");
+  }
   await loadDevicesAsync();
   await loadAudioDevicesAsync();
   await renderShutdownVolumeDevices();
