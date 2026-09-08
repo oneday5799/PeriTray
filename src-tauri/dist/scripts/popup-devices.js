@@ -194,9 +194,9 @@ function buildActionsEl(card) {
 
     try {
       if (isConnect) {
-        await invoke("connect_bluetooth_device", { name: dev.name });
+        await invoke("connect_bluetooth_device", { device_id: dev.device_id, is_ble: dev.is_ble });
       } else {
-        await invoke("disconnect_bluetooth_device", { name: dev.name });
+        await invoke("disconnect_bluetooth_device", { device_id: dev.device_id });
       }
     } catch (err) {
       console.error("BT action failed:", err);
@@ -212,7 +212,7 @@ function buildActionsEl(card) {
     const pollInterval = isBle ? 200 : 400;
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const connected = await invoke("check_bt_connection", { name: dev.name });
+        const connected = await invoke("check_bt_connection", { device_id: dev.device_id });
         if (connected !== null && connected !== undefined) {
           newStatus = connected ? "已连接" : "已配对";
           if (connected === expectedConnected) {

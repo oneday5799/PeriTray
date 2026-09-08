@@ -34,7 +34,6 @@ fn toggle_vec_item(vec: &mut Vec<String>, item: &str) {
 #[tauri::command(async)]
 pub async fn get_devices() -> Result<Vec<device::Device>, String> {
     let devices = run_blocking(|| query_devices(false)).await??;
-    device::store_device_ids(&devices);
     Ok(devices)
 }
 
@@ -43,7 +42,6 @@ pub async fn get_devices() -> Result<Vec<device::Device>, String> {
 #[tauri::command(async)]
 pub async fn get_devices_fresh() -> Result<Vec<device::Device>, String> {
     let devices = run_blocking(|| query_devices(true)).await??;
-    device::store_device_ids(&devices);
     Ok(devices)
 }
 
@@ -194,24 +192,24 @@ pub fn toggle_group_hidden(app: tauri::AppHandle, group: String) {
 }
 
 #[tauri::command(async)]
-pub async fn disconnect_bluetooth_device(name: String) -> Result<String, String> {
-    crate::process::append_log(&format!("[cmd] disconnect_bluetooth_device: {}", name));
-    run_blocking(move || crate::bluetooth::bt_action(&name, "disconnect"))
+pub async fn disconnect_bluetooth_device(device_id: String) -> Result<String, String> {
+    crate::process::append_log(&format!("[cmd] disconnect_bluetooth_device: {}", device_id));
+    run_blocking(move || crate::bluetooth::bt_action(&device_id, "disconnect", false))
         .await?
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
-pub async fn connect_bluetooth_device(name: String) -> Result<String, String> {
-    crate::process::append_log(&format!("[cmd] connect_bluetooth_device: {}", name));
-    run_blocking(move || crate::bluetooth::bt_action(&name, "connect"))
+pub async fn connect_bluetooth_device(device_id: String, is_ble: bool) -> Result<String, String> {
+    crate::process::append_log(&format!("[cmd] connect_bluetooth_device: {}", device_id));
+    run_blocking(move || crate::bluetooth::bt_action(&device_id, "connect", is_ble))
         .await?
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command(async)]
-pub async fn check_bt_connection(name: String) -> Result<Option<bool>, String> {
-    Ok(run_blocking(move || crate::bluetooth::check_device_connection(&name)).await?)
+pub async fn check_bt_connection(device_id: String) -> Result<Option<bool>, String> {
+    Ok(run_blocking(move || crate::bluetooth::check_device_connection(&device_id)).await?)
 }
 
 /// 前端行为埋点：写入运行日志（受日志级别门控，标准级可见）

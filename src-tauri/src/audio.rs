@@ -92,7 +92,10 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
             for i in 0..count {
                 if let Ok(device) = collection.Item(i) {
                     if let Ok(id) = device.GetId() {
-                        let id_str = pwstr_to_string(id)?;
+                        // #30 单台设备 ID 转换失败跳过，不影响其他设备枚举
+                        let Some(id_str) = pwstr_to_string(id).ok() else {
+                            continue;
+                        };
                         let name = get_device_name(&device)
                             .unwrap_or_else(|_| "Unknown Device".to_string());
                         let (volume, is_muted) =

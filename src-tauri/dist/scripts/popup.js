@@ -53,15 +53,9 @@ window.addEventListener("focus", async () => {
     const deviceTab = document.getElementById("tab-devices");
     const scrollTop = (volumeTab.style.display !== "none" ? volumeTab : deviceTab).scrollTop;
 
-    const cfg = await invoke("get_config");
-    hiddenDevices = cfg.hidden_devices || [];
-    hiddenGroups = cfg.hidden_groups || [];
-    deviceNames = cfg.device_names || {};
-    deviceGroups = cfg.device_groups || {};
-    useSystemBt = cfg.use_system_bt || false;
-    trayDevices = cfg.tray_devices || [];
-    allDevices = await invoke("get_devices");
-    renderDevices();
+    // #16 复用 loadDevices 替代手工 config 赋值 + renderDevices
+    await loadDevices();
+
     if (volumeTab.style.display !== "none") {
       await loadAudioDevices();
       if (selectedDeviceId) {

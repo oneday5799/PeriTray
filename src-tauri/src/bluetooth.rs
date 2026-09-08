@@ -18,8 +18,6 @@ use windows_sys::Win32::Foundation::{CloseHandle, DEVPROPKEY, HANDLE, INVALID_HA
 
 use tauri::Emitter;
 
-use crate::device;
-
 /// 蓝牙操作全局锁，防止并发操作干扰适配器状态
 static BT_LOCK: Mutex<()> = Mutex::new(());
 
@@ -340,19 +338,12 @@ fn try_bt_action(radio: HANDLE, target_mac: &str, action: &str, log: &mut Vec<St
 }
 
 /// 原生蓝牙连接/断开操作（直接调用 Win32 BluetoothApis.dll）
-fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
+fn bt_action_native(device_id: &str, action: &str) -> Result<String, String> {
     let mut log: Vec<String> = Vec::new();
-    log.push(format!("START action={} name={}", action, name));
+    log.push(format!("START action={} device_id={}", action, device_id));
 
-    let device_id = match device::get_device_id_by_name(name) {
-        Some(id) => id,
-        None => {
-            log.push("DEVICE_NOT_FOUND".into());
-            return Err(log.join("\n"));
-        }
-    };
-    let mac = normalize_mac(&device_id).unwrap_or_default();
-    log.push(format!("MAC:{} device_id={}", mac, device_id));
+    let mac = normalize_mac(device_id).unwrap_or_default();
+    log.push(format!("MAC:{}", mac));
 
     let mut r_params: BLUETOOTH_FIND_RADIO_PARAMS = unsafe { mem::zeroed() };
     r_params.dwSize = mem::size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32;
@@ -397,35 +388,33 @@ fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
 }
 
 /// 执行蓝牙连接/断开操作
-pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
+pub fn bt_action(device_id: &str, action: &str, is_ble: bool) -> Result<String, String> {
     let _guard = crate::state::lock_unpoisoned(&BT_LOCK);
 
     let action_upper = action.to_uppercase();
-    crate::process::append_log(&format!("[bt] {} device='{}'", action_upper, name));
+    crate::process::append_log(&format!("[bt] {} device_id='{}'", action_upper, device_id));
 
     // ── BLE 路径：WinRT 优先，失败 fallback 到 Win32 ──
-    if crate::device::is_ble_device(name) {
-        if let Some(device_id) = crate::device::get_device_id_by_name(name) {
-            match crate::bt_ble::ble_action(&device_id, action) {
-                Ok(result) => {
-                    crate::process::append_log(&format!(
-                        "[bt] {} 完成（WinRT, {}）",
-                        action_upper, result
-                    ));
-                    return Ok(result);
-                }
-                Err(e) => {
-                    crate::process::append_verbose_log(&format!(
-                        "[bt:dbg] {} WinRT 失败: {}，尝试 fallback",
-                        action_upper, e
-                    ));
-                }
+    if is_ble {
+        match crate::bt_ble::ble_action(device_id, action) {
+            Ok(result) => {
+                crate::process::append_log(&format!(
+                    "[bt] {} 完成（WinRT, {}）",
+                    action_upper, result
+                ));
+                return Ok(result);
+            }
+            Err(e) => {
+                crate::process::append_verbose_log(&format!(
+                    "[bt:dbg] {} WinRT 失败: {}，尝试 fallback",
+                    action_upper, e
+                ));
             }
         }
     }
 
     // ── 经典 BT 路径（现有逻辑不变）──
-    match bt_action_native(name, action) {
+    match bt_action_native(device_id, action) {
         Ok(result) => {
             crate::process::append_log(&format!("[bt] {} 完成", action_upper));
             crate::process::append_verbose_log(&format!("[bt:dbg] {}:\n{}", action_upper, result));
@@ -700,13 +689,12 @@ pub fn init_bt_event_handle(app: &tauri::AppHandle) {
     BT_EVENT_HANDLE.set(app.clone()).ok();
 }
 
-/// Check connection status of a single Bluetooth device by name
-pub fn check_device_connection(name: &str) -> Option<bool> {
-    let cn = crate::dedup::core_name(name);
+/// Check connection status of a single Bluetooth device by device_id
+pub fn check_device_connection(device_id: &str) -> Option<bool> {
     find_paired_bluetooth_devices(false)
         .ok()?
         .into_iter()
-        .find(|(n, _, _, _, _)| crate::dedup::core_name(n) == cn)
+        .find(|(_, _, _, did, _)| did == device_id)
         .map(|(_, connected, _, _, _)| connected)
 }
 
