@@ -88,7 +88,7 @@
 | 17 | `popup-audio.js:898-940` | 强制静音先写 `forceMuteHold[devName]`（L908）后调 toggle，失败走 catch（L937）时 L935 的 delete 不执行 | 脏 hold 常驻，后续 volume-changed 用错误值覆盖真实状态 | catch 中补 delete | ✅ d08bca6 |
 | 18 | `settings-general.js:34-41` | `check_material_support("mica")` 返回 false 直接 return，ComboBox 已显示新值 | **仅 UI 漂移**（`config.window_material` 未污染，L43 在 return 之后） | 失败时把 combo 恢复为 config 现值 | ✅ 47797e4 |
 | 19 | `settings-shortcut.js:33-39` / `popup-audio.js:381-390` | 快捷键清除路径 `.catch(() => {})` 吞错 | **机制已修正**：后端 `set_config_key` 走 `with_config_mut` 实际会落盘持久化；真实问题是吞错无提示、**不广播 config-changed**（其他窗口不感知）、本地先行改值在失败时与后端漂移。**补全**：`set_hotkey_config`（commands.rs:412-428）注册被外部占用时配置已写入但快捷键未生效，下次启动静默失败——注册失败时应回滚配置 | 清除路径对称处理：await + 失败 toast + 后端补 emit config-changed（与 #13 联动）；注册失败时回滚配置 | ✅ 47797e4 |
-| 20 | `settings-devices.js:57` | `config.hidden_groups.includes` 假设恒为数组 | 已核实当前不会出现缺键（后端 Config 恒序列化该字段）；纯防御加固 | `(config.hidden_groups \|\| []).includes(...)`，可随手带上 | ⏭️ 不做 |
+| 20 | `settings-devices.js:57` | `config.hidden_groups.includes` 假设恒为数组 | 已核实当前不会出现缺键（后端 Config 恒序列化该字段）；纯防御加固 | `(config.hidden_groups \|\| []).includes(...)`，可随手带上 | ⏭️ 不做——后端恒序列化该字段，不可能缺键，纯加固无实际收益 |
 | 46 | `main.rs:291-294` | 弹窗 CloseRequested（Alt+F4/关闭按钮）只 `hide()` 不 `suspend()` | 与失焦关闭路径（`popup.rs:348-352` suspend）不一致：WebView 渲染进程持续运行、JS 定时器继续跑、内存不释放（实际不可达：popup 无 X 按钮，正常路径走 `popup::close`） | CloseRequested handler 中补 suspend（与失焦路径对齐） | ✅ 47797e4 |
 | 47 | `commands.rs:158,247` + `tray.rs:314` | `rename_device`（emit `audio-devices-changed`）、`toggle_device_tray`（emit `tray-devices-changed`）、托盘 auto_start（无 emit）三个 mutator 不广播 `config-changed` | 重命名设备后设置页设备名/快捷键卡片不实时同步；切换托盘设备/自启后设置页状态漂移 | 三个 mutator 补 `app.emit("config-changed", ())`（零成本，与其余 5 个发射点对齐） | ✅ d08bca6 |
 | 49 | `popup-devices.js:117-119` | `deviceKey = name + bt/24g`，缺 is_ble 维度 | 两只同名 BLE 设备（含不同厂）在 UI 合并为一张卡，#2 的"含同名逐一连接/断开"回归点在前端不可达 | deviceKey 追加 `is_ble` 或 `device_id` 维度 | ✅ d08bca6 |
@@ -98,11 +98,11 @@
 | # | 位置 | 问题 | 方案 | 状态 |
 |---|---|---|---|---|
 | 21 | `wmi_query.rs:228-241` + `classify.rs:18-20,93-98,163-174` + `device_data.rs:163-186` | 每个 USB 行最多 **5 次** `extract_vid_pid` 重复解析（classify_device_inner 1 + is_wireless_24g_by_vid_pid 1 + 主循环 2 + wmi_query.rs:231 1） | 行首解析一次，合并为 `device_data::lookup(vid, pid) -> Option<(is_24g, name, type)>` 单接口透传全行 | ✅ 5605561 |
-| 22 | `bluetooth.rs:702-748` | 经典电量逐台全量枚举 SetupDi 系统设备类（O(N×M)） | 后台补查批次内枚举一次，收集全部 MAC→电量后批量写缓存 | ⏭️ 跳过 |
+| 22 | `bluetooth.rs:702-748` | 经典电量逐台全量枚举 SetupDi 系统设备类（O(N×M)） | 后台补查批次内枚举一次，收集全部 MAC→电量后批量写缓存 | ⏭️ 跳过——中高复杂度，需重构 SetupDi 遍历逻辑，实际设备数有限（≤5 台），性能收益不明显 |
 | 23 | `config.rs:322-338` | `with_config_mut` 每次调用全量 `toml::to_string_pretty` + 写盘（原子替换已由 #8 解决，此处是频率） | 序列化后与上次内容比对，未变化跳过写盘（脏检查） | ✅ 5605561 |
-| 24 | `battery_notify.rs:32` | `resolve_toast_icon` 在通过 enabled/thresholds 检查后**无条件执行**（`selected.is_empty()` 时照写文件），且该检查在循环内逐设备做（L44） | 图标解析延迟到首次真正命中阈值；`selected.is_empty()` 提前到循环外 | ⏭️ 跳过 |
+| 24 | `battery_notify.rs:32` | `resolve_toast_icon` 在通过 enabled/thresholds 检查后**无条件执行**（`selected.is_empty()` 时照写文件），且该检查在循环内逐设备做（L44） | 图标解析延迟到首次真正命中阈值；`selected.is_empty()` 提前到循环外 | ⏭️ 跳过——低电量通知为低频事件，图标解析一次性开销可忽略 |
 | 25 | `audio_spatial.rs:82-103` | `is_package_registered_for_user` 每次新建 PackageManager + WinRT 查询（Dolby/DTS 各一次） | 按进程 TTL（如 60s）缓存包族注册结果 | ✅ 5605561 |
-| 26 | `device_data.rs:140-151` | 每轮轮询对用户文件做一次 `fs::metadata`（文件不存在时 `.ok()` 静默） | 成本实测仅每 10s 一次 stat 系统调用——**价值低**，如做则缓存"不存在"状态 + 拉长重试间隔 | ⏭️ 不做 |
+| 26 | `device_data.rs:140-151` | 每轮轮询对用户文件做一次 `fs::metadata`（文件不存在时 `.ok()` 静默） | 成本实测仅每 10s 一次 stat 系统调用——**价值低**，如做则缓存"不存在"状态 + 拉长重试间隔 | ⏭️ 不做——实测每 10s 一次 stat 系统调用，开销极低，优化无感知收益 |
 | 27 | `device.rs` 映射（#3 根治） | 前端传 `name`（popup-devices.js:197,199,215），Rust 侧经 `DEVICE_IDS` name→id 映射解析；同名设备覆盖问题（#3 根因） | **已提至批一子批 B（与 #2/#3 同批）**；若未在批一落地则在批四执行。**方案**：前端直传 `device_id + is_ble` 给 `connect/disconnect_bluetooth_device`/`check_bt_connection`，删除 name→id 全局映射；`deviceKey`（L117-119）需加 is_ble 维度 | ✅ 18687d8 |
 | 28 | `settings-about.js:18-25` + `settings.js:460,513` | `runUpdateCheck` 开始处快照按钮文案、finally 回填。用户先点检测时快照的是静态占位，`get_app_version` 后返回的真实版本号**被 finally 覆盖直至页面重载** | 版本 promise 完成前禁用检测按钮，或 finally 改回填异步取得的真实值 | ✅ 5605561 |
 
@@ -113,17 +113,17 @@
 | 29 | `audio.rs:71-75` | `pwstr_to_string` 错误路径（`to_string()?` 提前返回）不执行 `CoTaskMemFree` | 先拷贝后无条件释放 | ✅ 1217487 |
 | 30 | `audio.rs:93` | 单台设备 ID 转换失败 `?` 使整个枚举返回 Err | 改 `continue` 跳过 | ✅ 18687d8 |
 | 31 | `audio.rs:296` | `state.0 > 2` 隐式数值过滤 AudioSessionState | 显式枚举 match | ✅ 1217487 |
-| 32 | `audio.rs:180` | `set_shutdown_volumes` 按设备名匹配（同名全设、重命名失效） | 配置层改稳定 id（需配置迁移，低优先） | ⏭️ 跳过 |
+| 32 | `audio.rs:180` | `set_shutdown_volumes` 按设备名匹配（同名全设、重命名失效） | 配置层改稳定 id（需配置迁移，低优先） | ⏭️ 跳过——需配置迁移（改 TOML schema），低优先级，同名设备场景极少 |
 | 33 | `audio.rs:243-248` | `force_mute_prev_volume` 全局表无清理（设备移除/重命名后残留） | 移除设备时顺带清理 | ✅ d0d71fd |
-| 34 | `tray.rs:124,203` / `windows.rs:34` 等 | 短小任务（tooltip/图标更新等）spawn 线程无节流 | 轻量操作直接调用或统一串行执行器。**注意**：`popup.rs:154` 是动画任务（`animate_close`），非短小任务；`window_material.rs:280` 的延迟线程已有配置复核（L282-283）+ DWM 对无效 hwnd 幂等失败，属"可选加固"非必修 | ⏭️ 跳过 |
-| 35 | `device.rs:38` / `update.rs:52,58` / `shortcut.rs:53` 等 | 锁风格混用（`lock_unpoisoned` vs `.lock().ok()` vs `.unwrap()`） | 统一 `state::lock_unpoisoned` | ⏭️ 跳过 |
+| 34 | `tray.rs:124,203` / `windows.rs:34` 等 | 短小任务（tooltip/图标更新等）spawn 线程无节流 | 轻量操作直接调用或统一串行执行器。**注意**：`popup.rs:154` 是动画任务（`animate_close`），非短小任务；`window_material.rs:280` 的延迟线程已有配置复核（L282-283）+ DWM 对无效 hwnd 幂等失败，属"可选加固"非必修 | ⏭️ 跳过——需逐处评估是否可改同步调用，中高复杂度，当前无用户可感知问题 |
+| 35 | `device.rs:38` / `update.rs:52,58` / `shortcut.rs:53` 等 | 锁风格混用（`lock_unpoisoned` vs `.lock().ok()` vs `.unwrap()`） | 统一 `state::lock_unpoisoned` | ⏭️ 跳过——纯风格一致性，不影响功能，改动量大（全仓多文件） |
 | 36 | `process.rs:67-87` | 日志每条 open/append/close | 缓存 File 句柄（需处理按天轮转失效），可选项 | ✅ d0d71fd |
-| 37 | `update.rs:147-235` | WinHTTP 错误分支 6 处重复 CloseHandle 三连（含正常关闭路径） | RAII guard 收敛 | ⏭️ 跳过 |
-| 38 | `app_icon.rs:22-26,121-184` | 解析失败不缓存（失败 PID 每次全量重查）；`normalize_image_path` 每次逐盘符遍历 QueryDosDeviceW（O(D), D≈3-5） | 负缓存（短 TTL）+ 盘符映射表进程级缓存 | ⏭️ 跳过 |
-| 39 | `classify.rs:140-145,114` | `"gpro"`/`"g pro"` 冗余；`"hunters"`（L145）疑似 Huntsman 笔误（现值匹配不到 Huntsman 设备）；`"amp"`（L114）子串可误伤 Rampage/Lamp | 核对品牌名、考虑词边界（影响有限：多数设备走 2.4G 注册表或 PNPClass 路径） | ⏭️ 跳过 |
+| 37 | `update.rs:147-235` | WinHTTP 错误分支 6 处重复 CloseHandle 三连（含正常关闭路径） | RAII guard 收敛 | ⏭️ 跳过——中高复杂度，6 处重复代码收敛为 RAII guard，但更新检查为低频操作 |
+| 38 | `app_icon.rs:22-26,121-184` | 解析失败不缓存（失败 PID 每次全量重查）；`normalize_image_path` 每次逐盘符遍历 QueryDosDeviceW（O(D), D≈3-5） | 负缓存（短 TTL）+ 盘符映射表进程级缓存 | ⏭️ 跳过——中复杂度，需设计负缓存 TTL + 盘符映射生命周期管理 |
+| 39 | `classify.rs:140-145,114` | `"gpro"`/`"g pro"` 冗余；`"hunters"`（L145）疑似 Huntsman 笔误（现值匹配不到 Huntsman 设备）；`"amp"`（L114）子串可误伤 Rampage/Lamp | 核对品牌名、考虑词边界（影响有限：多数设备走 2.4G 注册表或 PNPClass 路径） | ⏭️ 跳过——影响有限，多数设备走 2.4G 注册表或 PNPClass 路径，品牌名误伤概率低 |
 | 40 | `webview.rs:66-75` | 透明重试**无条件跑满 4 次**（累计 sleep ~3s + 4 行日志），`set_webview_bg_color` 返回值被忽略 | 把成功信号从 `set_webview_bg_transparent` 返回，首次成功即退出 | ✅ d0d71fd |
 | 41 | `xinput.rs:26` | 注释"20 字节，与 Win32 XINPUT_BATTERY_INFORMATION 布局一致"——结构体实为 2×u8=2 字节（Win32 原结构也是 2 字节） | 修正注释 | ✅ 1217487 |
-| 42 | `toast.rs` 与 `windows.rs:394` `build_toast` | 双 toast 体系并存：更新通知走 build_toast（带点击回调，不经 PREV_TOAST Hide 机制），低电量/切设备走 `toast::show_toast`——两系统可同时弹 | 可选统一：toast.rs 增加 activation 回调支持后合并 build_toast 调用方 | ⏭️ 延后 |
+| 42 | `toast.rs` 与 `windows.rs:394` `build_toast` | 双 toast 体系并存：更新通知走 build_toast（带点击回调，不经 PREV_TOAST Hide 机制），低电量/切设备走 `toast::show_toast`——两系统可同时弹 | 可选统一：toast.rs 增加 activation 回调支持后合并 build_toast 调用方 | ⏭️ 延后——需回调改造（toast.rs 增加 activation 支持），改动中等非必要 |
 
 ### 取舍边界（明确做 / 延后 / 不做）
 
