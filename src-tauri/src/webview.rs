@@ -6,7 +6,10 @@ use crate::process;
 
 /// 通过 Tauri with_webview API 设置 WebView2 背景颜色
 /// 使用 ICoreWebView2Controller2::SetDefaultBackgroundColor
-fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
+/// 返回 true 表示设置成功
+fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) -> bool {
+    let ok = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ok_clone = ok.clone();
     let r = webview.with_webview(move |wv| {
         #[cfg(target_os = "windows")]
         unsafe {
@@ -50,16 +53,15 @@ fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) {
                 ));
             } else {
                 process::append_log(&format!("[webview_bg] set to {:?}", color));
+                ok_clone.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
     });
-    if r.is_err() {
-        process::append_log("[webview_bg] with_webview dispatch failed");
-    }
+    r.is_ok() && ok.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn set_webview_bg_transparent(webview: &tauri::Webview) {
-    set_webview_bg_color(webview, [0, 0, 0, 0]);
+fn set_webview_bg_transparent(webview: &tauri::Webview) -> bool {
+    set_webview_bg_color(webview, [0, 0, 0, 0])
 }
 
 /// 带重试的 webview 背景透明设置，用于窗口创建后异步调用
@@ -68,7 +70,10 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
     std::thread::spawn(move || {
         for attempt in 1..=4 {
             std::thread::sleep(std::time::Duration::from_millis(300 * attempt));
-            set_webview_bg_transparent(&wb);
+            if set_webview_bg_transparent(&wb) {
+                process::append_log(&format!("[webview_bg] transparent attempt {} ok", attempt));
+                break;
+            }
             process::append_log(&format!("[webview_bg] transparent attempt {}", attempt));
         }
     });

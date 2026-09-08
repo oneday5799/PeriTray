@@ -3,6 +3,7 @@
 // 参考 32feet 的 RemoteGattServer.windows.cs 和 BluetoothLEExplorer 的简单模式。
 // Windows 无显式 BLE 断开 API，通过 dispose 所有 WinRT 对象释放系统级连接。
 
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use windows::core::HSTRING;
@@ -12,18 +13,17 @@ use windows::Devices::Bluetooth::GenericAttributeProfile::{
 use windows::Devices::Bluetooth::{BluetoothCacheMode, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceAccessStatus;
 
-// ── 缓存：当前唯一连接的 BLE 设备 ──
+// ── 缓存：当前已连接的 BLE 设备（支持多设备并行连接）──
 
 struct BLEConnection {
-    device_id: String,
     device: BluetoothLEDevice,
     session: Option<GattSession>,
 }
 
-static BLE_CONN: OnceLock<Mutex<Option<BLEConnection>>> = OnceLock::new();
+static BLE_CONN: OnceLock<Mutex<HashMap<String, BLEConnection>>> = OnceLock::new();
 
-fn ble_conn() -> &'static Mutex<Option<BLEConnection>> {
-    BLE_CONN.get_or_init(|| Mutex::new(None))
+fn ble_conn() -> &'static Mutex<HashMap<String, BLEConnection>> {
+    BLE_CONN.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 // ── 公开入口 ──
@@ -44,10 +44,8 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
     // 若已有连接且是同一设备，直接返回
     {
         let guard = ble_conn().lock().map_err(|e| e.to_string())?;
-        if let Some(ref conn) = *guard {
-            if conn.device_id == device_id {
-                return Ok("already connected".into());
-            }
+        if guard.contains_key(device_id) {
+            return Ok("already connected".into());
         }
     }
 
@@ -134,13 +132,14 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
         return Err("GATT request failed after 3 attempts".into());
     }
 
-    // 5. 缓存连接
-    let conn = BLEConnection {
-        device_id: device_id.to_string(),
-        device,
-        session,
-    };
-    *ble_conn().lock().map_err(|e| e.to_string())? = Some(conn);
+    // 5. 缓存连接（覆盖旧连接并释放其 WinRT 资源）
+    let conn = BLEConnection { device, session };
+    let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
+    if let Some(old) = guard.remove(device_id) {
+        let _ = old.session.as_ref().map(|s| s.Close());
+        let _ = old.device.Close();
+    }
+    guard.insert(device_id.to_string(), conn);
 
     crate::process::append_verbose_log("[bt:dbg] ble_connect: done");
     crate::process::append_log("[bt] BLE connect 完成");
@@ -153,28 +152,19 @@ fn ble_disconnect(device_id: &str) -> Result<String, String> {
     crate::process::append_log(&format!("[bt] BLE disconnect: {}", device_id));
     let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
 
-    if let Some(conn) = guard.take() {
-        if conn.device_id == device_id {
-            crate::process::append_verbose_log(&format!(
-                "[bt:dbg] ble_disconnect: closing connection for {}",
-                device_id
-            ));
-            // 显式 Close() 释放 WinRT BLE 连接资源，再 drop 释放 Rust 所有权
-            let _ = conn.session.as_ref().map(|s| s.Close());
-            let _ = conn.device.Close();
-            drop(conn.session);
-            drop(conn.device);
-            crate::process::append_verbose_log("[bt:dbg] ble_disconnect: done");
-            crate::process::append_log("[bt] BLE disconnect 完成");
-            Ok("disconnected".into())
-        } else {
-            let cached_id = conn.device_id.clone();
-            *guard = Some(conn);
-            Err(format!(
-                "device not connected by this app (cached: {})",
-                cached_id
-            ))
-        }
+    if let Some(conn) = guard.remove(device_id) {
+        crate::process::append_verbose_log(&format!(
+            "[bt:dbg] ble_disconnect: closing connection for {}",
+            device_id
+        ));
+        // 显式 Close() 释放 WinRT BLE 连接资源，再 drop 释放 Rust 所有权
+        let _ = conn.session.as_ref().map(|s| s.Close());
+        let _ = conn.device.Close();
+        drop(conn.session);
+        drop(conn.device);
+        crate::process::append_verbose_log("[bt:dbg] ble_disconnect: done");
+        crate::process::append_log("[bt] BLE disconnect 完成");
+        Ok("disconnected".into())
     } else {
         Err("no BLE connection cached".into())
     }

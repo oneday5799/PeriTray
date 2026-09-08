@@ -7,12 +7,19 @@
 let devices = [];
 let expandedGroups = new Set();
 let deviceGroups = {};
+let prevRenderKey = "";
 
 async function loadDevicesAsync() {
   try {
     config = await invoke("get_config");
     devices = await invoke("get_devices");
     deviceGroups = config.device_groups || {};
+
+    // 设备列表或分组映射无变化时跳过 DOM 重建，避免闪烁
+    const key = devices.map(d => d.name).join(",") + "|" + JSON.stringify(deviceGroups);
+    if (key === prevRenderKey) return;
+    prevRenderKey = key;
+
     renderGroups();
   } catch (e) {
     console.error("Failed to load devices:", e);

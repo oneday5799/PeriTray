@@ -227,6 +227,8 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
                     endpoint.SetMute(true, ptr::null())?;
                 } else {
                     endpoint.SetMute(true, ptr::null())?;
+                    // 非 force_mute 设备静音时，清理可能残留的旧记录
+                    crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
                 }
             } else {
                 endpoint.SetMute(false, ptr::null())?;
