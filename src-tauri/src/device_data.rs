@@ -185,6 +185,23 @@ pub(crate) fn get_device_type(vid: &str, pid: &str) -> String {
         .unwrap_or_else(|| "other".to_string())
 }
 
+/// 统一查询接口：从 pnp_id 一次性提取 VID/PID 并查询 24G 状态、设备名、设备类型。
+/// 返回 (is_24g, display_name, device_type)；非 USB 设备或找不到 VID/PID 时返回 None。
+pub fn lookup(pnp_id: &str) -> Option<(bool, Option<String>, String)> {
+    let (vid, pid) = extract_vid_pid(pnp_id)?;
+    let is_24g = is_wireless_24g(&vid, &pid);
+    let data = DEVICE_DATA.get().and_then(|rw_lock| rw_lock.read().ok());
+    let info = data
+        .as_ref()
+        .and_then(|d| d.get(&vid))
+        .and_then(|pids| pids.get(&pid));
+    let name = info.map(|i| i.name.clone());
+    let device_type = info
+        .map(|i| i.device_type.clone())
+        .unwrap_or_else(|| "other".to_string());
+    Some((is_24g, name, device_type))
+}
+
 pub fn extract_vid_pid(pnp_id: &str) -> Option<(String, String)> {
     // 大小写不敏感查找 VID_ 和 PID_，避免整串 to_uppercase()
     let bytes = pnp_id.as_bytes();

@@ -5,8 +5,11 @@
 //! 日志沿用 [audio] 前缀以保持检索习惯。
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use windows::core::HSTRING;
 use windows::Win32::System::Com::*;
 
@@ -78,10 +81,25 @@ pub fn get_spatial_sound(device_id: &str) -> std::result::Result<SpatialSoundSta
     }
 }
 
+/// 包族注册结果缓存（TTL 60s），避免每次枚举空间音效格式都新建 PackageManager + WinRT 查询
+static PACKAGE_CACHE: OnceLock<Mutex<HashMap<String, (bool, Instant)>>> = OnceLock::new();
+const PACKAGE_CACHE_TTL: Duration = Duration::from_secs(60);
+
 /// 查询当前用户是否注册了指定包族的 AppX 应用（免管理员，经 PackageManager WinRT）
+/// 结果缓存 60 秒，避免频繁创建 PackageManager 对象
 fn is_package_registered_for_user(family: &str) -> bool {
+    let cache = PACKAGE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    // 检查缓存
+    if let Ok(guard) = cache.lock() {
+        if let Some((result, time)) = guard.get(family) {
+            if time.elapsed() < PACKAGE_CACHE_TTL {
+                return *result;
+            }
+        }
+    }
+    // 缓存未命中，执行 WinRT 查询
     use windows::Management::Deployment::PackageManager;
-    unsafe {
+    let result = unsafe {
         crate::audio::ensure_com_initialized();
         let Ok(pm) = PackageManager::new() else {
             return false;
@@ -91,7 +109,12 @@ fn is_package_registered_for_user(family: &str) -> bool {
         pm.FindPackagesByUserSecurityIdPackageFamilyName(&empty, &fam)
             .map(|p| p.into_iter().next().is_some())
             .unwrap_or(false)
+    };
+    // 写入缓存
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(family.to_string(), (result, Instant::now()));
     }
+    result
 }
 
 /// 格式可用性：无包族依赖（内置）恒可用；有依赖则任一包族已注册即视为可用

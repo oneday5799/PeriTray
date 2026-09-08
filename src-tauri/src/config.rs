@@ -221,6 +221,8 @@ static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 /// 日志级别进程缓存：0=关闭 1=标准 2=详细
 static LOG_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 static LOG_ONCE: AtomicBool = AtomicBool::new(false);
+/// 上次成功写盘的 TOML 内容，用于脏检查跳过无变化写入
+static LAST_CONFIG_CONTENT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 /// 解析日志级别字符串（未知值按关闭处理）
 pub fn parse_log_level(s: &str) -> u8 {
@@ -290,6 +292,16 @@ pub fn init_config() {
         *guard = config;
         sync_log_cache(&guard);
     }
+    // 初始化脏检查缓存：读取磁盘文件内容作为基准
+    if let Ok(content) = std::fs::read_to_string(config_path()) {
+        if let Some(last) = LAST_CONFIG_CONTENT.get() {
+            if let Ok(mut cached) = last.lock() {
+                *cached = Some(content);
+            }
+        } else {
+            let _ = LAST_CONFIG_CONTENT.set(Mutex::new(Some(content)));
+        }
+    }
     // 旧版布尔日志开关一次性迁移（true→标准 / false→关闭），
     // 消费 legacy 字段并立即持久化，防止每次启动重复映射。
     // 注意：此处必须在上方 guard 作用域结束后执行，否则 CONFIG
@@ -326,6 +338,14 @@ where
     let mut guard = crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
     let result = f(&mut guard);
     if let Ok(content) = toml::to_string_pretty(&*guard) {
+        // #23 脏检查：内容未变化时跳过写盘（减少高频配置操作的 I/O）
+        let last = LAST_CONFIG_CONTENT.get_or_init(|| Mutex::new(None));
+        if let Ok(cached) = last.lock() {
+            if cached.as_deref() == Some(content.as_str()) {
+                sync_log_cache(&guard);
+                return result;
+            }
+        }
         use std::io::Write;
         // 原子写入：先写临时文件，再 rename 替换（同卷原子操作）
         let cfg_path = config_path();
@@ -341,6 +361,9 @@ where
             crate::process::append_log(&format!("[config] save failed: {}", e));
             // 清理临时文件（如果 rename 失败）
             let _ = std::fs::remove_file(&tmp_path);
+        } else if let Ok(mut cached) = last.lock() {
+            // 写盘成功，更新缓存
+            *cached = Some(content);
         }
     }
     sync_log_cache(&guard);
