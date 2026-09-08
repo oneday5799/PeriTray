@@ -69,9 +69,11 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
 /// 读取 COM 分配的 PWSTR 到 Rust String 后释放 CoTaskMem 内存。
 /// 用于 GetId / GetDisplayName / GetSessionInstanceIdentifier 等返回 PWSTR 的 API。
 pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
-    let s = pwstr.to_string()?;
-    CoTaskMemFree(Some(pwstr.as_ptr() as *const c_void));
-    Ok(s)
+    // #29 先保存原始指针，确保无论 to_string 成功与否都能释放 COM 内存
+    let ptr = pwstr.as_ptr();
+    let result = pwstr.to_string().map_err(|e| windows::core::Error::from(e));
+    CoTaskMemFree(Some(ptr as *const c_void));
+    result
 }
 
 /// 枚举指定方向的音频设备（output=eRender / input=eCapture），并标记系统默认
@@ -297,8 +299,10 @@ pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
                                     Err(_) => continue,
                                 };
                             let state = session_control2.GetState().unwrap_or(AudioSessionState(0));
-                            if state.0 > 2 {
-                                continue;
+                            // #31 显式枚举过滤：只保留 Active/Inactive 状态，跳过 Expired/Invalid
+                            match state.0 {
+                                0 | 1 => {} // Active | Inactive — 继续处理
+                                _ => continue,
                             }
                             let pid = session_control2.GetProcessId().unwrap_or(0);
                             if pid == 0 {

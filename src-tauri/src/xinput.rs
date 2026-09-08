@@ -23,7 +23,7 @@ const BATTERY_LEVEL_LOW: u8 = 0x01;
 const BATTERY_LEVEL_MEDIUM: u8 = 0x02;
 const BATTERY_LEVEL_FULL: u8 = 0x03;
 
-/// 20 字节，与 Win32 XINPUT_BATTERY_INFORMATION 布局一致
+/// 2 字节（battery_type: u8 + battery_level: u8），与 Win32 XINPUT_BATTERY_INFORMATION 布局一致
 #[repr(C)]
 struct XinputBatteryInformation {
     battery_type: u8,
