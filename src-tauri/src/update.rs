@@ -1,3 +1,4 @@
+use crate::standard_log;
 use serde::Serialize;
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -83,12 +84,12 @@ pub async fn check_and_store(
             (Ok(info), true)
         }
         Ok(Err(e)) => {
-            crate::process::append_log(&format!("[update]{} check failed: {}", prefix, e));
+            standard_log!("[update]{} check failed: {}", prefix, e);
             set_last_status(UpdateStatus::from_error(&current_version, &e));
             (Err(e), true)
         }
         Err(e) => {
-            crate::process::append_log(&format!("[update]{} task failed: {}", prefix, e));
+            standard_log!("[update]{} task failed: {}", prefix, e);
             (Err(format!("task error: {}", e)), false)
         }
     }
@@ -282,10 +283,11 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 
 /// 检测 GitHub 是否有新版本
 fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<UpdateInfo, String> {
-    crate::process::append_log(&format!(
+    standard_log!(
         "[update] checking for update: current={} include_prerelease={}",
-        current_version, include_prerelease
-    ));
+        current_version,
+        include_prerelease
+    );
 
     let body = winhttp_get("api.github.com", "/repos/oneday5799/PeriTray/releases")?;
 
@@ -321,10 +323,11 @@ fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<U
         Some(release) => {
             let latest_ver = release.tag_name.trim_start_matches('v');
             let has_update = compare_versions(current_version, latest_ver);
-            crate::process::append_log(&format!(
+            standard_log!(
                 "[update] result: has_update={} latest={}",
-                has_update, latest_ver
-            ));
+                has_update,
+                latest_ver
+            );
             Ok(UpdateInfo {
                 has_update,
                 current_version: current_version.to_string(),

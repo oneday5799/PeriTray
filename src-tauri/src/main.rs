@@ -53,11 +53,7 @@ fn install_panic_hook() {
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "unknown location".to_string());
         let full = format!("{}\n\nLocation: {}", msg, location);
-        process::append_log(&format!(
-            "[panic] {} @ {}",
-            msg.replace('\n', " | "),
-            location
-        ));
+        standard_log!("[panic] {} @ {}", msg.replace('\n', " | "), location);
         show_error_box(&full);
         default_hook(info);
     }));
@@ -125,7 +121,7 @@ fn forward_second_instance(app: &tauri::AppHandle) {
     std::thread::spawn(move || {
         let tab = config::with_config(|c| c.default_popup_tab.clone());
         if app.get_webview_window("popup").is_some() {
-            process::append_log(&format!("[single-instance] popup exists, open tab={}", tab));
+            standard_log!("[single-instance] popup exists, open tab={}", tab);
             popup::open_popup(&app, &tab);
         } else {
             process::append_log("[single-instance] no popup, create via toggle");
@@ -181,7 +177,7 @@ fn spawn_startup_update_check(app: &tauri::AppHandle) {
                             Ok(())
                         });
                         if let Err(e) = toast.show() {
-                            crate::process::append_log(&format!("[update] toast failed: {:?}", e));
+                            standard_log!("[update] toast failed: {:?}", e);
                         }
                     }
                 }
@@ -221,10 +217,10 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
             let elapsed = now.duration_since(last_instant);
             last_instant = now;
             if elapsed > std::time::Duration::from_secs(20) {
-                crate::process::append_log(&format!(
+                standard_log!(
                     "[watchdog] time jump: {:.1}s — resuming webview",
                     elapsed.as_secs_f64()
-                ));
+                );
                 if let Some(popup_win) = app_handle.get_webview_window("popup") {
                     let wv: &tauri::Webview = popup_win.as_ref();
                     crate::webview::resume_webview(wv);
@@ -244,10 +240,10 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
                 Ok(true) => stuck_streak = 0,
                 _ => {
                     stuck_streak += 1;
-                    crate::process::append_log(&format!(
+                    standard_log!(
                         "[watchdog] event loop unresponsive, streak={}",
                         stuck_streak
-                    ));
+                    );
                     if stuck_streak >= 2 {
                         watchdog_self_restart();
                     }
@@ -319,10 +315,7 @@ fn main() {
     config::init_config();
 
     if let Some(old_pid) = watchdog_restart {
-        process::append_log(&format!(
-            "[watchdog] restart mode, waited old pid={} exit",
-            old_pid
-        ));
+        standard_log!("[watchdog] restart mode, waited old pid={} exit", old_pid);
     }
 
     install_panic_hook();
@@ -335,7 +328,7 @@ fn main() {
             0x2, // COINIT_APARTMENTTHREADED
         );
         if hr < 0 {
-            process::append_log(&format!("[main] CoInitializeEx failed: 0x{:08X}", hr));
+            standard_log!("[main] CoInitializeEx failed: 0x{:08X}", hr);
         }
     }
 
@@ -429,7 +422,7 @@ fn main() {
             crate::windows::register_aumid();
 
             if let Err(e) = tray::setup_tray(app) {
-                process::append_log(&format!("[main] setup_tray failed: {}", e));
+                standard_log!("[main] setup_tray failed: {}", e);
             }
             // 初始化音频通知回调（替代轮询）
             crate::audio_notify::init_audio_notify(app.handle().clone());

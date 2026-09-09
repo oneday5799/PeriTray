@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::standard_log;
 use serde::{Deserialize, Serialize};
 
 /// 成功电量缓存的最大保留时长：超过该时长未再成功查询的条目在加载时淘汰。
@@ -64,7 +65,7 @@ pub(crate) fn load(path: &Path) -> HashMap<(String, String), (i32, u64)> {
                     RawValue::Entry(Entry { level, seen }) => (level, seen),
                 };
                 if now.saturating_sub(seen) > MAX_AGE_SECS {
-                    crate::process::append_log(&format!("[24g] 淘汰超龄电量缓存条目 {}", key));
+                    standard_log!("[24g] 淘汰超龄电量缓存条目 {}", key);
                     continue;
                 }
                 result.insert(pair, (level, seen));
@@ -72,11 +73,7 @@ pub(crate) fn load(path: &Path) -> HashMap<(String, String), (i32, u64)> {
             result
         }
         Err(e) => {
-            crate::process::append_log(&format!(
-                "[24g] 电量缓存损坏，忽略重建 ({}): {}",
-                path.display(),
-                e
-            ));
+            standard_log!("[24g] 电量缓存损坏，忽略重建 ({}): {}", path.display(), e);
             HashMap::new()
         }
     }
@@ -106,7 +103,7 @@ pub(crate) fn flush() {
         return;
     }
     if let Err(e) = save(&successes, &cache_path()) {
-        crate::process::append_log(&format!("[24g] 电量缓存写盘失败: {}", e));
+        standard_log!("[24g] 电量缓存写盘失败: {}", e);
     }
 }
 

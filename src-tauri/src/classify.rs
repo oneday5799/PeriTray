@@ -1,15 +1,19 @@
 use crate::config;
 use crate::device::DevType;
 use crate::device_data;
+use crate::verbose_log;
 
 pub(crate) fn classify_device(name: &str, pnp_class: &str, pnp_id: &str, caption: &str) -> DevType {
     let lower_combined = format!("{} {}", name, caption).to_lowercase();
 
     let result = classify_device_inner(&lower_combined, pnp_class, pnp_id);
-    crate::process::append_verbose_log(&format!(
+    verbose_log!(
         "[classify] classify_device: {} -> {:?} (pnp_class={}, pnp_id={})",
-        name, result, pnp_class, pnp_id
-    ));
+        name,
+        result,
+        pnp_class,
+        pnp_id
+    );
     result
 }
 
@@ -65,10 +69,7 @@ fn classify_device_inner(lower_combined: &str, pnp_class: &str, pnp_id: &str) ->
 
 pub(crate) fn classify_bluetooth(name: &str) -> Option<DevType> {
     let result = classify_bluetooth_inner(name);
-    crate::process::append_verbose_log(&format!(
-        "[classify] classify_bluetooth: {} -> {:?}",
-        name, result
-    ));
+    verbose_log!("[classify] classify_bluetooth: {} -> {:?}", name, result);
     result
 }
 

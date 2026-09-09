@@ -1,3 +1,4 @@
+use crate::standard_log;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::{LazyLock, Mutex};
@@ -70,13 +71,13 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
         let sc = match tauri_plugin_global_shortcut::Shortcut::try_from(key.as_str()) {
             Ok(sc) => sc,
             Err(_) => {
-                crate::process::append_log(&format!("[shortcut] invalid key: {}", key));
+                standard_log!("[shortcut] invalid key: {}", key);
                 continue;
             }
         };
         let action = format!("device_shortcut_key:{}", key);
         let key_str = key.clone();
-        crate::process::append_log(&format!("[shortcut] registered {} -> {}", key, action));
+        standard_log!("[shortcut] registered {} -> {}", key, action);
         let _ = app
             .global_shortcut()
             .on_shortcut(sc, move |_app, _shortcut, event| {
@@ -93,7 +94,7 @@ fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {
     let sc = match tauri_plugin_global_shortcut::Shortcut::try_from(key) {
         Ok(sc) => sc,
         Err(_) => {
-            crate::process::append_log(&format!("[shortcut] invalid key: {}", key));
+            standard_log!("[shortcut] invalid key: {}", key);
             return;
         }
     };
@@ -108,7 +109,7 @@ fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {
             }
             dispatch_shortcut_action(_app, &action_str, &key_str);
         });
-    crate::process::append_log(&format!("[shortcut] registered {} -> {}", key, action));
+    standard_log!("[shortcut] registered {} -> {}", key, action);
 }
 
 /// 在共用同一快捷键的设备间循环切换默认输出设备（按设备列表自然顺序）
@@ -130,10 +131,7 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
         .filter(|d| group.iter().any(|id| id == &d.id))
         .collect();
     if connected.is_empty() {
-        crate::process::append_log(&format!(
-            "[hotkey] no connected devices for shared key {}",
-            key
-        ));
+        standard_log!("[hotkey] no connected devices for shared key {}", key);
         return;
     }
 
@@ -154,12 +152,13 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
         connected[0]
     };
 
-    crate::process::append_log(&format!(
+    standard_log!(
         "[hotkey] device shortcut '{}' -> switch default to {}",
-        key, next.name
-    ));
+        key,
+        next.name
+    );
     if let Err(e) = crate::audio::set_default_device(&next.id) {
-        crate::process::append_log(&format!("[hotkey] set default device failed: {}", e));
+        standard_log!("[hotkey] set default device failed: {}", e);
     } else {
         let notify = crate::config::with_config(|c| c.shortcut_switch_notify);
         if notify {
@@ -189,12 +188,12 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
 pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str, key: &str) {
     if crate::state::SHORTCUT_RECORDING.load(Ordering::Relaxed) {
         // 录制期间：不执行动作，把按下的键上报给前端用于录制
-        crate::process::append_log(&format!("[hotkey] captured while recording: {}", key));
+        standard_log!("[hotkey] captured while recording: {}", key);
         let _ = app.emit("shortcut-recorded", key);
         return;
     }
     if let Some(key) = action.strip_prefix("device_shortcut_key:") {
-        crate::process::append_log(&format!("[hotkey] device shortcut key triggered: {}", key));
+        standard_log!("[hotkey] device shortcut key triggered: {}", key);
         cycle_device_shortcut(app, key);
         return;
     }
@@ -202,24 +201,15 @@ pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str, key
         "devices" => crate::popup::open_popup(app, "devices"),
         "volume" => crate::popup::open_popup(app, "volume"),
         "volume_up" => {
-            crate::process::append_log(&format!(
-                "[hotkey] volume action: {} (key={})",
-                action, key
-            ));
+            standard_log!("[hotkey] volume action: {} (key={})", action, key);
             crate::audio::adjust_default_volume_up()
         }
         "volume_down" => {
-            crate::process::append_log(&format!(
-                "[hotkey] volume action: {} (key={})",
-                action, key
-            ));
+            standard_log!("[hotkey] volume action: {} (key={})", action, key);
             crate::audio::adjust_default_volume_down()
         }
         "volume_mute" => {
-            crate::process::append_log(&format!(
-                "[hotkey] volume action: {} (key={})",
-                action, key
-            ));
+            standard_log!("[hotkey] volume action: {} (key={})", action, key);
             crate::audio::toggle_default_mute()
         }
         _ => {}

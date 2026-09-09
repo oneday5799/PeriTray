@@ -3,6 +3,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::config;
 use crate::device::Device;
+use crate::{standard_log, verbose_log};
 
 // ── 去重状态 ──
 // 每个 (设备名, 阈值) 组合只通知一次；重启后清空重新检测
@@ -20,11 +21,11 @@ pub fn check_battery_notify(devices: &[Device]) {
     });
 
     if !enabled || thresholds.is_empty() {
-        crate::process::append_verbose_log(&format!(
+        verbose_log!(
             "[battery-notify] 跳过：enabled={}, thresholds={}",
             enabled,
             thresholds.len()
-        ));
+        );
         return;
     }
 
@@ -33,10 +34,7 @@ pub fn check_battery_notify(devices: &[Device]) {
 
     for d in devices {
         let Some(level) = d.battery else {
-            crate::process::append_verbose_log(&format!(
-                "[battery-notify] 跳过 {}：无电量数据",
-                d.name
-            ));
+            verbose_log!("[battery-notify] 跳过 {}：无电量数据", d.name);
             continue;
         };
 
@@ -48,10 +46,7 @@ pub fn check_battery_notify(devices: &[Device]) {
 
         // 指定了设备列表但当前设备不在其中 → 跳过
         if !selected.contains(&d.name) {
-            crate::process::append_verbose_log(&format!(
-                "[battery-notify] 跳过 {}：不在选中列表",
-                d.name
-            ));
+            verbose_log!("[battery-notify] 跳过 {}：不在选中列表", d.name);
             continue;
         }
 
@@ -71,10 +66,11 @@ pub fn check_battery_notify(devices: &[Device]) {
                     .unwrap_or_else(|e| e.into_inner())
                     .insert((d.name.clone(), threshold))
                 {
-                    crate::process::append_verbose_log(&format!(
+                    verbose_log!(
                         "[battery-notify] 跳过 {}：阈值 {}% 已通知过",
-                        d.name, threshold
-                    ));
+                        d.name,
+                        threshold
+                    );
                     continue;
                 }
 
@@ -87,10 +83,12 @@ pub fn check_battery_notify(devices: &[Device]) {
                     );
                 }
 
-                crate::process::append_log(&format!(
+                standard_log!(
                     "[battery-notify] {} 电量 {}% ≤ 阈值 {}%",
-                    display_name, level, threshold
-                ));
+                    display_name,
+                    level,
+                    threshold
+                );
             }
         }
     }

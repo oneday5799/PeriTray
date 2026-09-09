@@ -11,6 +11,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::verbose_log;
 use hidapi::HidDevice;
 
 // ── 协议常量 ────────────────────────────────────────────
@@ -246,10 +247,11 @@ pub fn read_battery_level(dev: &HidDevice, slot: u8) -> Result<BatteryReading, S
     if let Some(idx) = get_feature_index(dev, slot, FEAT_BATTERY_STATUS) {
         let args = call_feature(dev, slot, idx, 0x00, &[0])?;
         if args[0] != 0 {
-            crate::process::append_verbose_log(&format!(
+            verbose_log!(
                 "[24g:dbg] 0x1000 电量 {}%（状态 {:#04X}）",
-                args[0], args[2]
-            ));
+                args[0],
+                args[2]
+            );
             return Ok(BatteryReading {
                 percent: args[0] as i32,
                 charging: status_charging(args[2]),
@@ -263,9 +265,7 @@ pub fn read_battery_level(dev: &HidDevice, slot: u8) -> Result<BatteryReading, S
         let args = call_feature(dev, slot, idx, 0x00, &[0])?;
         let mv = u16::from_be_bytes([args[0], args[1]]);
         let percent = voltage_to_percent(mv);
-        crate::process::append_verbose_log(&format!(
-            "[24g:dbg] 0x1001 电压 {mv}mV → 插值 {percent}%"
-        ));
+        verbose_log!("[24g:dbg] 0x1001 电压 {mv}mV → 插值 {percent}%");
         return Ok(BatteryReading {
             percent: percent as i32,
             charging: args[2] & 0x80 != 0,
@@ -276,10 +276,11 @@ pub fn read_battery_level(dev: &HidDevice, slot: u8) -> Result<BatteryReading, S
     // （Solaar 以 function 0x10 调用，上线后低半字节被 sw_id 覆盖，实际 func=1，两者等价）
     if let Some(idx) = get_feature_index(dev, slot, FEAT_UNIFIED_BATTERY) {
         let args = call_feature(dev, slot, idx, 0x01, &[0])?;
-        crate::process::append_verbose_log(&format!(
+        verbose_log!(
             "[24g:dbg] 0x1004 电量 {}%（状态 {:#04X}）",
-            args[0], args[2]
-        ));
+            args[0],
+            args[2]
+        );
         return Ok(BatteryReading {
             percent: args[0] as i32,
             charging: status_charging(args[2]),

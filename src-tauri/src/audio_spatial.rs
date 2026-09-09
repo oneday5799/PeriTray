@@ -4,6 +4,7 @@
 //! 对外仅暴露 get_spatial_sound / set_spatial_sound / SpatialSoundFormat / SpatialSoundState。
 //! 日志沿用 [audio] 前缀以保持检索习惯。
 
+use crate::standard_log;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -147,10 +148,11 @@ pub fn set_spatial_sound(
         (None, _) => "关",
         _ => "自定义格式",
     };
-    crate::process::append_log(&format!(
+    standard_log!(
         "[audio] set_spatial_sound: {} -> {}",
-        device_id, target_name
-    ));
+        device_id,
+        target_name
+    );
     let wide: Vec<u16> = crate::process::to_wide(device_id);
     unsafe {
         let client = PolicySpatialClient::acquire()?;
@@ -194,10 +196,10 @@ pub fn set_spatial_sound(
             Err(query_err) => {
                 // 降级路径：读取失败（如激活中的格式提供应用被卸载导致端点状态不可读）
                 // fmt=null 直接写入；写后尽力读回，仍不可读则信任 HRESULT
-                crate::process::append_log(&format!(
+                standard_log!(
                     "[audio] set_spatial_sound degraded path (query err: {})",
                     query_err
-                ));
+                );
                 let hr = client.try_set_state(wide.as_ptr(), &new_state, ptr::null());
                 if hr < 0 {
                     return Err(format!("设置空间音效失败（hr={:#010x}）", hr as u32));

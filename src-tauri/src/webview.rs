@@ -3,6 +3,7 @@
 //! 与 windows 模块的窗口定位 / 窗口材质（DWM）逻辑相互独立。
 
 use crate::process;
+use crate::standard_log;
 
 /// 通过 Tauri with_webview API 设置 WebView2 背景颜色
 /// 使用 ICoreWebView2Controller2::SetDefaultBackgroundColor
@@ -32,7 +33,7 @@ fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) -> bool {
             let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
             let hr = qi(raw, &iid, &mut ptr);
             if hr != 0 || ptr.is_null() {
-                process::append_log(&format!("[webview_bg] QI failed, hr={}", hr));
+                standard_log!("[webview_bg] QI failed, hr={}", hr);
                 return;
             }
 
@@ -47,12 +48,9 @@ fn set_webview_bg_color(webview: &tauri::Webview, color: [u8; 4]) -> bool {
             rel(ptr);
 
             if hr2 != 0 {
-                process::append_log(&format!(
-                    "[webview_bg] SetDefaultBackgroundColor failed, hr={}",
-                    hr2
-                ));
+                standard_log!("[webview_bg] SetDefaultBackgroundColor failed, hr={}", hr2);
             } else {
-                process::append_log(&format!("[webview_bg] set to {:?}", color));
+                standard_log!("[webview_bg] set to {:?}", color);
                 ok_clone.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
@@ -71,10 +69,10 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
         for attempt in 1..=4 {
             std::thread::sleep(std::time::Duration::from_millis(300 * attempt));
             if set_webview_bg_transparent(&wb) {
-                process::append_log(&format!("[webview_bg] transparent attempt {} ok", attempt));
+                standard_log!("[webview_bg] transparent attempt {} ok", attempt);
                 break;
             }
-            process::append_log(&format!("[webview_bg] transparent attempt {}", attempt));
+            standard_log!("[webview_bg] transparent attempt {}", attempt);
         }
     });
 }
@@ -99,7 +97,7 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 /// TrySuspend 完成回调（最小 COM 对象，vtable 指针为首字段的标準布局）
 #[cfg(target_os = "windows")]
 mod try_suspend_cb {
-    use super::process;
+    use crate::standard_log;
 
     #[repr(C)]
     pub struct Obj {
@@ -137,11 +135,11 @@ mod try_suspend_cb {
     }
 
     unsafe extern "system" fn invoke(_this: *mut Obj, error_code: i32, is_successful: i32) -> i32 {
-        process::append_log(&format!(
+        standard_log!(
             "[webview] TrySuspend completed: hr=0x{:08X} success={}",
             error_code as u32,
             is_successful != 0
-        ));
+        );
         0 // S_OK
     }
 
@@ -231,7 +229,7 @@ pub fn suspend_webview(webview: &tauri::Webview) {
                 let cb_ptr = try_suspend_cb::create();
                 let hr = try_suspend(ptr, cb_ptr);
                 if hr != 0 {
-                    process::append_log(&format!("[webview] TrySuspend call failed: 0x{:08X}", hr));
+                    standard_log!("[webview] TrySuspend call failed: 0x{:08X}", hr);
                     try_suspend_cb::destroy(cb_ptr);
                 }
                 // Release ICoreWebView2_3
@@ -268,7 +266,7 @@ pub fn resume_webview(webview: &tauri::Webview) {
                 let resume_fn: ResumeFn = std::mem::transmute(*vtable3.add(69));
                 let hr = resume_fn(ptr);
                 if hr != 0 {
-                    process::append_log(&format!("[webview] Resume call failed: 0x{:08X}", hr));
+                    standard_log!("[webview] Resume call failed: 0x{:08X}", hr);
                 }
                 let release3: ReleaseFn = std::mem::transmute(*vtable3.add(2));
                 release3(ptr);

@@ -6,6 +6,7 @@ use crate::process;
 use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
+use crate::standard_log;
 mod material {
     use std::sync::OnceLock;
 
@@ -258,7 +259,7 @@ pub fn check_material_support(_material: &str) -> bool {
 // ═══════════════════════════════════════════════════════════════
 
 pub fn set_window_material(app: &tauri::AppHandle, material: String) -> Result<bool, String> {
-    process::append_log(&format!("[material] set_window_material: {}", material));
+    standard_log!("[material] set_window_material: {}", material);
     config::with_config_mut(|c| c.window_material = material.clone());
 
     // 恒透明架构：webview 表面在创建时已一次性设为透明，运行时只切换两层——
@@ -287,10 +288,7 @@ pub fn set_window_material(app: &tauri::AppHandle, material: String) -> Result<b
                     });
                 } else {
                     let ok = apply_window_material(hwnd.0 as isize, &material);
-                    process::append_log(&format!(
-                        "[material] apply {} to {} -> {}",
-                        material, label, ok
-                    ));
+                    standard_log!("[material] apply {} to {} -> {}", material, label, ok);
                     if ok {
                         any_success = true;
                     }

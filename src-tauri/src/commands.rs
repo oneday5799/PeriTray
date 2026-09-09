@@ -1,6 +1,7 @@
 use crate::config::{self, Config};
 use crate::device;
 use crate::process;
+use crate::standard_log;
 use crate::wmi_query::query_devices;
 use tauri::Emitter;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -8,7 +9,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 #[tauri::command]
 pub fn set_shortcut_recording(recording: bool) {
     crate::state::SHORTCUT_RECORDING.store(recording, std::sync::atomic::Ordering::Relaxed);
-    process::append_log(&format!("[hotkey] shortcut recording = {}", recording));
+    standard_log!("[hotkey] shortcut recording = {}", recording);
 }
 
 /// 在 tokio blocking 线程中执行阻塞操作
@@ -126,7 +127,7 @@ fn clear_shared_device_shortcuts(c: &mut Config) {
 
 #[tauri::command]
 pub fn toggle_device_hidden(app: tauri::AppHandle, name: String) {
-    crate::process::append_log(&format!("[cmd] toggle_device_hidden: {}", name));
+    standard_log!("[cmd] toggle_device_hidden: {}", name);
     config::with_config_mut(|c| toggle_vec_item(&mut c.hidden_devices, &name));
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);
@@ -134,7 +135,7 @@ pub fn toggle_device_hidden(app: tauri::AppHandle, name: String) {
 
 #[tauri::command]
 pub fn toggle_audio_device_hidden(app: tauri::AppHandle, name: String) {
-    crate::process::append_log(&format!("[cmd] toggle_audio_device_hidden: {}", name));
+    standard_log!("[cmd] toggle_audio_device_hidden: {}", name);
     config::with_config_mut(|c| toggle_vec_item(&mut c.hidden_audio_devices, &name));
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);
@@ -153,10 +154,7 @@ pub fn open_url(url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) {
-    crate::process::append_log(&format!(
-        "[cmd] rename_device: '{}' -> '{}'",
-        original, new_name
-    ));
+    standard_log!("[cmd] rename_device: '{}' -> '{}'", original, new_name);
     config::with_config_mut(|c| {
         if new_name.is_empty() || new_name == original {
             c.device_names.remove(&original);
@@ -171,7 +169,7 @@ pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) 
 
 #[tauri::command]
 pub fn change_device_group(app: tauri::AppHandle, name: String, group: String) {
-    crate::process::append_log(&format!("[cmd] change_device_group: {} -> {}", name, group));
+    standard_log!("[cmd] change_device_group: {} -> {}", name, group);
     config::with_config_mut(|c| {
         if group.is_empty() {
             c.device_groups.remove(&name);
@@ -185,7 +183,7 @@ pub fn change_device_group(app: tauri::AppHandle, name: String, group: String) {
 
 #[tauri::command]
 pub fn toggle_group_hidden(app: tauri::AppHandle, group: String) {
-    crate::process::append_log(&format!("[cmd] toggle_group_hidden: {}", group));
+    standard_log!("[cmd] toggle_group_hidden: {}", group);
     config::with_config_mut(|c| toggle_vec_item(&mut c.hidden_groups, &group));
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);
@@ -193,7 +191,7 @@ pub fn toggle_group_hidden(app: tauri::AppHandle, group: String) {
 
 #[tauri::command(async)]
 pub async fn disconnect_bluetooth_device(device_id: String) -> Result<String, String> {
-    crate::process::append_log(&format!("[cmd] disconnect_bluetooth_device: {}", device_id));
+    standard_log!("[cmd] disconnect_bluetooth_device: {}", device_id);
     run_blocking(move || crate::bluetooth::bt_action(&device_id, "disconnect", false))
         .await?
         .map_err(|e| e.to_string())
@@ -201,7 +199,7 @@ pub async fn disconnect_bluetooth_device(device_id: String) -> Result<String, St
 
 #[tauri::command(async)]
 pub async fn connect_bluetooth_device(device_id: String, is_ble: bool) -> Result<String, String> {
-    crate::process::append_log(&format!("[cmd] connect_bluetooth_device: {}", device_id));
+    standard_log!("[cmd] connect_bluetooth_device: {}", device_id);
     run_blocking(move || crate::bluetooth::bt_action(&device_id, "connect", is_ble))
         .await?
         .map_err(|e| e.to_string())
@@ -215,7 +213,7 @@ pub async fn check_bt_connection(device_id: String) -> Result<Option<bool>, Stri
 /// 前端行为埋点：写入运行日志（受日志级别门控，标准级可见）
 #[tauri::command]
 pub fn frontend_log(tag: String, msg: String) {
-    crate::process::append_log(&format!("[{tag}] {msg}"));
+    standard_log!("[{tag}] {msg}");
 }
 
 #[tauri::command]
@@ -238,13 +236,14 @@ pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(
     let (already_added, count) =
         config::with_config(|c| (c.tray_devices.contains(&name), c.tray_devices.len()));
     if !already_added && count >= TRAY_DEVICE_LIMIT {
-        crate::process::append_log(&format!(
+        standard_log!(
             "[cmd] toggle_device_tray: {} 达上限({})拒绝",
-            name, TRAY_DEVICE_LIMIT
-        ));
+            name,
+            TRAY_DEVICE_LIMIT
+        );
         return Err(format!("托盘最多添加 {} 个设备", TRAY_DEVICE_LIMIT));
     }
-    crate::process::append_log(&format!("[cmd] toggle_device_tray: {}", name));
+    standard_log!("[cmd] toggle_device_tray: {}", name);
     run_blocking(move || {
         config::with_config_mut(|c| toggle_vec_item(&mut c.tray_devices, &name));
     })
@@ -355,7 +354,7 @@ pub async fn get_sessions_device_names(
 
 #[tauri::command]
 pub fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<(), String> {
-    crate::process::append_log(&format!("[cmd] set_default_device: {}", device_id));
+    standard_log!("[cmd] set_default_device: {}", device_id);
     crate::audio::set_default_device(&device_id).map_err(|e| e.to_string())?;
     let _ = app.emit("audio-devices-changed", ());
     Ok(())
@@ -422,10 +421,7 @@ pub fn set_hotkey_config(
     if let Some(ref pk) = prev_key {
         if let Ok(sc) = parse_shortcut(pk) {
             let _ = app.global_shortcut().unregister(sc);
-            crate::process::append_log(&format!(
-                "[hotkey] unregistered old key {} for {}",
-                pk, action
-            ));
+            standard_log!("[hotkey] unregistered old key {} for {}", pk, action);
         }
     }
     if let Some(ref new_key_str) = key {
@@ -436,7 +432,7 @@ pub fn set_hotkey_config(
         }
         let action_clone = action.clone();
         let key_clone = new_key_str.clone();
-        crate::process::append_log(&format!("[hotkey] registered {} {}", new_key_str, action));
+        standard_log!("[hotkey] registered {} {}", new_key_str, action);
         app.global_shortcut()
             .on_shortcut(sc, move |_app, _shortcut, event| {
                 if event.state != ShortcutState::Pressed {
@@ -498,11 +494,11 @@ pub fn set_device_shortcut(
             }
         }
     }
-    crate::process::append_log(&format!(
+    standard_log!(
         "[hotkey] set_device_shortcut: {} key={}",
         name,
         key.as_deref().unwrap_or("None")
-    ));
+    );
     set_device_shortcut_key(&device_id, &name, key);
     crate::shortcut::sync_device_shortcuts(&app);
     let config_snapshot = config::with_config(|c| c.clone());
@@ -529,7 +525,7 @@ fn set_device_shortcut_key(device_id: &str, name: &str, key: Option<String>) {
 
 #[tauri::command]
 pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
-    crate::process::append_log(&format!("[hotkey] remove_device_shortcut: {}", device_id));
+    standard_log!("[hotkey] remove_device_shortcut: {}", device_id);
     config::with_config_mut(|c| {
         c.device_shortcuts.remove(&device_id);
     });

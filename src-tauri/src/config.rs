@@ -1,3 +1,4 @@
+use crate::standard_log;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -273,16 +274,13 @@ pub fn init_config() {
                 Err(e) => {
                     // stderr 直出：日志门控依赖本文件解析成功，失败时必须可见
                     eprintln!("[config] parse error: {}", e);
-                    crate::process::append_log(&format!("[config] parse error: {}", e));
+                    standard_log!("[config] parse error: {}", e);
                     Config::default()
                 }
             },
             Err(e) => {
                 eprintln!("[config] load failed (using defaults): {}", e);
-                crate::process::append_log(&format!(
-                    "[config] load failed (using defaults): {}",
-                    e
-                ));
+                standard_log!("[config] load failed (using defaults): {}", e);
                 Config::default()
             }
         }
@@ -315,10 +313,7 @@ pub fn init_config() {
                 "off".to_string()
             };
             c.legacy_log_enabled = None;
-            crate::process::append_log(&format!(
-                "[config] 旧版日志开关已迁移为级别: {}",
-                c.log_level
-            ));
+            standard_log!("[config] 旧版日志开关已迁移为级别: {}", c.log_level);
         });
     }
 }
@@ -358,7 +353,7 @@ where
             })
             .and_then(|_| std::fs::rename(&tmp_path, &cfg_path));
         if let Err(e) = write_result {
-            crate::process::append_log(&format!("[config] save failed: {}", e));
+            standard_log!("[config] save failed: {}", e);
             // 清理临时文件（如果 rename 失败）
             let _ = std::fs::remove_file(&tmp_path);
         } else if let Ok(mut cached) = last.lock() {

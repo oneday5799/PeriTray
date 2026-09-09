@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use tauri::Emitter;
 
+use crate::{standard_log, verbose_log};
 use hid_link::HidLink;
 
 /// 成功电量的缓存有效期
@@ -103,7 +104,7 @@ fn cache() -> &'static Mutex<HashMap<(String, String), CacheEntry>> {
             })
             .collect();
         if !map.is_empty() {
-            crate::process::append_log(&format!("[24g] 电量缓存自盘载入 {} 条", map.len()));
+            standard_log!("[24g] 电量缓存自盘载入 {} 条", map.len());
         }
         Mutex::new(map)
     })
@@ -174,25 +175,16 @@ pub fn snapshot(
                     // 成功过的条目常驻旧值；纯失败态仅在负缓存窗口内返回 None
                     if fresh || e.level.is_some() {
                         if !fresh {
-                            crate::process::append_verbose_log(&format!(
-                                "[24g:dbg] {} 过期，SWR 服务旧值并排入刷新",
-                                k
-                            ));
+                            verbose_log!("[24g:dbg] {} 过期，SWR 服务旧值并排入刷新", k);
                         }
                         result.insert(key.clone(), e.level);
                     } else {
-                        crate::process::append_verbose_log(&format!(
-                            "[24g:dbg] {} 负缓存窗口内，返回无数据",
-                            k
-                        ));
+                        verbose_log!("[24g:dbg] {} 负缓存窗口内，返回无数据", k);
                         result.insert(key.clone(), None);
                     }
                 }
                 None => {
-                    crate::process::append_verbose_log(&format!(
-                        "[24g:dbg] {} 无缓存条目（冷启动），排入刷新",
-                        k
-                    ));
+                    verbose_log!("[24g:dbg] {} 无缓存条目（冷启动），排入刷新", k);
                     if !stale.contains(key) {
                         stale.push(key.clone());
                     }
@@ -205,24 +197,18 @@ pub fn snapshot(
     // 单飞触发后台刷新：已有线程在跑则跳过本轮，待其结束后下轮补查
     if !stale.is_empty() {
         let Some(_guard) = SingleFlightGuard::new(&REFRESHING) else {
-            crate::process::append_log(&format!(
+            standard_log!(
                 "[24g] 已有后台刷新进行中，跳过本轮（{} 台待查）",
                 stale.len()
-            ));
+            );
             return result;
         };
-        crate::process::append_log(&format!(
-            "[24g] 后台刷新开始: {} 台（来源：惰性补查）",
-            stale.len()
-        ));
+        standard_log!("[24g] 后台刷新开始: {} 台（来源：惰性补查）", stale.len());
         // guard 移入闭包，panic 时 Drop 自动复位标志
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
             refresh_worker(stale);
-            crate::process::append_log(&format!(
-                "[24g] 后台刷新耗时 {}ms",
-                started.elapsed().as_millis()
-            ));
+            standard_log!("[24g] 后台刷新耗时 {}ms", started.elapsed().as_millis());
             // guard 在此 drop，自动复位 REFRESHING
         });
     }
@@ -291,14 +277,8 @@ fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutco
             None => Err("XInput 无可用控制器".to_string()),
         };
         match &result {
-            Ok(lv) => crate::process::append_log(&format!(
-                "[24g] XInput {:04X}:{:04X} 电量 {}%",
-                v, p, lv
-            )),
-            Err(e) => crate::process::append_verbose_log(&format!(
-                "[24g:dbg] XInput {:04X}:{:04X} 查询失败: {}",
-                v, p, e
-            )),
+            Ok(lv) => standard_log!("[24g] XInput {:04X}:{:04X} 电量 {}%", v, p, lv),
+            Err(e) => verbose_log!("[24g:dbg] XInput {:04X}:{:04X} 查询失败: {}", v, p, e),
         }
         let mut guard = crate::state::lock_unpoisoned(cache());
         let (entry, changed) = apply_result(guard.get(key), &result);
@@ -322,8 +302,8 @@ fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutco
         };
         let result = driver.read_battery(link, v, p);
         match &result {
-            Ok(lv) => crate::process::append_log(&format!("[24g] {} 电量 {}%", label, lv)),
-            Err(e) => crate::process::append_log(&format!("[24g] {} 查询失败: {}", label, e)),
+            Ok(lv) => standard_log!("[24g] {} 电量 {}%", label, lv),
+            Err(e) => standard_log!("[24g] {} 查询失败: {}", label, e),
         }
         let mut guard = crate::state::lock_unpoisoned(cache());
         let (entry, changed) = apply_result(guard.get(key), &result);
@@ -353,7 +333,7 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
             .collect();
     };
 
-    crate::process::append_log(&format!("[24g] 强制刷新开始: {} 台", pairs.len()));
+    standard_log!("[24g] 强制刷新开始: {} 台", pairs.len());
     let started = std::time::Instant::now();
     let link = HidLink::new().ok();
     let mut result = HashMap::new();
@@ -377,12 +357,12 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
     if any_queried_ok {
         persist::flush();
     }
-    crate::process::append_log(&format!(
+    standard_log!(
         "[24g] 强制刷新结束(耗时 {}ms): 成功 {} 失败 {}",
         started.elapsed().as_millis(),
         ok,
         fail
-    ));
+    );
     result
 }
 
@@ -402,7 +382,7 @@ fn refresh_worker(pairs: Vec<(String, String)>) {
         any_changed |= o.changed;
         any_queried_ok |= o.queried_ok;
     }
-    crate::process::append_log(&format!("[24g] 后台刷新结束: 成功 {} 失败 {}", ok, fail));
+    standard_log!("[24g] 后台刷新结束: 成功 {} 失败 {}", ok, fail);
     if any_changed {
         notify_battery_changed();
         crate::process::append_log("[24g] 已推送电量变更事件");

@@ -3,6 +3,7 @@
 // 参考 32feet 的 RemoteGattServer.windows.cs 和 BluetoothLEExplorer 的简单模式。
 // Windows 无显式 BLE 断开 API，通过 dispose 所有 WinRT 对象释放系统级连接。
 
+use crate::{standard_log, verbose_log};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -39,7 +40,7 @@ pub fn ble_action(device_id: &str, action: &str) -> Result<String, String> {
 // ── 连接 ──
 
 fn ble_connect(device_id: &str) -> Result<String, String> {
-    crate::process::append_log(&format!("[bt] BLE connect: {}", device_id));
+    standard_log!("[bt] BLE connect: {}", device_id);
 
     // 若已有连接且是同一设备，直接返回
     {
@@ -49,7 +50,7 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
         }
     }
 
-    crate::process::append_verbose_log(&format!("[bt:dbg] ble_connect: device_id={}", device_id));
+    verbose_log!("[bt:dbg] ble_connect: device_id={}", device_id);
 
     // 1. 打开 BLE 设备
     let hstr = HSTRING::from(device_id);
@@ -82,10 +83,10 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
             Some(s)
         }
         Err(e) => {
-            crate::process::append_verbose_log(&format!(
+            verbose_log!(
                 "[bt:dbg] ble_connect: GattSession failed ({})，使用简单模式",
                 e
-            ));
+            );
             None
         }
     };
@@ -111,11 +112,11 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
                 break;
             }
             Err(e) => {
-                crate::process::append_verbose_log(&format!(
+                verbose_log!(
                     "[bt:dbg] ble_connect: GATT attempt {} failed: {}",
                     attempt + 1,
                     e
-                ));
+                );
                 if attempt < 2 {
                     std::thread::sleep(Duration::from_millis(200));
                 }
@@ -149,14 +150,14 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
 // ── 断开 ──
 
 fn ble_disconnect(device_id: &str) -> Result<String, String> {
-    crate::process::append_log(&format!("[bt] BLE disconnect: {}", device_id));
+    standard_log!("[bt] BLE disconnect: {}", device_id);
     let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
 
     if let Some(conn) = guard.remove(device_id) {
-        crate::process::append_verbose_log(&format!(
+        verbose_log!(
             "[bt:dbg] ble_disconnect: closing connection for {}",
             device_id
-        ));
+        );
         // 显式 Close() 释放 WinRT BLE 连接资源，再 drop 释放 Rust 所有权
         let _ = conn.session.as_ref().map(|s| s.Close());
         let _ = conn.device.Close();

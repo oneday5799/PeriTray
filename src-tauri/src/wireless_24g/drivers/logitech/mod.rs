@@ -1,3 +1,4 @@
+use crate::verbose_log;
 // ── 模块职责 ─────────────────────────────────────────────
 // 罗技域驱动：经 Unifying/Lightspeed/Bolt 接收器读取下游设备的电量。
 //
@@ -72,14 +73,14 @@ impl BatteryDriver for LogitechDriver {
             let dev = match link.open_path_handle(&p.path) {
                 Ok(d) => d,
                 Err(e) => {
-                    crate::process::append_verbose_log(&format!(
+                    verbose_log!(
                         "[24g:dbg] 集合 {}/{} (page={:#06X},ifc={}) 打开失败: {}",
                         i + 1,
                         paths.len(),
                         p.usage_page,
                         p.interface_number,
                         e
-                    ));
+                    );
                     last_err = format!("集合 {} 打开失败: {}", i + 1, e);
                     continue;
                 }
@@ -87,12 +88,12 @@ impl BatteryDriver for LogitechDriver {
 
             // 槽位扫描（兼唤醒）：统计在线下游设备
             let alive: Vec<u8> = (1..=6).filter(|s| hidpp::ping(&dev, *s)).collect();
-            crate::process::append_verbose_log(&format!(
+            verbose_log!(
                 "[24g:dbg] 集合 {}/{} 在线槽位: {:?}",
                 i + 1,
                 paths.len(),
                 alive
-            ));
+            );
 
             match alive.len() {
                 0 => {
@@ -113,10 +114,13 @@ impl BatteryDriver for LogitechDriver {
 
             match hidpp::read_battery_level(&dev, slot) {
                 Ok(r) => {
-                    crate::process::append_verbose_log(&format!(
+                    verbose_log!(
                         "[24g:dbg] 槽位 {} 设备 {:?} 电量 {}%（充电={}）",
-                        slot, name, r.percent, r.charging
-                    ));
+                        slot,
+                        name,
+                        r.percent,
+                        r.charging
+                    );
                     return Ok(r.percent);
                 }
                 Err(e) => {

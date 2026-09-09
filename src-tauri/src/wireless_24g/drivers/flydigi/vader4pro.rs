@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use hidapi::HidDevice;
 
 use crate::wireless_24g::hid_link::HidLink;
+use crate::{standard_log, verbose_log};
 
 pub const VID: u16 = 0x04B4;
 pub const PID: u16 = 0x2412;
@@ -63,13 +64,13 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        crate::process::append_verbose_log(&format!(
+        verbose_log!(
             "[24g:dbg] Flydigi {:04X}:{:04X} 候选集合 {} 个（0xFFA0 优先）: {}",
             VID,
             PID,
             candidates.len(),
             detail
-        ));
+        );
     }
 
     for (i, p) in candidates.iter().enumerate() {
@@ -77,14 +78,14 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
             Ok(d) => d,
             Err(e) => {
                 if crate::config::verbose_log_enabled() {
-                    crate::process::append_verbose_log(&format!(
+                    verbose_log!(
                         "[24g:dbg] 集合 {}/{} (page={:#06X},ifc={}) 打开失败: {}",
                         i + 1,
                         candidates.len(),
                         p.usage_page,
                         p.interface_number,
                         e
-                    ));
+                    );
                 }
                 continue;
             }
@@ -93,41 +94,38 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
         // 不做 drain_input：vendor 集合上 read_timeout 不超时会无限循环
         // 直接写命令，在连续读取中过滤电池回复
         if crate::config::verbose_log_enabled() {
-            crate::process::append_verbose_log(&format!(
+            verbose_log!(
                 "[24g:dbg] 集合 {}/{} (page={:#06X},ifc={}) 写出命令 {:02X}",
                 i + 1,
                 candidates.len(),
                 p.usage_page,
                 p.interface_number,
                 CMD_GET_DEVICE_INFO
-            ));
+            );
         }
 
         match try_query(&dev) {
             Ok(Some(pct)) => {
-                crate::process::append_log(&format!(
-                    "[24g] Flydigi {:04X}:{:04X} 电量 {}%",
-                    VID, PID, pct
-                ));
+                standard_log!("[24g] Flydigi {:04X}:{:04X} 电量 {}%", VID, PID, pct);
                 return Ok(Some(pct));
             }
             Ok(None) => {
                 if crate::config::verbose_log_enabled() {
-                    crate::process::append_verbose_log(&format!(
+                    verbose_log!(
                         "[24g:dbg] 集合 {}/{} 命中回复但电量值异常（充电中或无效）",
                         i + 1,
                         candidates.len()
-                    ));
+                    );
                 }
             }
             Err(e) => {
                 if crate::config::verbose_log_enabled() {
-                    crate::process::append_verbose_log(&format!(
+                    verbose_log!(
                         "[24g:dbg] 集合 {}/{} 查询失败: {}",
                         i + 1,
                         candidates.len(),
                         e
-                    ));
+                    );
                 }
             }
         }
@@ -169,11 +167,11 @@ fn try_query(dev: &HidDevice) -> Result<Option<i32>, String> {
         // 匹配命令回显：buf[15] == 0xEC
         if n > CMD_ECHO_OFFSET && buf[CMD_ECHO_OFFSET] == CMD_GET_DEVICE_INFO {
             if crate::config::verbose_log_enabled() {
-                crate::process::append_verbose_log(&format!(
+                verbose_log!(
                     "[24g:dbg] Flydigi 命中回复（第 {} 帧）: {:02X?}",
                     read_count,
                     &buf[..n.min(20)]
-                ));
+                );
             }
             return parse_battery_level(&buf[..n]);
         }

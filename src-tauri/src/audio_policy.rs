@@ -2,6 +2,7 @@
 //! （IAudioPolicyConfigFactory / SetPersistedDefaultAudioEndpoint）。
 //! 与 audio.rs 的设备枚举/音量会话逻辑分离，聚焦策略层 COM/WinRT 调用。
 
+use crate::standard_log;
 use std::ffi::c_void;
 use std::ptr;
 use windows::core::*;
@@ -24,7 +25,7 @@ pub(crate) const IID_IUNKNOWN: windows_sys::core::GUID = windows_sys::core::GUID
 };
 
 pub fn set_default_device(device_id: &str) -> Result<()> {
-    crate::process::append_log(&format!("[audio] set_default_device: {}", device_id));
+    standard_log!("[audio] set_default_device: {}", device_id);
     unsafe {
         crate::audio::ensure_com_initialized();
         let wide: Vec<u16> = crate::process::to_wide(device_id);
@@ -225,10 +226,12 @@ pub fn set_session_device(pid: u32, direction: &str, device_id: &str) -> Result<
     } else {
         device_id
     };
-    crate::process::append_log(&format!(
+    standard_log!(
         "[audio] set_session_device pid={} dir={} device={}",
-        pid, direction, target
-    ));
+        pid,
+        direction,
+        target
+    );
     let flow = direction_flow(direction);
     unsafe {
         let factory = create_policy_config_factory()?;

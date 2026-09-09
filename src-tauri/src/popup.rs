@@ -6,6 +6,7 @@ use crate::state::{ANIMATING, POPUP_POS, TRAY_POS};
 use crate::webview;
 use crate::window_material;
 use crate::windows;
+use crate::{standard_log, verbose_log};
 
 /// 弹窗宽度 clamp 下限（窄屏下避免退化为不可用宽度）
 const POPUP_MIN_W: f64 = 300.0;
@@ -103,7 +104,7 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
         return;
     }
 
-    crate::process::append_log(&format!("[popup] toggle tab={}", tab));
+    standard_log!("[popup] toggle tab={}", tab);
     let p = compute_position(app);
 
     if let Some(window) = app.get_webview_window("popup") {
@@ -280,15 +281,16 @@ fn create(
             let rewin = win.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(200));
-                crate::process::append_verbose_log(&format!(
+                verbose_log!(
                     "[popup] create size reapply, popup_w={}, popup_h={}",
-                    popup_w, popup_h
-                ));
+                    popup_w,
+                    popup_h
+                );
                 let _ = rewin.set_size(tauri::LogicalSize::new(popup_w, popup_h));
             });
         }
         Err(e) => {
-            crate::process::append_log(&format!("[popup] create window failed: {}", e));
+            standard_log!("[popup] create window failed: {}", e);
         }
     }
 }
@@ -309,7 +311,7 @@ fn animate_slide(
         if let Err(e) =
             window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
         {
-            crate::process::append_log(&format!("[popup] set_position FAILED frame={}: {}", i, e));
+            standard_log!("[popup] set_position FAILED frame={}: {}", i, e);
         }
         std::thread::sleep(std::time::Duration::from_millis(step_ms));
     }

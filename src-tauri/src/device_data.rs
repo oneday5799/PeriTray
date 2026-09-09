@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::SystemTime;
 
+use crate::standard_log;
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
@@ -62,11 +63,7 @@ fn load_user_data(path: &std::path::Path) -> HashMap<String, HashMap<String, Dev
                     result
                 }
                 Err(e) => {
-                    crate::process::append_log(&format!(
-                        "[device_data] JSON parse error ({}): {}",
-                        path.display(),
-                        e
-                    ));
+                    standard_log!("[device_data] JSON parse error ({}): {}", path.display(), e);
                     HashMap::new()
                 }
             }
@@ -124,11 +121,11 @@ pub fn init_device_data() {
     let user = load_user_data(&user_data_path());
     let user_count = count_user_entries(&user);
     let data = build_registry(user);
-    crate::process::append_log(&format!(
+    standard_log!(
         "[device_data] registry: {} VIDs (driver builtin, {} user entries)",
         data.len(),
         user_count
-    ));
+    );
     DEVICE_DATA.set(RwLock::new(data)).ok();
 }
 

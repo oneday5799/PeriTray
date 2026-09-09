@@ -8,6 +8,7 @@
 // Xbox 360 Controller 身份出现在 XInput 中时（如 Flydigi Vader 4 Pro
 // 的 XInput 模式），仍可读取粗粒度电量。
 
+use crate::verbose_log;
 use std::os::raw::c_void;
 
 // ── XInput FFI ───────────────────────────────────────────
@@ -121,17 +122,14 @@ pub fn scan_battery() -> Option<i32> {
     for i in 0..=3 {
         match read_battery(i) {
             Ok(Some(pct)) => {
-                crate::process::append_verbose_log(&format!("[xinput] 索引 {} 电量 {}%", i, pct));
+                verbose_log!("[xinput] 索引 {} 电量 {}%", i, pct);
                 return Some(pct);
             }
             Ok(None) => {
-                crate::process::append_verbose_log(&format!(
-                    "[xinput] 索引 {} 有线供电，无百分比",
-                    i
-                ));
+                verbose_log!("[xinput] 索引 {} 有线供电，无百分比", i);
             }
             Err(e) => {
-                crate::process::append_verbose_log(&format!("[xinput] 索引 {} 不可用: {}", i, e));
+                verbose_log!("[xinput] 索引 {} 不可用: {}", i, e);
             }
         }
     }

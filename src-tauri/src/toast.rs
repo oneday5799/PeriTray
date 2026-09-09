@@ -13,15 +13,13 @@ use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager, ToastNotifier};
 
 #[cfg(target_os = "windows")]
+use crate::{standard_log, verbose_log};
 static TOAST_NOTIFIER: LazyLock<Option<ToastNotifier>> = LazyLock::new(|| {
     match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(crate::windows::AUMID))
     {
         Ok(notifier) => Some(notifier),
         Err(e) => {
-            crate::process::append_verbose_log(&format!(
-                "[toast] failed to create notifier: {:?}",
-                e
-            ));
+            verbose_log!("[toast] failed to create notifier: {:?}", e);
             None
         }
     }
@@ -49,14 +47,14 @@ pub fn show_toast(title: &str, text: &str, icon: Option<&std::path::Path>) {
         let notification = match build_notification(title, text, icon) {
             Ok(n) => n,
             Err(e) => {
-                crate::process::append_log(&format!("[toast] build failed: {:?}", e));
+                standard_log!("[toast] build failed: {:?}", e);
                 return;
             }
         };
 
         // 显示
         if let Err(e) = notifier.Show(&notification) {
-            crate::process::append_log(&format!("[toast] show failed: {:?}", e));
+            standard_log!("[toast] show failed: {:?}", e);
             return;
         }
 

@@ -12,6 +12,7 @@ use crate::config;
 use crate::dedup::{core_name, try_insert};
 use crate::device::{DevType, Device};
 use crate::device_data;
+use crate::{standard_log, verbose_log};
 
 /// 蓝牙设备状态字符串：WMI 查询构造与托盘图标判断共用，避免字面量散落
 pub const BT_STATUS_CONNECTED: &str = "已连接";
@@ -100,7 +101,7 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
         &mut cn_index,
         &mut pnp_24g_pairs,
     ) {
-        crate::process::append_log(&format!("[wmi] {}", e));
+        standard_log!("[wmi] {}", e);
         return Err(e);
     }
     query_bt_devices(
@@ -134,11 +135,12 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
     // 2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
     fill_24g_battery(&mut all, pnp_24g_pairs, fresh);
 
-    crate::process::append_verbose_log(&format!(
+    verbose_log!(
         "[wmi:dbg] query_devices: fresh={}, wireless_only={}",
-        fresh, wireless_only
-    ));
-    crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
+        fresh,
+        wireless_only
+    );
+    standard_log!("[wmi] query_devices: {} devices found", all.len());
     Ok(all)
 }
 
@@ -168,7 +170,7 @@ fn query_pnp_devices(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("pnp query failed: {}", e);
-            crate::process::append_log(&format!("[wmi] {}", msg));
+            standard_log!("[wmi] {}", msg);
             return Err(msg);
         }
     };
@@ -398,7 +400,7 @@ fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: boo
         if *guard != summary {
             *guard = summary.clone();
             drop(guard);
-            crate::process::append_log(&format!("[24g] 管线实体: {}", summary));
+            standard_log!("[24g] 管线实体: {}", summary);
         }
     }
 

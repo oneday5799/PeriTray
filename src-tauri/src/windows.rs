@@ -7,6 +7,7 @@ use crate::process;
 use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
+use crate::{standard_log, verbose_log};
 pub(crate) fn browser_args() -> String {
     let mut args = String::from("--renderer-process-limit=1 --disable-breakpad --disable-features=AudioServiceOutOfProcess,TranslateUI,msWebOOUI,msPdfOOUI,msSmartScreenProtection");
     if !config::with_config(|c| c.hardware_acceleration) {
@@ -38,10 +39,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {
                 let material = config::with_config(|c| c.window_material.clone());
-                process::append_log(&format!(
-                    "[material] reopen settings, material={}",
-                    material
-                ));
+                standard_log!("[material] reopen settings, material={}", material);
                 crate::window_material::apply_window_material(hwnd.0 as isize, &material);
             }
             let _ = win.unminimize();
@@ -471,10 +469,10 @@ $shortcut.Save()
                 process::append_verbose_log("[aumid] registered successfully");
             } else {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                process::append_log(&format!("[aumid] registration failed: {}", stderr.trim()));
+                standard_log!("[aumid] registration failed: {}", stderr.trim());
             }
         }
-        Err(e) => process::append_verbose_log(&format!("[aumid] powershell exec error: {}", e)),
+        Err(e) => verbose_log!("[aumid] powershell exec error: {}", e),
     }
 }
 

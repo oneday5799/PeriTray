@@ -1,3 +1,4 @@
+use crate::{standard_log, verbose_log};
 // ── 模块职责 ─────────────────────────────────────────────
 // 雷蛇域驱动：收录 OpenRazer 全系支持电量上报的雷蛇无线设备
 // （mouse.rs 鼠标域 64 PID / keyboard.rs 键盘域 12 PID）。
@@ -70,12 +71,12 @@ fn read_battery_level(
     wait_ms: u64,
 ) -> Result<i32, String> {
     let paths = link.enumerate_paths(vid, pid)?;
-    crate::process::append_log(&format!(
+    standard_log!(
         "[24g] {:04X}:{:04X} 枚举到 {} 个候选集合",
         vid,
         pid,
         paths.len()
-    ));
+    );
     if crate::config::verbose_log_enabled() {
         let detail = paths
             .iter()
@@ -90,10 +91,14 @@ fn read_battery_level(
             })
             .collect::<Vec<_>>()
             .join(" ");
-        crate::process::append_verbose_log(&format!(
+        verbose_log!(
             "[24g:dbg] {:04X}:{:04X} 候选清单(txid={:#04X}, wait={}ms): {}",
-            vid, pid, txid, wait_ms, detail
-        ));
+            vid,
+            pid,
+            txid,
+            wait_ms,
+            detail
+        );
     }
 
     let request = build_report(txid);
@@ -101,40 +106,40 @@ fn read_battery_level(
 
     for round in 0..MAX_RETRIES {
         if round > 0 && crate::config::verbose_log_enabled() {
-            crate::process::append_verbose_log(&format!(
+            verbose_log!(
                 "[24g:dbg] {:04X}:{:04X} 进入第 {}/{} 轮重试",
                 vid,
                 pid,
                 round + 1,
                 MAX_RETRIES
-            ));
+            );
         }
         for (i, p) in paths.iter().enumerate() {
             match link.exchange(&p.path, &request, wait_ms) {
                 Ok(resp) => {
                     if crate::config::verbose_log_enabled() {
-                        crate::process::append_verbose_log(&format!(
+                        verbose_log!(
                             "[24g:dbg] 路径 {}/{} (page={:#06X},ifc={}) 响应: {}",
                             i + 1,
                             paths.len(),
                             p.usage_page,
                             p.interface_number,
                             hex_prefix(&resp)
-                        ));
+                        );
                     }
                     match parse_level(&request, &resp) {
                         Ok(level) => return Ok(level),
                         Err(e) => {
                             last_err = e.clone();
                             if crate::config::verbose_log_enabled() {
-                                crate::process::append_verbose_log(&format!(
+                                verbose_log!(
                                     "[24g:dbg] 路径 {}/{} (page={:#06X},ifc={}) 解析失败: {}",
                                     i + 1,
                                     paths.len(),
                                     p.usage_page,
                                     p.interface_number,
                                     e
-                                ));
+                                );
                             }
                         }
                     }
@@ -142,14 +147,14 @@ fn read_battery_level(
                 Err(e) => {
                     last_err = e.clone();
                     if crate::config::verbose_log_enabled() {
-                        crate::process::append_verbose_log(&format!(
+                        verbose_log!(
                             "[24g:dbg] 路径 {}/{} (page={:#06X},ifc={}) 收发失败: {}",
                             i + 1,
                             paths.len(),
                             p.usage_page,
                             p.interface_number,
                             e
-                        ));
+                        );
                     }
                 }
             }

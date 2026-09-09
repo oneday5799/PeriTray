@@ -61,6 +61,26 @@ pub fn append_verbose_log(msg: &str) {
     write_log(msg);
 }
 
+/// 标准级日志宏：前置开关判断惰性求值，日志关闭时 format! 不执行、零堆分配
+#[macro_export]
+macro_rules! standard_log {
+    ($($arg:tt)*) => {{
+        if $crate::config::standard_log_enabled() {
+            $crate::process::append_log(&format!($($arg)*));
+        }
+    }};
+}
+
+/// 详细级日志宏：前置开关判断惰性求值，详细日志关闭时 format! 不执行、零堆分配
+#[macro_export]
+macro_rules! verbose_log {
+    ($($arg:tt)*) => {{
+        if $crate::config::verbose_log_enabled() {
+            $crate::process::append_verbose_log(&format!($($arg)*));
+        }
+    }};
+}
+
 /// 落盘失败计数：首次失败告警，后续静默（防止高频日志重复刷屏）
 static LOG_WRITE_FAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -284,10 +304,7 @@ fn chrono_str() -> String {
 pub fn open_with_system(path: &str) -> Result<(), String> {
     let mut cmd = new_hidden_cmd("cmd");
     cmd.args(["/c", "start", "", path]).spawn().map_err(|e| {
-        crate::process::append_log(&format!(
-            "[process] open_with_system failed: {} -> {}",
-            path, e
-        ));
+        standard_log!("[process] open_with_system failed: {} -> {}", path, e);
         e.to_string()
     })?;
     Ok(())

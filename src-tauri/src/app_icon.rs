@@ -1,3 +1,4 @@
+use crate::verbose_log;
 use image::codecs::png::PngEncoder;
 use image::ImageEncoder;
 use image::RgbaImage;
@@ -40,9 +41,7 @@ fn query_exe_path_by_openprocess(pid: u32) -> Option<String> {
         let process_handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
             Ok(h) => h,
             Err(_) => {
-                crate::process::append_verbose_log(&format!(
-                    "[app_icon] OpenProcess pid={pid} 失败（权限/保护进程）"
-                ));
+                verbose_log!("[app_icon] OpenProcess pid={pid} 失败（权限/保护进程）");
                 return None;
             }
         };
@@ -56,9 +55,7 @@ fn query_exe_path_by_openprocess(pid: u32) -> Option<String> {
         );
         let _ = windows::Win32::Foundation::CloseHandle(process_handle);
         if result.is_err() {
-            crate::process::append_verbose_log(&format!(
-                "[app_icon] QueryFullProcessImageNameW pid={pid} 失败"
-            ));
+            verbose_log!("[app_icon] QueryFullProcessImageNameW pid={pid} 失败");
             return None;
         }
         Some(String::from_utf16_lossy(&path_buf[..path_size as usize]))
@@ -103,10 +100,10 @@ fn query_exe_path_by_nt(pid: u32) -> Option<String> {
             &mut ret,
         );
         if status != 0 {
-            crate::process::append_verbose_log(&format!(
+            verbose_log!(
                 "[app_icon] NtQuerySystemInformation pid={pid} 失败 status={:#x}",
                 status as u32
-            ));
+            );
             return None;
         }
         let len = info.image_name.length as usize / 2;
@@ -138,7 +135,7 @@ fn normalize_image_path(path: &str) -> Option<String> {
     let rest = match path.strip_prefix("\\Device\\") {
         Some(r) => r,
         None => {
-            crate::process::append_verbose_log(&format!("[app_icon] 未知路径形态: {path}"));
+            verbose_log!("[app_icon] 未知路径形态: {path}");
             return Some(path.to_string());
         }
     };
@@ -154,9 +151,7 @@ fn normalize_image_path(path: &str) -> Option<String> {
         let mut drives = [0u16; 512];
         let n = GetLogicalDriveStringsW(Some(&mut drives));
         if n == 0 {
-            crate::process::append_verbose_log(&format!(
-                "[app_icon] GetLogicalDriveStringsW 失败: {path}"
-            ));
+            verbose_log!("[app_icon] GetLogicalDriveStringsW 失败: {path}");
             return None;
         }
         let mut cur = 0usize;
@@ -183,16 +178,14 @@ fn normalize_image_path(path: &str) -> Option<String> {
         }
     }
 
-    crate::process::append_verbose_log(&format!("[app_icon] 设备路径转盘符失败: {path}"));
+    verbose_log!("[app_icon] 设备路径转盘符失败: {path}");
     None
 }
 
 /// 从进程 PID 查询 exe 路径：主路径（OpenProcess）→ 内核兜底（NtQuerySystemInformation）。
 fn query_exe_path_by_pid(pid: u32) -> Option<String> {
     query_exe_path_by_openprocess(pid).or_else(|| {
-        crate::process::append_verbose_log(&format!(
-            "[app_icon] 常规查询失败 pid={pid}，走 NtQuerySystemInformation 兜底"
-        ));
+        verbose_log!("[app_icon] 常规查询失败 pid={pid}，走 NtQuerySystemInformation 兜底");
         query_exe_path_by_nt(pid)
     })
 }
@@ -289,9 +282,7 @@ pub fn get_app_icon_by_pid(pid: u32) -> Option<Arc<str>> {
         let exe_path = query_exe_path_by_pid(pid)?;
         let icon = get_icon_from_path(&exe_path);
         if icon.is_none() {
-            crate::process::append_verbose_log(&format!(
-                "[app_icon] 取图失败 pid={pid} path={exe_path}"
-            ));
+            verbose_log!("[app_icon] 取图失败 pid={pid} path={exe_path}");
         }
         icon
     })();

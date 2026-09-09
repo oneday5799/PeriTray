@@ -1,3 +1,4 @@
+use crate::{standard_log, verbose_log};
 use std::collections::HashMap;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -65,7 +66,7 @@ fn evict_stale_bt_entries() {
     guard.retain(|_, e| now.duration_since(e.at) < BT_BATTERY_MAX_AGE);
     let evicted = before - guard.len();
     if evicted > 0 {
-        crate::process::append_log(&format!("[bt] 淘汰 {} 条过期电量缓存", evicted));
+        standard_log!("[bt] 淘汰 {} 条过期电量缓存", evicted);
     }
 }
 
@@ -392,23 +393,17 @@ pub fn bt_action(device_id: &str, action: &str, is_ble: bool) -> Result<String, 
     let _guard = crate::state::lock_unpoisoned(&BT_LOCK);
 
     let action_upper = action.to_uppercase();
-    crate::process::append_log(&format!("[bt] {} device_id='{}'", action_upper, device_id));
+    standard_log!("[bt] {} device_id='{}'", action_upper, device_id);
 
     // ── BLE 路径：WinRT 优先，失败 fallback 到 Win32 ──
     if is_ble {
         match crate::bt_ble::ble_action(device_id, action) {
             Ok(result) => {
-                crate::process::append_log(&format!(
-                    "[bt] {} 完成（WinRT, {}）",
-                    action_upper, result
-                ));
+                standard_log!("[bt] {} 完成（WinRT, {}）", action_upper, result);
                 return Ok(result);
             }
             Err(e) => {
-                crate::process::append_verbose_log(&format!(
-                    "[bt:dbg] {} WinRT 失败: {}，尝试 fallback",
-                    action_upper, e
-                ));
+                verbose_log!("[bt:dbg] {} WinRT 失败: {}，尝试 fallback", action_upper, e);
             }
         }
     }
@@ -416,16 +411,13 @@ pub fn bt_action(device_id: &str, action: &str, is_ble: bool) -> Result<String, 
     // ── 经典 BT 路径（现有逻辑不变）──
     match bt_action_native(device_id, action) {
         Ok(result) => {
-            crate::process::append_log(&format!("[bt] {} 完成", action_upper));
-            crate::process::append_verbose_log(&format!("[bt:dbg] {}:\n{}", action_upper, result));
+            standard_log!("[bt] {} 完成", action_upper);
+            verbose_log!("[bt:dbg] {}:\n{}", action_upper, result);
             Ok(result)
         }
         Err(e) => {
-            crate::process::append_log(&format!("[bt] {} 失败", action_upper));
-            crate::process::append_verbose_log(&format!(
-                "[bt:dbg] {} 失败详情:\n{}",
-                action_upper, e
-            ));
+            standard_log!("[bt] {} 失败", action_upper);
+            verbose_log!("[bt:dbg] {} 失败详情:\n{}", action_upper, e);
             Err(e)
         }
     }
@@ -511,11 +503,11 @@ pub fn find_paired_bluetooth_devices(
         }
     }
 
-    crate::process::append_log(&format!(
+    standard_log!(
         "[bt] find_paired_bluetooth_devices: found {} devices (fresh={})",
         result.len(),
         force
-    ));
+    );
     if force {
         BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
     }
@@ -661,7 +653,7 @@ fn enqueue_bt_refresh(queue: Vec<(String, BtKind)>) {
     let Some(_guard) = SingleFlightGuard::new(&BT_BATTERY_REFRESHING) else {
         return;
     };
-    crate::process::append_log(&format!("[bt] 后台电量补查开始: {} 台", queue.len()));
+    standard_log!("[bt] 后台电量补查开始: {} 台", queue.len());
     // guard 移入闭包，panic 时 Drop 自动复位标志
     std::thread::spawn(move || {
         let mut any_changed = false;
@@ -832,7 +824,7 @@ pub fn init_radio_watcher(app: &tauri::AppHandle) {
     RADIO_WATCHER_HANDLE.set(app.clone()).ok();
     std::thread::spawn(|| {
         if let Err(e) = watch_radio_state() {
-            crate::process::append_log(&format!("[bt] radio watcher failed: {}", e));
+            standard_log!("[bt] radio watcher failed: {}", e);
         }
     });
 }
@@ -859,7 +851,7 @@ fn watch_radio_state() -> Result<(), String> {
 
     let radio = bt_radio.ok_or("no bluetooth radio found")?;
     let state = radio.State().map_err(|e| format!("State error: {}", e))?;
-    crate::process::append_log(&format!("[bt] radio watcher started, state={:?}", state));
+    standard_log!("[bt] radio watcher started, state={:?}", state);
 
     // 使用 TypedEventHandler 显式类型避免 windows_core 版本冲突
     use windows::Foundation::TypedEventHandler;

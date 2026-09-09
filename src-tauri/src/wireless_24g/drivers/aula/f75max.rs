@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use hidapi::HidDevice;
 
+use crate::verbose_log;
 use crate::wireless_24g::hid_link::HidLink;
 
 pub const VID: u16 = 0x05AC;
@@ -39,24 +40,24 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
     } else {
         preferred
     };
-    crate::process::append_verbose_log(&format!(
+    verbose_log!(
         "[24g:dbg] AULA {:04X}:{:04X} 候选集合 {} 个（raw 页优先）",
         VID,
         PID,
         candidates.len()
-    ));
+    );
 
     for (i, p) in candidates.iter().enumerate() {
         let dev = match link.open_path_handle(&p.path) {
             Ok(d) => d,
             Err(e) => {
-                crate::process::append_verbose_log(&format!(
+                verbose_log!(
                     "[24g:dbg] 集合 {}/{} 打开失败: {} | 路径 {}",
                     i + 1,
                     candidates.len(),
                     e,
                     p.path
-                ));
+                );
                 continue;
             }
         };
@@ -66,11 +67,7 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
             let Some(frame) = build_query(len, true) else {
                 continue;
             };
-            crate::process::append_verbose_log(&format!(
-                "[24g:dbg] 形态 len={}: 写出帧 {}",
-                len,
-                hex_prefix(&frame)
-            ));
+            verbose_log!("[24g:dbg] 形态 len={}: 写出帧 {}", len, hex_prefix(&frame));
             drain_input(&dev);
             if let Some(pct) = try_form(&dev, &frame, FORM_DEADLINE_MS as i64) {
                 return Ok(Some(pct));
@@ -144,17 +141,17 @@ fn try_form(dev: &HidDevice, frame: &[u8], deadline_ms: i64) -> Option<i32> {
             continue;
         }
         if let Some(pct) = parse_battery_percent(&buf[..n]) {
-            crate::process::append_verbose_log(&format!(
+            verbose_log!(
                 "[24g:dbg] 命中应答: 帧前 8 字节 {} → 电量 {}%",
                 hex_prefix(&buf[..8.min(n)]),
                 pct
-            ));
+            );
             return Some(pct);
         }
-        crate::process::append_verbose_log(&format!(
+        verbose_log!(
             "[24g:dbg] 收到非匹配帧（已忽略）: {}",
             hex_prefix(&buf[..n.min(16)])
-        ));
+        );
     }
 }
 

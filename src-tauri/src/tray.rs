@@ -1,3 +1,4 @@
+use crate::standard_log;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use tauri::{
@@ -36,7 +37,7 @@ fn refresh_devices_cache() -> bool {
     match crate::wmi_query::query_devices(false) {
         Ok(d) => apply_devices_cache(d),
         Err(e) => {
-            crate::process::append_log(&format!("[tray] skip cache refresh: {}", e));
+            standard_log!("[tray] skip cache refresh: {}", e);
             false
         }
     }
@@ -95,7 +96,7 @@ fn start_device_watcher(app: &tauri::AppHandle) {
         let con = match wmi::WMIConnection::new() {
             Ok(c) => c,
             Err(e) => {
-                crate::process::append_log(&format!("[tray] WMIConnection::new failed: {}", e));
+                standard_log!("[tray] WMIConnection::new failed: {}", e);
                 std::thread::sleep(std::time::Duration::from_secs(10));
                 continue;
             }
@@ -115,7 +116,7 @@ fn start_device_watcher(app: &tauri::AppHandle) {
             let changed = match crate::wmi_query::query_devices_with(&con, false) {
                 Ok(d) => apply_devices_cache(d),
                 Err(e) => {
-                    crate::process::append_log(&format!("[tray] skip cache refresh: {}", e));
+                    standard_log!("[tray] skip cache refresh: {}", e);
                     break; // 连接可能失效，跳出重建
                 }
             };
@@ -287,7 +288,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
-            crate::process::append_log(&format!("[tray] menu: {}", event.id.as_ref()));
+            standard_log!("[tray] menu: {}", event.id.as_ref());
             // 菜单事件在事件线程上分发：重操作（窗口/材质/DWM）一律 spawn 移出，
             // 比照 audio_dev_ 分支的既有模式
             match event.id.as_ref() {
@@ -321,7 +322,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     update_auto_text();
                     let config_snapshot = config::with_config(|c| c.clone());
                     let _ = app.emit("config-changed", config_snapshot);
-                    crate::process::append_log(&format!("[tray] auto_start toggled: {}", new_val));
+                    standard_log!("[tray] auto_start toggled: {}", new_val);
                 }
                 "exit" => {
                     app.exit(0);
@@ -329,10 +330,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 id if id.starts_with("audio_dev_") => {
                     let device_id = id[10..].to_owned();
                     if !device_id.is_empty() {
-                        crate::process::append_log(&format!(
-                            "[tray] set_default_device: {}",
-                            device_id
-                        ));
+                        standard_log!("[tray] set_default_device: {}", device_id);
                         std::thread::spawn(move || {
                             let _ = audio::set_default_device(&device_id);
                             update_audio_devices_menu();
