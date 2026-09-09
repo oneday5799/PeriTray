@@ -22,6 +22,10 @@ base64 = "0.23"
 ntapi = "0.4"
 hidapi = "2"
 windows-core = "0.62"
+# WebView2 类型安全基座：sys 0.38 绑定在 windows-core 0.61 上（与 audio_notify
+# 的 implement 宏所需 0.62 不同版本，rename 共存，勿合并）
+windows-core-061 = { package = "windows-core", version = "0.61" }
+webview2-com-sys = "0.38"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
