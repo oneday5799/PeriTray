@@ -181,6 +181,8 @@ fn show(
     // popup 打开前 Resume WebView2 渲染进程（可能因关闭后 Suspend 或系统唤醒处于挂起状态）
     let wv: &tauri::Webview = window.as_ref();
     webview::resume_webview(wv);
+    // 打开即恢复常规内存档位（隐藏期间 LOW 收缩的缓存按需回填）
+    webview::set_memory_usage_target(wv, false);
 
     // 按当前工作区动态尺寸调整窗口（换显示器/换分辨率/改档位后尺寸可能变化）
     let _ = window.set_size(tauri::LogicalSize::new(popup_w, popup_h));

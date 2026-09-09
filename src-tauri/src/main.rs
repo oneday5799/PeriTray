@@ -262,7 +262,14 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 // close_popup 内部自带 ANIMATING/is_visible 防护，
                 // 重复分发安全，且 compute_position/Win32 调用不阻塞事件循环
                 let app = window.app_handle().clone();
-                std::thread::spawn(move || popup::close_popup(&app));
+                std::thread::spawn(move || {
+                    popup::close_popup(&app);
+                    // 隐藏后降内存档位：Chromium 主动收缩 browser/GPU 缓存（与 TrySuspend 互补）
+                    if let Some(w) = app.get_webview_window("popup") {
+                        let wv: &tauri::Webview = w.as_ref();
+                        crate::webview::set_memory_usage_target(wv, true);
+                    }
+                });
             }
         }
         tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -290,6 +297,7 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 if let Some(popup_wv) = window.app_handle().get_webview_window("popup") {
                     let wv: &tauri::Webview = popup_wv.as_ref();
                     crate::webview::suspend_webview(wv);
+                    crate::webview::set_memory_usage_target(wv, true);
                 }
             }
         }

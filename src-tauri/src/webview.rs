@@ -1,4 +1,5 @@
-//! WebView2 底层控制：背景色（恒透明）、页面生命周期（Suspend/Resume）。
+//! WebView2 底层控制：背景色（恒透明）、页面生命周期（Suspend/Resume）、
+//! 内存档位（MemoryUsageTargetLevel）。
 //! PlatformWebview::controller() 直接返回强类型 ICoreWebView2Controller
 //! （webview2-com 0.38，与 sys 同基座 windows-core 0.61），全部调用走
 //! webview2-com-sys 类型安全 API——零 transmute、零手写 vtable、零手抄 IID；
@@ -6,11 +7,14 @@
 
 use crate::process;
 use crate::standard_log;
+#[cfg(target_os = "windows")]
+use crate::verbose_log;
 
 #[cfg(target_os = "windows")]
 use webview2_com_sys::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2Controller2, ICoreWebView2TrySuspendCompletedHandler, ICoreWebView2_3,
-    COREWEBVIEW2_COLOR,
+    ICoreWebView2Controller2, ICoreWebView2TrySuspendCompletedHandler, ICoreWebView2_19,
+    ICoreWebView2_3, COREWEBVIEW2_COLOR, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
 };
 #[cfg(target_os = "windows")]
 use windows_core_061::Interface;
@@ -233,3 +237,47 @@ pub fn suspend_webview(_webview: &tauri::Webview) {}
 
 #[cfg(not(target_os = "windows"))]
 pub fn resume_webview(_webview: &tauri::Webview) {}
+
+/// 设置 WebView2 内存档位（ICoreWebView2_19::SetMemoryUsageTargetLevel）。
+/// LOW：Chromium 主动收缩 browser/GPU 进程缓存——与 TrySuspend（仅冻结
+/// renderer）互补，弹窗隐藏时叠加使用；NORMAL：恢复常规档位（弹窗打开时）。
+/// WebView2 运行时过旧（QI 不到 _19 接口）时静默跳过。
+#[cfg(target_os = "windows")]
+pub fn set_memory_usage_target(webview: &tauri::Webview, low: bool) {
+    let wb = webview.clone();
+    let r = wb.with_webview(move |wv| unsafe {
+        let controller = wv.controller();
+        let Ok(webview2) = controller.CoreWebView2() else {
+            return;
+        };
+        let wv19: ICoreWebView2_19 = match webview2.cast() {
+            Ok(w) => w,
+            Err(_) => {
+                verbose_log!("[webview] ICoreWebView2_19 unavailable, skip memory target");
+                return;
+            }
+        };
+        let level = if low {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+        } else {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+        };
+        match wv19.SetMemoryUsageTargetLevel(level) {
+            Ok(()) => {
+                verbose_log!(
+                    "[webview] memory usage target -> {}",
+                    if low { "LOW" } else { "NORMAL" }
+                );
+            }
+            Err(e) => {
+                standard_log!("[webview] SetMemoryUsageTargetLevel failed: {}", e);
+            }
+        }
+    });
+    if r.is_err() {
+        process::append_verbose_log("[webview] set_memory_usage_target: dispatch failed");
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_memory_usage_target(_webview: &tauri::Webview, _low: bool) {}
