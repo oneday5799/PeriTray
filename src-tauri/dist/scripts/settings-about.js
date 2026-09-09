@@ -15,6 +15,8 @@ function initAboutTab() {
 
   const versionBtn = document.getElementById("about-version-btn");
   if (versionBtn) {
+    // #28 版本号加载完成前禁用检测按钮，防止静态占位文案被误当作真实版本号用于更新比对
+    versionBtn.disabled = true;
     versionBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       runUpdateCheck("about-version-btn");
@@ -22,7 +24,10 @@ function initAboutTab() {
     // 静态文案仅作首帧占位，加载后以真实包版本覆盖（版本号唯一事实来源是 tauri.conf.json）
     invoke("get_app_version").then((v) => {
       versionBtn.textContent = `版本 v${v}`;
-    }).catch(() => {});
+      versionBtn.disabled = false;
+    }).catch(() => {
+      versionBtn.disabled = false;
+    });
   }
 
   const infobarClose = document.getElementById("infobar-close");

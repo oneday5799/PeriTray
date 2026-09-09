@@ -645,7 +645,12 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
   ensureShortcutRecordListener();
 
   restoreSaved();
-  return { restore: restoreSaved };
+
+  // 返回 dispose 函数，用于从 Set 中移除 recorder，防止内存泄漏
+  function dispose() {
+    shortcutRecorders.delete(self);
+  }
+  return { restore: restoreSaved, dispose };
 };
 
 // ── 对话框 ───────────────────────────────────────────────
@@ -708,7 +713,8 @@ window.showToast = function (msg, onClick, isError) {
     el.className = "toast";
     document.body.appendChild(el);
   }
-  el.innerHTML = msg;
+  // 使用 textContent 防止 XSS
+  el.textContent = msg;
   el.classList.toggle("error", !!isError);
   el.classList.add("show");
   el.style.cursor = onClick ? "pointer" : "default";

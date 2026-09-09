@@ -64,6 +64,11 @@ pub fn append_verbose_log(msg: &str) {
 /// 落盘失败计数：首次失败告警，后续静默（防止高频日志重复刷屏）
 static LOG_WRITE_FAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// 缓存日志文件句柄与对应路径，避免每次写入都重新打开文件
+static LOG_FILE: std::sync::OnceLock<
+    std::sync::Mutex<Option<(std::path::PathBuf, std::fs::File)>>,
+> = std::sync::OnceLock::new();
+
 fn write_log(msg: &str) {
     use std::io::Write;
     let timestamp = chrono_str();
@@ -72,17 +77,31 @@ fn write_log(msg: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let mut ok = false;
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        ok = file.write_all(line.as_bytes()).is_ok();
+    let cache = LOG_FILE.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    // 路径变化时（跨天 / log_once 切换）重建文件句柄
+    if let Some((ref cached_path, _)) = *guard {
+        if *cached_path != path {
+            *guard = None;
+        }
     }
-    // 首次落盘失败时 stderr 直出告警，防止日志丢失无感知
-    if !ok && !LOG_WRITE_FAILS.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        eprintln!("[process] 日志写入失败，日志可能丢失: {:?}", path);
+    if guard.is_none() {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(f) => *guard = Some((path.clone(), f)),
+            Err(_) => {
+                if !LOG_WRITE_FAILS.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    eprintln!("[process] 日志写入失败，日志可能丢失: {:?}", path);
+                }
+                return;
+            }
+        }
+    }
+    if let Some((_, ref mut file)) = *guard {
+        let _ = file.write_all(line.as_bytes());
     }
 }
 

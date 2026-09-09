@@ -18,8 +18,6 @@ use windows_sys::Win32::Foundation::{CloseHandle, DEVPROPKEY, HANDLE, INVALID_HA
 
 use tauri::Emitter;
 
-use crate::device;
-
 /// 蓝牙操作全局锁，防止并发操作干扰适配器状态
 static BT_LOCK: Mutex<()> = Mutex::new(());
 
@@ -340,19 +338,12 @@ fn try_bt_action(radio: HANDLE, target_mac: &str, action: &str, log: &mut Vec<St
 }
 
 /// 原生蓝牙连接/断开操作（直接调用 Win32 BluetoothApis.dll）
-fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
+fn bt_action_native(device_id: &str, action: &str) -> Result<String, String> {
     let mut log: Vec<String> = Vec::new();
-    log.push(format!("START action={} name={}", action, name));
+    log.push(format!("START action={} device_id={}", action, device_id));
 
-    let device_id = match device::get_device_id_by_name(name) {
-        Some(id) => id,
-        None => {
-            log.push("DEVICE_NOT_FOUND".into());
-            return Err(log.join("\n"));
-        }
-    };
-    let mac = normalize_mac(&device_id).unwrap_or_default();
-    log.push(format!("MAC:{} device_id={}", mac, device_id));
+    let mac = normalize_mac(device_id).unwrap_or_default();
+    log.push(format!("MAC:{}", mac));
 
     let mut r_params: BLUETOOTH_FIND_RADIO_PARAMS = unsafe { mem::zeroed() };
     r_params.dwSize = mem::size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32;
@@ -397,35 +388,33 @@ fn bt_action_native(name: &str, action: &str) -> Result<String, String> {
 }
 
 /// 执行蓝牙连接/断开操作
-pub fn bt_action(name: &str, action: &str) -> Result<String, String> {
+pub fn bt_action(device_id: &str, action: &str, is_ble: bool) -> Result<String, String> {
     let _guard = crate::state::lock_unpoisoned(&BT_LOCK);
 
     let action_upper = action.to_uppercase();
-    crate::process::append_log(&format!("[bt] {} device='{}'", action_upper, name));
+    crate::process::append_log(&format!("[bt] {} device_id='{}'", action_upper, device_id));
 
     // ── BLE 路径：WinRT 优先，失败 fallback 到 Win32 ──
-    if crate::device::is_ble_device(name) {
-        if let Some(device_id) = crate::device::get_device_id_by_name(name) {
-            match crate::bt_ble::ble_action(&device_id, action) {
-                Ok(result) => {
-                    crate::process::append_log(&format!(
-                        "[bt] {} 完成（WinRT, {}）",
-                        action_upper, result
-                    ));
-                    return Ok(result);
-                }
-                Err(e) => {
-                    crate::process::append_verbose_log(&format!(
-                        "[bt:dbg] {} WinRT 失败: {}，尝试 fallback",
-                        action_upper, e
-                    ));
-                }
+    if is_ble {
+        match crate::bt_ble::ble_action(device_id, action) {
+            Ok(result) => {
+                crate::process::append_log(&format!(
+                    "[bt] {} 完成（WinRT, {}）",
+                    action_upper, result
+                ));
+                return Ok(result);
+            }
+            Err(e) => {
+                crate::process::append_verbose_log(&format!(
+                    "[bt:dbg] {} WinRT 失败: {}，尝试 fallback",
+                    action_upper, e
+                ));
             }
         }
     }
 
     // ── 经典 BT 路径（现有逻辑不变）──
-    match bt_action_native(name, action) {
+    match bt_action_native(device_id, action) {
         Ok(result) => {
             crate::process::append_log(&format!("[bt] {} 完成", action_upper));
             crate::process::append_verbose_log(&format!("[bt:dbg] {}:\n{}", action_upper, result));
@@ -486,7 +475,8 @@ pub fn find_paired_bluetooth_devices(
         && BT_BATTERY_REFRESHING
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok();
-    let _force_guard = BtForceGuard(force);
+    // 注意：此处不使用 RAII guard，因为函数结束时需要复位标志
+    // 后台补查线程使用 SingleFlightGuard 保证 panic 安全
 
     let mut result = Vec::new();
 
@@ -526,16 +516,35 @@ pub fn find_paired_bluetooth_devices(
         result.len(),
         force
     ));
+    if force {
+        BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
+    }
     Ok(result)
 }
 
-/// 单飞 flag 的 RAII 释放：正常/早期返回均复位，避免后台补查被永久锁死
-struct BtForceGuard(bool);
-impl Drop for BtForceGuard {
-    fn drop(&mut self) {
-        if self.0 {
-            BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
+/// 单飞标志的 RAII 释放：正常/panic均复位，避免后台补查被永久锁死
+/// 用于后台线程路径（enqueue_bt_refresh）
+struct SingleFlightGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> SingleFlightGuard<'a> {
+    /// CAS 获取标志；成功返回 guard，失败返回 None（已有补查在跑）
+    fn new(flag: &'a AtomicBool) -> Option<Self> {
+        if flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            Some(Self { flag })
+        } else {
+            None
         }
+    }
+}
+
+impl Drop for SingleFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
     }
 }
 
@@ -649,24 +658,22 @@ fn enqueue_bt_refresh(queue: Vec<(String, BtKind)>) {
     if queue.is_empty() {
         return;
     }
-    if BT_BATTERY_REFRESHING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    let Some(_guard) = SingleFlightGuard::new(&BT_BATTERY_REFRESHING) else {
         return;
-    }
+    };
     crate::process::append_log(&format!("[bt] 后台电量补查开始: {} 台", queue.len()));
+    // guard 移入闭包，panic 时 Drop 自动复位标志
     std::thread::spawn(move || {
         let mut any_changed = false;
         for (device_id, kind) in &queue {
             let lv = read_battery_by_kind(*kind, device_id);
             any_changed |= apply_battery(device_id, lv);
         }
-        BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
         crate::process::append_log("[bt] 后台电量补查结束");
         if any_changed {
             notify_bt_battery_changed();
         }
+        // guard 在此 drop，自动复位 BT_BATTERY_REFRESHING
     });
 }
 
@@ -682,13 +689,12 @@ pub fn init_bt_event_handle(app: &tauri::AppHandle) {
     BT_EVENT_HANDLE.set(app.clone()).ok();
 }
 
-/// Check connection status of a single Bluetooth device by name
-pub fn check_device_connection(name: &str) -> Option<bool> {
-    let cn = crate::dedup::core_name(name);
+/// Check connection status of a single Bluetooth device by device_id
+pub fn check_device_connection(device_id: &str) -> Option<bool> {
     find_paired_bluetooth_devices(false)
         .ok()?
         .into_iter()
-        .find(|(n, _, _, _, _)| crate::dedup::core_name(n) == cn)
+        .find(|(_, _, _, did, _)| did == device_id)
         .map(|(_, connected, _, _, _)| connected)
 }
 

@@ -13,9 +13,18 @@ use windows::Data::Xml::Dom::XmlDocument;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager, ToastNotifier};
 
 #[cfg(target_os = "windows")]
-static TOAST_NOTIFIER: LazyLock<ToastNotifier> = LazyLock::new(|| {
-    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(crate::windows::AUMID))
-        .expect("[toast] failed to create notifier")
+static TOAST_NOTIFIER: LazyLock<Option<ToastNotifier>> = LazyLock::new(|| {
+    match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(crate::windows::AUMID))
+    {
+        Ok(notifier) => Some(notifier),
+        Err(e) => {
+            crate::process::append_verbose_log(&format!(
+                "[toast] failed to create notifier: {:?}",
+                e
+            ));
+            None
+        }
+    }
 });
 
 #[cfg(target_os = "windows")]
@@ -25,14 +34,15 @@ static PREV_TOAST: OnceLock<Mutex<Option<ToastNotification>>> = OnceLock::new();
 pub fn show_toast(title: &str, text: &str, icon: Option<&std::path::Path>) {
     #[cfg(target_os = "windows")]
     {
-        // 隐藏旧通知
-        if let Some(prev) = PREV_TOAST
-            .get_or_init(|| Mutex::new(None))
-            .lock()
-            .unwrap()
-            .take()
+        let Some(ref notifier) = *TOAST_NOTIFIER else {
+            return;
+        };
+
+        // 隐藏旧通知（使用 lock_unpoisoned 防止 mutex 中毒 panic）
+        if let Some(prev) =
+            crate::state::lock_unpoisoned(PREV_TOAST.get_or_init(|| Mutex::new(None))).take()
         {
-            let _ = TOAST_NOTIFIER.Hide(&prev);
+            let _ = notifier.Hide(&prev);
         }
 
         // 构建 XML → ToastNotification
@@ -45,13 +55,14 @@ pub fn show_toast(title: &str, text: &str, icon: Option<&std::path::Path>) {
         };
 
         // 显示
-        if let Err(e) = TOAST_NOTIFIER.Show(&notification) {
+        if let Err(e) = notifier.Show(&notification) {
             crate::process::append_log(&format!("[toast] show failed: {:?}", e));
             return;
         }
 
         // 存储（保持 alive 以供下次 Hide）
-        *PREV_TOAST.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some(notification);
+        *crate::state::lock_unpoisoned(PREV_TOAST.get_or_init(|| Mutex::new(None))) =
+            Some(notification);
     }
 }
 

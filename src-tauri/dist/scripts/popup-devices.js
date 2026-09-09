@@ -113,9 +113,9 @@ function getDeviceGroup(dev) {
 
 // ── 设备卡构建与原地更新 ────────────────────────────────
 
-// 设备卡唯一键：同名设备的多形态（蓝牙/2.4G/USB）并存时可区分
+// 设备卡唯一键：同名设备的多形态（蓝牙/2.4G/USB/BLE）并存时可区分
 function deviceKey(dev) {
-  return `${dev.name}|${dev.is_bluetooth ? "bt" : ""}${dev.is_wireless_24g ? "24g" : ""}`;
+  return `${dev.name}|${dev.is_bluetooth ? "bt" : ""}${dev.is_wireless_24g ? "24g" : ""}${dev.is_ble ? "ble" : ""}`;
 }
 
 // 填充状态标签行（创建与原地更新共用，保证动态部分单一来源）
@@ -194,9 +194,9 @@ function buildActionsEl(card) {
 
     try {
       if (isConnect) {
-        await invoke("connect_bluetooth_device", { name: dev.name });
+        await invoke("connect_bluetooth_device", { deviceId: dev.device_id, isBle: dev.is_ble });
       } else {
-        await invoke("disconnect_bluetooth_device", { name: dev.name });
+        await invoke("disconnect_bluetooth_device", { deviceId: dev.device_id });
       }
     } catch (err) {
       console.error("BT action failed:", err);
@@ -212,7 +212,7 @@ function buildActionsEl(card) {
     const pollInterval = isBle ? 200 : 400;
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        const connected = await invoke("check_bt_connection", { name: dev.name });
+        const connected = await invoke("check_bt_connection", { deviceId: dev.device_id });
         if (connected !== null && connected !== undefined) {
           newStatus = connected ? "已连接" : "已配对";
           if (connected === expectedConnected) {

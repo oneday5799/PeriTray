@@ -69,9 +69,11 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
 /// 读取 COM 分配的 PWSTR 到 Rust String 后释放 CoTaskMem 内存。
 /// 用于 GetId / GetDisplayName / GetSessionInstanceIdentifier 等返回 PWSTR 的 API。
 pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
-    let s = pwstr.to_string()?;
-    CoTaskMemFree(Some(pwstr.as_ptr() as *const c_void));
-    Ok(s)
+    // #29 先保存原始指针，确保无论 to_string 成功与否都能释放 COM 内存
+    let ptr = pwstr.as_ptr();
+    let result = pwstr.to_string().map_err(|e| windows::core::Error::from(e));
+    CoTaskMemFree(Some(ptr as *const c_void));
+    result
 }
 
 /// 枚举指定方向的音频设备（output=eRender / input=eCapture），并标记系统默认
@@ -90,7 +92,10 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
             for i in 0..count {
                 if let Ok(device) = collection.Item(i) {
                     if let Ok(id) = device.GetId() {
-                        let id_str = pwstr_to_string(id)?;
+                        // #30 单台设备 ID 转换失败跳过，不影响其他设备枚举
+                        let Some(id_str) = pwstr_to_string(id).ok() else {
+                            continue;
+                        };
                         let name = get_device_name(&device)
                             .unwrap_or_else(|_| "Unknown Device".to_string());
                         let (volume, is_muted) =
@@ -222,6 +227,8 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
                     endpoint.SetMute(true, ptr::null())?;
                 } else {
                     endpoint.SetMute(true, ptr::null())?;
+                    // 非 force_mute 设备静音时，清理可能残留的旧记录
+                    crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
                 }
             } else {
                 endpoint.SetMute(false, ptr::null())?;
@@ -263,7 +270,7 @@ pub fn set_device_mute(device_id: &str, muted: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
+pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
     unsafe {
         with_enumerator(|enumerator| -> Result<Vec<AudioSession>> {
             let mut all_sessions: Vec<AudioSession> = Vec::new();
@@ -275,6 +282,10 @@ pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
                         .GetId()
                         .map(|id| pwstr_to_string(id).unwrap_or_default())
                         .unwrap_or_default();
+                    // 按 device_id 裁剪：只枚举指定设备的会话
+                    if !device_id.is_empty() && dev_id != device_id {
+                        continue;
+                    }
                     let session_manager: IAudioSessionManager2 =
                         match device.Activate(CLSCTX_ALL, None) {
                             Ok(m) => m,
@@ -293,8 +304,10 @@ pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
                                     Err(_) => continue,
                                 };
                             let state = session_control2.GetState().unwrap_or(AudioSessionState(0));
-                            if state.0 > 2 {
-                                continue;
+                            // #31 显式枚举过滤：只保留 Active/Inactive 状态，跳过 Expired/Invalid
+                            match state.0 {
+                                0 | 1 => {} // Active | Inactive — 继续处理
+                                _ => continue,
                             }
                             let pid = session_control2.GetProcessId().unwrap_or(0);
                             if pid == 0 {
@@ -350,11 +363,20 @@ pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
 }
 
 /// 按 session_id 查找并返回 ISimpleAudioVolume 接口
-unsafe fn find_session_volume(session_id: &str) -> Result<ISimpleAudioVolume> {
+/// device_id 非空时只在指定设备内查找，为空时全量扫描
+unsafe fn find_session_volume(session_id: &str, device_id: &str) -> Result<ISimpleAudioVolume> {
     with_enumerator(|enumerator| -> Result<ISimpleAudioVolume> {
         let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
         for di in 0..collection.GetCount().unwrap_or(0) {
             if let Ok(device) = collection.Item(di) {
+                let dev_id = device
+                    .GetId()
+                    .map(|id| pwstr_to_string(id).unwrap_or_default())
+                    .unwrap_or_default();
+                // 按 device_id 裁剪：只在指定设备内查找
+                if !device_id.is_empty() && dev_id != device_id {
+                    continue;
+                }
                 let sm: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) {
                     Ok(m) => m,
                     Err(_) => continue,
@@ -382,25 +404,25 @@ unsafe fn find_session_volume(session_id: &str) -> Result<ISimpleAudioVolume> {
     })?
 }
 
-pub fn set_session_volume(session_id: &str, volume: f32) -> Result<()> {
+pub fn set_session_volume(session_id: &str, device_id: &str, volume: f32) -> Result<()> {
     crate::process::append_verbose_log(&format!(
-        "[audio] set_session_volume {} {}",
-        session_id, volume
+        "[audio] set_session_volume {} {} {}",
+        session_id, device_id, volume
     ));
     unsafe {
-        let sv = find_session_volume(session_id)?;
+        let sv = find_session_volume(session_id, device_id)?;
         sv.SetMasterVolume(volume.max(0.0).min(1.0), ptr::null())?;
     }
     Ok(())
 }
 
-pub fn set_session_mute(session_id: &str, muted: bool) -> Result<()> {
+pub fn set_session_mute(session_id: &str, device_id: &str, muted: bool) -> Result<()> {
     crate::process::append_log(&format!(
-        "[audio] set_session_mute {} muted={}",
-        session_id, muted
+        "[audio] set_session_mute {} {} muted={}",
+        session_id, device_id, muted
     ));
     unsafe {
-        let sv = find_session_volume(session_id)?;
+        let sv = find_session_volume(session_id, device_id)?;
         sv.SetMute(muted, ptr::null())?;
     }
     Ok(())

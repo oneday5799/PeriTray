@@ -39,6 +39,36 @@ static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// 事件推送句柄（main setup 注入）
 static EVENT_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
+/// 单飞标志的 RAII 释放：正常/panic均复位，避免后台刷新被永久锁死
+struct SingleFlightGuard<'a> {
+    flag: &'a std::sync::atomic::AtomicBool,
+}
+
+impl<'a> SingleFlightGuard<'a> {
+    /// CAS 获取标志；成功返回 guard，失败返回 None（已有刷新在跑）
+    fn new(flag: &'a std::sync::atomic::AtomicBool) -> Option<Self> {
+        if flag
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            Some(Self { flag })
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for SingleFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 struct CacheEntry {
     /// Some=最后已知电量百分比；None=从未成功过（负缓存）
     level: Option<i32>,
@@ -174,34 +204,27 @@ pub fn snapshot(
 
     // 单飞触发后台刷新：已有线程在跑则跳过本轮，待其结束后下轮补查
     if !stale.is_empty() {
-        if REFRESHING
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-            )
-            .is_ok()
-        {
-            crate::process::append_log(&format!(
-                "[24g] 后台刷新开始: {} 台（来源：惰性补查）",
-                stale.len()
-            ));
-            std::thread::spawn(move || {
-                let started = std::time::Instant::now();
-                refresh_worker(stale);
-                crate::process::append_log(&format!(
-                    "[24g] 后台刷新耗时 {}ms",
-                    started.elapsed().as_millis()
-                ));
-                REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
-            });
-        } else {
+        let Some(_guard) = SingleFlightGuard::new(&REFRESHING) else {
             crate::process::append_log(&format!(
                 "[24g] 已有后台刷新进行中，跳过本轮（{} 台待查）",
                 stale.len()
             ));
-        }
+            return result;
+        };
+        crate::process::append_log(&format!(
+            "[24g] 后台刷新开始: {} 台（来源：惰性补查）",
+            stale.len()
+        ));
+        // guard 移入闭包，panic 时 Drop 自动复位标志
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            refresh_worker(stale);
+            crate::process::append_log(&format!(
+                "[24g] 后台刷新耗时 {}ms",
+                started.elapsed().as_millis()
+            ));
+            // guard 在此 drop，自动复位 REFRESHING
+        });
     }
     result
 }
@@ -319,15 +342,7 @@ fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutco
 /// 强制刷新路径（手动刷新按钮）：在调用方阻塞线程中同步逐台现查并返回最新值。
 /// 后台刷新线程恰好在跑时退化为读缓存，避免并发访问同一 HID 设备。
 fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Option<i32>> {
-    if REFRESHING
-        .compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-        )
-        .is_err()
-    {
+    let Some(_guard) = SingleFlightGuard::new(&REFRESHING) else {
         let guard = crate::state::lock_unpoisoned(cache());
         return pairs
             .into_iter()
@@ -336,7 +351,7 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
                 (k, lvl)
             })
             .collect();
-    }
+    };
 
     crate::process::append_log(&format!("[24g] 强制刷新开始: {} 台", pairs.len()));
     let started = std::time::Instant::now();
@@ -362,7 +377,6 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
     if any_queried_ok {
         persist::flush();
     }
-    REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
     crate::process::append_log(&format!(
         "[24g] 强制刷新结束(耗时 {}ms): 成功 {} 失败 {}",
         started.elapsed().as_millis(),
