@@ -537,9 +537,13 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
 /// 注意：必须在非 STA 线程中调用，否则 SendMessageW 会死锁
 pub fn request_session_sync_blocking() {
     let Some(&hwnd) = NOTIFY_HWND.get() else {
+        standard_log!("[audio_notify] request_session_sync_blocking: STA 线程未就绪，跳过会话同步");
         return;
     };
     if hwnd == 0 {
+        standard_log!(
+            "[audio_notify] request_session_sync_blocking: STA 窗口句柄为 0，跳过会话同步"
+        );
         return;
     }
     unsafe {

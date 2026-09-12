@@ -289,6 +289,7 @@ pub async fn set_device_mute(device_id: String, muted: bool) -> Result<(), Strin
 pub async fn get_audio_sessions(
     device_id: String,
 ) -> Result<Vec<crate::audio::AudioSession>, String> {
+    standard_log!("[cmd] get_audio_sessions: device_id={}", device_id);
     run_blocking(move || {
         // 同步等待 STA 线程完成会话回调注册，确保后续枚举能获取实时音量变化
         crate::audio_notify::request_session_sync_blocking();

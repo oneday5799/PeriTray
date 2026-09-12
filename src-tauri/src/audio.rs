@@ -57,7 +57,12 @@ pub struct SessionDeviceNames {
 
 /// 确保当前线程已初始化 COM（幂等调用）
 pub(crate) unsafe fn ensure_com_initialized() {
-    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok();
+    if let Err(e) = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
+        verbose_log!(
+            "[audio] ensure_com_initialized: CoInitializeEx 返回错误: {}",
+            e
+        );
+    }
 }
 
 /// 获取 IMMDeviceEnumerator 并执行回调
@@ -263,11 +268,16 @@ pub fn set_device_mute(device_id: &str, muted: bool) -> Result<()> {
 }
 
 pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
-    unsafe {
+    standard_log!("[audio] enumerate_audio_sessions: device_id={}", device_id);
+    let result = unsafe {
         with_enumerator(|enumerator| -> Result<Vec<AudioSession>> {
             let mut all_sessions: Vec<AudioSession> = Vec::new();
             let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
             let device_count = collection.GetCount()?;
+            verbose_log!(
+                "[audio] enumerate_audio_sessions: 枚举到 {} 台设备",
+                device_count
+            );
             for di in 0..device_count {
                 if let Ok(device) = collection.Item(di) {
                     let dev_id = device
@@ -276,18 +286,34 @@ pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
                         .unwrap_or_default();
                     // 按 device_id 裁剪：只枚举指定设备的会话
                     if !device_id.is_empty() && dev_id != device_id {
+                        verbose_log!("[audio] 设备 {} 不匹配目标 {}，跳过", dev_id, device_id);
                         continue;
                     }
                     let session_manager: IAudioSessionManager2 =
                         match device.Activate(CLSCTX_ALL, None) {
                             Ok(m) => m,
-                            Err(_) => continue,
+                            Err(e) => {
+                                verbose_log!(
+                                    "[audio] 设备 {} Activate IAudioSessionManager2 失败: {}",
+                                    dev_id,
+                                    e
+                                );
+                                continue;
+                            }
                         };
                     let session_enumerator = match session_manager.GetSessionEnumerator() {
                         Ok(e) => e,
-                        Err(_) => continue,
+                        Err(e) => {
+                            verbose_log!(
+                                "[audio] 设备 {} GetSessionEnumerator 失败: {}",
+                                dev_id,
+                                e
+                            );
+                            continue;
+                        }
                     };
                     let count = session_enumerator.GetCount().unwrap_or(0);
+                    verbose_log!("[audio] 设备 {}: 枚举到 {} 个会话", dev_id, count);
                     for i in 0..count {
                         if let Ok(session_control) = session_enumerator.GetSession(i) {
                             let session_control2: IAudioSessionControl2 =
@@ -351,7 +377,14 @@ pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
             }
             Ok(all_sessions)
         })?
+    };
+    if let Ok(ref sessions) = result {
+        standard_log!(
+            "[audio] enumerate_audio_sessions: 返回 {} 个会话",
+            sessions.len()
+        );
     }
+    result
 }
 
 /// 按 session_id 查找并返回 ISimpleAudioVolume 接口
