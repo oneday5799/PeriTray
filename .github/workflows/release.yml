@@ -89,11 +89,30 @@ jobs:
       - name: Build NSIS installer (${{ matrix.target }})
         run: npm run tauri build -- --bundles nsis --target ${{ matrix.rust_target }}
 
+      # 生成 Store 图标
+      - name: Generate Store icons
+        run: npx tauri icon src-tauri/icons/128x128.png
+
+      # 打包 MSIX（供上传到 Partner Center）
+      - name: Build MSIX package (${{ matrix.target }})
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}.0"
+          & src-tauri/msix/stage.ps1 -Target ${{ matrix.target }} -Version $version
+          & src-tauri/msix/pack.ps1 -Target ${{ matrix.target }} -Version $version
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: installer-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis/*.exe
+
+      # 上传 MSIX 产物（供手动上传到 Partner Center）
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix-${{ matrix.target }}
+          path: src-tauri/msix/output/*.msix
 
   release:
     needs: build
