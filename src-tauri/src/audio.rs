@@ -284,11 +284,6 @@ pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
                         .GetId()
                         .map(|id| pwstr_to_string(id).unwrap_or_default())
                         .unwrap_or_default();
-                    // 按 device_id 裁剪：只枚举指定设备的会话
-                    if !device_id.is_empty() && dev_id != device_id {
-                        verbose_log!("[audio] 设备 {} 不匹配目标 {}，跳过", dev_id, device_id);
-                        continue;
-                    }
                     let session_manager: IAudioSessionManager2 =
                         match device.Activate(CLSCTX_ALL, None) {
                             Ok(m) => m,

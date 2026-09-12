@@ -38,6 +38,13 @@ if (-not (Test-Path $manifestPath)) {
 
 Add-AppxPackage -Register $manifestPath
 
+# Clean up duplicate Start Menu shortcut (loose EXE entry from -Register)
+$shortcutPath = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\PeriTray.lnk'
+if (Test-Path $shortcutPath) {
+    Remove-Item $shortcutPath -Force
+    Write-Host "Removed duplicate Start Menu shortcut" -ForegroundColor Cyan
+}
+
 Write-Host "Installation complete" -ForegroundColor Green
 Write-Host ""
 Write-Host "Test steps:" -ForegroundColor Yellow

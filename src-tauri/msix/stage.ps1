@@ -1,8 +1,11 @@
 # stage.ps1 - Assemble MSIX packaging directory
 param(
     [string]$Target = "x64",
-    [string]$Version = "1.3.5.0"
+    [string]$Version = "1.3.5.0",
+    [string]$PublisherDN = ""
 )
+
+if (-not $PublisherDN) { $PublisherDN = $env:MSIX_PUBLISHER_DN }
 
 $ErrorActionPreference = "Stop"
 
@@ -48,10 +51,15 @@ if (Test-Path $distDir) {
 Write-Host "Copying Store icons..." -ForegroundColor Cyan
 Copy-Item -Path "$AssetsDir\*.png" -Destination "$StageDir\Assets"
 
-# Generate AppxManifest.xml (replace version number)
+# Generate AppxManifest.xml (replace version number and publisher DN)
 Write-Host "Generating AppxManifest.xml..." -ForegroundColor Cyan
+if (-not $PublisherDN) {
+    Write-Error "MSIX_PUBLISHER_DN environment variable is not set. Please set it to your Partner Center publisher CN."
+    exit 1
+}
 $manifest = Get-Content $ManifestTemplate -Raw
 $manifest = $manifest -replace 'Version="1\.3\.5\.0"', "Version=`"$Version`""
+$manifest = $manifest -replace '__PUBLISHER_DN__', $PublisherDN
 $manifest | Set-Content -Path "$StageDir\AppxManifest.xml" -Encoding UTF8
 
 Write-Host "Stage directory ready: $StageDir" -ForegroundColor Green
