@@ -27,4 +27,8 @@ Thumbs.db
 *.bak
 *.user
 
+# MSIX 打包临时文件
+/src-tauri/msix/stage/
+/src-tauri/msix/output/
+
 
