@@ -368,15 +368,14 @@ pub fn set_rounded_corners(hwnd: isize) {
 /// 避免运行时文件系统路径歧义（Tauri 2 的 `frontendDist` 嵌入二进制，`resources` 部署到子目录）。
 static TOAST_ICON_PNG: &[u8] = include_bytes!("../dist/icon.png");
 
-/// 将嵌入的图标写入 exe 目录 `toast_icon.png`，返回路径供 WinRT toast 使用。
+/// 将嵌入的图标写入临时目录 `PeriTray_toast_icon.png`，返回路径供 WinRT toast 使用。
 ///
 /// WinRT `file:///` URI 要求绝对路径且无 `\\?\` 前缀，
 /// 因此每次写入固定文件名而非使用 `canonicalize`。
+/// 写入临时目录而非 exe 目录（MSIX 包目录只读）。
 #[cfg(target_os = "windows")]
 pub fn resolve_toast_icon() -> Option<std::path::PathBuf> {
-    let exe_path = std::env::current_exe().ok()?;
-    let dir = exe_path.parent()?;
-    let target = dir.join("toast_icon.png");
+    let target = std::env::temp_dir().join("PeriTray_toast_icon.png");
     std::fs::write(&target, TOAST_ICON_PNG).ok()?;
     Some(target)
 }
@@ -411,10 +410,39 @@ pub fn build_toast(
 
 pub(crate) const AUMID: &str = "com.peri.tray";
 
+/// 检测当前是否运行在 MSIX 包上下文中。
+/// 通过 kernel32!GetCurrentPackageFamilyName 判断：返回
+/// ERROR_SUCCESS 或 ERROR_INSUFFICIENT_BUFFER 即为 MSIX 上下文。
+#[cfg(target_os = "windows")]
+pub(crate) fn is_msix_context() -> bool {
+    type GetCurPkgFn = unsafe extern "system" fn(*mut u32, *mut u16) -> i32;
+    let Some(fn_ptr) = (unsafe {
+        windows::Win32::System::LibraryLoader::GetProcAddress(
+            windows::Win32::System::LibraryLoader::GetModuleHandleW(windows::core::w!(
+                "kernel32.dll"
+            ))
+            .unwrap_or_default(),
+            windows::core::s!("GetCurrentPackageFamilyName"),
+        )
+    }) else {
+        return false;
+    };
+    let get_cur_pkg: GetCurPkgFn = unsafe { std::mem::transmute(fn_ptr) };
+    let mut buf_len: u32 = 0;
+    let status = unsafe { get_cur_pkg(&mut buf_len, std::ptr::null_mut()) };
+    // ERROR_SUCCESS(0) 或 ERROR_INSUFFICIENT_BUFFER(122) 均表示在包上下文中
+    status == 0 || status == 122
+}
+
 /// 注册 AUMID 到开始菜单快捷方式，使 Windows 通知显示应用图标。
+/// MSIX 包自带 AUMID，无需创建快捷方式；仅 NSIS 安装需要。
 /// 已存在同名快捷方式时跳过。
 #[cfg(target_os = "windows")]
 pub fn register_aumid() {
+    if is_msix_context() {
+        process::append_verbose_log("[aumid] MSIX context, skipping shortcut creation");
+        return;
+    }
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 

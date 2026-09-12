@@ -15,8 +15,11 @@ use windows::UI::Notifications::{ToastNotification, ToastNotificationManager, To
 #[cfg(target_os = "windows")]
 use crate::{standard_log, verbose_log};
 static TOAST_NOTIFIER: LazyLock<Option<ToastNotifier>> = LazyLock::new(|| {
-    match ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(crate::windows::AUMID))
-    {
+    // 先尝试包身份（MSIX 自动生效），失败则回退自定义 AUMID（NSIS 需要 .lnk）
+    let result = ToastNotificationManager::CreateToastNotifier().or_else(|_| {
+        ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(crate::windows::AUMID))
+    });
+    match result {
         Ok(notifier) => Some(notifier),
         Err(e) => {
             verbose_log!("[toast] failed to create notifier: {:?}", e);
