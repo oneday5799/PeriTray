@@ -56,6 +56,7 @@ features = [
     "Data_Xml_Dom",
     "Foundation_Collections",
     "Management_Deployment",
+    "Services_Store",
     "Storage_Streams",
     "UI_Notifications",
     "Win32_Foundation",

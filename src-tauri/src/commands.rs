@@ -390,10 +390,10 @@ pub fn open_log_dir() -> Result<(), String> {
 pub async fn check_for_update(
     app: tauri::AppHandle,
     include_prerelease: bool,
-) -> Result<crate::update::UpdateInfo, String> {
+) -> Result<crate::update::UpdateStatus, String> {
     let current_version = app.package_info().version.to_string();
-    let (result, _) = crate::update::check_and_store("", current_version, include_prerelease).await;
-    result
+    let _ = crate::update::check_and_store("", current_version, include_prerelease).await;
+    crate::update::get_last_status().ok_or_else(|| "状态未存储".to_string())
 }
 
 #[tauri::command]

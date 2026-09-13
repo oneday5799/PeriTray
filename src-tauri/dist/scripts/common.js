@@ -731,8 +731,16 @@ window.showToast = function (msg, onClick, isError) {
 // ── 启动时更新检测（全局监听） ─────────────────────────
 window.__TAURI__.event.listen("update-available", (event) => {
   const info = event.payload;
-  window.showToast(
-    `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
-    () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
-  );
+  const isStore = info.release_url && info.release_url.startsWith("ms-windows-store://");
+  if (isStore) {
+    window.showToast(
+      "Microsoft Store 有新版本可用<br>点击前往更新",
+      () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
+    );
+  } else {
+    window.showToast(
+      `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
+      () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
+    );
+  }
 });

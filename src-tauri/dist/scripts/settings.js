@@ -472,31 +472,32 @@ async function runUpdateCheck(btnId) {
   }, 30000);
 
   try {
-    const info = await invoke("check_for_update", {
+    const status = await invoke("check_for_update", {
       includePrerelease: config.include_prerelease || false
     });
     clearTimeout(timeoutId);
-    if (info.has_update) {
-      renderUpdateInfobar({
-        status: "update",
-        currentVersion: info.current_version,
-        latestVersion: info.latest_version,
-        releaseUrl: info.release_url,
-        error: null
-      });
+    renderUpdateInfobar(status);
+    if (status.status === "update") {
       showToast(
-        `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
-        () => invoke("open_url", { url: info.release_url })
+        `检测到新版本 ${status.latestVersion}（当前 ${status.currentVersion}）<br>点击前往下载`,
+        () => invoke("open_url", { url: status.releaseUrl })
       );
-    } else {
-      renderUpdateInfobar({
-        status: "latest",
-        currentVersion: info.current_version,
-        latestVersion: info.latest_version,
-        releaseUrl: info.release_url,
-        error: null
-      });
+    } else if (status.status === "storeUpdate") {
+      showToast(
+        "Microsoft Store 存在更新版本<br>点击前往更新",
+        () => invoke("open_url", { url: status.releaseUrl })
+      );
+    } else if (status.status === "latest") {
       showToast("已是最新版本");
+    } else if (status.status === "error") {
+      const err = status.error || "";
+      if (err.includes("超时") || err.includes("timeout")) {
+        showToast("检测超时，请检查网络后重试");
+      } else if (err.includes("频繁") || err.includes("rate_limited")) {
+        showToast("GitHub API 请求过于频繁，请稍后再试");
+      } else {
+        showToast("检测失败：" + err);
+      }
     }
   } catch (e) {
     clearTimeout(timeoutId);
@@ -571,6 +572,8 @@ function classifyUpdateError(err) {
   if (err.includes("403")) return "GitHub API 请求被拒绝（403），请稍后再试";
   if (err.includes("404")) return "未找到发布资源（404），请确认仓库地址";
   if (err.includes("解析失败")) return "响应数据解析失败，请稍后再试";
+  if (err.includes("Store 服务")) return "Microsoft Store 服务不可用，请稍后再试";
+  if (err.includes("Store")) return "Store 更新查询失败，请稍后再试";
   return "";
 }
 
@@ -640,18 +643,31 @@ function renderUpdateInfobar(status) {
   if (!icon || !content || !action) return;
   action.hidden = false;
 
+  const isStore = status.releaseUrl && status.releaseUrl.startsWith("ms-windows-store://");
+
   if (status.status === "latest") {
     bar.classList.add("win-infobar-success");
     icon.innerHTML = UPDATE_ICONS.success;
-    content.textContent = `当前版本 v${status.currentVersion} ，已是最新版本。`;
-    action.textContent = "查看更新日志";
-    action.onclick = () => invoke("open_url", { url: RELEASES_URL });
+    if (isStore) {
+      content.textContent = `当前版本 v${status.currentVersion} ，已是最新版本。通过 Microsoft Store 自动更新。`;
+      action.hidden = true;
+    } else {
+      content.textContent = `当前版本 v${status.currentVersion} ，已是最新版本。`;
+      action.textContent = "查看更新日志";
+      action.onclick = () => invoke("open_url", { url: RELEASES_URL });
+    }
   } else if (status.status === "update") {
     bar.classList.add("win-infobar-warning");
     icon.innerHTML = UPDATE_ICONS.warning;
     content.textContent = `检测到新版本 v${status.latestVersion} ，当前版本 v${status.currentVersion} 。`;
     action.textContent = "下载最新版本";
     action.onclick = () => invoke("open_url", { url: status.releaseUrl || RELEASES_URL });
+  } else if (status.status === "storeUpdate") {
+    bar.classList.add("win-infobar-warning");
+    icon.innerHTML = UPDATE_ICONS.warning;
+    content.textContent = "Microsoft Store 存在更新版本，点击跳转更新。";
+    action.textContent = "前往更新";
+    action.onclick = () => invoke("open_url", { url: status.releaseUrl });
   } else {
     bar.classList.add("win-infobar-error");
     icon.innerHTML = UPDATE_ICONS.error;

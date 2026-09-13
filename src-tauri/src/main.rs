@@ -153,7 +153,15 @@ fn spawn_startup_update_check(app: &tauri::AppHandle) {
             crate::update::check_and_store("startup", current_version, include).await;
         match result {
             Ok(info) => {
-                let status = if info.has_update { "update" } else { "latest" };
+                let status = if info.has_update {
+                    if crate::windows::is_msix_context() {
+                        "storeUpdate"
+                    } else {
+                        "update"
+                    }
+                } else {
+                    "latest"
+                };
                 let payload = crate::update::UpdateStatus::from_info(&info, status);
                 let _ = app_handle.emit("update-status", payload);
                 if info.has_update {
@@ -163,9 +171,14 @@ fn spawn_startup_update_check(app: &tauri::AppHandle) {
                     {
                         let ico_path = crate::windows::resolve_toast_icon();
                         let app = app_handle.clone();
+                        let toast_text = if status == "storeUpdate" {
+                            "Microsoft Store 有新版本可用".to_string()
+                        } else {
+                            format!("发现新版本 v{}，点击查看详情", info.latest_version)
+                        };
                         let toast = crate::windows::build_toast(
                             "发现新版本",
-                            &format!("发现新版本 v{}，点击查看详情", info.latest_version),
+                            &toast_text,
                             ico_path.as_deref(),
                         )
                         .on_activated(move |_args| {

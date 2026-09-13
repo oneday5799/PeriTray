@@ -17,7 +17,7 @@ pub struct UpdateInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
-    /// "latest" | "update" | "error"
+    /// "latest" | "update" | "storeUpdate" | "error"
     pub status: String,
     pub current_version: String,
     pub latest_version: String,
@@ -72,25 +72,41 @@ pub async fn check_and_store(
     } else {
         format!(" {}", tag)
     };
-    let ver_for_task = current_version.clone();
-    let result =
-        tokio::task::spawn_blocking(move || check_for_update(&ver_for_task, include_prerelease))
-            .await;
+
+    // 根据安装方式选择更新源：MSIX 走 Store API，NSIS 走 GitHub
+    let result: Result<UpdateInfo, String> = if crate::windows::is_msix_context() {
+        standard_log!("[update]{} MSIX context, checking Store", prefix);
+        check_store_update(&current_version).await
+    } else {
+        let ver_for_task = current_version.clone();
+        match tokio::task::spawn_blocking(move || {
+            check_for_update(&ver_for_task, include_prerelease)
+        })
+        .await
+        {
+            Ok(inner) => inner,
+            Err(e) => Err(format!("task error: {}", e)),
+        }
+    };
 
     match result {
-        Ok(Ok(info)) => {
-            let status = if info.has_update { "update" } else { "latest" };
+        Ok(info) => {
+            let status = if info.has_update {
+                if crate::windows::is_msix_context() {
+                    "storeUpdate"
+                } else {
+                    "update"
+                }
+            } else {
+                "latest"
+            };
             set_last_status(UpdateStatus::from_info(&info, status));
             (Ok(info), true)
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             standard_log!("[update]{} check failed: {}", prefix, e);
             set_last_status(UpdateStatus::from_error(&current_version, &e));
             (Err(e), true)
-        }
-        Err(e) => {
-            standard_log!("[update]{} task failed: {}", prefix, e);
-            (Err(format!("task error: {}", e)), false)
         }
     }
 }
@@ -101,6 +117,34 @@ struct GitHubRelease {
     prerelease: bool,
     draft: bool,
     html_url: String,
+}
+
+/// Microsoft Store 更新检测（仅 MSIX 环境）。
+/// Store API 不返回版本号，仅判断"是否有更新可用"。
+const STORE_URL: &str = "ms-windows-store://pdp/?productid=9PLTSS6S80XJ";
+
+async fn check_store_update(current_version: &str) -> Result<UpdateInfo, String> {
+    use windows::Services::Store::StoreContext;
+
+    let ctx = StoreContext::GetDefault().map_err(|e| format!("Store 服务初始化失败: {:?}", e))?;
+    let op = ctx
+        .GetAppAndOptionalStorePackageUpdatesAsync()
+        .map_err(|e| format!("Store 查询失败: {:?}", e))?;
+    let updates = op.await.map_err(|e| format!("Store 请求失败: {:?}", e))?;
+
+    let has_update = updates.Size().unwrap_or(0) > 0;
+    standard_log!(
+        "[update] Store check: has_update={}, current={}",
+        has_update,
+        current_version
+    );
+
+    Ok(UpdateInfo {
+        has_update,
+        current_version: current_version.to_string(),
+        latest_version: String::new(),
+        release_url: STORE_URL.to_string(),
+    })
 }
 
 /// WinHTTP GET request, returns response body as String
