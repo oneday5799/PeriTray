@@ -5,7 +5,8 @@
          IgnorableNamespaces="uap rescap">
   <Identity Name="Oneday.PeriTray" 
             Version="1.3.5.0" 
-            Publisher="__PUBLISHER_DN__" />
+            Publisher="__PUBLISHER_DN__"
+            ProcessorArchitecture="__ARCH__" />
   <Properties>
     <DisplayName>PeriTray</DisplayName>
     <PublisherDisplayName>Oneday</PublisherDisplayName>

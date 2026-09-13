@@ -64,6 +64,7 @@ if (-not $PublisherDN) {
 $manifest = Get-Content $ManifestTemplate -Raw
 $manifest = $manifest -replace 'Version="1\.3\.5\.0"', "Version=`"$Version`""
 $manifest = $manifest -replace '__PUBLISHER_DN__', $PublisherDN
+$manifest = $manifest -replace '__ARCH__', $Target
 $manifest | Set-Content -Path "$StageDir\AppxManifest.xml" -Encoding UTF8
 
 Write-Host "Stage directory ready: $StageDir" -ForegroundColor Green
