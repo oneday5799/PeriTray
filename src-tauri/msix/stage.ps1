@@ -12,7 +12,11 @@ $ErrorActionPreference = "Stop"
 # Path configuration (relative to script location)
 $ScriptDir = $PSScriptRoot
 $ProjectRoot = Split-Path (Split-Path $ScriptDir -Parent) -Parent
-$ReleaseDir = Join-Path $ProjectRoot "src-tauri\target\x86_64-pc-windows-msvc\release"
+switch ($Target) {
+    "arm64"  { $RustTarget = "aarch64-pc-windows-msvc" }
+    default  { $RustTarget = "x86_64-pc-windows-msvc" }
+}
+$ReleaseDir = Join-Path $ProjectRoot "src-tauri\target\$RustTarget\release"
 $StageDir = Join-Path $ScriptDir "stage"
 $AssetsDir = Join-Path $ScriptDir "assets"
 $ManifestTemplate = Join-Path $ScriptDir "AppxManifest.xml"
