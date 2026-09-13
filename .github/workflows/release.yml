@@ -144,5 +144,7 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_TOKEN }}
           prerelease: ${{ steps.prerelease.outputs.IS_PRERELEASE == 'true' }}
-          files: artifacts/*.exe
+          files: |
+            artifacts/*.exe
+            artifacts/*.msix
           generate_release_notes: true
