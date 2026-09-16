@@ -102,7 +102,14 @@ async function loadDevices(fresh24g = false, opts = {}) {
     // 失败保留既有渲染（水合快照或上一轮数据）
     if (gen === loadGen) {
       if (notify) showToast("刷新失败", null, true);
-      else if (!hasCards && !hydrated) list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
+      else if (!hasCards && !hydrated) {
+        // 错误对象文本不拼进 innerHTML：以 textContent 写入，避免其被当标记解析
+        list.innerHTML = "";
+        const failEl = document.createElement("div");
+        failEl.className = "loading";
+        failEl.textContent = `加载失败: ${e}`;
+        list.appendChild(failEl);
+      }
     }
   }
 }

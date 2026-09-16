@@ -438,9 +438,11 @@ fn main() {
             commands::check_material_support,
         ])
         .setup(move |app| {
-            // 注册 AUMID，使 Windows 通知显示应用图标
+            // 注册 AUMID，使 Windows 通知显示应用图标。
+            // 首次启动需同步等待一次 PowerShell（冷启动 300ms~1.5s），故下放子线程，
+            // 不叠加到应用可见时间上；函数自身幂等（快捷方式已最新时立即返回）。
             #[cfg(target_os = "windows")]
-            crate::windows::register_aumid();
+            std::thread::spawn(crate::windows::register_aumid);
 
             if let Err(e) = tray::setup_tray(app) {
                 standard_log!("[main] setup_tray failed: {}", e);

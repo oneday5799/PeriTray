@@ -487,6 +487,11 @@
   width: max-content;
   min-width: 80px;
   box-sizing: border-box;
+  /* 初始态一律由样式表给出，不得依赖标记里的内联 style：
+     CSP `style-src 'self'` 会拦掉内联 style 属性，届时 display 回落为初始值，
+     而 settings.js 又用「内联样式回读」判断浮层是否已展开 —— 首点必被吞。
+     现改为读 `combo.classList.contains("is-open")`，本行只是把初始态补回样式表。 */
+  display: none;
   overflow: hidden;
   visibility: hidden;
   overflow-y: scroll;

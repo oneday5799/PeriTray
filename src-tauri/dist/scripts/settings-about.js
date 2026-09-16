@@ -7,7 +7,8 @@ function initAboutTab() {
   const items = document.getElementById("about-info-items");
   const arrow = document.getElementById("arrow-about");
   if (card && items) {
-    // HTML 初始即带 .show + inline 999px；此后展开态由骨架经 .show 类跟踪
+    // HTML 初始即带 .show（展开高度由 base.css 的 .card-items.show 给出）；
+    // 此后展开态由骨架经 .show 类跟踪
     createExpandableCard(items, arrow).bindHeaderClick(card, {
       extraGuards: ["button", "a"],
     });

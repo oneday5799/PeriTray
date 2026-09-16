@@ -1,5 +1,5 @@
 /* common.js — 共享基础层（popup/settings 两页最先加载）：Tauri invoke/主题与材质应用/
- *            右键菜单族（注册/钳位/关闭/子菜单外壳 createSubmenuShell/勾选图标 createCheckIcon）/
+ *            右键菜单族（默认菜单屏蔽/注册/钳位/关闭/子菜单外壳 createSubmenuShell/勾选图标 createCheckIcon）/
  *            设备显示名解析（simplifyDeviceName/formatDeviceName/getDisplayName）/
  *            对话框与 toast/快捷键录制器（码表为本文件内部实现细节，不对外）
  * 加载序 1/N · 提供：window 全局 API —— CATEGORIES/initTheme/applyThemeMode/applyMaterialMode/
@@ -237,6 +237,10 @@ window.hideAllContextMenus = function () {
 
 document.addEventListener("click", hideAllContextMenus);
 
+// 禁用浏览器默认右键菜单（两页共用）。原先写在 <body oncontextmenu="return false"> 上，
+// 属内联事件属性，会被不含 'unsafe-inline' 的 CSP `script-src` 拦掉 —— 改为在此注册。
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
 // 勾选图标（context-menu-check）：各菜单选中态的统一构造入口
 window.createCheckIcon = function () {
   const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -249,13 +253,35 @@ window.createCheckIcon = function () {
   return check;
 };
 
+// 子菜单展开箭头（内部实现细节，不对外）：与 createCheckIcon 同款 createElementNS 组装
+function createChevronIcon() {
+  const chevron = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  chevron.setAttribute("class", "context-menu-chevron");
+  chevron.setAttribute("width", "10");
+  chevron.setAttribute("height", "10");
+  chevron.setAttribute("viewBox", "0 0 12 12");
+  chevron.setAttribute("fill", "none");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M4 2L8 6L4 10");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.5");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  chevron.appendChild(path);
+  return chevron;
+}
+
 // 子菜单外壳：悬停展开的二级菜单（分组/输出设备/会话路由/空间音效共用）。
 // positionFn(submenu, groupItem, menu) 可注入自定义定位策略；缺省为锚定 groupItem 视口矩形。
 window.createSubmenuShell = function (menu, label, positionFn) {
   const groupItem = document.createElement("div");
   groupItem.className = "context-menu-item context-menu-subitem";
-  groupItem.innerHTML = "<span>" + label + "</span>" +
-    '<svg class="context-menu-chevron" width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  // label 来自调用点（含设备名等外部数据），一律以 textContent 写入，
+  // 不拼 innerHTML —— 拼字符串会把设备名里的标记当结构解析（见 P1-10 残留注入面）
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  groupItem.appendChild(labelEl);
+  groupItem.appendChild(createChevronIcon());
 
   const submenu = document.createElement("div");
   submenu.className = "context-menu context-submenu";

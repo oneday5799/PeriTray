@@ -87,8 +87,17 @@
   left: 0;
   right: 0;
   bottom: 0;
+  /* 隐藏态必须由样式表给出：原先进在 #tab-volume 的内联 style 上，
+     CSP `style-src 'self'` 会拦掉内联 style 属性 → 该页回落 display:block，
+     与 #tab-devices 完全重叠且绘制在上层，popup 默认视图被改成音量页。
+     现由 .active 表达可见态（#tab-devices 初始即带 active）。 */
+  display: none;
   overflow-y: auto;
   scrollbar-gutter: stable;
+}
+
+.tab-viewport .tab-content.active {
+  display: block;
 }
 
 /* ── Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, horizontal) ─── */

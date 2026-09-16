@@ -441,6 +441,12 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   color: var(--text-disabled, #a0a0a0);
 }
 
+/* 空态文案（「没有检测到…」）：原为内联 style="color:#888"，CSP `style-src 'self'`
+   会拦掉内联 style 属性使灰色丢失，故收敛为类，并改用主题令牌（暗色下同样成立） */
+.card-item-name--empty {
+  color: var(--text-tertiary, #888);
+}
+
 .card-item-controls {
   display: flex;
   align-items: center;

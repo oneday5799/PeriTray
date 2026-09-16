@@ -290,12 +290,15 @@ function initComboBox(comboId, selectedValue, onChange) {
   }
 
   function onScroll() {
-    if (flyout.style.display !== "none") positionFlyout();
+    if (combo.classList.contains("is-open")) positionFlyout();
   }
 
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const isOpen = flyout.style.display !== "none" && flyout.style.visibility !== "hidden";
+    // 状态源是类，不是内联样式：`is-open` 由下方开/closeFlyout 完整维护。
+    // 原先回读 `flyout.style.display`，而初始态一旦改由样式表给出（CSP 收紧后必须如此），
+    // 内联值就是空串、该表达式恒为 true，首点会走 closeFlyout()（关一个本来就关着的浮层）。
+    const isOpen = combo.classList.contains("is-open");
     if (isOpen) {
       closeFlyout();
     } else {

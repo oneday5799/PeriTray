@@ -5,7 +5,6 @@
 
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::process::Command;
 
 /// 获取 exe 所在目录
 pub fn exe_dir() -> PathBuf {
@@ -23,16 +22,6 @@ pub fn logs_dir() -> PathBuf {
 /// 获取数据目录（`<exe目录>/data`）
 pub fn data_dir() -> PathBuf {
     exe_dir().join("data")
-}
-
-/// 创建 Windows 隐藏窗口命令
-#[cfg(target_os = "windows")]
-fn new_hidden_cmd(program: &str) -> Command {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    let mut cmd = Command::new(program);
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd
 }
 
 /// 获取日志文件路径（写入 logs/ 子目录；once 为 debug_once_{pid}.log，其余按天 debug_YYYYMMDD.log）
@@ -300,16 +289,6 @@ fn chrono_str() -> String {
     }
 }
 
-/// 使用系统默认程序打开文件/URL
-pub fn open_with_system(path: &str) -> Result<(), String> {
-    let mut cmd = new_hidden_cmd("cmd");
-    cmd.args(["/c", "start", "", path]).spawn().map_err(|e| {
-        standard_log!("[process] open_with_system failed: {} -> {}", path, e);
-        e.to_string()
-    })?;
-    Ok(())
-}
-
 /// 将字符串转换为 Windows 宽字符串 (null-terminated UTF-16)
 pub fn to_wide(s: &str) -> Vec<u16> {
     std::ffi::OsStr::new(s)
@@ -337,12 +316,19 @@ extern "system" {
     fn GetProcAddress(module: *mut core::ffi::c_void, name: *const u8) -> *mut core::ffi::c_void;
 }
 
-/// 通过 ShellExecuteW 打开文件/URL/命令
-fn shell_open(file: &str, params: Option<&str>) {
+/// 通过 ShellExecuteW 打开文件/URL/命令。
+/// **全仓「打开外部目标」的唯一实现**——原 `open_with_system` 走
+/// `cmd /c start`，会经 cmd.exe 二次解析命令行（Rust 1.77+ 虽已针对
+/// `cmd`/`bat` 打了 BatBadBut 补丁，但这层隐式依赖不应保留），已统一到此处。
+///
+/// 失败判据来自 ShellExecuteW 的返回值：**> 32 为成功，≤ 32 为错误码**
+/// （见 ShellExecute 文档的返回值表），因此本函数能报出「协议未注册」
+/// 「文件不存在」这类真实失败，而非仅捕获进程创建失败。
+pub fn shell_open(file: &str, params: Option<&str>) -> Result<(), String> {
     let wide_file = to_wide(file);
     let wide_params = params.map(to_wide);
     let wide_verb = to_wide("open");
-    unsafe {
+    let ret = unsafe {
         windows_sys::Win32::UI::Shell::ShellExecuteW(
             std::ptr::null_mut(),
             wide_verb.as_ptr(),
@@ -352,13 +338,19 @@ fn shell_open(file: &str, params: Option<&str>) {
                 .map_or(std::ptr::null(), |v| v.as_ptr()),
             std::ptr::null(),
             windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-        );
+        )
+    };
+    let code = ret as isize;
+    if code <= 32 {
+        standard_log!("[process] shell_open failed: {} (code {})", file, code);
+        return Err(format!("打开失败（错误码 {}）", code));
     }
+    Ok(())
 }
 
 /// 打开旧版声音控制面板 (mmsys.cpl)
 pub fn open_sound_panel(panel: &str) {
-    shell_open(
+    let _ = shell_open(
         "rundll32.exe",
         Some(&format!("shell32.dll,Control_RunDLL mmsys.cpl,,{}", panel)),
     );
@@ -366,5 +358,5 @@ pub fn open_sound_panel(panel: &str) {
 
 /// 打开现代 Windows 设置页面 (ms-settings:)
 pub fn open_settings_page(page: &str) {
-    shell_open(&format!("ms-settings:{}", page), None);
+    let _ = shell_open(&format!("ms-settings:{}", page), None);
 }

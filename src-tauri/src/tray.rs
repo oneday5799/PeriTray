@@ -338,7 +338,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 "win_sound_volume_mixer" => {
-                    let _ = crate::process::open_with_system("sndvol.exe");
+                    let _ = crate::process::shell_open("sndvol.exe", None);
                 }
                 "win_sound_playback" => {
                     crate::process::open_sound_panel("playback");
@@ -440,13 +440,15 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     app.listen("config-changed", move |_| {
+        // 事件线程只做轻量分发（见 AGENTS.md「事件回调不得在事件线程做阻塞工作」）：
+        // 读配置 + 更新原子标志 + 刷新勾选文案，三者都需即时反映，故留在本线程；
+        // 其余（图标重建、菜单重建、设备缓存刷新）含 COM 枚举与全量菜单构造，全部下放子线程。
         let new_auto = config::with_config(|c| c.auto_start);
         AUTO_START.store(new_auto, Ordering::Relaxed);
         update_auto_text();
-        update_tray_icon();
-        update_audio_devices_menu();
-        // config 变更时立即刷新设备缓存和 tooltip（异步避免阻塞主线程）
         std::thread::spawn(|| {
+            update_tray_icon();
+            update_audio_devices_menu();
             refresh_devices_cache();
             update_tooltip();
         });
@@ -457,7 +459,8 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     app.listen("audio-devices-changed", |_| {
-        update_audio_devices_menu();
+        // 同 config-changed：菜单重建内含 COM 枚举，不能在事件线程上同步跑
+        std::thread::spawn(|| update_audio_devices_menu());
     });
 
     // 启动后台设备监控线程
@@ -553,21 +556,35 @@ fn build_audio_devices_menu(
 }
 
 /// 更新音频设备切换子菜单（在设备列表变化时调用）
+///
+/// 锁纪律：`TRAY_ICON` 只用于「取句柄」和「换菜单」两个瞬时动作，
+/// 中间的 COM 枚举（`build_audio_devices_menu`）与全量菜单构造（`build_full_menu`）
+/// 一律在锁外完成——否则会与 `update_tray_icon` 等持锁路径互相排队，
+/// 把一次设备热插拔放大成可见卡顿。
 fn update_audio_devices_menu() {
-    let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
-    let Some(ref tray) = *tray_guard else { return };
-    let app = tray.app_handle().clone();
+    // 第一段：仅取 app 句柄，取到即释放锁
+    let app = {
+        let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
+        match *tray_guard {
+            Some(ref tray) => tray.app_handle().clone(),
+            None => return,
+        }
+    };
 
+    // 第二段：锁外做耗时工作（COM 枚举 + 菜单树构造）
     let new_submenu = match build_audio_devices_menu(&app) {
         Ok(s) => s,
         Err(_) => return,
     };
+    let Ok(menu) = build_full_menu(&app, &new_submenu) else {
+        return;
+    };
 
-    if let Ok(menu) = build_full_menu(&app, &new_submenu) {
+    // 第三段：仅替换动作持锁，持有时长与菜单规模无关
+    let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
+    if let Some(ref tray) = *tray_guard {
         let _ = tray.set_menu(Some(menu));
     }
-
-    drop(tray_guard);
 }
 
 /// 构建 Windows 声音设置子菜单

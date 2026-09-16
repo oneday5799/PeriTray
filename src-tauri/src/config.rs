@@ -224,6 +224,13 @@ static LOG_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new
 static LOG_ONCE: AtomicBool = AtomicBool::new(false);
 /// 上次成功写盘的 TOML 内容，用于脏检查跳过无变化写入
 static LAST_CONFIG_CONTENT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// 落盘串行锁：与配置锁相互独立的第二把锁，保证同一时刻只有一次落盘在进行
+/// （落盘已移出配置锁，见 `with_config_mut`；这里只解决「不交错」）
+static PERSIST_LOCK: Mutex<()> = Mutex::new(());
+/// 落盘序号（内容版本号）：解决串行锁解决不了的「乱序覆盖」——
+/// 调用 A 先取内容、调用 B 后取内容，但 B 先落盘、A 后落盘时，
+/// 磁盘上会留下 A 的旧内容。进入串行区前取号，进入后若发现已有更新者取过号就丢弃本次。
+static CONFIG_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// 解析日志级别字符串（未知值按关闭处理）
 pub fn parse_log_level(s: &str) -> u8 {
@@ -318,6 +325,61 @@ pub fn init_config() {
     }
 }
 
+/// 落盘取号：调用方**必须已持有内容快照**后再调用，否则版本号与内容不对应。
+fn claim_revision() -> u64 {
+    CONFIG_REVISION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// 本次取号是否仍是最新的一号。只有最新号才允许落盘，
+/// 否则「先取号者后落盘」会把旧内容盖到新内容上。
+fn revision_is_latest(rev: u64) -> bool {
+    rev == CONFIG_REVISION.load(Ordering::SeqCst)
+}
+
+/// 脏检查 + 原子落盘。**必须在配置锁之外调用**（这是 P1-3 的核心）。
+///
+/// 两步保护，缺一不可：
+/// 1. `PERSIST_LOCK` 串行化——保证两次落盘不交错（不会你写一半我写一半）；
+/// 2. `CONFIG_REVISION` 版本号——串行化**不解决乱序**：先取到内容的那次可能后落盘，
+///    把较旧的内容盖到较新的内容上。故进入串行区前先取号，进入后若已被更新者超越即丢弃。
+fn persist_if_changed(content: &str) {
+    let rev = claim_revision();
+    let _serial = crate::state::lock_unpoisoned(&PERSIST_LOCK);
+
+    // 已有更新的写入取过号 → 本次内容已过期，丢弃（防乱序覆盖）
+    if !revision_is_latest(rev) {
+        return;
+    }
+
+    // #23 脏检查：内容未变化时跳过写盘（减少高频配置操作的 I/O）
+    let last = LAST_CONFIG_CONTENT.get_or_init(|| Mutex::new(None));
+    if let Ok(cached) = last.lock() {
+        if cached.as_deref() == Some(content) {
+            return;
+        }
+    }
+
+    use std::io::Write;
+    // 原子写入：先写临时文件，再 rename 替换（同卷原子操作）
+    let cfg_path = config_path();
+    let tmp_path = cfg_path.with_extension("toml.tmp");
+    let write_result = std::fs::File::create(&tmp_path)
+        .and_then(|mut f| {
+            f.write_all(content.as_bytes())?;
+            f.sync_all()?;
+            Ok(())
+        })
+        .and_then(|_| std::fs::rename(&tmp_path, &cfg_path));
+    if let Err(e) = write_result {
+        standard_log!("[config] save failed: {}", e);
+        // 清理临时文件（如果 rename 失败）
+        let _ = std::fs::remove_file(&tmp_path);
+    } else if let Ok(mut cached) = last.lock() {
+        // 写盘成功，更新缓存
+        *cached = Some(content.to_string());
+    }
+}
+
 pub fn with_config<F, R>(f: F) -> R
 where
     F: FnOnce(&Config) -> R,
@@ -330,37 +392,48 @@ pub fn with_config_mut<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Config) -> R,
 {
-    let mut guard = crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
-    let result = f(&mut guard);
-    if let Ok(content) = toml::to_string_pretty(&*guard) {
-        // #23 脏检查：内容未变化时跳过写盘（减少高频配置操作的 I/O）
-        let last = LAST_CONFIG_CONTENT.get_or_init(|| Mutex::new(None));
-        if let Ok(cached) = last.lock() {
-            if cached.as_deref() == Some(content.as_str()) {
-                sync_log_cache(&guard);
-                return result;
-            }
-        }
-        use std::io::Write;
-        // 原子写入：先写临时文件，再 rename 替换（同卷原子操作）
-        let cfg_path = config_path();
-        let tmp_path = cfg_path.with_extension("toml.tmp");
-        let write_result = std::fs::File::create(&tmp_path)
-            .and_then(|mut f| {
-                f.write_all(content.as_bytes())?;
-                f.sync_all()?;
-                Ok(())
-            })
-            .and_then(|_| std::fs::rename(&tmp_path, &cfg_path));
-        if let Err(e) = write_result {
-            standard_log!("[config] save failed: {}", e);
-            // 清理临时文件（如果 rename 失败）
-            let _ = std::fs::remove_file(&tmp_path);
-        } else if let Ok(mut cached) = last.lock() {
-            // 写盘成功，更新缓存
-            *cached = Some(content);
-        }
+    // 配置锁只覆盖「改内存 + 同步日志缓存 + 序列化」，三者都是纯内存操作；
+    // 落盘（`sync_all()` 在机械盘 / 受控磁盘 / 杀软实时扫描下可达数十毫秒）
+    // 移到锁外执行。否则这段时间内所有 `with_config` 读取者——托盘 tooltip、
+    // 设备查询、电量通知、快捷键分发、看门狗探活——都会阻塞在配置锁上。
+    let (result, snapshot) = {
+        let mut guard =
+            crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
+        let result = f(&mut guard);
+        // 日志级别缓存必须与配置内容同拍更新，故留在锁内（纯内存，微秒级）
+        sync_log_cache(&guard);
+        (result, toml::to_string_pretty(&*guard).ok())
+    }; // ← 配置锁在此释放
+    if let Some(content) = snapshot {
+        persist_if_changed(&content);
     }
-    sync_log_cache(&guard);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{claim_revision, revision_is_latest};
+
+    /// 落盘版本号判据：**先取号者永远不得落盘**（当已有更新者取过号时）。
+    ///
+    /// 这正是 P1-3「落盘移出配置锁」后防乱序覆盖的核心：
+    /// 落盘已不在配置锁内，两次写入的完成顺序与取号顺序可以相反，
+    /// 若不比对版本号，先取到内容（较旧）的那次会最后落盘、把新内容盖掉。
+    ///
+    /// 只断言「单调递增」与「先取号者已过期」两个方向——它们是确定性的；
+    /// 反方向（后取号者此刻仍是最新）会被其他测试线程继续取号破坏，故不断言。
+    #[test]
+    fn stale_revision_never_wins() {
+        let first = claim_revision();
+        let second = claim_revision();
+
+        assert!(second > first, "取号必须单调递增，否则版本号无法定序");
+
+        // 关键断言：second 已取号，故 first 无论何时进入串行区都已被判为过期。
+        // 修复前没有这层判据，first 若后落盘就会覆盖 second 的内容。
+        assert!(
+            !revision_is_latest(first),
+            "先取号者被后取号者超越后必须判为过期，否则会乱序覆盖新内容"
+        );
+    }
 }

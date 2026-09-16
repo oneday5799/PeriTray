@@ -434,9 +434,42 @@ pub(crate) fn is_msix_context() -> bool {
     status == 0 || status == 122
 }
 
+/// 开始菜单 Programs 目录下的快捷方式路径
+/// （`%APPDATA%\Microsoft\Windows\Start Menu\Programs\PeriTray.lnk`，
+/// 与脚本里 `[Environment]::GetFolderPath('Programs')` 的结果一致）。
+#[cfg(target_os = "windows")]
+fn start_menu_shortcut_path() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(
+        std::path::Path::new(&appdata)
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("PeriTray.lnk"),
+    )
+}
+
+/// 判断已存在的快捷方式是否仍指向当前 exe 且带当前 AUMID。
+///
+/// 只判「文件存在」是不够的：用户换过安装目录后，旧 `.lnk` 会指向已删除的文件，
+/// 此时跳过会**永久**留下一个坏掉的开始菜单项，通知图标也一并丢失。
+/// 判据取「`.lnk` 字节中同时出现当前 exe 路径与 AUMID」——两者都是 ASCII 字面量，
+/// 由 `WScript.Shell` 写入时原样落盘。该判据只会**假阴性**（匹配不到 → 退化为重建，无害），
+/// 不会假阳性（不可能把坏快捷方式误判成最新）。
+#[cfg(target_os = "windows")]
+fn shortcut_is_current(lnk: &std::path::Path, exe_path: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(lnk) else {
+        return false;
+    };
+    let has =
+        |needle: &[u8]| !needle.is_empty() && bytes.windows(needle.len()).any(|w| w == needle);
+    has(exe_path.to_string_lossy().as_bytes()) && has(AUMID.as_bytes())
+}
+
 /// 注册 AUMID 到开始菜单快捷方式，使 Windows 通知显示应用图标。
 /// MSIX 包自带 AUMID，无需创建快捷方式；仅 NSIS 安装需要。
-/// 已存在同名快捷方式时跳过。
+/// 已存在且仍指向当前 exe / 当前 AUMID 的快捷方式时跳过（幂等）。
 #[cfg(target_os = "windows")]
 pub fn register_aumid() {
     if is_msix_context() {
@@ -450,6 +483,17 @@ pub fn register_aumid() {
         process::append_verbose_log("[aumid] failed to get exe path");
         return;
     };
+
+    // 幂等快速路径：快捷方式已存在且仍指向当前 exe 时直接返回。
+    // 价值在于**避免每次启动都拉起一次 PowerShell**（冷启动 300ms~1.5s），
+    // 与下方「移出启动关键路径」互补：前者省掉进程创建，后者兜住首次启动的开销。
+    if let Some(lnk) = start_menu_shortcut_path() {
+        if lnk.exists() && shortcut_is_current(&lnk, &exe_path) {
+            process::append_verbose_log("[aumid] shortcut exists, skip");
+            return;
+        }
+    }
+
     let exe_dir = exe_path.parent().unwrap_or(exe_path.as_path());
     let exe_str = exe_path.to_string_lossy().replace('\'', "''");
     let dir_str = exe_dir.to_string_lossy().replace('\'', "''");
@@ -487,7 +531,23 @@ $shortcut.Save()
         ico = icon_str,
     );
 
-    match Command::new("powershell")
+    // 绝对路径调用系统 PowerShell：`Command::new("powershell")` 走 PATH 解析，
+    // 存在被同名可执行文件劫持（或 PATH 缺失时静默失败）的面。
+    // 优先由 %SystemRoot% 拼出（兼容系统盘非 C: 的机器），缺失时退回惯用路径。
+    let powershell = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .map(|root| {
+            root.join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        });
+
+    match Command::new(powershell)
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()

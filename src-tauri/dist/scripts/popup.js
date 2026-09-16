@@ -51,18 +51,22 @@ window.addEventListener("focus", async () => {
   try {
     const volumeTab = document.getElementById("tab-volume");
     const deviceTab = document.getElementById("tab-devices");
-    const scrollTop = (volumeTab.style.display !== "none" ? volumeTab : deviceTab).scrollTop;
+    // 判据读类而非内联样式：CSP 收紧后内联 style 属性被拦，`style.display` 恒为空串，
+    // 会让这里恒取 volumeTab —— 每次 focus 都读写错误元素的 scrollTop，
+    // 并无条件多跑一遍 loadAudioDevices()/loadAudioSessions()。
+    const isVolume = volumeTab.classList.contains("active");
+    const scrollTop = (isVolume ? volumeTab : deviceTab).scrollTop;
 
     // #16 复用 loadDevices 替代手工 config 赋值 + renderDevices
     await loadDevices();
 
-    if (volumeTab.style.display !== "none") {
+    if (isVolume) {
       await loadAudioDevices();
       if (selectedDeviceId) {
         await loadAudioSessions(selectedDeviceId);
       }
     }
-    (volumeTab.style.display !== "none" ? volumeTab : deviceTab).scrollTop = scrollTop;
+    (isVolume ? volumeTab : deviceTab).scrollTop = scrollTop;
     lastFocusRefresh = Date.now();
   } catch (e) {
     console.error("Failed to refresh on focus:", e);
@@ -193,8 +197,15 @@ let suppressNextSwitchAnimation = false;
 let tabAnimToken = 0;
 
 function applyTabContentDisplay(tabName) {
-  document.getElementById("tab-devices").style.display = tabName === "devices" ? "block" : "none";
-  document.getElementById("tab-volume").style.display = tabName === "volume" ? "block" : "none";
+  const isVolume = tabName === "volume";
+  const deviceTab = document.getElementById("tab-devices");
+  const volumeTab = document.getElementById("tab-volume");
+  deviceTab.style.display = isVolume ? "none" : "block";
+  volumeTab.style.display = isVolume ? "block" : "none";
+  // `active` 是标签可见性的语义状态源（样式表据它给出初始 display），
+  // 必须与内联 display 同步维护，否则读类的判据会读到过期状态。
+  deviceTab.classList.toggle("active", !isVolume);
+  volumeTab.classList.toggle("active", isVolume);
 }
 
 function animateTabSwitch(oldIndex, newIndex) {

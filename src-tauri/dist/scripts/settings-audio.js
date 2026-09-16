@@ -23,7 +23,16 @@ function renderAudioDeviceGroups(audioDevices) {
   container.innerHTML = "";
 
   if (audioDevices.length === 0) {
-    container.innerHTML = '<div class="card-item"><div class="card-item-name" style="color:#888">没有检测到音频设备</div></div>';
+    // 空态以 DOM 组装（空态类的灰色见 base.css 的 .card-item-name--empty）：
+    // 不再把样式写进 innerHTML —— 内联 style 属性会被 CSP `style-src 'self'` 拦掉
+    container.innerHTML = "";
+    const emptyItem = document.createElement("div");
+    emptyItem.className = "card-item";
+    const emptyName = document.createElement("div");
+    emptyName.className = "card-item-name card-item-name--empty";
+    emptyName.textContent = "没有检测到音频设备";
+    emptyItem.appendChild(emptyName);
+    container.appendChild(emptyItem);
     if (arrow) arrow.classList.remove("expanded");
     container.style.maxHeight = "0px";
     return;

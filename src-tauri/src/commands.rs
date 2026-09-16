@@ -144,12 +144,29 @@ pub fn toggle_audio_device_hidden(app: tauri::AppHandle, name: String) {
 
 #[tauri::command]
 pub fn open_bt_settings() -> Result<(), String> {
-    process::open_with_system("ms-settings:bluetooth")
+    process::shell_open("ms-settings:bluetooth", None)
 }
 
+/// `open_url` 允许的目标协议白名单。
+/// 覆盖前端全部实际调用面：GitHub / Release 页（https）、空间音效回退（ms-settings:）。
+const OPEN_URL_ALLOWED: &[&str] = &["https://", "http://", "ms-windows-store://", "ms-settings:"];
+
+/// 判定一个 URL 是否允许交给系统打开（纯函数，便于单测覆盖拒绝分支）。
+fn is_allowed_open_url(url: &str) -> bool {
+    OPEN_URL_ALLOWED.iter().any(|p| url.starts_with(p))
+}
+
+/// 打开外部链接。
+/// **必须白名单**：`ShellExecuteW` 会执行任意已注册协议，不加限制时前端一旦被注入
+/// （XSS / 恶意扩展）即可借 `open_url` 用 `file:`、自定义协议等做本地落地，
+/// 而本命令是前端唯一能触达「系统执行」的入口（见代码审查报告 P1-4）。
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), String> {
-    process::open_with_system(&url)
+    if !is_allowed_open_url(&url) {
+        standard_log!("[cmd] open_url 拒绝非白名单协议: {}", url);
+        return Err(format!("不允许的链接协议: {}", url));
+    }
+    process::shell_open(&url, None)
 }
 
 #[tauri::command]
@@ -226,7 +243,7 @@ pub fn open_24g_device_file() -> Result<(), String> {
         }
         std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
     }
-    process::open_with_system(&path.to_string_lossy())
+    process::shell_open(&path.to_string_lossy(), None)
 }
 
 const TRAY_DEVICE_LIMIT: usize = 4;
@@ -383,7 +400,7 @@ pub async fn set_spatial_sound(
 pub fn open_log_dir() -> Result<(), String> {
     let dir = crate::process::logs_dir();
     let _ = std::fs::create_dir_all(&dir);
-    process::open_with_system(&dir.to_string_lossy())
+    process::shell_open(&dir.to_string_lossy(), None)
 }
 
 #[tauri::command(async)]
@@ -405,6 +422,26 @@ fn parse_shortcut(s: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, Str
     tauri_plugin_global_shortcut::Shortcut::try_from(s).map_err(|e| e.to_string())
 }
 
+/// 为一个动作注册快捷键（含事件分发闭包）。**只碰注册表，不写配置**，
+/// 便于提交阶段在注册失败时把旧键原样恢复回去。
+fn register_shortcut(
+    app: &tauri::AppHandle,
+    action: &str,
+    sc: tauri_plugin_global_shortcut::Shortcut,
+    key: &str,
+) -> Result<(), String> {
+    let action_clone = action.to_string();
+    let key_clone = key.to_string();
+    app.global_shortcut()
+        .on_shortcut(sc, move |_app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            crate::shortcut::dispatch_shortcut_action(_app, &action_clone, &key_clone);
+        })
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn set_hotkey_config(
     app: tauri::AppHandle,
@@ -419,29 +456,47 @@ pub fn set_hotkey_config(
         "volume_mute" => c.shortcut_volume_mute.clone(),
         _ => None,
     });
-    if let Some(ref pk) = prev_key {
-        if let Ok(sc) = parse_shortcut(pk) {
-            let _ = app.global_shortcut().unregister(sc);
-            standard_log!("[hotkey] unregistered old key {} for {}", pk, action);
+    let prev_sc = prev_key.as_deref().and_then(|pk| parse_shortcut(pk).ok());
+
+    // ① 校验阶段：**不做任何副作用**。
+    // 原实现先注销旧键再校验新键，于是「新键解析失败」这条分支会留下：
+    // 注册表里旧键已没了、配置里旧键还在 —— 前端显示「已设置 XX」但按键无反应，
+    // 且不广播 config-changed，用户完全无从察觉（见代码审查报告 P1-5）。
+    let new_sc = match key.as_deref() {
+        Some(k) => {
+            let sc = parse_shortcut(k)?; // 解析失败：状态零变化
+                                         // 同键重设必须放行：此刻旧键尚未注销（校验先于副作用），它必然处于已注册状态，
+                                         // 若按「已占用」拒绝，用户重新选中同一个键就会失败。
+            let same_as_prev = prev_sc.as_ref() == Some(&sc);
+            if !same_as_prev && app.global_shortcut().is_registered(sc.clone()) {
+                return Err("快捷键已被占用".to_string()); // 被占用：状态零变化
+            }
+            Some(sc)
         }
+        None => None,
+    };
+
+    // ② 提交阶段：注销旧 → 注册新 → 落配置（顺序不变，只是整体挪到校验之后）
+    if let Some(prev) = prev_sc {
+        let _ = app.global_shortcut().unregister(prev);
+        standard_log!(
+            "[hotkey] unregistered old key {} for {}",
+            prev_key.as_deref().unwrap_or(""),
+            action
+        );
     }
-    if let Some(ref new_key_str) = key {
-        let sc = parse_shortcut(new_key_str)?;
-        if app.global_shortcut().is_registered(sc.clone()) {
-            set_config_key(&action, None);
-            return Err("快捷键已被占用".to_string());
+    if let Some(sc) = new_sc {
+        let new_key_str = key.as_deref().unwrap_or_default();
+        if let Err(e) = register_shortcut(&app, &action, sc, new_key_str) {
+            // 注册失败：把旧键恢复回去，否则会重现本条要修的那种不一致
+            //（注册表空着、配置里留着旧键）
+            if let (Some(prev), Some(prev_key_str)) = (prev_sc, prev_key.as_deref()) {
+                let _ = register_shortcut(&app, &action, prev, prev_key_str);
+            }
+            return Err(e);
         }
-        let action_clone = action.clone();
-        let key_clone = new_key_str.clone();
+        // 成功后才记日志：原先在注册尝试之前打印，失败时日志与事实相反
         standard_log!("[hotkey] registered {} {}", new_key_str, action);
-        app.global_shortcut()
-            .on_shortcut(sc, move |_app, _shortcut, event| {
-                if event.state != ShortcutState::Pressed {
-                    return;
-                }
-                crate::shortcut::dispatch_shortcut_action(_app, &action_clone, &key_clone);
-            })
-            .map_err(|e| e.to_string())?;
     }
     set_config_key(&action, key);
     let config_snapshot = config::with_config(|c| c.clone());
@@ -549,4 +604,39 @@ pub fn set_window_material(app: tauri::AppHandle, material: String) -> Result<bo
 #[tauri::command]
 pub fn check_material_support(material: String) -> Result<bool, String> {
     Ok(crate::window_material::check_material_support(&material))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_allowed_open_url;
+
+    /// P1-4 的可证伪单测：`open_url` 只放行白名单协议。
+    ///
+    /// 修复前 `open_url` 直接把任意字符串交给 `ShellExecuteW`，没有这层判据；
+    /// 本测试锁定「前端唯一触达系统执行的入口不得被用作本地落地原语」这一性质。
+    #[test]
+    fn open_url_rejects_non_whitelisted_schemes() {
+        for ok in [
+            "https://github.com/oneday5799/PeriTray",
+            "http://127.0.0.1:8080/x",
+            "ms-settings:sound-defaultoutputproperties",
+            "ms-windows-store://pdp/?productid=X",
+        ] {
+            assert!(is_allowed_open_url(ok), "白名单协议应放行: {ok}");
+        }
+
+        for bad in [
+            "file:///C:/Windows/System32/calc.exe",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "ftp://example.com/x",
+            r"C:/Windows/System32/calc.exe",
+            r"\\server\share\payload.exe",
+            "shell:startup",
+            "",
+        ] {
+            assert!(!is_allowed_open_url(bad), "非白名单协议必须拒绝: {bad}");
+        }
+    }
 }
