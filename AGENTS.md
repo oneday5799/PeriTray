@@ -38,6 +38,12 @@
 - **缩进**：JS / CSS 两空格，Rust 四空格，一律空格禁 Tab
 - **命名**：JS 函数/变量 camelCase、CSS 类名 kebab-case（变体用 `--` 后缀）、
   Rust 与配置键 snake_case
+- **RAII 守卫的绑定命名**：**需要被 `move` 闭包捕获的守卫（外层绑定）不得以 `_` 开头**——
+  下划线会同时消掉 `unused_variables` 告警，而「未被引用」正是闭包捕获失败的直接原因；
+  仅在被移入目标作用域后、只承担 Drop 职责的**内层绑定**，`_` 前缀才是正确用法
+  （如 `let _guard = guard;`）。**这条规则的作用域是「外层守卫」，不是「所有 RAII 守卫」**——
+  对 `let _guard = crate::state::lock_unpoisoned(&LOCK);` 这类内层 Drop-only 绑定，
+  去掉下划线只会制造永久误报。详见代码审查报告 P3-14
 - **异步**：以 async/await 为主；fire-and-forget 场景可用 `.then().catch()` 链
 - **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
 - **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
