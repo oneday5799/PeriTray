@@ -380,6 +380,22 @@ fn persist_if_changed(content: &str) {
     }
 }
 
+/// 只读访问配置。
+///
+/// **锁纪律（P0 死锁防护，勿破坏）**：闭包内**只允许纯内存操作**（读字段、clone、算术）。
+/// 禁止在闭包内调用任何「向主线程分发并同步等待」的 API，典型为：
+/// Tauri 菜单（`MenuItem::with_id` / `Submenu::append` / `set_text` / `set_menu` /
+/// `set_icon` / `set_tooltip`）、窗口 getter（`is_visible` / `hwnd` / `show`）、
+/// `run_on_main_thread`；同样禁止 COM/WMI 查询、文件 I/O 等阻塞调用。
+///
+/// 原因：主线程自身会通过 `with_config(_mut)` 读配置（`set_window_material`、
+/// `get_config`、快捷键分发、tooltip 刷新…）。上述 API 内部经
+/// `run_item_main_thread!` 展开为 `run_on_main_thread(..)` + `rx.recv()`（**无超时**），
+/// 于是「子线程持配置锁 → 等主线程」与「主线程 → 等配置锁」构成 AB/BA 死锁：
+/// **永久冻结，看门狗也救不回**（其探活同样要主线程）。
+///
+/// 需要配置数据来构造 UI 时，先在锁内取纯数据快照（如 `Vec<(String, String)>`），
+/// 再在锁外调用相关 API——参考 `tray::build_audio_devices_menu`。
 pub fn with_config<F, R>(f: F) -> R
 where
     F: FnOnce(&Config) -> R,
@@ -388,6 +404,10 @@ where
     f(&guard)
 }
 
+/// 可变访问配置（改内存 + 同步日志缓存 + 序列化快照，落盘在锁外）。
+///
+/// **锁纪律（P0 死锁防护，勿破坏）**：同 [`with_config`]——闭包内只允许纯内存操作，
+/// 严禁调用任何会向主线程分发并同步等待的 Tauri API、COM/WMI 查询或文件 I/O。
 pub fn with_config_mut<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Config) -> R,

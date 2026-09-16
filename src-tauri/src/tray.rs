@@ -77,11 +77,16 @@ fn build_tooltip_text() -> String {
 fn update_tooltip() {
     let tooltip = build_tooltip_text();
 
-    if let Ok(guard) = TRAY_ICON.get_or_init(|| Mutex::new(None)).lock() {
-        if let Some(ref tray) = *guard {
-            let _ = tray.set_tooltip(Some(tooltip));
-        }
-    }
+    // 先取句柄再释放锁：`set_tooltip` 内部同步等主线程，
+    // 持 TRAY_ICON 调用会与「主线程等 TRAY_ICON」构成 AB/BA 死锁（详见 build_audio_devices_menu 注释）
+    let tray = match TRAY_ICON.get_or_init(|| Mutex::new(None)).lock() {
+        Ok(guard) => match *guard {
+            Some(ref tray) => tray.clone(),
+            None => return,
+        },
+        Err(_) => return,
+    };
+    let _ = tray.set_tooltip(Some(tooltip));
 }
 
 /// 后台刷新线程：定期查询设备并更新缓存，状态变化时自动更新 tooltip
@@ -472,27 +477,37 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn update_auto_text() {
-    if let Some(item) = AUTO_MENU_ITEM.get() {
-        if let Ok(guard) = item.lock() {
-            if let Some(ref mi) = *guard {
-                let text = if AUTO_START.load(Ordering::Relaxed) {
-                    "开机自启 ✓"
-                } else {
-                    "开机自启"
-                };
-                let _ = mi.set_text(text);
-            }
-        }
-    }
+    // 先取句柄再释放锁：`set_text` 内部同步等主线程（同 build_audio_devices_menu 注释）
+    let item = match AUTO_MENU_ITEM.get() {
+        Some(slot) => match slot.lock() {
+            Ok(guard) => match *guard {
+                Some(ref mi) => mi.clone(),
+                None => return,
+            },
+            Err(_) => return,
+        },
+        None => return,
+    };
+    let text = if AUTO_START.load(Ordering::Relaxed) {
+        "开机自启 ✓"
+    } else {
+        "开机自启"
+    };
+    let _ = item.set_text(text);
 }
 
 /// 根据默认打开页面与系统深色模式更新托盘图标
 fn update_tray_icon() {
     let icon = pick_tray_icon();
-    let guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
-    if let Some(ref tray) = *guard {
-        let _ = tray.set_icon(Some(icon));
-    }
+    // 先取句柄再释放锁：`set_icon` 内部同步等主线程（同 build_audio_devices_menu 注释）
+    let tray = {
+        let guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
+        match *guard {
+            Some(ref tray) => tray.clone(),
+            None => return,
+        }
+    };
+    let _ = tray.set_icon(Some(icon));
 }
 
 /// 简化设备名称：仅保留括号内内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
@@ -512,6 +527,18 @@ pub(crate) fn simplify_device_name(name: &str) -> &str {
 }
 
 /// 构建音频设备切换子菜单
+///
+/// **锁纪律（P0 死锁防护，勿破坏）**：`config::with_config` 闭包内**只允许纯内存拷贝**。
+///
+/// Tauri 的菜单 API（`MenuItem::with_id` / `Submenu::append` / `set_menu` /
+/// `set_icon` / `set_tooltip` / `set_text` …）内部一律经 `run_item_main_thread!` 展开为
+/// `run_on_main_thread(..)` + `rx.recv()`（**无超时**），即同步等待主线程执行完闭包。
+/// 而主线程自身会通过 `with_config(_mut)` 读配置（`set_window_material`、`get_config`、
+/// 快捷键分发、tooltip 刷新…）。因此「持配置锁 → 调菜单 API」与「主线程 → 等配置锁」
+/// 构成 AB/BA 死锁：子线程等主线程、主线程等配置锁，**永久冻结且看门狗也救不回**
+/// （看门狗探活 `is_visible()` 同样要主线程）。
+///
+/// 故此处先在锁内取纯数据快照，菜单 API 全部移到锁外调用。
 fn build_audio_devices_menu(
     app: &tauri::AppHandle,
 ) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
@@ -521,36 +548,37 @@ fn build_audio_devices_menu(
         let empty = MenuItem::with_id(app, "audio_dev_empty", "无音频设备", false, None::<&str>)?;
         submenu.append(&empty)?;
     } else {
-        config::with_config(|c| {
-            for device in &devices {
-                if c.hidden_audio_devices.contains(&device.name) {
-                    continue;
-                }
-                let check = if device.is_default { " ✓" } else { "" };
-                let display = c
-                    .device_names
-                    .get(&device.name)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        if c.simplify_device_names {
-                            simplify_device_name(&device.name).to_string()
-                        } else {
-                            device.name.clone()
-                        }
-                    });
-                let label = format!("{}{}", display, check);
-                let item = MenuItem::with_id(
-                    app,
-                    format!("audio_dev_{}", device.id),
-                    label,
-                    true,
-                    None::<&str>,
-                );
-                if let Ok(item) = item {
-                    let _ = submenu.append(&item);
-                }
-            }
+        // 锁内：只做纯内存快照（菜单 id + 显示文案），不触碰任何 Tauri API
+        let rows: Vec<(String, String)> = config::with_config(|c| {
+            devices
+                .iter()
+                .filter(|device| !c.hidden_audio_devices.contains(&device.name))
+                .map(|device| {
+                    let check = if device.is_default { " ✓" } else { "" };
+                    let display = c
+                        .device_names
+                        .get(&device.name)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            if c.simplify_device_names {
+                                simplify_device_name(&device.name).to_string()
+                            } else {
+                                device.name.clone()
+                            }
+                        });
+                    (
+                        format!("audio_dev_{}", device.id),
+                        format!("{}{}", display, check),
+                    )
+                })
+                .collect()
         });
+        // 锁外：菜单 API（内部同步等主线程，绝不可在持锁时调用）
+        for (id, label) in rows {
+            if let Ok(item) = MenuItem::with_id(app, id, label, true, None::<&str>) {
+                let _ = submenu.append(&item);
+            }
+        }
     }
     Ok(submenu)
 }
@@ -580,11 +608,17 @@ fn update_audio_devices_menu() {
         return;
     };
 
-    // 第三段：仅替换动作持锁，持有时长与菜单规模无关
-    let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
-    if let Some(ref tray) = *tray_guard {
-        let _ = tray.set_menu(Some(menu));
-    }
+    // 第三段：先取句柄、释放托盘锁，再换菜单——`set_menu` 内部经
+    // `run_item_main_thread!` 同步等主线程，持锁调用会与主线程的
+    // `update_tooltip` / `update_tray_icon`（同样要 TRAY_ICON）构成 AB/BA 死锁。
+    let tray = {
+        let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
+        match *tray_guard {
+            Some(ref tray) => tray.clone(),
+            None => return,
+        }
+    };
+    let _ = tray.set_menu(Some(menu));
 }
 
 /// 构建 Windows 声音设置子菜单

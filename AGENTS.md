@@ -52,6 +52,18 @@
   其余一律 `std::thread::spawn` 下放。**评审检查项**：每新增一个 `app.listen`，
   逐行确认回调体内没有跨进程等待、没有设备枚举、没有整棵菜单/图标的构造；
   同理，`Mutex`/`OnceLock` 的持锁区内不得调用上述耗时函数（先取句柄 → 锁外构造 → 短暂持锁替换）
+- **持锁区不得调用「同步等主线程」的 API（P0，会永久死锁）**：Tauri 的菜单/托盘 API
+  （`MenuItem::with_id`、`Submenu::append`、`set_text`、`set_menu`、`set_icon`、`set_tooltip` …）
+  与窗口 getter（`is_visible`、`hwnd`、`show` …）内部都经 `run_item_main_thread!` 展开为
+  `run_on_main_thread(..)` + `rx.recv()`——**无超时地同步等待主线程**。而主线程自身会通过
+  `config::with_config(_mut)` 读配置（`set_window_material`、`get_config`、快捷键分发、
+  tooltip 刷新…）。因此「子线程持配置锁/托盘锁 → 调菜单 API」与「主线程 → 等该锁」
+  构成 **AB/BA 死锁：永久冻结，看门狗也救不回**（其探活 `is_visible()` 同样要主线程），
+  只能被系统按「应用无响应」终止（退出码 `0xCFFFFFFF`）。
+  **正确写法**：锁内只取纯数据快照或句柄克隆（`TrayIcon`/`MenuItem` 均 `Clone`），
+  释放锁后再调用 API——参考 `tray::build_audio_devices_menu` / `update_audio_devices_menu`。
+  **评审检查项**：任何 `with_config(_mut)`、`lock_unpoisoned(..)`、`.lock()` 的持锁区内，
+  逐行确认没有 Tauri 菜单/窗口 API、没有 `run_on_main_thread`、没有 COM/WMI 与文件 I/O
 - **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
 - **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
 - **Rust 文档注释与日志**：`///` 用于 pub 项；日志统一走 `process::append_log`（标准级）
