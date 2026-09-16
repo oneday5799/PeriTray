@@ -1,7 +1,8 @@
+use crate::state::SingleFlightGuard;
 use crate::{standard_log, verbose_log};
 use std::collections::HashMap;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
@@ -462,13 +463,15 @@ pub fn find_paired_bluetooth_devices(
     // 每次枚举入口顺手淘汰超龄条目，防止 device_id 长期累积
     evict_stale_bt_entries();
 
-    // 单飞协调：仅当抢到 flag 才真正同步现查；后台补查进行中则整段降级为读缓存
-    let force = fresh
-        && BT_BATTERY_REFRESHING
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok();
-    // 注意：此处不使用 RAII guard，因为函数结束时需要复位标志
-    // 后台补查线程使用 SingleFlightGuard 保证 panic 安全
+    // 单飞协调：仅当抢到 flag 才真正同步现查；后台补查进行中则整段降级为读缓存。
+    // 守卫持有至函数结束——下方 6 个 `?` 早退路径（含 GetDeviceSelectorFromPairingState /
+    // FindAllAsyncAqsFilter / join）任一处失败都会经 Drop 复位标志，不再泄漏。
+    let force_guard = if fresh {
+        SingleFlightGuard::new(&BT_BATTERY_REFRESHING)
+    } else {
+        None
+    };
+    let force = force_guard.is_some();
 
     let mut result = Vec::new();
 
@@ -508,36 +511,8 @@ pub fn find_paired_bluetooth_devices(
         result.len(),
         force
     );
-    if force {
-        BT_BATTERY_REFRESHING.store(false, Ordering::SeqCst);
-    }
+    // 标志复位由 force_guard 的 Drop 负责（含上方所有早退路径）
     Ok(result)
-}
-
-/// 单飞标志的 RAII 释放：正常/panic均复位，避免后台补查被永久锁死
-/// 用于后台线程路径（enqueue_bt_refresh）
-struct SingleFlightGuard<'a> {
-    flag: &'a AtomicBool,
-}
-
-impl<'a> SingleFlightGuard<'a> {
-    /// CAS 获取标志；成功返回 guard，失败返回 None（已有补查在跑）
-    fn new(flag: &'a AtomicBool) -> Option<Self> {
-        if flag
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            Some(Self { flag })
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for SingleFlightGuard<'_> {
-    fn drop(&mut self) {
-        self.flag.store(false, Ordering::SeqCst);
-    }
 }
 
 fn read_ble_battery_from_id(device_id: &str) -> Option<u8> {
@@ -650,12 +625,14 @@ fn enqueue_bt_refresh(queue: Vec<(String, BtKind)>) {
     if queue.is_empty() {
         return;
     }
-    let Some(_guard) = SingleFlightGuard::new(&BT_BATTERY_REFRESHING) else {
+    // 外层绑定必须具名（不得写成 `_guard`）：否则 move 闭包不会捕获它，
+    // 守卫会在函数返回时立即 Drop，单飞语义退化为无保护（见 AGENTS.md 命名约定）
+    let Some(guard) = SingleFlightGuard::new(&BT_BATTERY_REFRESHING) else {
         return;
     };
     standard_log!("[bt] 后台电量补查开始: {} 台", queue.len());
-    // guard 移入闭包，panic 时 Drop 自动复位标志
     std::thread::spawn(move || {
+        let _guard = guard; // 显式引用 → 触发闭包捕获，随线程结束（或 panic 展开）Drop
         let mut any_changed = false;
         for (device_id, kind) in &queue {
             let lv = read_battery_by_kind(*kind, device_id);
@@ -665,7 +642,7 @@ fn enqueue_bt_refresh(queue: Vec<(String, BtKind)>) {
         if any_changed {
             notify_bt_battery_changed();
         }
-        // guard 在此 drop，自动复位 BT_BATTERY_REFRESHING
+        // _guard 在此 drop，自动复位 BT_BATTERY_REFRESHING
     });
 }
 

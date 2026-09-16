@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tauri::menu::MenuItem;
 
@@ -45,6 +45,39 @@ pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceL
 /// （本项目各静态量在 panic 后仅需"可用"而非"严格一致"，统一在此表达该语义）
 pub fn lock_unpoisoned<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 单飞标志的 RAII 守卫：CAS 抢占，Drop 时复位。
+/// 正常返回与 panic 展开均会复位，避免后台任务被永久锁死。
+///
+/// 用法要点（见 AGENTS.md「RAII 守卫的绑定命名」）：
+/// - **外层绑定不得以 `_` 开头**——若守卫需要在线程闭包内被持有，必须以具名绑定
+///   `let Some(guard) = ...` 取得，再在闭包体内显式引用（`let _guard = guard;`）触发捕获。
+///   写成 `let Some(_guard)` 且闭包内不引用它时，`move` 闭包**不会捕获它**，
+///   守卫会在函数返回时立即 Drop，单飞语义退化为无保护。
+/// - 同步路径（在本函数内跑完工作再返回）用 `let Some(_guard)` 是正确的：Drop-only 绑定。
+pub(crate) struct SingleFlightGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> SingleFlightGuard<'a> {
+    /// CAS 获取标志；成功返回 guard，失败返回 None（已有任务在跑）
+    pub(crate) fn new(flag: &'a AtomicBool) -> Option<Self> {
+        if flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            Some(Self { flag })
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for SingleFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
 }
 
 /// 设备缓存，用于托盘 tooltip 显示，避免重复 WMI 查询
