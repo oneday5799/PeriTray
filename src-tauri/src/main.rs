@@ -226,9 +226,13 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
 
             // 时间跳变检测：期望 ~15s，>20s 说明系统经历过休眠/唤醒。
             // 唤醒后主动 Resume WebView2 渲染进程（Suspend 期间渲染暂停）。
-            let now = Instant::now();
-            let elapsed = now.duration_since(last_instant);
-            last_instant = now;
+            //
+            // ⚠️ 基准点 `last_instant` 必须取在**本轮探活结束之后**（见循环末尾），
+            // 即只度量 sleep 间隔。若按直觉取在本行（sleep 之后、探活之前），
+            // 上一轮探活的超时耗时（最长 5s）会叠加进下一轮间隔，使 15s 变成
+            // 20.008s > 20s —— **每次探活超时都必然误报**为「系统休眠唤醒」，
+            // 进而执行一次不必要的 resume_webview（唤醒本应休眠的弹窗）。
+            let elapsed = Instant::now().duration_since(last_instant);
             if elapsed > std::time::Duration::from_secs(20) {
                 standard_log!(
                     "[watchdog] time jump: {:.1}s — resuming webview",
@@ -262,6 +266,9 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
                     }
                 }
             }
+
+            // 下一轮的时间基准：置于探活之后，使 elapsed 只含 sleep 间隔（~15s）
+            last_instant = Instant::now();
         }
     });
 }
