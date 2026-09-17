@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tauri::menu::MenuItem;
 
@@ -29,8 +29,96 @@ pub fn get_tray_monitor() -> &'static Mutex<Option<TrayMonitorInfo>> {
     TRAY_MONITOR.get_or_init(|| Mutex::new(None))
 }
 
-/// 弹窗动画状态
+/// 弹窗动画状态。
+///
+/// **不要直接 `store` 它**（P1-8）：置位/复位一律经 [`try_begin_animation`] 取守卫，
+/// 由 `SingleFlightGuard` 的 Drop 负责复位。手工 `store(false)` 一旦被漏写
+/// （或动画线程 panic 未展开到复位点），弹窗会**永久打不开也关不掉**。
 pub static ANIMATING: AtomicBool = AtomicBool::new(false);
+
+/// 本次动画的起始时刻（[`monotonic_ms`] 刻度）。
+///
+/// 存在的唯一理由：`Cargo.toml` 的 `[profile.release] panic = "abort"` 让
+/// **Drop 复位在 release 下根本不会执行**（abort 直接终止进程，不展开栈），
+/// 因此不能只靠 RAII。这里存下起始时刻，配合 [`ANIMATION_TIMEOUT_MS`]
+/// 把「永久卡死」降级为「最多卡 2 秒」。
+static ANIMATION_STARTED: AtomicU64 = AtomicU64::new(0);
+
+/// 动画超时上限（毫秒）。动画本体最长 250ms（`animate_open`），
+/// 取 2 秒给足调度余量；超过即认定动画线程已死。
+pub(crate) const ANIMATION_TIMEOUT_MS: u64 = 2000;
+
+/// 单调毫秒时钟（自本进程首次调用起算）。
+///
+/// **不用 `SystemTime`**：系统时间会被 NTP 校正、用户改表、休眠唤醒调整，
+/// 跳变会让「已过多少毫秒」算出负数或突增，超时判定随之失效
+/// （看门狗的时间跳变误报就是同一类坑）。
+pub fn monotonic_ms() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// 纯判据：`flag` 置位且未超时 ⇒ 动画仍在阻塞新操作。
+/// 抽成纯函数以便对边界（恰好 `ANIMATION_TIMEOUT_MS`）做单测。
+fn animation_blocks_at(flag: bool, elapsed_ms: u64) -> bool {
+    flag && elapsed_ms < ANIMATION_TIMEOUT_MS
+}
+
+/// 动画是否正在阻塞新的开关操作（含超时自愈判定）。
+///
+/// 注意它**不**清除标志：超时后返回 `false` 只是让调用方继续往下走，
+/// 真正的夺回发生在 [`try_begin_animation`] 里。
+pub fn animation_blocks() -> bool {
+    let flag = ANIMATING.load(Ordering::SeqCst);
+    if !flag {
+        return false;
+    }
+    let elapsed = monotonic_ms().saturating_sub(ANIMATION_STARTED.load(Ordering::SeqCst));
+    animation_blocks_at(flag, elapsed)
+}
+
+/// 尝试开始一次弹窗动画：成功返回守卫（Drop 时复位 `ANIMATING`），
+/// 失败返回 `None`（已有动画在跑且未超时）。
+///
+/// **超时自愈**：标志为 true 但已超过 [`ANIMATION_TIMEOUT_MS`] 时，认定上一轮
+/// 动画线程已异常终止（release 下 `panic = "abort"` 使 Drop 复位不生效），
+/// 强行夺回标志并放行——这是「永久卡死」与「最多卡 2 秒」的分界。
+///
+/// **已知残留**（超时夺回时才可能出现）：若那轮「疑似已死」的动画线程其实还活着，
+/// 它随后 Drop 守卫时会把 `ANIMATING` 复位一次，可能误清掉新一轮的持有状态。
+/// 后果是允许两个动画短暂重叠（画面抖动），而非卡死——方向上仍是净改善。
+/// 彻底消除需要带代际号的守卫类型，而本项目的守卫是共用的 `SingleFlightGuard`。
+pub(crate) fn try_begin_animation() -> Option<SingleFlightGuard<'static>> {
+    try_begin_animation_with_timeout(ANIMATION_TIMEOUT_MS)
+}
+
+/// [`try_begin_animation`] 的实际实现。`timeout_ms` 作为参数是为了让「超时夺回」
+/// 这条分支能被**确定性地**单测（不必真的等 2 秒）。
+fn try_begin_animation_with_timeout(timeout_ms: u64) -> Option<SingleFlightGuard<'static>> {
+    if let Some(guard) = SingleFlightGuard::new(&ANIMATING) {
+        ANIMATION_STARTED.store(monotonic_ms(), Ordering::SeqCst);
+        return Some(guard);
+    }
+    // 已被占用：仅当判定超时才夺回
+    let elapsed = monotonic_ms().saturating_sub(ANIMATION_STARTED.load(Ordering::SeqCst));
+    if !(elapsed < timeout_ms) {
+        // 先复位再重新抢占：直接 CAS 抢占会失败（标志仍为 true）
+        let _ = ANIMATING.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst);
+        if let Some(guard) = SingleFlightGuard::new(&ANIMATING) {
+            ANIMATION_STARTED.store(monotonic_ms(), Ordering::SeqCst);
+            crate::standard_log!(
+                "[popup] ANIMATING 超时自愈：动画线程疑似已死（已过 {}ms，上限 {}ms），强制放行",
+                elapsed,
+                timeout_ms
+            );
+            return Some(guard);
+        }
+    }
+    None
+}
 
 /// 开机自启状态
 pub static AUTO_START: AtomicBool = AtomicBool::new(false);
@@ -134,6 +222,102 @@ pub fn get_devices_cache() -> &'static Mutex<Vec<Device>> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// 动画相关用例会操作全局 `ANIMATING` / `ANIMATION_STARTED`，
+    /// 而测试默认并行 ⇒ 用一把测试专用锁串行化，避免相互干扰。
+    static ANIM_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    // ── P1-8：弹窗动画守卫 ────────────────────────────────────────
+
+    /// 超时判据的边界：**恰好等于上限**即视为超时（`<` 而非 `<=`）。
+    /// 若把比较写反（`flag && elapsed > TIMEOUT`），正常动画在 2 秒内仍会被
+    /// 判定为「未超时」而拒绝夺回——即超时自愈彻底失效，本用例会红。
+    #[test]
+    fn animation_timeout_boundary() {
+        assert!(!animation_blocks_at(false, 0), "标志未置位时不应阻塞");
+        assert!(
+            !animation_blocks_at(false, u64::MAX),
+            "标志未置位时与耗时无关"
+        );
+        assert!(animation_blocks_at(true, 0), "刚置位应阻塞");
+        assert!(
+            animation_blocks_at(true, ANIMATION_TIMEOUT_MS - 1),
+            "未到上限应阻塞"
+        );
+        assert!(
+            !animation_blocks_at(true, ANIMATION_TIMEOUT_MS),
+            "到达上限即视为超时"
+        );
+        assert!(
+            !animation_blocks_at(true, u64::MAX),
+            "远超上限（时钟异常/守卫丢失）必须放行，否则永久卡死"
+        );
+    }
+
+    /// 守卫的核心契约：互斥 + Drop 复位。
+    /// 「Drop 复位」是本条修复的立足点——原先靠两处手工 `store(false)`，
+    /// 漏一处弹窗就永久打不开也关不掉。
+    #[test]
+    fn animation_guard_is_exclusive_and_released_on_drop() {
+        let _serial = lock_unpoisoned(&ANIM_TEST_LOCK);
+        // 前置清理：避免其它用例残留状态影响本用例
+        ANIMATING.store(false, Ordering::SeqCst);
+
+        let g1 = try_begin_animation().expect("首次获取应成功");
+        assert!(animation_blocks(), "持有期间应阻塞新操作");
+        assert!(try_begin_animation().is_none(), "重复获取必须失败（互斥）");
+
+        drop(g1);
+        assert!(!animation_blocks(), "守卫 Drop 后不应再阻塞");
+        let g2 = try_begin_animation().expect("释放后应能再次开始动画");
+        drop(g2);
+        assert!(!animation_blocks());
+    }
+
+    /// 动画线程 panic（debug 下 unwind）时守卫必须随栈展开释放。
+    /// 这是「一次动画异常不能永久废掉弹窗」的直接断言。
+    #[test]
+    fn animation_guard_released_when_animation_panics() {
+        let _serial = lock_unpoisoned(&ANIM_TEST_LOCK);
+        ANIMATING.store(false, Ordering::SeqCst);
+
+        let guard = try_begin_animation().expect("首次获取应成功");
+        let h = std::thread::spawn(move || {
+            let _guard = guard;
+            panic!("模拟动画线程 panic");
+        });
+        assert!(h.join().is_err(), "线程应因 panic 结束");
+        assert!(!animation_blocks(), "panic 展开后守卫应已释放");
+        assert!(
+            try_begin_animation().is_some(),
+            "panic 之后必须还能重新开始动画"
+        );
+    }
+
+    /// 超时自愈：模拟 release 下 `panic = "abort"` 的后果
+    /// （abort 不展开栈 ⇒ 守卫 Drop 不会执行 ⇒ 标志永久停在 true）。
+    /// 这条断言的是「永久卡死」已降级为「最多卡 2 秒」。
+    #[test]
+    fn animation_flag_is_reclaimed_after_timeout() {
+        let _serial = lock_unpoisoned(&ANIM_TEST_LOCK);
+        // 伪造「上一位持权者已死」的现场：标志置位 + 起始时刻记为当下
+        ANIMATING.store(true, Ordering::SeqCst);
+        ANIMATION_STARTED.store(monotonic_ms(), Ordering::SeqCst);
+
+        // ① 未超时：不得夺回，否则会打断正在进行的正常动画
+        assert!(animation_blocks(), "刚置位应处于阻塞状态");
+        assert!(
+            try_begin_animation_with_timeout(ANIMATION_TIMEOUT_MS).is_none(),
+            "未超时时不得夺回"
+        );
+
+        // ② 超时（timeout=0 等价于「已过期」）：必须夺回
+        let guard = try_begin_animation_with_timeout(0).expect("超时后必须夺回标志");
+        drop(guard);
+        assert!(!animation_blocks(), "夺回并释放后应恢复正常");
+    }
+
+    // ── B3：单飞 + 合并执行器 ────────────────────────────────────
 
     /// 无竞争：只跑一轮，且结束后单飞权必须已释放（否则后续所有重建都会被永久吞掉）
     #[test]
