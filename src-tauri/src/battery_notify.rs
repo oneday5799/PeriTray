@@ -30,7 +30,6 @@ pub fn check_battery_notify(devices: &[Device]) {
     }
 
     let notified = NOTIFIED.get_or_init(|| Mutex::new(HashSet::new()));
-    let icon = crate::windows::resolve_toast_icon();
 
     for d in devices {
         let Some(level) = d.battery else {
@@ -74,6 +73,10 @@ pub fn check_battery_notify(devices: &[Device]) {
 
                 #[cfg(target_os = "windows")]
                 {
+                    // 图标解析下移到「确实要弹通知」处（P2-6）：原先在函数开头就解析，
+                    // 而下面的 `selected.is_empty()` / 阈值去重都可能让整轮一条都不弹。
+                    // 解析本身有 `OnceLock` 缓存，循环内重复调用只读一次内存。
+                    let icon = crate::windows::resolve_toast_icon();
                     crate::toast::show_toast(
                         "低电量提醒",
                         &format!("{} 电量仅剩 {}%", display_name, level),

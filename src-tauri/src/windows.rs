@@ -368,16 +368,33 @@ pub fn set_rounded_corners(hwnd: isize) {
 /// 避免运行时文件系统路径歧义（Tauri 2 的 `frontendDist` 嵌入二进制，`resources` 部署到子目录）。
 static TOAST_ICON_PNG: &[u8] = include_bytes!("../dist/icon.png");
 
+/// 已写入临时目录的图标路径缓存（进程内只写一次）。
+///
+/// ⚠️ 必须保留 `#[cfg(target_os = "windows")]`：非 Windows 下只有下面那个返回 `None`
+/// 的桩函数，缓存本体不存在。
+#[cfg(target_os = "windows")]
+static TOAST_ICON_PATH: std::sync::OnceLock<Option<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
+
 /// 将嵌入的图标写入临时目录 `PeriTray_toast_icon.png`，返回路径供 WinRT toast 使用。
 ///
 /// WinRT `file:///` URI 要求绝对路径且无 `\\?\` 前缀，
 /// 因此每次写入固定文件名而非使用 `canonicalize`。
 /// 写入临时目录而非 exe 目录（MSIX 包目录只读）。
+///
+/// 结果用 `OnceLock` 缓存（P2-6）：图标内容编译期就已固定，重复写盘既无意义，又会让
+/// `%TEMP%\PeriTray_toast_icon.png` 的 mtime 每次弹通知都变（不利于排查「图标为何
+/// 不更新」这类问题）。**失败结果同样缓存**：临时目录不可写属于环境问题、不会自愈，
+/// 没必要每次弹通知都重试一遍磁盘 I/O。
 #[cfg(target_os = "windows")]
 pub fn resolve_toast_icon() -> Option<std::path::PathBuf> {
-    let target = std::env::temp_dir().join("PeriTray_toast_icon.png");
-    std::fs::write(&target, TOAST_ICON_PNG).ok()?;
-    Some(target)
+    TOAST_ICON_PATH
+        .get_or_init(|| {
+            let target = std::env::temp_dir().join("PeriTray_toast_icon.png");
+            std::fs::write(&target, TOAST_ICON_PNG).ok()?;
+            Some(target)
+        })
+        .clone()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -566,3 +583,29 @@ $shortcut.Save()
 
 #[cfg(not(target_os = "windows"))]
 pub fn register_aumid() {}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    /// P2-6：`resolve_toast_icon` 必须**只写一次盘**，其后走 `OnceLock` 缓存。
+    ///
+    /// 判据用 mtime：若每次调用都重写，第二次的 mtime 必然前进。
+    /// 两次调用之间 sleep 一下以越过文件系统的 mtime 精度。
+    #[test]
+    fn toast_icon_is_written_once_then_cached() {
+        let first = resolve_toast_icon().expect("临时目录应可写");
+        let mtime_first = std::fs::metadata(&first)
+            .and_then(|m| m.modified())
+            .expect("应能读到 mtime");
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = resolve_toast_icon().expect("缓存命中后仍应返回路径");
+        let mtime_second = std::fs::metadata(&second)
+            .and_then(|m| m.modified())
+            .expect("应能读到 mtime");
+
+        assert_eq!(second, first, "两次调用应返回同一路径");
+        assert_eq!(mtime_first, mtime_second, "第二次调用不应重写文件");
+    }
+}
