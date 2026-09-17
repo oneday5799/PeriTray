@@ -271,6 +271,23 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
                 break;
             }
             body.extend_from_slice(&buffer[..bytes_read as usize]);
+            // 响应体上限（P3-1）：GitHub Releases 的 JSON 正常在百 KB 量级，
+            // 4 MiB 已是两个数量级的余量。修复前这里**没有上限**，`body` 会一直
+            // 增长到内存耗尽 —— 对端是 `api.github.com`，但 DNS / 代理被劫持时
+            // 完全可能收到一个无底洞式的响应体。
+            //
+            // 判定放在**读满之后**：4 MiB + 4 KiB 也能被拦下，不会因为
+            // 校验早于读取而漏掉「恰好跨过边界」的那一批。
+            if body_too_large(body.len()) {
+                let size = body.len();
+                WinHttpCloseHandle(request);
+                WinHttpCloseHandle(connect);
+                WinHttpCloseHandle(session);
+                return Err(format!(
+                    "响应体过大（{} 字节，上限 {} 字节），已中止下载",
+                    size, MAX_RESPONSE_BODY
+                ));
+            }
         }
 
         WinHttpCloseHandle(request);
@@ -279,6 +296,44 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
 
         String::from_utf8(body).map_err(|_| "响应编码错误".to_string())
     }
+}
+
+/// 响应体大小上限：4 MiB。GitHub Releases JSON 正常量级为百 KB，
+/// 留两个数量级余量；超出即视为异常（DNS/代理劫持或服务端异常）。
+const MAX_RESPONSE_BODY: usize = 4 * 1024 * 1024;
+
+/// 响应体是否已超上限。
+///
+/// 抽成**纯函数**是为了能对边界本身做单测（P3-1）：`cargo check` 证明不了
+/// 「4 MiB 与 4 MiB+1 分别怎么走」，只有断言才能。判据取**严格大于**：
+/// 恰好等于上限的响应体是允许的，上限本身不是非法值。
+fn body_too_large(len: usize) -> bool {
+    len > MAX_RESPONSE_BODY
+}
+
+/// 把两个版本号数字段补齐到等长后逐位比较。
+///
+/// 抽成独立函数（而非内联 `Vec` 比较）是为了**同时**给「判等」与「判大小」
+/// 两条路径一个单一来源 —— 两者若各写一份补齐逻辑，迟早会漂移。
+fn align_version_nums(a: &[u32], b: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    let n = a.len().max(b.len());
+    let mut av = a.to_vec();
+    let mut bv = b.to_vec();
+    av.resize(n, 0);
+    bv.resize(n, 0);
+    (av, bv)
+}
+
+/// 两个版本号的数字部分是否表示同一个版本（`1.2` 与 `1.2.0` 视为相同）。
+fn version_nums_equal(a: &[u32], b: &[u32]) -> bool {
+    let (av, bv) = align_version_nums(a, b);
+    av == bv
+}
+
+/// 比较两个版本号的数字部分（已按 `align_version_nums` 语义补齐 0）。
+fn compare_version_nums(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
+    let (av, bv) = align_version_nums(a, b);
+    av.cmp(&bv)
 }
 
 /// 比较版本号：返回 latest > current
@@ -313,9 +368,12 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     let (cur_nums, cur_pre) = split_version(current);
     let (lat_nums, lat_pre) = split_version(latest);
 
-    // 先比较数字部分
-    if cur_nums != lat_nums {
-        return cur_nums < lat_nums;
+    // 先比较数字部分。
+    // ⚠️ 必须**补齐到等长**再比（P3-2）：`Vec<u32>` 的 `Ord` 是字典序，
+    // 短的排在短的后面 —— `[1,2] < [1,2,0]`，于是 `1.2` 会被判成「低于」`1.2.0`，
+    // 明明两者是同一个版本。补齐 0 后长度一致，纯按数值比较。
+    if !version_nums_equal(&cur_nums, &lat_nums) {
+        return compare_version_nums(&cur_nums, &lat_nums) == std::cmp::Ordering::Less;
     }
 
     // 数字部分相同：有预发布后缀的版本 < 无后缀的版本（如 1.1.5-beta < 1.1.5）
@@ -389,5 +447,101 @@ fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<U
                 release_url: String::new(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── P3-1：响应体上限 ────────────────────────────────────────────
+
+    /// 边界**两侧都断言**：恰好等于上限合法，超 1 字节即拒。
+    /// 修复前不存在这个函数，也就无从断言 —— 这正是它被抽出来的理由。
+    #[test]
+    fn body_limit_boundary_is_exclusive_at_exact_size() {
+        assert!(
+            !body_too_large(MAX_RESPONSE_BODY),
+            "恰好等于上限应被允许（上限本身不是非法值）"
+        );
+        assert!(!body_too_large(MAX_RESPONSE_BODY - 1), "低于上限应被允许");
+        assert!(
+            body_too_large(MAX_RESPONSE_BODY + 1),
+            "超出上限 1 字节即应拒绝"
+        );
+        assert!(body_too_large(MAX_RESPONSE_BODY * 2), "远超上限应拒绝");
+    }
+
+    #[test]
+    fn body_limit_covers_realistic_and_degenerate_sizes() {
+        assert!(!body_too_large(0), "空响应体合法");
+        assert!(!body_too_large(100 * 1024), "百 KB 量级是 GitHub 正常响应");
+        assert!(body_too_large(usize::MAX), "极端值不应 panic / 溢出");
+    }
+
+    // ── P3-2：版本号数字段等长比较 ──────────────────────────────────
+
+    /// `1.2` 与 `1.2.0` 数值上是同一个版本 ⇒ 不应判为「有更新」。
+    /// 修复前 `Vec<u32>` 字典序把 `[1,2] < [1,2,0]` 判为 true，会误报有更新。
+    #[test]
+    fn version_nums_treat_trailing_zeros_as_equal() {
+        assert!(version_nums_equal(&[1, 2], &[1, 2, 0]));
+        assert!(version_nums_equal(&[1, 2, 0], &[1, 2]));
+        assert!(version_nums_equal(&[1], &[1, 0, 0]));
+        assert!(version_nums_equal(&[1, 2, 3], &[1, 2, 3]));
+
+        // 反向：确实不同的不能被抹平
+        assert!(!version_nums_equal(&[1, 2], &[1, 3]));
+        assert!(!version_nums_equal(&[1, 2], &[1, 2, 1]));
+    }
+
+    /// 端到端：`1.2` vs `1.2.0` 两个方向都判「无更新」。
+    #[test]
+    fn compare_versions_ignores_missing_trailing_segment() {
+        assert!(
+            !compare_versions("1.2", "1.2.0"),
+            "1.2.0 相对 1.2 不应判为更新（同一版本）"
+        );
+        assert!(
+            !compare_versions("1.2.0", "1.2"),
+            "1.2 相对 1.2.0 不应判为更新（同一版本）"
+        );
+    }
+
+    /// 补齐不能把真实的版本升级吃掉。
+    #[test]
+    fn compare_versions_still_detects_real_bumps() {
+        assert!(compare_versions("1.2", "1.3"), "次版本升级应检出");
+        assert!(compare_versions("1.2.9", "1.3"), "1.3 > 1.2.9 应检出");
+        assert!(compare_versions("1.2", "1.2.1"), "补丁升级应检出");
+        assert!(compare_versions("1.2.0", "2.0"), "主版本升级应检出");
+        assert!(!compare_versions("1.3", "1.2"), "降级不应判为更新");
+    }
+
+    /// 边界：位数不同的比较方向必须正确（不是「长度不同就判大」）。
+    #[test]
+    fn version_num_ordering_is_numeric_not_lexical() {
+        use std::cmp::Ordering;
+        assert_eq!(compare_version_nums(&[1, 2], &[1, 2, 0]), Ordering::Equal);
+        assert_eq!(compare_version_nums(&[1, 2], &[1, 2, 1]), Ordering::Less);
+        assert_eq!(compare_version_nums(&[1, 3], &[1, 2, 9]), Ordering::Greater);
+        assert_eq!(compare_version_nums(&[1, 10], &[1, 9]), Ordering::Greater);
+    }
+
+    /// 预发布语义不应被本次改动破坏。
+    #[test]
+    fn prerelease_semantics_preserved() {
+        assert!(compare_versions("1.2.0-beta", "1.2.0"), "预发布 < 正式版");
+        assert!(
+            !compare_versions("1.2.0", "1.2.0-beta"),
+            "正式版不应被预发布顶掉"
+        );
+        assert!(
+            compare_versions("1.2.0-beta.1", "1.2.0-beta.2"),
+            "预发布序号比较"
+        );
+        assert!(!compare_versions("1.2.0-beta.2", "1.2.0-beta.1"));
+        // 数字部分不同时，预发布后缀不参与（1.3.0-beta > 1.2.0）
+        assert!(compare_versions("1.2.0", "1.3.0-beta"));
     }
 }
