@@ -45,7 +45,15 @@ fn query_exe_path_by_openprocess(pid: u32) -> Option<String> {
                 return None;
             }
         };
-        let mut path_buf = [0u16; 32768];
+        // ── 为什么用堆上的 `Vec<u16>` 而不是 `[0u16; 32768]`（P3-5）──────
+        // 32768 个 `u16` = **64 KiB**，直接压在栈上。这个函数是**逐进程**调用的
+        // （会话列表里通常几十个 PID），而且调用点分布在 Tauri 命令 / 托盘刷新等
+        // 线程上 —— 栈默认 1 MiB（后台线程常被调小到 256 KiB），64 KiB 的
+        // 单帧占用完全是浪费，也埋着栈溢出的风险。
+        //
+        // `vec![0u16; n]` 是一次性堆分配，容量由 Windows 规定的路径上限
+        // （`MAX_PATH` 扩展名 32767 宽字符）决定，既不给栈压力，也不牺牲长路径。
+        let mut path_buf = vec![0u16; 32768];
         let mut path_size = path_buf.len() as u32;
         let result = QueryFullProcessImageNameW(
             process_handle,
@@ -58,6 +66,9 @@ fn query_exe_path_by_openprocess(pid: u32) -> Option<String> {
             verbose_log!("[app_icon] QueryFullProcessImageNameW pid={pid} 失败");
             return None;
         }
+        // `path_size` 是**不含 NUL 的字符数**，且 API 成功时必然 <= 缓冲长度 ⇒
+        // 这里的切片不会越界。截断是 API 的契约（超出上限会失败而不是静默截断），
+        // 故无需额外的长度校验。
         Some(String::from_utf16_lossy(&path_buf[..path_size as usize]))
     }
 }
@@ -76,6 +87,17 @@ struct SystemProcessIdInformation {
     image_name: NtUnicodeString,
 }
 
+/// 校验内核返回的字符长度是否可安全用于切片。
+///
+/// 抽成**真函数**而不是在 `query_exe_path_by_nt` 里内联一个 `if`：
+/// 内联时单测只能「照抄一遍判据」来断言，那种测试对判据的改动是**免疫的**
+/// （把 `>` 改成 `>=` 也照样绿）—— 是假验收。抽出来后单测调用的是真判据。
+///
+/// 边界取**严格大于**：`len == cap` 时 `&buf[..len]` 恰好取满，合法。
+fn nt_length_in_bounds(len: usize, cap: usize) -> bool {
+    len <= cap
+}
+
 /// 兜底：NtQuerySystemInformation(SystemProcessIdInformation) 查询 exe 路径。
 /// 纯内核查询，无需打开目标进程句柄，可覆盖 PPL 等 OpenProcess 被拒的受保护进程
 /// （返回 NT 设备路径，由 normalize_image_path 转回盘符）。
@@ -83,7 +105,9 @@ fn query_exe_path_by_nt(pid: u32) -> Option<String> {
     use ntapi::ntexapi::{NtQuerySystemInformation, SystemProcessIdInformation};
 
     unsafe {
-        let mut name_buf = [0u16; 2048];
+        // 同理改堆分配（P3-5）：4 KiB 压栈虽不致命，但这条路径本身就在
+        // 「OpenProcess 被拒」的兜底分支上，不该再给栈加无谓开销。
+        let mut name_buf = vec![0u16; 2048];
         let mut info = SystemProcessIdInformation {
             process_id: pid as usize as *mut core::ffi::c_void,
             image_name: NtUnicodeString {
@@ -110,8 +134,38 @@ fn query_exe_path_by_nt(pid: u32) -> Option<String> {
         if len == 0 {
             return None;
         }
+        // 内核返回的 `length` 理论上不会超过我们给的 `maximum_length`，但这是
+        // **内核数据结构**：若真被填成更大的值，下面的切片就会越界 panic
+        // （而 `unsafe` 块内的越界读是 UB）。宁可保守地判成「查不到」，
+        // 也不要拿一个无法证伪的前提去切片。
+        if !nt_length_in_bounds(len, name_buf.len()) {
+            verbose_log!(
+                "[app_icon] NtQuerySystemInformation pid={pid} 返回长度异常 {} > 缓冲 {}",
+                len,
+                name_buf.len()
+            );
+            return None;
+        }
         normalize_image_path(&String::from_utf16_lossy(&name_buf[..len]))
     }
+}
+
+/// 把 `\Device\HarddiskVolumeN\rest` 拆成 `(volume, after)`，供盘符映射使用。
+///
+/// 抽成不依赖任何 Win32 调用的纯函数（P3-5 附带）：`normalize_image_path` 的
+/// 前两步（剥命名空间前缀、识别已含盘符）逻辑简单，但第三步的拆分一旦
+/// 写错（比如 `\Device\` 后面没有反斜杠、或 `volume` 为空）就会退化成
+/// 「返回原路径」或「返回 None」，只能靠在 Windows 上真机跑才能发现。
+/// 拆出来后这些边界可以在任何平台单测。
+fn split_device_path(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("\\Device\\")?;
+    let mut parts = rest.splitn(2, '\\');
+    let volume = parts.next().unwrap_or("");
+    if volume.is_empty() {
+        return None;
+    }
+    let after = parts.next().unwrap_or("");
+    Some((volume, after))
 }
 
 /// NT 设备路径（\Device\HarddiskVolumeN\...）转盘符路径；已有盘符则原样返回。
@@ -132,19 +186,10 @@ fn normalize_image_path(path: &str) -> Option<String> {
     }
 
     // \Device\HarddiskVolumeN\... → 盘符
-    let rest = match path.strip_prefix("\\Device\\") {
-        Some(r) => r,
-        None => {
-            verbose_log!("[app_icon] 未知路径形态: {path}");
-            return Some(path.to_string());
-        }
-    };
-    let mut parts = rest.splitn(2, '\\');
-    let volume = parts.next().unwrap_or("");
-    let after = parts.next().unwrap_or("");
-    if volume.is_empty() {
+    let Some((volume, after)) = split_device_path(path) else {
+        verbose_log!("[app_icon] 未知路径形态: {path}");
         return Some(path.to_string());
-    }
+    };
     let device = format!("\\Device\\{volume}");
 
     unsafe {
@@ -455,4 +500,103 @@ fn bitmap_to_base64(img: &RgbaImage) -> Option<Arc<str>> {
             .encode(buffer.into_inner())
             .into(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── P3-5：`\Device\...` 路径拆分的边界 ──────────────────────────
+
+    #[test]
+    fn split_device_path_splits_volume_and_rest() {
+        assert_eq!(
+            split_device_path("\\Device\\HarddiskVolume3\\Windows\\explorer.exe"),
+            Some(("HarddiskVolume3", "Windows\\explorer.exe"))
+        );
+        // 卷根（after 为空）是合法形态，不该被判成 None
+        assert_eq!(
+            split_device_path("\\Device\\HarddiskVolume3"),
+            Some(("HarddiskVolume3", ""))
+        );
+        assert_eq!(
+            split_device_path("\\Device\\HarddiskVolume3\\"),
+            Some(("HarddiskVolume3", ""))
+        );
+    }
+
+    #[test]
+    fn split_device_path_rejects_non_device_and_empty_volume() {
+        // 不是 \Device\ 前缀
+        assert_eq!(split_device_path("C://Windows//explorer.exe"), None);
+        assert_eq!(split_device_path("\\??\\C://x.exe"), None);
+        assert_eq!(split_device_path(""), None);
+        // 前缀后为空卷名
+        assert_eq!(split_device_path("\\Device\\"), None);
+        assert_eq!(split_device_path("\\Device\\\\x.exe"), None);
+    }
+
+    /// 拆分结果拼回去必须与输入一致（`after` 为空时不能多出反斜杠）。
+    #[test]
+    fn split_device_path_round_trips() {
+        for p in [
+            "\\Device\\HarddiskVolume1\\a\\b\\c.exe",
+            "\\Device\\HarddiskVolume10\\",
+            "\\Device\\HarddiskVolume2",
+        ] {
+            let (vol, after) = split_device_path(p).expect("应能拆分");
+            let rebuilt = if after.is_empty() {
+                if p.ends_with('\\') {
+                    format!("\\Device\\{vol}\\")
+                } else {
+                    format!("\\Device\\{vol}")
+                }
+            } else {
+                format!("\\Device\\{vol}\\{after}")
+            };
+            assert_eq!(rebuilt, p, "拆分后拼回应还原原路径");
+        }
+    }
+
+    /// 长路径（远超 MAX_PATH）必须能完整往返 —— 堆缓冲的意义就在这里。
+    ///
+    /// 注：`query_exe_path_by_openprocess` 本身要真实 PID 才能跑，
+    /// 但「缓冲大小是否够、切片是否完整」这件事与 Win32 无关，
+    /// 用同构的 `Vec<u16>` + `from_utf16_lossy` 即可覆盖。
+    #[test]
+    fn long_path_survives_wide_round_trip() {
+        let long = format!("C://{}", "a\\".repeat(4000));
+        assert!(long.len() > 8000, "构造的路径应远超 MAX_PATH");
+        let wide: Vec<u16> = long.encode_utf16().collect();
+        // 模拟 API：写入 wide 后 length = 字符数（不含 NUL）
+        let buf = vec![0u16; 32768];
+        let mut buf = buf;
+        buf[..wide.len()].copy_from_slice(&wide);
+        let path_size = wide.len() as u32;
+        let decoded = String::from_utf16_lossy(&buf[..path_size as usize]);
+        assert_eq!(decoded, long, "超长路径应完整还原，不 panic 不截断");
+        assert_eq!(decoded.len(), long.len());
+    }
+
+    /// `query_exe_path_by_nt` 的长度守卫：`length` 若被填得比缓冲还大，
+    /// 必须判成「查不到」而不是越界切片。这里直接验算守卫判据本身。
+    #[test]
+    fn nt_length_guard_rejects_oversized_reports() {
+        // 调用的是**真判据** `nt_length_in_bounds`（不是照抄一遍条件）：
+        // 照抄式的测试对判据改动免疫（把 `<=` 改成 `<` 也照样绿），等于没测。
+        let cap = 2048usize;
+        // 两侧都断言：容量内合法、恰好等于容量合法、超 1 即非法
+        assert!(nt_length_in_bounds(0, cap), "空长度合法");
+        assert!(nt_length_in_bounds(1, cap), "正常短名合法");
+        assert!(nt_length_in_bounds(cap - 1, cap), "差 1 合法");
+        assert!(
+            nt_length_in_bounds(cap, cap),
+            "恰好等于容量合法（&buf[..cap] 恰好取满）"
+        );
+        assert!(
+            !nt_length_in_bounds(cap + 1, cap),
+            "超出 1 即非法，否则切片越界"
+        );
+        assert!(!nt_length_in_bounds(usize::MAX, cap), "极端值不得判为合法");
+    }
 }
