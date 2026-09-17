@@ -49,23 +49,57 @@ pub fn register_shortcuts(app: &tauri::AppHandle) {
             )
         });
 
+    // B15：这 5 个键的注册失败同样要能被用户看见。原先 `register_single` 的返回值
+    // 被 `let _ =` 丢弃，启动时若某个键被别的程序占用，日志与界面都毫无痕迹。
+    // 收集失败键后与设备快捷键的失败**合并成一份**上报（两条通道与前端文案全复用）。
+    let mut failed: Vec<String> = Vec::new();
     if let Some(ref key) = device_key {
-        register_single(&app, key, "devices");
+        if register_single(&app, key, "devices") {
+            failed.push(key.clone());
+        }
     }
     if let Some(ref key) = volume_key {
-        register_single(&app, key, "volume");
+        if register_single(&app, key, "volume") {
+            failed.push(key.clone());
+        }
     }
     if let Some(ref key) = vol_up_key {
-        register_single(&app, key, "volume_up");
+        if register_single(&app, key, "volume_up") {
+            failed.push(key.clone());
+        }
     }
     if let Some(ref key) = vol_down_key {
-        register_single(&app, key, "volume_down");
+        if register_single(&app, key, "volume_down") {
+            failed.push(key.clone());
+        }
     }
     if let Some(ref key) = vol_mute_key {
-        register_single(&app, key, "volume_mute");
+        if register_single(&app, key, "volume_mute") {
+            failed.push(key.clone());
+        }
     }
 
-    sync_device_shortcuts(&app);
+    // `sync_device_shortcuts` 内部会先 `report_register_failed` 一次（只含它自己那份），
+    // 故这里在它**之后**再把两边合并上报——否则先上报的常规快捷键失败会被它整份覆盖掉。
+    let device_failed = sync_device_shortcuts(&app);
+    report_register_failed(&app, merge_failed_keys(failed, device_failed));
+}
+
+/// 合并两组注册失败的键：常规快捷键（B15）+ 设备快捷键（P2-12）。
+///
+/// 抽成纯函数是为了能单测——`register_shortcuts` 本身要 `AppHandle`，测不到；
+/// 而「合并」恰是这里唯一的逻辑（去重 + 保持稳定顺序），也是错一处就丢告警的地方。
+///
+/// 为什么必须去重：同一个物理按键可以同时被常规快捷键与设备快捷键占用，
+/// 两个来源都会把它报成失败。不去重的话提示会写成「快捷键 Ctrl+Alt+1、Ctrl+Alt+1 注册失败」。
+fn merge_failed_keys(plain: Vec<String>, device: Vec<String>) -> Vec<String> {
+    let mut merged = plain;
+    for key in device {
+        if !merged.contains(&key) {
+            merged.push(key);
+        }
+    }
+    merged
 }
 
 /// 计算「需要注销」「需要注册」两个差集。
@@ -188,26 +222,55 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
     failed
 }
 
-fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {
+/// 注册 5 个非设备快捷键之一（设备/音量/音量+/音量-/静音）。
+///
+/// **返回值 = 本次注册是否失败**（B15）。
+///
+/// 原实现是 `let _ = app.global_shortcut().on_shortcut(..)`：返回值被丢弃且**不记日志**，
+/// 于是启动时这 5 个键若被其他程序占用，日志里一行都没有——用户只知道
+/// 「我的音量快捷键按了没反应」，既看不到原因也查不到记录。
+///
+/// 与 `sync_device_shortcuts`（P2-12）的区别：本函数**没有注册表**，
+/// 故不存在「失败后被永久跳过」的问题；缺的只是**可见性**。
+/// 因此这里只把失败键回报给 `register_shortcuts`，由它并入同一次
+/// `report_register_failed` 上报——两条通道（广播事件 + `get_register_failed`
+/// 可拉取）与前端文案**全部复用**，前端无需改动。
+///
+/// ⚠️ **锁纪律**：与 `sync_device_shortcuts` 同——`on_shortcut` 内部经
+/// `run_main_thread!` 展开为 `run_on_main_thread(..) + rx.recv()`（**recv 无超时**）。
+/// 本函数不在任何锁内调用（只读一次配置快照即返回），新增调用点时必须保持这一点。
+///
+/// `key` 无法解析（配置值非法）同样计为失败：它同样是「按键没反应」，
+/// 只是原因不同（配置损坏而非外部占用），日志侧会分行区分。
+fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) -> bool {
     let sc = match tauri_plugin_global_shortcut::Shortcut::try_from(key) {
         Ok(sc) => sc,
         Err(_) => {
-            standard_log!("[shortcut] invalid key: {}", key);
-            return;
+            standard_log!("[shortcut] invalid key: {} ({})", key, action);
+            return true;
         }
     };
     let action_str = action.to_string();
     let key_str = key.to_string();
     let app = app.clone();
-    let _ = app
+    // B15：原为 `let _ = ...`，失败被静默吞掉。
+    match app
         .global_shortcut()
         .on_shortcut(sc, move |_app, _shortcut, event| {
             if event.state != ShortcutState::Pressed {
                 return;
             }
             dispatch_shortcut_action(_app, &action_str, &key_str);
-        });
-    standard_log!("[shortcut] registered {} -> {}", key, action);
+        }) {
+        Ok(()) => {
+            standard_log!("[shortcut] registered {} -> {}", key, action);
+            false
+        }
+        Err(e) => {
+            standard_log!("[shortcut] 注册失败 {} -> {}: {}", key, action, e);
+            true
+        }
+    }
 }
 
 /// 在共用同一快捷键的设备间循环切换默认输出设备（按设备列表自然顺序）
@@ -374,5 +437,78 @@ mod tests {
     fn both_empty_is_noop() {
         let (unregister, register) = diff_keys(&HashSet::new(), &HashSet::new());
         assert!(unregister.is_empty() && register.is_empty());
+    }
+
+    // ── B15：常规快捷键注册失败的上报 ────────────────────────────
+
+    /// 合并的结果必须**同时包含**两个来源，且一个都不能丢。
+    ///
+    /// 修复前 `register_single` 的失败被 `let _ =` 丢弃，常规快捷键那一半
+    /// 压根进不了上报列表——用户看到的是「按键没反应」而全无提示。
+    #[test]
+    fn merge_failed_keys_keeps_both_sources() {
+        let merged = merge_failed_keys(vec!["Ctrl+Alt+1".into()], vec!["Ctrl+Alt+2".into()]);
+
+        assert!(
+            merged.contains(&"Ctrl+Alt+1".to_string()),
+            "常规快捷键的失败不得被设备那份覆盖掉: {merged:?}"
+        );
+        assert!(
+            merged.contains(&"Ctrl+Alt+2".to_string()),
+            "设备快捷键的失败不得丢失: {merged:?}"
+        );
+        assert_eq!(merged.len(), 2, "两个不同键应各占一项: {merged:?}");
+    }
+
+    /// 同一个键被两个来源同时报失败 ⇒ **只保留一项**。
+    ///
+    /// 同一个物理按键可以既是常规快捷键、又被某设备占用，两个来源都会报它失败。
+    /// 不去重的话前端文案会渲染成「快捷键 Ctrl+Alt+1、Ctrl+Alt+1 注册失败」。
+    #[test]
+    fn merge_failed_keys_deduplicates_same_key() {
+        let merged = merge_failed_keys(vec!["Ctrl+Alt+1".into()], vec!["Ctrl+Alt+1".into()]);
+
+        assert_eq!(merged, vec!["Ctrl+Alt+1".to_string()], "重复键必须去重");
+    }
+
+    /// 单个来源为空时不得panic、也不得凭空造出条目。
+    ///
+    /// 这是最常见的实际情况：多数用户要么只用常规快捷键、要么只用设备快捷键。
+    #[test]
+    fn merge_failed_keys_handles_one_empty_side() {
+        assert_eq!(
+            merge_failed_keys(Vec::new(), vec!["Ctrl+Alt+2".into()]),
+            vec!["Ctrl+Alt+2".to_string()],
+            "设备侧有失败、常规侧全成功 ⇒ 只报设备侧"
+        );
+        assert_eq!(
+            merge_failed_keys(vec!["Ctrl+Alt+1".into()], Vec::new()),
+            vec!["Ctrl+Alt+1".to_string()],
+            "常规侧有失败、设备侧全成功 ⇒ 只报常规侧（B15 之前这里是空的）"
+        );
+        assert!(
+            merge_failed_keys(Vec::new(), Vec::new()).is_empty(),
+            "两侧都无失败 ⇒ 空列表（上层据此清掉上一轮遗留的告警）"
+        );
+    }
+
+    /// 常规快捷键的失败必须排在前面。
+    ///
+    /// 顺序不是纯装饰：`report_register_failed` 会把列表整份交给前端渲染成
+    /// 「快捷键 A、B 注册失败」，用户最先看到的应当是最常用的音量键。
+    /// `merge_failed_keys` 保留 `plain` 的原始顺序，本用例把这个性质钉死。
+    #[test]
+    fn merge_failed_keys_preserves_plain_order_first() {
+        let merged = merge_failed_keys(vec!["音量-".into(), "音量+".into()], vec!["设备键".into()]);
+
+        assert_eq!(
+            merged,
+            vec![
+                "音量-".to_string(),
+                "音量+".to_string(),
+                "设备键".to_string()
+            ],
+            "常规快捷键应保持原顺序并排在设备快捷键之前"
+        );
     }
 }
