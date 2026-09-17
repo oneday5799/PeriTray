@@ -36,25 +36,124 @@ use tauri::Emitter;
 use tauri::Manager;
 use tauri::RunEvent;
 
-/// 安装 panic hook：捕获 panic 后弹 MessageBox 再退出（避免 release 模式静默闪退）
+/// panic 发生的位置（相对主线程）——决定「要不要弹模态框」（B12）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanicSite {
+    /// panic 发生在主线程：应用本就要终止，弹框是合理的最后一手告知
+    Main,
+    /// panic 发生在后台线程：只落日志，把栈展开还给 panic 运行时
+    Background,
+}
+
+impl PanicSite {
+    /// 依据「panic 所在线程 id」与「主线程 id」判定。
+    fn of(panicking: std::thread::ThreadId, main: std::thread::ThreadId) -> Self {
+        if panicking == main {
+            Self::Main
+        } else {
+            Self::Background
+        }
+    }
+
+    /// 是否应当弹模态框。**只有主线程可以**（根因见 `install_panic_hook` 文档）。
+    fn shows_dialog(self) -> bool {
+        matches!(self, Self::Main)
+    }
+}
+
+/// 从 panic payload 提取可读消息；无法识别的 payload 退回固定文案。
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown panic".to_string()
+    }
+}
+
+/// 把 panic 位置格式化成 `file:line:col`；拿不到位置时退回固定文案。
+fn format_location(location: Option<&panic::Location<'_>>) -> String {
+    location
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "unknown location".to_string())
+}
+
+/// 拼出完整的 panic 报告（消息 + 位置），用于弹框正文与 stderr 兜底。
+fn format_panic_report(msg: &str, location: &str) -> String {
+    format!("{}\n\nLocation: {}", msg, location)
+}
+
+/// 统一的 panic 处置（B12）：主线程弹框、后台线程只写 stderr；返回本次处置结果。
+///
+/// 之所以把「弹框动作」交由调用方注入（`on_main_panic`），是为了让单测能传入
+/// **记录器**替代 `show_error_box`：模态框会把测试挂死，而替换后即可在真实安装
+/// hook 的前提下断言「后台线程 panic 不走弹框分支、且栈展开照常完成」。
+fn handle_panic(
+    msg: &str,
+    location: &str,
+    panicking_thread: std::thread::ThreadId,
+    main_thread_id: std::thread::ThreadId,
+    on_main_panic: &(dyn Fn(&str) + Send + Sync),
+) -> PanicSite {
+    let full = format_panic_report(msg, location);
+    let site = PanicSite::of(panicking_thread, main_thread_id);
+    if site.shows_dialog() {
+        on_main_panic(&full);
+    } else {
+        // 后台线程不弹框（见 `install_panic_hook`），改用 stderr 兜底——
+        // 安装版无控制台，但开发/调试与重定向到文件时可见
+        eprintln!("[panic] 后台线程 panic（不弹框以免阻塞栈展开）：{}", full);
+    }
+    site
+}
+
+/// 组装 panic hook 本体（**不含**对默认 hook 的委托），抽出以便单测安装同一份逻辑。
+fn make_panic_hook(
+    main_thread_id: std::thread::ThreadId,
+    on_main_panic: Box<dyn Fn(&str) + Send + Sync + 'static>,
+) -> Box<dyn Fn(&panic::PanicHookInfo<'_>) + Send + Sync + 'static> {
+    Box::new(move |info| {
+        let msg = panic_payload_message(info.payload());
+        let location = format_location(info.location());
+        standard_log!("[panic] {} @ {}", msg.replace('\n', " | "), location);
+        handle_panic(
+            &msg,
+            &location,
+            std::thread::current().id(),
+            main_thread_id,
+            &*on_main_panic,
+        );
+    })
+}
+
+/// 安装 panic hook：主线程 panic 弹 MessageBox 告知用户，后台线程 panic 只写日志。
+///
+/// ⚠️ **绝不能对后台线程弹框**（B12）：`show_error_box` 用的是 `MessageBoxW`，**模态**
+/// ——它会一直阻塞到用户点掉。而 panic hook 是在**panic 的那个线程**上同步执行的，
+/// 于是「后台线程 panic」的真实后果不是「死一个线程」，而是：
+///   ① 该线程**永久卡在弹框上，栈展开根本不发生** ⇒ 它持有的锁、RAII 守卫
+///      （`SingleFlightGuard` 等）永不释放，把「局部故障」放大成「整机卡死」。
+///      P1-8 的注入验证实测到了这条链路：panic 后子进程 **stderr 为 0 字节**
+///      （证明 `default_hook` 从未执行），`ANIMATING` 一直为 `true`，
+///      只能靠超时自愈救回。
+///   ② release 下 `panic = "abort"` 本想「快速失败」，但 hook 卡住 ⇒ **abort 永远不会发生**，
+///      进程带着一个僵死线程继续跑，`panic = "abort"` 的语义被静默抵消。
+///
+/// 故此处按线程区分（`PanicSite`）：主线程 panic 时应用本就要终止，弹框是合理的最后一手
+/// 告知；后台线程只落日志（`standard_log!` + stderr 双通道），把栈展开还给 panic 运行时。
+///
+/// 副作用（知情）：release 下后台线程 panic 现在会**真的**走到 `abort()`，
+/// 即整个进程终止（此前是「弹框 + 线程僵死 + 进程存活」）。这是 `panic = "abort"`
+/// 的既定语义，也是「快速失败优于带病运行」的选择；若不希望如此，
+/// 应改为 `panic = "unwind"` 并让后台任务自行兜底，而不是靠 hook 卡住进程。
 fn install_panic_hook() {
     let default_hook = panic::take_hook();
+    // 本函数在 `main` 里调用 ⇒ 此处就是主线程
+    let main_thread_id = std::thread::current().id();
+    let inner = make_panic_hook(main_thread_id, Box::new(show_error_box));
     panic::set_hook(Box::new(move |info| {
-        let payload = info.payload();
-        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Unknown panic".to_string()
-        };
-        let location = info
-            .location()
-            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-            .unwrap_or_else(|| "unknown location".to_string());
-        let full = format!("{}\n\nLocation: {}", msg, location);
-        standard_log!("[panic] {} @ {}", msg.replace('\n', " | "), location);
-        show_error_box(&full);
+        inner(info);
         default_hook(info);
     }));
 }
@@ -510,4 +609,171 @@ fn main() {
         RunEvent::Exit => crate::process::flush_log(),
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    /// 「弹框」的替身：把弹框正文记进 Vec，避免测试真的弹模态框。
+    type DialogLog = Arc<Mutex<Vec<String>>>;
+
+    fn recorder() -> (DialogLog, Box<dyn Fn(&str) + Send + Sync>) {
+        let log: DialogLog = Arc::new(Mutex::new(Vec::new()));
+        let handle = log.clone();
+        let f: Box<dyn Fn(&str) + Send + Sync> =
+            Box::new(move |msg: &str| handle.lock().unwrap().push(msg.to_string()));
+        (log, f)
+    }
+
+    /// 取一个确定与当前线程不同的线程 id。
+    fn other_thread_id() -> std::thread::ThreadId {
+        std::thread::spawn(|| std::thread::current().id())
+            .join()
+            .expect("取线程 id 的线程不应 panic")
+    }
+
+    #[test]
+    fn panic_site_of_distinguishes_main_from_background() {
+        let main = std::thread::current().id();
+        let other = other_thread_id();
+        assert_ne!(main, other, "前提：另起线程的 id 必须与当前线程不同");
+        assert_eq!(PanicSite::of(main, main), PanicSite::Main);
+        assert_eq!(PanicSite::of(other, main), PanicSite::Background);
+    }
+
+    #[test]
+    fn only_main_thread_shows_dialog() {
+        assert!(PanicSite::Main.shows_dialog());
+        assert!(
+            !PanicSite::Background.shows_dialog(),
+            "后台线程弹模态框会永久阻塞栈展开（B12 根因）"
+        );
+    }
+
+    #[test]
+    fn main_thread_panic_goes_through_dialog_hook() {
+        let (log, rec) = recorder();
+        let me = std::thread::current().id();
+        let site = handle_panic("boom", "src/x.rs:1:2", me, me, &*rec);
+
+        assert_eq!(site, PanicSite::Main);
+        let got = log.lock().unwrap();
+        assert_eq!(got.len(), 1, "主线程 panic 应恰好走一次弹框分支");
+        assert!(
+            got[0].contains("boom"),
+            "弹框正文应含 panic 消息：{:?}",
+            got[0]
+        );
+        assert!(
+            got[0].contains("src/x.rs:1:2"),
+            "弹框正文应含位置：{:?}",
+            got[0]
+        );
+    }
+
+    #[test]
+    fn background_thread_panic_skips_dialog_hook() {
+        let (log, rec) = recorder();
+        let main = std::thread::current().id();
+        let site = handle_panic("boom", "src/x.rs:1:2", other_thread_id(), main, &*rec);
+
+        assert_eq!(site, PanicSite::Background);
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "后台线程 panic 不得走弹框分支"
+        );
+    }
+
+    #[test]
+    fn payload_message_extracts_str_literal() {
+        assert_eq!(panic_payload_message(&"静态字面量"), "静态字面量");
+    }
+
+    #[test]
+    fn payload_message_extracts_owned_string() {
+        assert_eq!(
+            panic_payload_message(&String::from("格式化消息")),
+            "格式化消息"
+        );
+    }
+
+    #[test]
+    fn payload_message_falls_back_for_opaque_payload() {
+        assert_eq!(panic_payload_message(&42u32), "Unknown panic");
+    }
+
+    #[test]
+    fn location_is_formatted_as_file_line_col() {
+        let loc = location_here();
+        let formatted = format_location(Some(loc));
+        assert_eq!(
+            formatted,
+            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
+        );
+        assert!(formatted.contains("main.rs"), "应含文件名：{formatted}");
+    }
+
+    #[test]
+    fn missing_location_falls_back_to_placeholder() {
+        assert_eq!(format_location(None), "unknown location");
+    }
+
+    #[test]
+    fn panic_report_contains_message_then_location() {
+        assert_eq!(
+            format_panic_report("boom", "src/x.rs:1:2"),
+            "boom\n\nLocation: src/x.rs:1:2"
+        );
+    }
+
+    /// 真装 hook 的集成验证（B12 验收要求）：后台线程 panic 必须
+    /// ① 完成栈展开（RAII 守卫被释放）、② 不走弹框分支。
+    ///
+    /// 可证伪性：把 `PanicSite::shows_dialog` 改成恒 `true`，第三条断言转红。
+    #[test]
+    fn installed_hook_lets_background_panic_unwind_without_dialog() {
+        struct DropFlag(Arc<AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        // panic hook 是进程级全局状态 ⇒ 与其它安装 hook 的用例串行
+        static HOOK_LOCK: Mutex<()> = Mutex::new(());
+        let _serial = HOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (log, rec) = recorder();
+        let hook = make_panic_hook(std::thread::current().id(), rec);
+        let prev = panic::take_hook();
+        panic::set_hook(hook);
+
+        let unwound = Arc::new(AtomicBool::new(false));
+        let flag = unwound.clone();
+        let joined = std::thread::spawn(move || {
+            let _guard = DropFlag(flag);
+            panic!("B12 注入：后台线程 panic");
+        })
+        .join();
+        panic::set_hook(prev);
+
+        assert!(joined.is_err(), "后台线程应以 panic 收尾（Err）");
+        assert!(
+            unwound.load(Ordering::SeqCst),
+            "栈展开必须真的发生 ⇒ RAII 守卫已释放"
+        );
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "后台线程 panic 不得走弹框分支（走了会卡死该线程）"
+        );
+    }
+
+    /// `#[track_caller]` 包装：让 `Location::caller()` 返回调用点的位置。
+    #[track_caller]
+    fn location_here() -> &'static panic::Location<'static> {
+        panic::Location::caller()
+    }
 }
