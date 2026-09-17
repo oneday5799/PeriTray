@@ -624,7 +624,7 @@ mod tests {
         let log: DialogLog = Arc::new(Mutex::new(Vec::new()));
         let handle = log.clone();
         let f: Box<dyn Fn(&str) + Send + Sync> =
-            Box::new(move |msg: &str| handle.lock().unwrap().push(msg.to_string()));
+            Box::new(move |msg: &str| crate::state::lock_unpoisoned(&handle).push(msg.to_string()));
         (log, f)
     }
 
@@ -660,7 +660,7 @@ mod tests {
         let site = handle_panic("boom", "src/x.rs:1:2", me, me, &*rec);
 
         assert_eq!(site, PanicSite::Main);
-        let got = log.lock().unwrap();
+        let got = crate::state::lock_unpoisoned(&log);
         assert_eq!(got.len(), 1, "主线程 panic 应恰好走一次弹框分支");
         assert!(
             got[0].contains("boom"),
@@ -682,7 +682,7 @@ mod tests {
 
         assert_eq!(site, PanicSite::Background);
         assert!(
-            log.lock().unwrap().is_empty(),
+            crate::state::lock_unpoisoned(&log).is_empty(),
             "后台线程 panic 不得走弹框分支"
         );
     }
@@ -744,7 +744,7 @@ mod tests {
 
         // panic hook 是进程级全局状态 ⇒ 与其它安装 hook 的用例串行
         static HOOK_LOCK: Mutex<()> = Mutex::new(());
-        let _serial = HOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::state::lock_unpoisoned(&HOOK_LOCK);
 
         let (log, rec) = recorder();
         let hook = make_panic_hook(std::thread::current().id(), rec);
@@ -766,7 +766,7 @@ mod tests {
             "栈展开必须真的发生 ⇒ RAII 守卫已释放"
         );
         assert!(
-            log.lock().unwrap().is_empty(),
+            crate::state::lock_unpoisoned(&log).is_empty(),
             "后台线程 panic 不得走弹框分支（走了会卡死该线程）"
         );
     }

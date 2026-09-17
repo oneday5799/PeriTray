@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tauri::menu::MenuItem;
 
 use crate::device::Device;
@@ -129,10 +129,43 @@ pub static SHORTCUT_RECORDING: AtomicBool = AtomicBool::new(false);
 /// 开机自启菜单项引用
 pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceLock::new();
 
-/// 容忍 Mutex 中毒的加锁：锁中毒时直接接管内部数据继续使用
-/// （本项目各静态量在 panic 后仅需"可用"而非"严格一致"，统一在此表达该语义）
+/// **全仓唯一的 Mutex 加锁入口**（P2-11）。
+///
+/// 语义：**容忍中毒**——锁中毒（持锁线程 panic）时直接接管内部数据继续使用。
+/// 依据：本项目各静态量在 panic 后仅需「可用」而非「严格一致」，
+/// 统一在此表达该语义，避免每个调用点各自发明一套。
+///
+/// **禁止的写法及其后果**（评审时逐条对照；括号内为 2026-09-17 统一前的历史写法）：
+/// - `Mutex::lock()` 之后直接 `unwrap()`（`audio_notify.rs`）——中毒即 **panic**。
+///   最危险的是 COM 回调路径：panic 会穿过 FFI/COM 边界向外抛，属未定义行为，
+///   且会把「一次 panic」放大成「此后每次回调都炸」。
+/// - `Mutex::lock()` 之后接 `ok()` / `.ok().and_then(..)`（`update.rs`）——中毒即
+///   **静默返回 `None`**，表现为「设置页永远显示不出更新状态」这类无日志的哑故障。
+/// - `if let Ok(guard) = mutex.lock() { .. }` / `match mutex.lock() { .. Err(_) => .. }`
+///   （`config.rs` / `tray.rs` / `device_data.rs` / `audio_spatial.rs`）——
+///   中毒即**静默跳过整个临界区**。写入侧跳过尤其致命：缓存/句柄会永久停在旧值
+///   （如 `TRAY_ICON` 永不被赋值 ⇒ tooltip 此后再也刷不动）。
+///
+/// **唯一例外**：需要把中毒**上报给调用方**的命令边界可用
+/// `.lock().map_err(|e| e.to_string())?`（见 `bt_ble.rs`）——那里返回 `Result`，
+/// 中毒属于可报告的错误，而非应当吞掉的内部状态。
+///
+/// > 本注释刻意不把被禁写法写成**连续字面量**（上一条已按该规则改写），
+/// > 以便「全仓 grep 该字面量 = 0」这条验收可机械执行、无需先剥离注释。
+///
+/// RwLock 同族见 [`read_unpoisoned`] / [`write_unpoisoned`]。
 pub fn lock_unpoisoned<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 容忍中毒的 RwLock 读锁（语义与 [`lock_unpoisoned`] 一致）。
+pub fn read_unpoisoned<T>(m: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    m.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 容忍中毒的 RwLock 写锁（语义与 [`lock_unpoisoned`] 一致）。
+pub fn write_unpoisoned<T>(m: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    m.write().unwrap_or_else(|e| e.into_inner())
 }
 
 /// 单飞标志的 RAII 守卫：CAS 抢占，Drop 时复位。
@@ -414,5 +447,52 @@ mod tests {
         });
         assert_eq!(rounds, Some(1), "8 个请求应合并为 1 轮重建");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    // ── P2-2 / P2-11：中毒容忍的加锁入口 ──────────────────────────
+
+    /// 让 `m` 处于中毒态：在持锁期间 panic，再用 `catch_unwind` 收住。
+    ///
+    /// 注：这会向 stderr 打印一行默认 hook 的 `thread panicked at ...`，
+    /// 属预期噪声——不用临时 hook 覆盖它，因为那是进程级全局状态。
+    fn poison_mutex<T>(m: &Mutex<T>) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = lock_unpoisoned(m);
+            panic!("注入：持锁 panic，令 Mutex 中毒");
+        }));
+        assert!(m.lock().is_err(), "前提：注入后锁必须已中毒");
+    }
+
+    /// 可证伪性：若 `lock_unpoisoned` 退回 `Mutex::lock()` + `unwrap()`，本用例转红（panic）。
+    #[test]
+    fn lock_unpoisoned_takes_over_poisoned_mutex() {
+        let m = Mutex::new(0u32);
+        poison_mutex(&m);
+        *lock_unpoisoned(&m) = 42;
+        assert_eq!(*lock_unpoisoned(&m), 42, "中毒后仍应能读写内部数据");
+    }
+
+    /// 同 `poison_mutex`，作用于 RwLock 的写锁。
+    fn poison_rwlock<T>(m: &RwLock<T>) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = write_unpoisoned(m);
+            panic!("注入：持写锁 panic，令 RwLock 中毒");
+        }));
+        assert!(m.write().is_err(), "前提：注入后写锁必须已中毒");
+    }
+
+    #[test]
+    fn read_unpoisoned_takes_over_poisoned_rwlock() {
+        let m = RwLock::new(7u32);
+        poison_rwlock(&m);
+        assert_eq!(*read_unpoisoned(&m), 7, "中毒后读锁仍应可用");
+    }
+
+    #[test]
+    fn write_unpoisoned_takes_over_poisoned_rwlock() {
+        let m = RwLock::new(7u32);
+        poison_rwlock(&m);
+        *write_unpoisoned(&m) = 9;
+        assert_eq!(*read_unpoisoned(&m), 9, "中毒后写锁仍应可用");
     }
 }

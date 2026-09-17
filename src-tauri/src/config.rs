@@ -380,9 +380,8 @@ pub fn init_config() {
     // 初始化脏检查缓存：读取磁盘文件内容作为基准
     if let Ok(content) = std::fs::read_to_string(config_path()) {
         if let Some(last) = LAST_CONFIG_CONTENT.get() {
-            if let Ok(mut cached) = last.lock() {
-                *cached = Some(content);
-            }
+            // P2-11：改用统一入口，中毒时不再静默丢弃基准值
+            *crate::state::lock_unpoisoned(last) = Some(content);
         } else {
             let _ = LAST_CONFIG_CONTENT.set(Mutex::new(Some(content)));
         }
@@ -432,11 +431,15 @@ fn persist_if_changed(content: &str) {
     }
 
     // #23 脏检查：内容未变化时跳过写盘（减少高频配置操作的 I/O）
+    // 守卫必须落在块内：下面要写文件，持锁做 I/O 会让所有落盘互相排队（P1-3 的教训），
+    // 且本函数末尾还要再取一次同一把锁（同线程重复加锁 = 直接死锁）。
     let last = LAST_CONFIG_CONTENT.get_or_init(|| Mutex::new(None));
-    if let Ok(cached) = last.lock() {
-        if cached.as_deref() == Some(content) {
-            return;
-        }
+    let unchanged = {
+        let cached = crate::state::lock_unpoisoned(last);
+        cached.as_deref() == Some(content)
+    };
+    if unchanged {
+        return;
     }
 
     use std::io::Write;
@@ -454,9 +457,9 @@ fn persist_if_changed(content: &str) {
         standard_log!("[config] save failed: {}", e);
         // 清理临时文件（如果 rename 失败）
         let _ = std::fs::remove_file(&tmp_path);
-    } else if let Ok(mut cached) = last.lock() {
+    } else {
         // 写盘成功，更新缓存
-        *cached = Some(content.to_string());
+        *crate::state::lock_unpoisoned(last) = Some(content.to_string());
     }
 }
 

@@ -19,13 +19,12 @@ static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new(
 /// 将查询结果写回设备缓存，返回是否发生变化（新旧列表比较）。
 fn apply_devices_cache(new_devices: Vec<crate::device::Device>) -> bool {
     let cache = get_devices_cache();
-    if let Ok(mut guard) = cache.lock() {
-        if *guard != new_devices {
-            *guard = new_devices;
-            true
-        } else {
-            false
-        }
+    // P2-11：中毒时不再静默返回 false —— 那会让调用方认为「设备列表没变」，
+    // 于是 tooltip 与弹窗卡片此后再也不刷新（无日志的哑故障）。
+    let mut guard = crate::state::lock_unpoisoned(cache);
+    if *guard != new_devices {
+        *guard = new_devices;
+        true
     } else {
         false
     }
@@ -79,12 +78,12 @@ fn update_tooltip() {
 
     // 先取句柄再释放锁：`set_tooltip` 内部同步等主线程，
     // 持 TRAY_ICON 调用会与「主线程等 TRAY_ICON」构成 AB/BA 死锁（详见 build_audio_devices_menu 注释）
-    let tray = match TRAY_ICON.get_or_init(|| Mutex::new(None)).lock() {
-        Ok(guard) => match *guard {
+    let tray = {
+        let guard = crate::state::lock_unpoisoned(TRAY_ICON.get_or_init(|| Mutex::new(None)));
+        match *guard {
             Some(ref tray) => tray.clone(),
             None => return,
-        },
-        Err(_) => return,
+        }
     };
     let _ = tray.set_tooltip(Some(tooltip));
 }
@@ -134,9 +133,7 @@ fn start_device_watcher(app: &tauri::AppHandle) {
             // 低电量通知检查
             if has_battery_notify {
                 let cache = get_devices_cache();
-                if let Ok(guard) = cache.lock() {
-                    crate::battery_notify::check_battery_notify(&guard);
-                }
+                crate::battery_notify::check_battery_notify(&crate::state::lock_unpoisoned(cache));
             }
         }
     });
@@ -239,10 +236,8 @@ fn build_full_menu(
     let auto_i = MenuItem::with_id(app, "auto_start", auto_text, true, None::<&str>)?;
     let exit_i = MenuItem::with_id(app, "exit", "退出", true, None::<&str>)?;
     let win_sound_menu = build_windows_sound_settings_menu(app)?;
-    let _ = AUTO_MENU_ITEM.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = AUTO_MENU_ITEM.get().unwrap().lock() {
-        *guard = Some(auto_i.clone());
-    }
+    let slot = AUTO_MENU_ITEM.get_or_init(|| Mutex::new(None));
+    *crate::state::lock_unpoisoned(slot) = Some(auto_i.clone());
 
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -413,9 +408,8 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .build(app)?;
 
-    if let Ok(mut guard) = TRAY_ICON.get_or_init(|| Mutex::new(None)).lock() {
-        *guard = Some(_tray);
-    }
+    let tray_slot = TRAY_ICON.get_or_init(|| Mutex::new(None));
+    *crate::state::lock_unpoisoned(tray_slot) = Some(_tray);
 
     let _ = TRAY_POS.get_or_init(|| {
         let handle = app.handle();
@@ -479,13 +473,13 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 fn update_auto_text() {
     // 先取句柄再释放锁：`set_text` 内部同步等主线程（同 build_audio_devices_menu 注释）
     let item = match AUTO_MENU_ITEM.get() {
-        Some(slot) => match slot.lock() {
-            Ok(guard) => match *guard {
+        Some(slot) => {
+            let guard = crate::state::lock_unpoisoned(slot);
+            match *guard {
                 Some(ref mi) => mi.clone(),
                 None => return,
-            },
-            Err(_) => return,
-        },
+            }
+        }
         None => return,
     };
     let text = if AUTO_START.load(Ordering::Relaxed) {

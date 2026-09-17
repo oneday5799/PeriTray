@@ -50,13 +50,14 @@ impl UpdateStatus {
 static LAST_STATUS: Mutex<Option<UpdateStatus>> = Mutex::new(None);
 
 fn set_last_status(status: UpdateStatus) {
-    if let Ok(mut guard) = LAST_STATUS.lock() {
-        *guard = Some(status);
-    }
+    // P2-11：统一入口。原写法 `if let Ok(guard) = mutex.lock()` 在中毒时静默丢弃状态，
+    // 设置页会永远显示不出「已是最新」。
+    *crate::state::lock_unpoisoned(&LAST_STATUS) = Some(status);
 }
 
 pub fn get_last_status() -> Option<UpdateStatus> {
-    LAST_STATUS.lock().ok().and_then(|guard| guard.clone())
+    // P2-11：原写法 `Mutex::lock()` 后接 `ok().and_then(..)` 在中毒时静默返回 None（同上后果）
+    crate::state::lock_unpoisoned(&LAST_STATUS).clone()
 }
 
 /// 执行一次更新检查并把结果写入 LAST_STATUS（成功与检查失败均存储）。

@@ -60,7 +60,10 @@ fn request_sync_callbacks_with(hwnd: HWND, post: fn(HWND) -> windows::core::Resu
 
 fn log_throttle_property(id: &str) {
     let lock = LAST_PROP_LOG.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut map = lock.lock().unwrap();
+    // 走统一入口（P2-2）：本函数由 COM 回调调用，若用 `Mutex::lock()` + `unwrap()`，
+    // 锁中毒时的 panic 会穿过 FFI/COM 边界向外抛（未定义行为），
+    // 且此后每次属性变更回调都会再炸一次。
+    let mut map = crate::state::lock_unpoisoned(lock);
     let now = Instant::now();
     if let Some(last) = map.get(id) {
         if now.duration_since(*last) < Duration::from_secs(2) {

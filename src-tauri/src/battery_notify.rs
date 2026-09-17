@@ -61,11 +61,9 @@ pub fn check_battery_notify(devices: &[Device]) {
         for &threshold in &thresholds {
             if level <= threshold {
                 // 去重：insert 返回 false 表示已存在（已通知过）
-                if !notified
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert((d.name.clone(), threshold))
-                {
+                // P2-11：原本是手写展开的 `.lock().unwrap_or_else(..)`，
+                // 语义与 lock_unpoisoned 一致，统一收敛到单一入口
+                if !crate::state::lock_unpoisoned(notified).insert((d.name.clone(), threshold)) {
                     verbose_log!(
                         "[battery-notify] 跳过 {}：阈值 {}% 已通知过",
                         d.name,
