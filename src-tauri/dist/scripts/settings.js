@@ -6,6 +6,23 @@
  *       updateFlyoutBackdrop 等框架级共享函数
  * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/about) */
 let config = null;
+// 「基线副本」= 本页**上次从后端收到的整份快照**（P1-11）。
+// saveConfig() 会把它随请求一起发回，后端据此算出用户真正改了哪些字段，
+// 只套用这些字段 —— 否则整份覆盖会抹掉弹窗侧并发的改名/隐藏等改动。
+// ⚠️ 必须是独立深拷贝：各分区脚本都直接在 config 上就地改字段，
+// 若与 config 指向同一对象，差异永远是空集，修复即失效。
+let configBase = null;
+
+/**
+ * 接受一份来自后端的整份配置快照：同时刷新工作副本与基线副本。
+ * **只有来自后端的快照**才走这里；本地派生的浅拷贝（如 `{ ...config }`）不走，
+ * 否则会把用户的未落盘改动误当成基线，差异被清零。
+ */
+function acceptConfig(snapshot) {
+  if (!snapshot) return;
+  config = snapshot;
+  configBase = structuredClone(snapshot);
+}
 let activeSettingsMenu = null;
 // 导航就绪门：get_config 往返期间各标签页内容尚未初始化，
 // 此期间的点击/托盘事件先记录、init 完成后统一补执行（防首次切换播在空白面板上）
@@ -25,7 +42,8 @@ document.addEventListener("pointerleave", (e) => {
 
 async function saveConfig() {
   try {
-    await invoke("update_config", { newConfig: config });
+    // base + newConfig 一起送：后端只套用两者之间的差异（P1-11）
+    await invoke("update_config", { base: configBase, newConfig: config });
   } catch (e) {
     console.error("Failed to save config:", e);
   }
@@ -688,7 +706,7 @@ async function init() {
   if (hash) selectTab(hash);
 
   try {
-    config = await invoke("get_config");
+    acceptConfig(await invoke("get_config"));
 
     applyThemeMode(config.theme_mode || "follow_system");
     initGeneralTab();
@@ -739,10 +757,10 @@ async function init() {
 window.__TAURI__.event.listen("config-changed", async (event) => {
   // 后端传递完整 config 快照，直接使用
   if (event.payload) {
-    config = event.payload;
+    acceptConfig(event.payload);
   } else {
     // 向后兼容：旧版后端可能传递空 payload
-    config = await invoke("get_config");
+    acceptConfig(await invoke("get_config"));
   }
   await loadDevicesAsync();
   await loadAudioDevicesAsync();

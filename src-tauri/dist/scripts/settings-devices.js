@@ -11,7 +11,7 @@ let prevRenderKey = "";
 
 async function loadDevicesAsync() {
   try {
-    config = await invoke("get_config");
+    acceptConfig(await invoke("get_config"));
     devices = await invoke("get_devices");
     deviceGroups = config.device_groups || {};
 
@@ -115,7 +115,7 @@ function renderGroups() {
 
       const { toggle, input } = createToggle(!isHidden, async (input) => {
         await invoke("toggle_device_hidden", { name: dev.name });
-        config = await invoke("get_config");
+        acceptConfig(await invoke("get_config"));
         nameEl.classList.toggle("hidden", !input.checked);
       });
 

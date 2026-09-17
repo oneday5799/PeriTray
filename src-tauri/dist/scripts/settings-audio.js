@@ -7,7 +7,7 @@
  *       settings.js(config/bindToggle/createExpandableCard/saveConfig) */
 async function loadAudioDevicesAsync() {
   try {
-    config = await invoke("get_config");
+    acceptConfig(await invoke("get_config"));
     const audioDevices = await invoke("get_audio_devices");
     renderAudioDeviceGroups(audioDevices);
   } catch (e) {
@@ -57,7 +57,7 @@ function renderAudioDeviceGroups(audioDevices) {
 
     const { toggle, input } = createToggle(!isHidden, async (input) => {
       await invoke("toggle_audio_device_hidden", { name: dev.name });
-      config = await invoke("get_config");
+      acceptConfig(await invoke("get_config"));
       nameEl.classList.toggle("hidden", !input.checked);
     });
 

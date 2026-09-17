@@ -109,19 +109,39 @@ pub fn set_window_theme(window: tauri::Window, theme: String) {
     let _ = window.set_theme(t);
 }
 
+/// 覆盖式更新配置——设置页 `saveConfig()` 的**唯一**入口。
+///
+/// `base` = 前端**上次从后端收到的配置快照**。后端据此算出「用户真正改了哪些字段」
+/// 并只套用这些字段（P1-11，见 `config::merge_config`），从而不会把弹窗侧并发的
+/// 改名 / 隐藏 / 分组等改动整份抹掉。
+///
+/// `base` 为 `None` 时退回整体覆盖（旧行为）并打**告警**日志——该分支只为兼容，
+/// 正常前端一定会带上 `base`；日志里出现这条告警即说明有调用点漏传。
 #[tauri::command]
-pub fn update_config(app: tauri::AppHandle, mut new_config: Config) {
+pub fn update_config(app: tauri::AppHandle, base: Option<Config>, mut new_config: Config) {
     let cycle_was_enabled = config::with_config(|c| c.enable_device_shortcut_cycle);
     if cycle_was_enabled && !new_config.enable_device_shortcut_cycle {
         // 关闭共享开关：清除被多个设备共用的快捷键
         clear_shared_device_shortcuts(&mut new_config);
         crate::shortcut::sync_device_shortcuts(&app);
     }
-    // 保留时长变更时，落地后立即清理一次旧日志
-    let retention_changed = config::with_config(|c| c.log_retention) != new_config.log_retention;
-    config::with_config_mut(|c| {
-        *c = new_config;
+    // 保留时长是否变化，必须比较**套用前后**的真值：套用是「按差异合并」，
+    // 前端没改 log_retention 时它压根不会被写，拿 patch 的值比较会误判。
+    let retention_before = config::with_config(|c| c.log_retention);
+    let applied = config::with_config_mut(|c| match base.as_ref() {
+        Some(base) => Some(config::merge_config(c, base, &new_config)),
+        None => {
+            *c = new_config.clone();
+            None
+        }
     });
+    match applied {
+        Some(n) => standard_log!("[config] update_config: 套用 {} 个字段变更", n),
+        None => standard_log!(
+            "[config] update_config 未带 base 快照，已退回整体覆盖（可能丢失并发改动）"
+        ),
+    }
+    let retention_changed = config::with_config(|c| c.log_retention) != retention_before;
     // 传递完整 config 快照，前端无需再调用 get_config
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);

@@ -47,13 +47,13 @@ impl Default for LogRetention {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceShortcut {
     pub name: String,
     pub shortcut: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     // ── 字段级 serde 默认值（P1-7）─────────────────────────────
     // 每个字段都必须有默认值：任何一个字段缺失或类型不符，都会让**整份**
@@ -463,6 +463,103 @@ fn persist_if_changed(content: &str) {
     }
 }
 
+/// `Config` 的字段清单（**单一来源**）：`merge_config` 与其覆盖性单测都由它生成，
+/// 新增字段时**只需**在这里加一个标识符，两处自动同步。
+///
+/// ⚠️ 漏加字段的后果：该字段在设置页**永远改不动**（前端发来的整份配置里，
+/// 它的差异不会被套用）。这是「可见的功能缺失」而非「静默丢数据」，
+/// 且覆盖性单测（`merge_field_list_covers_every_serialized_field`）会直接转红。
+macro_rules! for_each_config_field {
+    ($mac:ident) => {
+        $mac! {
+            auto_start,
+            hidden_devices,
+            hidden_groups,
+            device_names,
+            device_groups,
+            filter_enabled,
+            filter_regex,
+            dedup_devices,
+            show_unnamed_bt,
+            use_system_bt,
+            wireless_only,
+            tray_devices,
+            hidden_audio_devices,
+            log_level,
+            legacy_log_enabled,
+            log_retention,
+            shutdown_volume_enabled,
+            shutdown_volume_devices,
+            mute_lock,
+            volume_fine_adjust,
+            force_mute_devices,
+            enable_spatial_sound,
+            check_updates,
+            include_prerelease,
+            simplify_device_names,
+            shortcut_devices,
+            shortcut_volume,
+            shortcut_volume_up,
+            shortcut_volume_down,
+            shortcut_volume_mute,
+            hardware_acceleration,
+            default_popup_tab,
+            popup_size,
+            device_shortcuts,
+            enable_device_shortcut_cycle,
+            shortcut_switch_notify,
+            theme_mode,
+            window_material,
+            low_battery_notify,
+            low_battery_devices,
+            low_battery_thresholds,
+            low_battery_refresh_secs,
+        }
+    };
+}
+
+macro_rules! merge_config_impl {
+    ($($field:ident),* $(,)?) => {
+        /// 把「`patch` 相对 `base` 的差异」套用到 `current` 上，返回被套用的字段数（P1-11）。
+        ///
+        /// **为什么需要它**：设置页的 `saveConfig()` 发送**整份**配置并整体覆盖，
+        /// 而弹窗侧的改名/隐藏/分组/托盘固定等操作走的是**字段级**命令
+        /// （`rename_device` / `toggle_device_hidden` / `change_device_group` / …）。
+        /// 设置页手里的快照一旦早于那些操作，整份覆盖就会把它们一并抹掉——
+        /// 典型 lost update：**改名的同时切一个开关，名字被改回去**。
+        ///
+        /// **语义**：只有 `base` 与 `patch` 不同的字段才算「用户改了」，其余一律保留
+        /// `current`（后端真值）。于是
+        /// - 用户没碰过的字段：**结构性免疫**并发覆盖（不是靠时序侥幸）；
+        /// - 同一字段被两边同时改：退化为 last-writer-wins——这既不可消除，
+        ///   也不需要消除（后端无从得知谁更晚，而前端的改动是用户刚做的动作）。
+        ///
+        /// `base` 由前端随请求一起送来（它上次从后端收到的快照）。`base` 缺失时
+        /// 调用方应退回整体覆盖并**打告警日志**（见 `commands::update_config`）。
+        pub fn merge_config(current: &mut Config, base: &Config, patch: &Config) -> usize {
+            let mut applied = 0usize;
+            $(
+                if base.$field != patch.$field {
+                    current.$field = patch.$field.clone();
+                    applied += 1;
+                }
+            )*
+            applied
+        }
+    };
+}
+for_each_config_field!(merge_config_impl);
+
+macro_rules! config_field_names_impl {
+    ($($field:ident),* $(,)?) => {
+        /// `merge_config` 覆盖的字段名（由 [`for_each_config_field`] 自动导出）。
+        /// 只给覆盖性单测对账用——手写清单会漂。
+        #[cfg(test)]
+        pub(crate) const MERGED_FIELD_NAMES: &[&str] = &[$(stringify!($field)),*];
+    };
+}
+for_each_config_field!(config_field_names_impl);
+
 /// 只读访问配置。
 ///
 /// **锁纪律（P0 死锁防护，勿破坏）**：闭包内**只允许纯内存操作**（读字段、clone、算术）。
@@ -515,7 +612,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{claim_revision, revision_is_latest};
+    use super::{claim_revision, merge_config, revision_is_latest, Config, MERGED_FIELD_NAMES};
 
     /// 落盘版本号判据：**先取号者永远不得落盘**（当已有更新者取过号时）。
     ///
@@ -645,6 +742,130 @@ mod tests {
             parsed.is_err(),
             "现状（P3-9 未做）：单个枚举字段取值非法会让整份 Config 解析失败。\
              若此断言失败，说明已改为「非法值降级 + 告警」，请同步更新本测试与 P3-9 状态"
+        );
+    }
+
+    // ── P1-11：整份覆盖 ⇒ 按差异合并 ────────────────────────────
+
+    /// **P1-11 的原始症状**：设置页手里的快照早于弹窗的改名，
+    /// 用户只切了一个开关，改名不能被抹掉。
+    #[test]
+    fn merge_preserves_concurrent_field_changes() {
+        let base = Config::default(); // 设置页手里的旧快照
+        let mut patch = base.clone(); // 用户只动了 auto_start
+        patch.auto_start = !base.auto_start;
+
+        let mut current = base.clone(); // 后端真值：弹窗刚改过 device_names
+        current
+            .device_names
+            .insert("VID_1".to_string(), "我的鼠标".to_string());
+
+        let applied = merge_config(&mut current, &base, &patch);
+
+        assert_eq!(applied, 1, "只有 auto_start 一个字段被改动");
+        assert_eq!(current.auto_start, patch.auto_start, "用户的改动要生效");
+        assert_eq!(
+            current.device_names.get("VID_1").map(String::as_str),
+            Some("我的鼠标"),
+            "并发的改名不能被整份覆盖抹掉（P1-11 的原始症状）"
+        );
+    }
+
+    /// 前端一个字段都没改 ⇒ 不得触碰任何字段（结构性免疫并发覆盖）。
+    #[test]
+    fn merge_never_touches_unchanged_fields() {
+        let base = Config::default();
+        let patch = base.clone();
+
+        let mut current = base.clone();
+        current.filter_regex = "用户手改".to_string();
+        current.hidden_groups = vec!["X".to_string()];
+
+        let applied = merge_config(&mut current, &base, &patch);
+
+        assert_eq!(applied, 0, "base 与 patch 相同 ⇒ 不应套用任何字段");
+        assert_eq!(current.filter_regex, "用户手改");
+        assert_eq!(current.hidden_groups, vec!["X".to_string()]);
+    }
+
+    /// 同一字段被两边同时改 ⇒ last-writer-wins，且**以 patch 为准**
+    /// （后端的改动可能更晚，但前端的改动是用户刚刚做的动作）。
+    #[test]
+    fn merge_resolves_same_field_conflict_in_favor_of_patch() {
+        let base = Config::default();
+        let mut patch = base.clone();
+        patch.log_level = "verbose".to_string();
+
+        let mut current = base.clone();
+        current.log_level = "off".to_string();
+
+        let applied = merge_config(&mut current, &base, &patch);
+
+        assert_eq!(applied, 1);
+        assert_eq!(current.log_level, "verbose");
+    }
+
+    /// 多个字段同时改动时，只有这些字段被套用（用计数锁住「只套差异」这一语义）。
+    #[test]
+    fn merge_applies_exactly_the_changed_fields() {
+        let base = Config::default();
+        let mut patch = base.clone();
+        patch.wireless_only = !base.wireless_only;
+        patch.mute_lock = !base.mute_lock;
+        patch.theme_mode = "dark".to_string();
+        patch.low_battery_thresholds = vec![10, 20, 30];
+
+        let mut current = base.clone();
+        current.popup_size = "large".to_string(); // 并发改动，不在 patch 里
+
+        let applied = merge_config(&mut current, &base, &patch);
+
+        assert_eq!(applied, 4, "恰好 4 个字段有差异");
+        assert_eq!(current.popup_size, "large", "未在 patch 中的字段保持真值");
+        assert_eq!(current.theme_mode, "dark");
+        assert_eq!(current.low_battery_thresholds, vec![10, 20, 30]);
+    }
+
+    /// **覆盖性守卫**：`merge_config` 的字段清单必须与 `Config` 的落盘字段集**双向相等**。
+    ///
+    /// 为什么按**字段名集合**而不是数个数：TOML 没有 null，`toml` crate 序列化时会
+    /// **跳过 `None`**，所以 `Config::default()` 里有 6 个 `Option` 字段压根不出现在
+    /// 结果里（`legacy_log_enabled` + 5 个 `shortcut_*`）。数个数就得硬编码偏移量，
+    /// 而偏移量本身也会漂。
+    ///
+    /// ⚠️ **新增可选（`Option`）字段时**：请同时在下面的 `probe` 里把它设为 `Some`，
+    /// 否则它默认不出现在序列化结果里，本用例覆盖不到它。
+    #[test]
+    fn merge_field_list_covers_every_serialized_field() {
+        use std::collections::BTreeSet;
+
+        // 把默认 `None` 的可选字段填上，使它们进入序列化结果（见上方 ⚠️）
+        let mut probe = Config::default();
+        probe.legacy_log_enabled = Some(true);
+        probe.shortcut_devices = Some("A".to_string());
+        probe.shortcut_volume = Some("B".to_string());
+        probe.shortcut_volume_up = Some("C".to_string());
+        probe.shortcut_volume_down = Some("D".to_string());
+        probe.shortcut_volume_mute = Some("E".to_string());
+
+        let text = toml::to_string_pretty(&probe).expect("Config 应可序列化为 TOML");
+        let serialized: BTreeSet<String> = toml::from_str::<toml::Table>(&text)
+            .expect("序列化结果应可解析回 TOML 表")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let merged: BTreeSet<String> = MERGED_FIELD_NAMES.iter().map(|s| s.to_string()).collect();
+
+        let forgotten: Vec<&String> = serialized.difference(&merged).collect();
+        assert!(
+            forgotten.is_empty(),
+            "以下字段会落盘但不在 merge_config 的清单里 —— 它们将在设置页**永远改不动**，\
+             请补进 for_each_config_field：{forgotten:?}"
+        );
+        let stale: Vec<&String> = merged.difference(&serialized).collect();
+        assert!(
+            stale.is_empty(),
+            "merge_config 的清单里有字段已不落盘（可能已从 Config 删除或改成了跳过序列化）：{stale:?}"
         );
     }
 }

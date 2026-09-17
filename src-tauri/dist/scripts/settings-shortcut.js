@@ -128,7 +128,7 @@ function initDeviceShortcutSettings() {
       deleteBtn.addEventListener("click", async () => {
         try {
           await invoke("remove_device_shortcut", { deviceId: id });
-          config = await invoke("get_config");
+          acceptConfig(await invoke("get_config"));
           render();
         } catch (e) {
           console.error("Failed to remove device shortcut:", e);
@@ -163,7 +163,7 @@ function initDeviceShortcutSettings() {
           }
           invoke("set_device_shortcut", { deviceId: id, name: entry.name, key: shortcut })
             .then(async () => {
-              config = await invoke("get_config");
+              acceptConfig(await invoke("get_config"));
               render();
             })
             .catch((err) => {
