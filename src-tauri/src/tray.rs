@@ -130,10 +130,24 @@ fn start_device_watcher(app: &tauri::AppHandle) {
                 let _ = handle.emit("devices-changed", ());
             }
 
-            // 低电量通知检查
+            // 低电量通知检查（P2-7）
+            //
+            // ⚠️ 锁的作用范围必须是**这一对花括号**，不能让 guard 活到下面的
+            // `emit_notifications`。原先写成
+            //     check_battery_notify(&lock_unpoisoned(cache))
+            // ——`lock_unpoisoned(cache)` 是**临时量**，其 guard 存活至**整条语句结束**，
+            // 于是 `check_battery_notify` 全程持设备缓存锁，而它内部要 `show_toast`
+            // （WinRT/COM）与取配置锁 ⇒ 既违「持锁不做 COM」又违锁序纪律。
+            // 更危险的是反向路径真实存在：主线程的命令（`update_config` 等）先取
+            // 配置锁，而 `apply_devices_cache` 会取设备缓存锁 ⇒ AB/BA 死锁条件齐备。
             if has_battery_notify {
                 let cache = get_devices_cache();
-                crate::battery_notify::check_battery_notify(&crate::state::lock_unpoisoned(cache));
+                let pending = {
+                    let guard = crate::state::lock_unpoisoned(cache);
+                    crate::battery_notify::collect_pending_notices(&guard)
+                }; // ← 设备缓存锁在此释放
+                   // 出锁后再弹通知：COM 调用与图标文件 I/O 都不在锁内。
+                crate::battery_notify::emit_notifications(&pending);
             }
         }
     });

@@ -9,14 +9,121 @@ use crate::{standard_log, verbose_log};
 // 每个 (设备名, 阈值) 组合只通知一次；重启后清空重新检测
 static NOTIFIED: OnceLock<Mutex<HashSet<(String, i32)>>> = OnceLock::new();
 
-/// 检查设备电量是否达到配置的阈值，命中时弹出 Windows 原生通知。
-/// 由 tray watcher 每轮调用，传入设备缓存快照。
-pub fn check_battery_notify(devices: &[Device]) {
-    let (enabled, selected, thresholds) = config::with_config(|c| {
+/// 一条待弹出的低电量通知（**纯数据**，不含任何已解析的句柄或资源）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingBatteryNotice {
+    /// 用户可见的显示名（已套用 `device_names` 里的自定义名）
+    pub display_name: String,
+    /// 当前电量
+    pub level: i32,
+    /// 命中的阈值
+    pub threshold: i32,
+}
+/// 判定哪些设备该弹通知（**纯函数**，不读全局配置、不碰锁、不做 I/O）。
+///
+/// 抽出来的理由与项目既有范式一致（见 P2-4 的 `should_restart` / `is_time_jump`）：
+/// 判定语义可以在单测里钉死，不必依赖真实配置与真实通知器。
+///
+/// `notified` 是「已通知过」的集合，本函数会**就地更新**它
+/// （命中即插入，用于跨轮去重）——这也是它唯一的副作用，且是纯内存的。
+///
+/// 参数里的 `Enabled/Selected/Thresholds/DeviceNames` 都是在**锁外**取好的快照，
+/// 故本函数不可能落在任何锁的作用域里。
+fn select_pending_notices(
+    devices: &[Device],
+    enabled: bool,
+    selected: &[String],
+    thresholds: &[i32],
+    device_names: &std::collections::HashMap<String, String>,
+    notified: &mut HashSet<(String, i32)>,
+) -> Vec<PendingBatteryNotice> {
+    if !enabled || thresholds.is_empty() {
+        return Vec::new();
+    }
+
+    // 未选择任何设备 → 不通知
+    if selected.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pending = Vec::new();
+
+    for d in devices {
+        let Some(level) = d.battery else {
+            verbose_log!("[battery-notify] 跳过 {}：无电量数据", d.name);
+            continue;
+        };
+
+        // 指定了设备列表但当前设备不在其中 → 跳过
+        if !selected.contains(&d.name) {
+            verbose_log!("[battery-notify] 跳过 {}：不在选中列表", d.name);
+            continue;
+        }
+
+        // 取用户自定义显示名，无则用原始名
+        let display_name = device_names
+            .get(&d.name)
+            .cloned()
+            .unwrap_or_else(|| d.name.clone());
+
+        for &threshold in thresholds {
+            if level <= threshold {
+                // 去重：insert 返回 false 表示已存在（已通知过）
+                if !notified.insert((d.name.clone(), threshold)) {
+                    verbose_log!(
+                        "[battery-notify] 跳过 {}：阈值 {}% 已通知过",
+                        d.name,
+                        threshold
+                    );
+                    continue;
+                }
+
+                pending.push(PendingBatteryNotice {
+                    display_name: display_name.clone(),
+                    level,
+                    threshold,
+                });
+            }
+        }
+    }
+
+    pending
+}
+
+/// 检查设备电量是否达到配置的阈值，**收集**待通知条目并返回。
+///
+/// ── 为什么要与「显示」拆开（P2-7）────────────────────────────────
+/// 原实现是 `check_battery_notify` 一个函数做完全部工作（取配置 → 判定 →
+/// `show_toast`），而它的调用点写成：
+///
+/// ```ignore
+/// crate::battery_notify::check_battery_notify(&crate::state::lock_unpoisoned(cache));
+/// ```
+///
+/// `lock_unpoisoned(cache)` 是**临时量**，其 `MutexGuard` 存活至**整条语句结束**
+/// （Rust 临时量的生命周期是「所在语句」），于是整个 `check_battery_notify`
+/// ——其中包括 `show_toast`（WinRT/COM 调用）与**循环内每台设备一次**的
+/// `config::with_config`——**全程持有设备缓存锁**。
+///
+/// 这同时违反两条既有纪律（`AGENTS.md`「持锁区不得调用…」）：
+/// ① 持锁做 **COM 调用**；
+/// ② 持锁取**另一把锁**（设备缓存锁 → 配置锁），构成锁序依赖。
+/// 反向路径真实存在：`update_config` 等命令在**主线程**先取配置锁，
+/// 而 `refresh_devices_cache` / `apply_devices_cache` 会取设备缓存锁
+/// ⇒ 与「设备缓存锁 → 配置锁」构成 AB/BA 死锁的完整条件。
+///
+/// 拆成 `collect_*`（纯内存判定，可由调用方在锁内调用）+ `emit_notifications`
+/// （出锁后显示）后，锁的持有范围退化成「把缓存换成待通知列表」这一次调用。
+pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> {
+    // 一次性把需要的配置全部 `clone` 出来，避免在循环里反复取配置锁。
+    // 原先第 53 行的「每台设备取一次配置锁」在设备多时是 O(N) 次加锁，
+    // 而 `device_names` 是同一份快照，取一次即可。
+    let (enabled, selected, thresholds, device_names) = config::with_config(|c| {
         (
             c.low_battery_notify,
             c.low_battery_devices.clone(),
             c.low_battery_thresholds.clone(),
+            c.device_names.clone(),
         )
     });
 
@@ -26,71 +133,260 @@ pub fn check_battery_notify(devices: &[Device]) {
             enabled,
             thresholds.len()
         );
-        return;
+        return Vec::new();
+    }
+
+    // 未选择任何设备 → 不通知
+    if selected.is_empty() {
+        crate::process::append_verbose_log("[battery-notify] 跳过：未选择任何设备");
+        return Vec::new();
     }
 
     let notified = NOTIFIED.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = crate::state::lock_unpoisoned(notified);
+    select_pending_notices(
+        devices,
+        enabled,
+        &selected,
+        &thresholds,
+        &device_names,
+        &mut guard,
+    )
+}
 
-    for d in devices {
-        let Some(level) = d.battery else {
-            verbose_log!("[battery-notify] 跳过 {}：无电量数据", d.name);
-            continue;
-        };
-
-        // 未选择任何设备 → 不通知
-        if selected.is_empty() {
-            crate::process::append_verbose_log("[battery-notify] 跳过：未选择任何设备");
-            continue;
+/// 把待通知条目逐条弹成系统通知（**必须在释放配置锁 / 设备缓存锁之后调用**）。
+///
+/// 图标解析放在这里而不是 `collect_*`：`resolve_toast_icon()` 会碰文件系统
+/// （首次写入 `%TEMP%`），属于「锁内不得做的 I/O」。它本身有 `OnceLock` 缓存，
+/// 循环内重复调用只读一次内存（P2-6）。
+pub fn emit_notifications(notices: &[PendingBatteryNotice]) {
+    for n in notices {
+        #[cfg(target_os = "windows")]
+        {
+            let icon = crate::windows::resolve_toast_icon();
+            crate::toast::show_toast(
+                "低电量提醒",
+                &format!("{} 电量仅剩 {}%", n.display_name, n.level),
+                icon.as_deref(),
+            );
         }
 
-        // 指定了设备列表但当前设备不在其中 → 跳过
-        if !selected.contains(&d.name) {
-            verbose_log!("[battery-notify] 跳过 {}：不在选中列表", d.name);
-            continue;
+        standard_log!(
+            "[battery-notify] {} 电量 {}% ≤ 阈值 {}%",
+            n.display_name,
+            n.level,
+            n.threshold
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_pending_notices, PendingBatteryNotice};
+    use crate::device::{DevType, Device};
+    use std::collections::{HashMap, HashSet};
+
+    /// 造一台只关心名字与电量的设备（其余字段与本轮判定无关）。
+    fn dev(name: &str, battery: Option<i32>) -> Device {
+        Device {
+            name: name.to_string(),
+            dt: DevType::Battery,
+            status: "OK".to_string(),
+            battery,
+            device_id: None,
+            is_bluetooth: false,
+            is_wireless_24g: false,
+            is_ble: false,
         }
+    }
 
-        // 取用户自定义显示名，无则用原始名
-        let display_name = config::with_config(|c| {
-            c.device_names
-                .get(&d.name)
-                .cloned()
-                .unwrap_or_else(|| d.name.clone())
-        });
+    fn names(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
 
-        for &threshold in &thresholds {
-            if level <= threshold {
-                // 去重：insert 返回 false 表示已存在（已通知过）
-                // P2-11：原本是手写展开的 `.lock().unwrap_or_else(..)`，
-                // 语义与 lock_unpoisoned 一致，统一收敛到单一入口
-                if !crate::state::lock_unpoisoned(notified).insert((d.name.clone(), threshold)) {
-                    verbose_log!(
-                        "[battery-notify] 跳过 {}：阈值 {}% 已通知过",
-                        d.name,
-                        threshold
-                    );
-                    continue;
-                }
+    fn sel(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
 
-                #[cfg(target_os = "windows")]
-                {
-                    // 图标解析下移到「确实要弹通知」处（P2-6）：原先在函数开头就解析，
-                    // 而下面的 `selected.is_empty()` / 阈值去重都可能让整轮一条都不弹。
-                    // 解析本身有 `OnceLock` 缓存，循环内重复调用只读一次内存。
-                    let icon = crate::windows::resolve_toast_icon();
-                    crate::toast::show_toast(
-                        "低电量提醒",
-                        &format!("{} 电量仅剩 {}%", display_name, level),
-                        icon.as_deref(),
-                    );
-                }
+    /// 阈值判据取**闭区间**（`level <= threshold` 才算命中）。
+    ///
+    /// 边界两侧都断言：`= threshold` 命中、`threshold + 1` 不命中。
+    /// 修复前该判据埋在 `check_battery_notify` 里（且全程持锁），无法单测；
+    /// 抽成纯函数后边界才可钉死。
+    #[test]
+    fn threshold_boundary_is_inclusive() {
+        let devices = vec![dev("耳机", Some(20)), dev("鼠标", Some(21))];
+        let mut notified = HashSet::new();
 
-                standard_log!(
-                    "[battery-notify] {} 电量 {}% ≤ 阈值 {}%",
-                    display_name,
-                    level,
-                    threshold
-                );
-            }
-        }
+        let pending = select_pending_notices(
+            &devices,
+            true,
+            &sel(&["耳机", "鼠标"]),
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+
+        assert_eq!(pending.len(), 1, "只有恰好等于阈值的应命中: {pending:?}");
+        assert_eq!(pending[0].display_name, "耳机");
+        assert_eq!(pending[0].level, 20);
+        assert_eq!(pending[0].threshold, 20);
+    }
+
+    /// 去重：同一个 (设备, 阈值) 只命中一次，**跨轮持久**。
+    ///
+    /// `notified` 由调用方持有并就地更新，第二轮必须拿到空结果——
+    /// 否则用户每轮都会被同一条低电量提醒轰炸（刷新间隔只有 10~60s）。
+    #[test]
+    fn same_device_and_threshold_notifies_only_once() {
+        let devices = vec![dev("耳机", Some(15))];
+        let mut notified = HashSet::new();
+
+        let first = select_pending_notices(
+            &devices,
+            true,
+            &sel(&["耳机"]),
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+        let second = select_pending_notices(
+            &devices,
+            true,
+            &sel(&["耳机"]),
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+
+        assert_eq!(first.len(), 1, "首次应命中");
+        assert!(second.is_empty(), "同一 (设备,阈值) 第二轮不得重复通知");
+    }
+
+    /// 多个阈值可各自命中一次；被去重的那些不影响其余阈值。
+    #[test]
+    fn multiple_thresholds_notify_independently() {
+        let devices = vec![dev("耳机", Some(10))];
+        let mut notified = HashSet::new();
+
+        let pending = select_pending_notices(
+            &devices,
+            true,
+            &sel(&["耳机"]),
+            &[20, 10],
+            &HashMap::new(),
+            &mut notified,
+        );
+
+        assert_eq!(pending.len(), 2, "两个阈值都应命中: {pending:?}");
+        let hits: Vec<i32> = pending.iter().map(|p| p.threshold).collect();
+        assert!(hits.contains(&20) && hits.contains(&10));
+
+        // 再跑一轮：两个阈值都已通知过 ⇒ 一条都不弹
+        let again = select_pending_notices(
+            &devices,
+            true,
+            &sel(&["耳机"]),
+            &[20, 10],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert!(again.is_empty(), "两个阈值都已去过重");
+    }
+
+    /// 自定义显示名优先于设备原始名（用户重命名后通知里应显示新名字）。
+    ///
+    /// 注：本用例同时锁定「每台设备不再各取一次配置锁」的重构——
+    /// 名字快照只取一次，与逐台去取在结果上必须完全一致。
+    #[test]
+    fn custom_display_name_wins_over_raw_name() {
+        let devices = vec![dev("WH-1000XM5", Some(5))];
+        let mut notified = HashSet::new();
+
+        let pending = select_pending_notices(
+            &devices,
+            true,
+            &sel(&["WH-1000XM5"]),
+            &[10],
+            &names(&[("WH-1000XM5", "我的耳机")]),
+            &mut notified,
+        );
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].display_name, "我的耳机",
+            "应使用用户自定义显示名"
+        );
+    }
+
+    /// 开关关闭 / 阈值列表为空 / 未选择设备 ⇒ 一律不产生通知。
+    ///
+    /// 三条早退分支各自独立：少写任何一条都会让用户在关闭功能后仍收到提醒，
+    /// 或让「未勾选任何设备」变成「所有低电量设备都提醒」这样的大范围打扰。
+    #[test]
+    fn disabled_or_unconfigured_yields_no_notices() {
+        let devices = vec![dev("耳机", Some(1))];
+        let chosen = sel(&["耳机"]);
+
+        // 开关关闭
+        let mut notified = HashSet::new();
+        assert!(select_pending_notices(
+            &devices,
+            false,
+            &chosen,
+            &[50],
+            &HashMap::new(),
+            &mut notified
+        )
+        .is_empty());
+
+        // 阈值列表为空
+        let mut notified = HashSet::new();
+        assert!(select_pending_notices(
+            &devices,
+            true,
+            &chosen,
+            &[],
+            &HashMap::new(),
+            &mut notified
+        )
+        .is_empty());
+
+        // 未选择任何设备
+        let mut notified = HashSet::new();
+        assert!(
+            select_pending_notices(&devices, true, &[], &[50], &HashMap::new(), &mut notified)
+                .is_empty()
+        );
+    }
+
+    /// 未选择的设备、无电量数据的设备都不得命中。
+    ///
+    /// 前者是用户显式排除；后者若按「无数据视为 0%」处理会制造大量假告警
+    /// （读数失败、设备刚连上尚未上报都会是 `None`）。
+    #[test]
+    fn unselected_or_unknown_level_is_skipped() {
+        let devices = vec![
+            dev("耳机", Some(1)),
+            dev("键盘", None),
+            dev("鼠标", Some(2)),
+        ];
+        let mut notified = HashSet::new();
+
+        let pending: Vec<PendingBatteryNotice> = select_pending_notices(
+            &devices,
+            true,
+            // 只勾选耳机；鼠标虽低电量但未勾选
+            &sel(&["耳机", "键盘"]),
+            &[50],
+            &HashMap::new(),
+            &mut notified,
+        );
+
+        assert_eq!(pending.len(), 1, "只应有耳机命中: {pending:?}");
+        assert_eq!(pending[0].display_name, "耳机");
     }
 }
