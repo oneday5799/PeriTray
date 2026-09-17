@@ -198,8 +198,10 @@ fn watchdog_self_restart() {
     process::append_log("[watchdog] EVENT LOOP STUCK — self-restarting");
     let exe = std::env::current_exe().unwrap_or_default();
     if exe.as_os_str().is_empty() {
-        // 走 process::exit 不经过 RunEvent::Exit，故此处显式排空日志队列（B5）
+        // 走 process::exit 不经过 RunEvent::Exit，故此处显式排空日志与配置落盘队列
+        // （B5 / B11）
         process::flush_log();
+        crate::config::flush_persist();
         std::process::exit(0);
     }
     let arg = format!("--watchdog-restart={}", std::process::id());
@@ -214,6 +216,7 @@ fn watchdog_self_restart() {
     // 同上：这条路径同样绕过 RunEvent::Exit，必须显式 flush，
     // 否则「EVENT LOOP STUCK」这段最关键的现场日志会随进程一起消失
     process::flush_log();
+    crate::config::flush_persist();
     std::process::exit(0);
 }
 
@@ -594,8 +597,10 @@ fn main() {
         Ok(app) => app,
         Err(e) => {
             show_error_box(&format!("应用初始化失败：\n{}", e));
-            // 日志已改为独立写线程（B5），退出前须等队列排空，否则启动期日志会丢
+            // 日志已改为独立写线程（B5）、配置落盘已改为写线程（B11），
+            // 退出前须等两个队列都排空，否则启动期日志与刚写入的设置会丢
             crate::process::flush_log();
+            crate::config::flush_persist();
             std::process::exit(1);
         }
     };
@@ -606,7 +611,15 @@ fn main() {
         // 兜底 flush：`RunEvent::Exit` 是所有正常退出路径（含托盘菜单 `app.exit`）
         // 的必经点，在此等日志队列排空，避免丢掉关停路径的最后几行——
         // 那恰是排查时最想看的部分。flush 幂等（队列已空则立即返回）。
-        RunEvent::Exit => crate::process::flush_log(),
+        //
+        // 配置落盘同理（B11）：`with_config_mut` 只把快照交给写线程就返回，
+        // 不在此排空的话，「改完设置立刻退出」会丢掉最后一次改动。
+        // 这里也是 B11「异常终止可能丢最后一次设置」那个代价的**收窄点**——
+        // 只有崩溃 / 被强杀才落在窗口内。
+        RunEvent::Exit => {
+            crate::config::flush_persist();
+            crate::process::flush_log();
+        }
         _ => {}
     });
 }

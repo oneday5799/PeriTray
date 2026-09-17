@@ -1,6 +1,7 @@
 use crate::standard_log;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -415,52 +416,168 @@ fn revision_is_latest(rev: u64) -> bool {
     rev == CONFIG_REVISION.load(Ordering::SeqCst)
 }
 
-/// 脏检查 + 原子落盘。**必须在配置锁之外调用**（这是 P1-3 的核心）。
+/// 一次待落盘的配置快照。
+struct PersistJob {
+    /// 入队时取的版本号（见 [`claim_revision`]）
+    rev: u64,
+    content: String,
+}
+
+/// 落盘队列：`with_config_mut` 只把快照交给写线程，调用线程立即返回（B11）。
 ///
-/// 两步保护，缺一不可：
-/// 1. `PERSIST_LOCK` 串行化——保证两次落盘不交错（不会你写一半我写一半）；
-/// 2. `CONFIG_REVISION` 版本号——串行化**不解决乱序**：先取到内容的那次可能后落盘，
-///    把较旧的内容盖到较新的内容上。故进入串行区前先取号，进入后若已被更新者超越即丢弃。
-fn persist_if_changed(content: &str) {
-    let rev = claim_revision();
+/// **为什么要有它**：原实现是在**调用线程**上直接落盘（`File::create` +
+/// `write_all` + `sync_all` + `rename`）。P1-3 已把落盘移出**配置锁**（那一步是对的），
+/// 但没移出**调用线程** —— 而 11 个调用点里有 10 个就在**主线程**上：
+/// 9 个同步命令（`update_config` / `toggle_device_hidden` / `rename_device` /
+/// `change_device_group` / `toggle_group_hidden` / `toggle_audio_device_hidden` /
+/// `set_hotkey_config` / `set_device_shortcut` / `remove_device_shortcut`）
+/// 与 1 个托盘菜单事件（`tray.rs` 的「开机自启」勾选）。
+/// `sync_all()` 在受控磁盘 / 杀软实时扫描下可达数十毫秒（本机 `append_log`
+/// 单行落盘实测约 21ms，`sync_all` 只会更贵）⇒ 表现是「**改一次设置卡一下 UI**」。
+///
+/// 队列满时**退回同步落盘**而不是丢弃：配置是用户数据，丢一次设置比卡一下更糟。
+///
+/// ⚠️ **代价（知情，已评估）**：进程**异常终止**（崩溃 / 被强杀）时，最后一次设置
+/// 可能尚未落盘。正常退出路径全部会 [`flush_persist`]（`RunEvent::Exit`、
+/// 看门狗自重启前、`builder.build()` 失败后），故该窗口只存在于异常终止，
+/// 通常 < 10ms。取舍理由：原实现是「**每次**改设置都卡 UI」（必然、高频），
+/// 本实现是「**极端**情况下丢最后一次设置」（偶发、低损）。
+static PERSIST_TX: OnceLock<SyncSender<PersistJob>> = OnceLock::new();
+
+/// 已入队 / 已**处理完**的任务数，供 [`flush_persist`] 判断队列是否排空。
+///
+/// 注意「处理完」≠「落盘」：若任务在写线程取到它之前就已被更新的写入超越，
+/// `persist_now` 会判其过期而**直接跳过**（这正是防乱序覆盖的机制），
+/// 此时计数照加但不产生磁盘写。故契约是「**入队数 == 处理数**」——
+/// 每条任务都被处置过（写盘或明确判弃），不会无声消失。
+static PERSIST_QUEUED: AtomicU64 = AtomicU64::new(0);
+static PERSIST_DONE: AtomicU64 = AtomicU64::new(0);
+
+/// 队列容量。落盘是低频操作（用户改设置才触发），64 足以吸收任何突发；
+/// 真满了会退回同步落盘，不会丢数据。
+const PERSIST_QUEUE_CAP: usize = 64;
+
+fn persist_sender() -> &'static SyncSender<PersistJob> {
+    PERSIST_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<PersistJob>(PERSIST_QUEUE_CAP);
+        std::thread::Builder::new()
+            .name("peritray-config".to_string())
+            .spawn(move || {
+                while let Ok(job) = rx.recv() {
+                    persist_now(&job);
+                    PERSIST_DONE.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .expect("无法启动配置写线程");
+        tx
+    })
+}
+
+/// 把一份快照交给写线程；队列满或写线程已退出时**同步落盘兜底**（永不丢弃）。
+fn enqueue_persist(content: String) {
+    let job = PersistJob {
+        rev: claim_revision(),
+        content,
+    };
+    PERSIST_QUEUED.fetch_add(1, Ordering::SeqCst);
+    match persist_sender().try_send(job) {
+        Ok(()) => {}
+        // 队列满 ⇒ 同步落盘。不丢弃：这是用户数据。
+        Err(TrySendError::Full(job)) => {
+            standard_log!("[config] 落盘队列已满，退回同步写");
+            persist_now(&job);
+            PERSIST_DONE.fetch_add(1, Ordering::SeqCst);
+        }
+        // 写线程已退出（只可能发生在进程收尾阶段）⇒ 同步兜底
+        Err(TrySendError::Disconnected(job)) => {
+            persist_now(&job);
+            PERSIST_DONE.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// 等待落盘队列排空（上限 2s）。**正常退出路径必须调用**，
+/// 否则关停前最后一次设置会留在队列里——这正是 B11 的已知代价，
+/// 调用它把窗口收窄到「异常终止」这一种情况。
+///
+/// 上限是必需的：写线程可能正卡在一次极慢的 `sync_all()` 上，
+/// 退出路径不能为此无限等待（用户点了退出就得退）。
+/// 排不空时**记日志而不是静默返回**——静默会让「设置丢了」无从追查。
+pub fn flush_persist() {
+    let pending = PERSIST_QUEUED
+        .load(Ordering::SeqCst)
+        .saturating_sub(PERSIST_DONE.load(Ordering::SeqCst));
+    if pending == 0 {
+        // 常见路径（队列本就空）直接返回，不打扰日志
+        return;
+    }
+    standard_log!("[config] flush_persist: 等待 {} 条落盘完成", pending);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while PERSIST_DONE.load(Ordering::SeqCst) < PERSIST_QUEUED.load(Ordering::SeqCst) {
+        if std::time::Instant::now() >= deadline {
+            standard_log!(
+                "[config] flush_persist 超时：已写 {} / 已入队 {}（最后一次设置可能未落盘）",
+                PERSIST_DONE.load(Ordering::SeqCst),
+                PERSIST_QUEUED.load(Ordering::SeqCst)
+            );
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    standard_log!("[config] flush_persist: 队列已排空");
+}
+
+/// 落盘一份快照：先做版本号与脏检查，再原子写入。**只在写线程上执行**
+/// （`enqueue_persist` 的兜底分支是唯一例外，那时写线程已不可用）。
+fn persist_now(job: &PersistJob) {
+    // 串行锁**故意**跨 I/O 持有：保证两次落盘不交错（各写一半 = 半个文件）。
+    // 它是专用的叶子锁，不与任何其他锁构成嵌套，故无锁序风险；
+    // 且本函数已只在写线程上执行，长时间持锁不影响 UI。
     let _serial = crate::state::lock_unpoisoned(&PERSIST_LOCK);
 
     // 已有更新的写入取过号 → 本次内容已过期，丢弃（防乱序覆盖）
-    if !revision_is_latest(rev) {
+    if !revision_is_latest(job.rev) {
         return;
     }
 
     // #23 脏检查：内容未变化时跳过写盘（减少高频配置操作的 I/O）
-    // 守卫必须落在块内：下面要写文件，持锁做 I/O 会让所有落盘互相排队（P1-3 的教训），
-    // 且本函数末尾还要再取一次同一把锁（同线程重复加锁 = 直接死锁）。
+    //
+    // ⚠️ 守卫必须收在块内，不能提升到函数作用域：本函数末尾（写盘成功后）
+    // 还要**再取一次同一把锁**，Mutex 不可重入 ⇒ 同线程重复加锁 = 直接死锁。
     let last = LAST_CONFIG_CONTENT.get_or_init(|| Mutex::new(None));
     let unchanged = {
         let cached = crate::state::lock_unpoisoned(last);
-        cached.as_deref() == Some(content)
+        cached.as_deref() == Some(job.content.as_str())
     };
     if unchanged {
         return;
     }
 
+    match write_config_atomically(&job.content, &config_path()) {
+        // 写盘成功，更新缓存
+        Ok(()) => *crate::state::lock_unpoisoned(last) = Some(job.content.clone()),
+        Err(e) => standard_log!("[config] save failed: {}", e),
+    }
+}
+
+/// 原子写入：先写临时文件并 `sync_all`，再 rename 替换（同卷原子操作）；
+/// 失败时清理临时文件。抽成独立函数是为了让单测用**临时路径**验证，
+/// 不必碰真实的 `config.toml`。
+fn write_config_atomically(content: &str, cfg_path: &std::path::Path) -> std::io::Result<()> {
     use std::io::Write;
-    // 原子写入：先写临时文件，再 rename 替换（同卷原子操作）
-    let cfg_path = config_path();
     let tmp_path = cfg_path.with_extension("toml.tmp");
-    let write_result = std::fs::File::create(&tmp_path)
+    let result = std::fs::File::create(&tmp_path)
         .and_then(|mut f| {
             f.write_all(content.as_bytes())?;
             f.sync_all()?;
             Ok(())
         })
-        .and_then(|_| std::fs::rename(&tmp_path, &cfg_path));
-    if let Err(e) = write_result {
-        standard_log!("[config] save failed: {}", e);
-        // 清理临时文件（如果 rename 失败）
+        .and_then(|_| std::fs::rename(&tmp_path, cfg_path));
+    if result.is_err() {
         let _ = std::fs::remove_file(&tmp_path);
-    } else {
-        // 写盘成功，更新缓存
-        *crate::state::lock_unpoisoned(last) = Some(content.to_string());
     }
+    result
 }
 
 /// `Config` 的字段清单（**单一来源**）：`merge_config` 与其覆盖性单测都由它生成，
@@ -584,7 +701,7 @@ where
     f(&guard)
 }
 
-/// 可变访问配置（改内存 + 同步日志缓存 + 序列化快照，落盘在锁外）。
+/// 可变访问配置（改内存 + 同步日志缓存 + 序列化快照，落盘交给写线程）。
 ///
 /// **锁纪律（P0 死锁防护，勿破坏）**：同 [`with_config`]——闭包内只允许纯内存操作，
 /// 严禁调用任何会向主线程分发并同步等待的 Tauri API、COM/WMI 查询或文件 I/O。
@@ -592,10 +709,12 @@ pub fn with_config_mut<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Config) -> R,
 {
-    // 配置锁只覆盖「改内存 + 同步日志缓存 + 序列化」，三者都是纯内存操作；
-    // 落盘（`sync_all()` 在机械盘 / 受控磁盘 / 杀软实时扫描下可达数十毫秒）
-    // 移到锁外执行。否则这段时间内所有 `with_config` 读取者——托盘 tooltip、
-    // 设备查询、电量通知、快捷键分发、看门狗探活——都会阻塞在配置锁上。
+    // 配置锁只覆盖「改内存 + 同步日志缓存 + 序列化」，三者都是纯内存操作。
+    // 落盘走两级外移，两级都是必需的：
+    // ① **移出配置锁**（P1-3）：否则这段时间内所有 `with_config` 读取者——托盘 tooltip、
+    //    设备查询、电量通知、快捷键分发、看门狗探活——都会阻塞在配置锁上；
+    // ② **移出调用线程**（B11）：落盘交给 `peritray-config` 写线程，
+    //    否则主线程上的 9 个同步命令与托盘菜单事件会各自卡一次 `sync_all()`。
     let (result, snapshot) = {
         let mut guard =
             crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
@@ -605,14 +724,19 @@ where
         (result, toml::to_string_pretty(&*guard).ok())
     }; // ← 配置锁在此释放
     if let Some(content) = snapshot {
-        persist_if_changed(&content);
+        enqueue_persist(content);
     }
     result
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{claim_revision, merge_config, revision_is_latest, Config, MERGED_FIELD_NAMES};
+    use super::{
+        claim_revision, config_path, enqueue_persist, flush_persist, merge_config,
+        revision_is_latest, write_config_atomically, Config, MERGED_FIELD_NAMES, PERSIST_DONE,
+        PERSIST_QUEUED,
+    };
+    use std::sync::atomic::Ordering;
 
     /// 落盘版本号判据：**先取号者永远不得落盘**（当已有更新者取过号时）。
     ///
@@ -866,6 +990,71 @@ mod tests {
         assert!(
             stale.is_empty(),
             "merge_config 的清单里有字段已不落盘（可能已从 Config 删除或改成了跳过序列化）：{stale:?}"
+        );
+    }
+
+    // ── B11：落盘写线程化 ────────────────────────────────────────
+
+    /// 临时目录（按 pid 命名，避免并行用例互相踩）
+    fn b11_temp_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("peritray-b11-{}", std::process::id()))
+    }
+
+    /// 原子写入：首次创建 + 覆盖替换 + 不残留临时文件。
+    #[test]
+    fn write_config_atomically_creates_then_replaces() {
+        let dir = b11_temp_dir();
+        std::fs::create_dir_all(&dir).expect("应能创建临时目录");
+        let path = dir.join("config.toml");
+
+        write_config_atomically("first", &path).expect("首次写入应成功");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+
+        write_config_atomically("second", &path).expect("覆盖写入应成功");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+        assert!(
+            !path.with_extension("toml.tmp").exists(),
+            "成功路径不应残留临时文件（残留会让下次 rename 撞上半个文件）"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 写入失败只返回 `Err`，不得 panic（调用方靠它记日志而非炸掉写线程）。
+    #[test]
+    fn write_config_atomically_failure_is_reported_not_panicked() {
+        let bogus = b11_temp_dir().join("no-such-subdir").join("config.toml");
+        assert!(
+            write_config_atomically("x", &bogus).is_err(),
+            "父目录不存在时必须返回 Err"
+        );
+    }
+
+    /// 落盘队列的两条契约（B11）：
+    /// ① **入队数 == 处理数**（不丢任务，含「队列满 ⇒ 同步兜底」那一支；
+    ///    被判为过期而跳过的也算处理过，见 `PERSIST_DONE` 的说明）；
+    /// ② `flush_persist()` 之后内容真的在盘上。
+    ///
+    /// 连发 200 条（队列容量 64）必然触发若干次 `Full` 兜底分支。
+    /// 注：会写到测试二进制同目录的 `config.toml`（`target/debug/deps/`，已 gitignore），
+    /// 与 B5 的日志队列用例同构。
+    #[test]
+    fn persist_queue_contract_never_loses_a_job() {
+        let marker = format!("# B11 队列契约 {}\n", std::process::id());
+        for i in 0..200 {
+            enqueue_persist(format!("{marker}{i}\n"));
+        }
+        flush_persist();
+
+        assert_eq!(
+            PERSIST_DONE.load(Ordering::SeqCst),
+            PERSIST_QUEUED.load(Ordering::SeqCst),
+            "入队数必须等于处理数（含同步兜底与判为过期而跳过的），否则就是丢任务"
+        );
+        let on_disk = std::fs::read_to_string(config_path()).expect("落盘后应能读到配置文件");
+        assert!(
+            on_disk.contains(&marker),
+            "盘上内容应来自本用例：{on_disk:?}"
         );
     }
 }
