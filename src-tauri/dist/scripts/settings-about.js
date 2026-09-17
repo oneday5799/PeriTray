@@ -54,7 +54,7 @@ function initAboutTab() {
   }).catch(() => {});
 
   // 启动时自动检测完成后实时更新 infobar
-  window.__TAURI__.event.listen("update-status", (event) => {
+  onTauriEvent("update-status", (event) => {
     renderUpdateInfobar(event.payload);
   });
 

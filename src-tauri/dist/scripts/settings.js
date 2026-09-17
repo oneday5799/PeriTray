@@ -754,7 +754,7 @@ async function init() {
 }
 
 // config-changed: 使用 payload 中的 config 快照，无需再调用 get_config
-window.__TAURI__.event.listen("config-changed", async (event) => {
+onTauriEvent("config-changed", async (event) => {
   // 后端传递完整 config 快照，直接使用
   if (event.payload) {
     acceptConfig(event.payload);
@@ -775,7 +775,7 @@ window.__TAURI__.event.listen("config-changed", async (event) => {
 });
 
 // 托盘「关于」指向设置页关于标签（窗口已存在时）
-window.__TAURI__.event.listen("settings-tab", (e) => {
+onTauriEvent("settings-tab", (e) => {
   selectTab(e.payload);
 });
 

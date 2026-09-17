@@ -9,7 +9,31 @@
  *             showRenameDialog/createDialog/closeDialog/showToast/describeShortcutError/
  *             bindShortcutRecorder
  * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖 */
-const { invoke } = window.__TAURI__.core;
+//
+// Tauri API 一律「惰性获取 + 防御式降级」（P2-3）。
+// 顶层直接解构 `window.__TAURI__.core` 会在运行时未注入（或注入晚于本文件执行）时
+// 抛 TypeError ⇒ **本文件后续所有 `window.*` API 都不再定义**，两页功能整体失效
+// ——这不是降级，是全崩。故：
+//   · `invoke` 包装为「每次调用重新解析」，未就绪时返回 rejected Promise，
+//     交给调用方既有的 `.catch()` / `try-catch` 走降级路径；
+//   · 顶层事件监听一律经 `onTauriEvent()`，未就绪时静默跳过并返回 false。
+const invoke = (...args) => {
+  const core = window.__TAURI__ && window.__TAURI__.core;
+  if (!core || typeof core.invoke !== "function") {
+    return Promise.reject(new Error("Tauri API 未就绪"));
+  }
+  return core.invoke(...args);
+};
+
+// 顶层注册 Tauri 事件监听（P2-3）。用 `function` 声明以便被提升，文件内任意位置可用。
+function onTauriEvent(name, handler) {
+  const ev = window.__TAURI__ && window.__TAURI__.event;
+  if (!ev || typeof ev.listen !== "function") {
+    return false;
+  }
+  ev.listen(name, handler);
+  return true;
+}
 
 window.CATEGORIES = [
   { key: "Audio", label: "音频设备", subtitle: "扬声器、耳机等音频设备", icon: "🔊" },
@@ -73,7 +97,7 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 // config-changed: 设置页切主题时，主窗口/设置页实时同步
-window.__TAURI__.event.listen("config-changed", () => {
+onTauriEvent("config-changed", () => {
   initTheme();
 });
 
@@ -92,7 +116,7 @@ window.applyMaterialMode = function (material) {
 })();
 
 // 材质变更时由 Rust 发出 material-changed；设置页切换过程中跳过（防闪烁时序由 settings.js 控制）
-window.__TAURI__.event.listen("material-changed", (e) => {
+onTauriEvent("material-changed", (e) => {
   if (!window.__materialChangeInProgress) applyMaterialMode(e.payload);
 });
 
@@ -547,7 +571,7 @@ function ensureShortcutRecordListener() {
   shortcutRecordListenerReady = true;
   // 已注册为全局快捷键的组合键，其按键事件可能被系统吞掉而收不到 keydown，
   // 由后端在录制期间直接上报按下的组合键。
-  window.__TAURI__.event.listen("shortcut-recorded", (event) => {
+  onTauriEvent("shortcut-recorded", (event) => {
     const key = event.payload;
     if (!key) return;
     for (const rec of shortcutRecorders) rec.recordFromBackend(key);
@@ -560,7 +584,7 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
 
   function setRecordingFlag(on) {
     try {
-      window.__TAURI__.core.invoke("set_shortcut_recording", { recording: on }).catch(() => {});
+      invoke("set_shortcut_recording", { recording: on }).catch(() => {});
     } catch (_) {}
   }
 
@@ -814,7 +838,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 // 后端在失败时广播本事件，避免「界面显示已设置、按键却毫无反应」这种无从察觉的失效。
 // 注：用户主动设键走 `set_device_shortcut`，那条路径会返回错误并自行提示；
 // 本监听覆盖的是启动同步、关闭共享开关、删除设备等没有直接返回值的路径。
-window.__TAURI__.event.listen("shortcut-register-failed", (event) => {
+onTauriEvent("shortcut-register-failed", (event) => {
   const keys = Array.isArray(event.payload) ? event.payload : [];
   if (!keys.length) return;
   window.showToast(
@@ -835,18 +859,18 @@ window.__TAURI__.event.listen("shortcut-register-failed", (event) => {
 });
 
 // ── 启动时更新检测（全局监听） ─────────────────────────
-window.__TAURI__.event.listen("update-available", (event) => {
+onTauriEvent("update-available", (event) => {
   const info = event.payload;
   const isStore = info.release_url && info.release_url.startsWith("ms-windows-store://");
   if (isStore) {
     window.showToast(
       "Microsoft Store 有新版本可用\n点击前往更新",
-      () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
+      () => invoke("open_url", { url: info.release_url })
     );
   } else {
     window.showToast(
       `发现新版本 ${info.latest_version}（当前 ${info.current_version}）\n点击前往下载`,
-      () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
+      () => invoke("open_url", { url: info.release_url })
     );
   }
 });
