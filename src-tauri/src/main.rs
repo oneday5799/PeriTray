@@ -493,7 +493,17 @@ fn main() {
             0x2, // COINIT_APARTMENTTHREADED
         );
         if hr < 0 {
-            standard_log!("[main] CoInitializeEx failed: 0x{:08X}", hr);
+            // 区分「公寓模型冲突」与真失败（P2-5）：主线程本该是最先初始化 COM 的，
+            // 出现 RPC_E_CHANGED_MODE 说明有别的东西抢先把主线程定成了 MTA
+            // ⇒ 与「进程内统一 STA」的约定冲突，值得单独告警。
+            if crate::audio::is_apartment_mode_conflict(hr) {
+                standard_log!(
+                    "[main] COM 公寓模型冲突（RPC_E_CHANGED_MODE）：主线程已被初始化为 MTA，\
+                     与「进程内统一 STA」的约定不符"
+                );
+            } else {
+                standard_log!("[main] CoInitializeEx failed: 0x{:08X}", hr);
+            }
         }
     }
 

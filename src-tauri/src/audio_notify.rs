@@ -487,7 +487,21 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
     std::thread::spawn(move || unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         if hr.is_err() {
-            crate::process::append_log("[audio_notify] CoInitializeEx failed");
+            // 区分「公寓模型冲突」与真失败（P2-5）：前者说明有代码抢先把本线程初始化
+            // 成了 MTA（约定是进程内统一 STA）。原先只记一句 "failed" 且不带 HRESULT
+            // ⇒ 整条音频通知链路静默失效，却无从归因。
+            let code = hr.0;
+            if crate::audio::is_apartment_mode_conflict(code) {
+                crate::process::append_log(
+                    "[audio_notify] CoInitializeEx 公寓模型冲突（RPC_E_CHANGED_MODE）：\
+                     本线程已是 MTA，音频通知消息窗口无法建立，音量/会话回调将不可用",
+                );
+            } else {
+                crate::process::append_log(&format!(
+                    "[audio_notify] CoInitializeEx failed: 0x{:08X}",
+                    code as u32
+                ));
+            }
             return;
         }
 
