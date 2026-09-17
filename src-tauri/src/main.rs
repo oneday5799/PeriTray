@@ -191,18 +191,47 @@ fn wait_process_exit(pid: u32, timeout_ms: u32) {
 #[cfg(not(target_os = "windows"))]
 fn wait_process_exit(_pid: u32, _timeout_ms: u32) {}
 
+/// 探活连续超时几次判定「事件循环僵死」⇒ 自愈重启（P2-4）。
+///
+/// 单次超时（5s）可能只是偶发瞬时卡顿（GC、磁盘抖动、杀软扫描），
+/// 连续两次（最坏 ~40s）才足以判定僵死。抽成纯函数以便边界单测。
+fn should_restart(stuck_streak: u32) -> bool {
+    stuck_streak >= 2
+}
+
+/// 本轮 sleep 间隔是否长到可判定「系统经历过休眠 / 唤醒」（P2-4）。
+///
+/// 期望 ~15s；>20s 说明中间发生了挂起 —— Suspend 期间渲染进程被暂停，
+/// 唤醒后需主动 Resume WebView2。抽成纯函数以便边界单测。
+fn is_time_jump(elapsed: std::time::Duration) -> bool {
+    elapsed > std::time::Duration::from_secs(20)
+}
+
+/// 看门狗自愈重启的退出码。
+///
+/// 取非 0（BSD sysexits 的 `EX_SOFTWARE`）：这条路径是「事件循环僵死后的自愈」，
+/// 不是正常关闭 —— 非 0 才能让任务管理器 / 事件日志 / 外部守护脚本把它与用户
+/// 主动退出区分开。原先一律用 0，异常退出在外部看来与正常关闭无异（P2-4）。
+const EXIT_CODE_WATCHDOG_RESTART: i32 = 70;
+
 /// 事件循环僵死自愈：spawn 自身新实例后立即退出当前进程。
 /// --autostart 复用静默启动逻辑（重启不弹窗）；
 /// 旧 pid 经参数传递，新实例启动时内核级等待其退出，规避 single-instance 转发竞态。
 fn watchdog_self_restart() {
     process::append_log("[watchdog] EVENT LOOP STUCK — self-restarting");
+    // 退出前投递一次 WM_CLOSE，让音频 STA 线程反注册 IMMNotificationClient 与
+    // 各设备/会话回调（P2-4）。本路径直接 process::exit，不经 RunEvent::Exit，
+    // 不显式投递就会带着已注册的回调被进程直接丢弃。
+    // `request_shutdown` 内部是 **PostMessageW 异步投递、不等待**，
+    // 故在「主线程已僵死」的本场景下也不会卡住看门狗线程。
+    crate::audio_notify::request_shutdown();
     let exe = std::env::current_exe().unwrap_or_default();
     if exe.as_os_str().is_empty() {
         // 走 process::exit 不经过 RunEvent::Exit，故此处显式排空日志与配置落盘队列
         // （B5 / B11）
         process::flush_log();
         crate::config::flush_persist();
-        std::process::exit(0);
+        std::process::exit(EXIT_CODE_WATCHDOG_RESTART);
     }
     let arg = format!("--watchdog-restart={}", std::process::id());
     let spawn_ok = std::process::Command::new(&exe)
@@ -214,10 +243,11 @@ fn watchdog_self_restart() {
     }
     std::thread::sleep(std::time::Duration::from_millis(300));
     // 同上：这条路径同样绕过 RunEvent::Exit，必须显式 flush，
-    // 否则「EVENT LOOP STUCK」这段最关键的现场日志会随进程一起消失
+    // 否则「EVENT LOOP STUCK」这段最关键的现场日志会随进程一起消失。
+    // （这 300ms 同时留给音频 STA 线程处理上面投递的 WM_CLOSE）
     process::flush_log();
     crate::config::flush_persist();
-    std::process::exit(0);
+    std::process::exit(EXIT_CODE_WATCHDOG_RESTART);
 }
 
 /// 处理第二实例启动：聚焦既有弹窗，或经 toggle 重建。
@@ -340,7 +370,7 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
             // 20.008s > 20s —— **每次探活超时都必然误报**为「系统休眠唤醒」，
             // 进而执行一次不必要的 resume_webview（唤醒本应休眠的弹窗）。
             let elapsed = Instant::now().duration_since(last_instant);
-            if elapsed > std::time::Duration::from_secs(20) {
+            if is_time_jump(elapsed) {
                 standard_log!(
                     "[watchdog] time jump: {:.1}s — resuming webview",
                     elapsed.as_secs_f64()
@@ -368,7 +398,7 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
                         "[watchdog] event loop unresponsive, streak={}",
                         stuck_streak
                     );
-                    if stuck_streak >= 2 {
+                    if should_restart(stuck_streak) {
                         watchdog_self_restart();
                     }
                 }
@@ -647,6 +677,26 @@ mod tests {
         std::thread::spawn(|| std::thread::current().id())
             .join()
             .expect("取线程 id 的线程不应 panic")
+    }
+
+    // ── P2-4：看门狗判据的边界 ─────────────────────────
+
+    #[test]
+    fn should_restart_only_after_two_consecutive_timeouts() {
+        assert!(!should_restart(0), "0 次超时不应重启");
+        assert!(!should_restart(1), "单次超时可能只是瞬时卡顿，不应重启");
+        assert!(should_restart(2), "连续两次超时判定僵死");
+        assert!(should_restart(3), "持续僵死应继续重启");
+    }
+
+    #[test]
+    fn is_time_jump_is_strictly_greater_than_20s() {
+        assert!(!is_time_jump(std::time::Duration::from_secs(19)));
+        // 期望间隔 ~15s；20s 整仍视为正常抖动（判据是严格大于）
+        assert!(!is_time_jump(std::time::Duration::from_secs(20)));
+        assert!(is_time_jump(std::time::Duration::from_secs(21)));
+        // 真实休眠唤醒场景：几十分钟
+        assert!(is_time_jump(std::time::Duration::from_secs(3600)));
     }
 
     #[test]
