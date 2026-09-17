@@ -658,12 +658,12 @@ async function loadAudioSessions(deviceId) {
   }
   try {
     audioSessions = (await invoke("get_audio_sessions", { deviceId })).map(s => ({ ...s, permanentMute: muteLockEnabled && !!(s.is_muted && s.volume > 0) }));
-    const devInfo = await invoke("get_sessions_device_names", { pids: audioSessions.map(s => s.pid) }).catch(() => ({}));
-    audioSessions = audioSessions.map(s => {
-      const info = devInfo[s.pid] || {};
-      return { ...s, outputDevice: info.output || null, inputDevice: info.input || null };
-    });
+    // 先把会话卡片渲染出来，再异步回填「已设置的输出/输入设备名」（P1-9）：
+    // 解析要逐 pid 走 IPolicyConfig 查询，实测百毫秒级；原先把它串行 await 在
+    // 渲染之前，会让首屏卡片一起等这段时间。设备名只影响图标上的「已路由」
+    // 标记与 tooltip，晚一点到不影响卡片本身可用。
     renderAudioSessions();
+    refreshSessionDeviceNames(invoke);
   } catch (e) {
     if (list.querySelectorAll(".card.session").length === 0) {
       // 同上：失败文案以 textContent 写入
@@ -674,6 +674,38 @@ async function loadAudioSessions(deviceId) {
       list.appendChild(failEl);
     }
   }
+}
+
+// 会话卡片图标解析的回填代际号。
+//
+// 解析是异步的，期间用户可能切了设备或再次刷新 ⇒ 旧请求的结果会落到新列表上。
+// 每次发起解析递增一次，回填前比对，代际不符就丢弃（P1-9）。
+let sessionNamesToken = 0;
+
+// 异步解析「各会话已设置的输出/输入设备名」并回填到已渲染的卡片上（P1-9）。
+//
+// 解析失败时**静默保持**「无设备名」：卡片本身已经渲染好了，设备名只是图标上的
+// 「已路由」标记与 tooltip 的补充信息，不值得为此打扰用户。
+async function refreshSessionDeviceNames(invoke) {
+  const pids = audioSessions.map(s => s.pid);
+  if (pids.length === 0) {
+    return;
+  }
+  const token = ++sessionNamesToken;
+  let devInfo;
+  try {
+    devInfo = await invoke("get_sessions_device_names", { pids });
+  } catch (_) {
+    return;
+  }
+  if (token !== sessionNamesToken) {
+    return;
+  }
+  audioSessions = audioSessions.map(s => {
+    const info = devInfo[s.pid] || {};
+    return { ...s, outputDevice: info.output || null, inputDevice: info.input || null };
+  });
+  renderAudioSessions();
 }
 
 function renderAudioSessions() {

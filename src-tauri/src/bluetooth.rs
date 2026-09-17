@@ -477,17 +477,29 @@ pub fn find_paired_bluetooth_devices(
 
     let btc_selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
     let btc_devices_info = DeviceInformation::FindAllAsyncAqsFilter(&btc_selector)?.join()?;
+    // 先把本批经典蓝牙设备收齐，再**一次性**读电量（P1-9）：
+    // 原实现是在循环里逐台调用，每次都要重建「系统类设备信息集」并全量枚举。
+    let mut btc_entries: Vec<(String, bool, String)> = Vec::new();
     for device_info in btc_devices_info.into_iter() {
         if let Some((name, connected, device_id)) = classic_device_from_info(&device_info) {
-            let battery = if force {
-                let lv = read_btc_battery_from_device_id(&device_id);
-                apply_battery(&device_id, lv);
-                lv
-            } else {
-                battery_cached(&device_id, BtKind::Classic)
-            };
-            result.push((name, connected, battery, device_id, false));
+            btc_entries.push((name, connected, device_id));
         }
+    }
+    let fresh_batteries: HashMap<String, u8> = if force {
+        let ids: Vec<&str> = btc_entries.iter().map(|(_, _, id)| id.as_str()).collect();
+        read_btc_batteries(&ids)
+    } else {
+        HashMap::new()
+    };
+    for (name, connected, device_id) in btc_entries {
+        let battery = if force {
+            let lv = fresh_batteries.get(&device_id).copied();
+            apply_battery(&device_id, lv);
+            lv
+        } else {
+            battery_cached(&device_id, BtKind::Classic)
+        };
+        result.push((name, connected, battery, device_id, false));
     }
 
     let ble_selector = BluetoothLEDevice::GetDeviceSelectorFromPairingState(true)?;
@@ -674,8 +686,33 @@ fn normalize_mac(device_id: &str) -> Option<String> {
     Some(mac.to_uppercase().replace(':', ""))
 }
 
+/// 单设备读取经典蓝牙电量。内部走批量实现（只建一次设备信息集）。
 fn read_btc_battery_from_device_id(device_id: &str) -> Option<u8> {
-    let mac_upper = normalize_mac(device_id)?;
+    read_btc_batteries(&[device_id]).remove(device_id)
+}
+
+/// 批量读取经典蓝牙电量：**设备信息集只建一次**（P1-9）。
+///
+/// 原实现是按设备逐个调用单设备版本，而每次调用都会
+/// `SetupDiGetClassDevsW(GUID_DEVCLASS_SYSTEM)` 重建一遍「系统类设备信息集」
+/// 再全量 `SetupDiEnumDeviceInfo` 枚举（并对每个实例调 2 次
+/// `SetupDiGetDeviceInstanceIdW` 取 ID）⇒ **N 台设备就全量扫描 N 遍**。
+/// 系统类设备通常上百个，故这一步是 O(N × 系统设备数)。
+///
+/// 现在改成：建一次信息集，**一趟枚举同时匹配所有目标 MAC**。
+/// 语义与逐个调用保持一致：
+/// - 同一 MAC 有多个实例时，取**第一个能读出电量**的实例（读不出则继续找下一个）；
+/// - 某设备先被命中后不再被后续实例覆盖。
+fn read_btc_batteries(device_ids: &[&str]) -> HashMap<String, u8> {
+    let mut out: HashMap<String, u8> = HashMap::new();
+    // 目标：(设备 id, 大写 MAC)。无法解析出 MAC 的 id 直接跳过（与单设备版一致）。
+    let wanted: Vec<(&str, String)> = device_ids
+        .iter()
+        .filter_map(|id| normalize_mac(id).map(|mac| (*id, mac)))
+        .collect();
+    if wanted.is_empty() {
+        return out;
+    }
 
     // 打开系统设备类设备信息集（仅当前存在设备）
     let handle = unsafe {
@@ -687,7 +724,7 @@ fn read_btc_battery_from_device_id(device_id: &str) -> Option<u8> {
         )
     };
     if handle == INVALID_HANDLE_VALUE as isize {
-        return None;
+        return out;
     }
     let _info_set = DeviceInfoSetHandle(handle);
 
@@ -706,20 +743,33 @@ fn read_btc_battery_from_device_id(device_id: &str) -> Option<u8> {
             break;
         }
 
-        // 实例 ID 须同时含 "BTHENUM\" 与目标 MAC（大小写不敏感）
         let Some(instance_id) = setupdi_get_device_instance_id(handle, &devinfo) else {
             continue;
         };
         let instance_upper = instance_id.to_uppercase();
-        if !instance_upper.contains("BTHENUM\\") || !instance_upper.contains(&mac_upper) {
+        // 实例 ID 须含 "BTHENUM\"；先做这一次廉价判断，避免对非蓝牙实例做 N 次 MAC 匹配
+        if !instance_upper.contains("BTHENUM\\") {
             continue;
         }
 
-        if let Some(battery) = setupdi_get_battery_byte(handle, &devinfo, &battery_key) {
-            return Some(battery);
+        for (id, mac_upper) in &wanted {
+            // 已命中过就不再覆盖：对应单设备版「读到第一个就返回」
+            if out.contains_key(*id) {
+                continue;
+            }
+            if instance_upper.contains(mac_upper) {
+                // 读不出电量时**不 break**：继续枚举，找同一 MAC 的下一个实例
+                //（单设备版同样是 continue 而非 return None）
+                if let Some(battery) = setupdi_get_battery_byte(handle, &devinfo, &battery_key) {
+                    out.insert((*id).to_string(), battery);
+                }
+            }
+        }
+        if out.len() == wanted.len() {
+            break; // 全部命中，不必再枚举剩余实例
         }
     }
-    None
+    out
 }
 
 /// 读取设备实例 ID 字符串（两次调用：先取长度，再取内容）
