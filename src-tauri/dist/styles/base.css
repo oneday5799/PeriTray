@@ -1173,6 +1173,9 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   pointer-events: none;
   max-width: 80%;
   text-align: center;
+  /* 文案里的 \n 要真的换行：showToast 用 textContent 写入（防 XSS），
+     故调用方传的是纯文本，换行只能靠 pre-line 渲染（P1-6）。 */
+  white-space: pre-line;
 }
 .toast.show {
   opacity: 1;

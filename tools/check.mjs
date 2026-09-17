@@ -255,6 +255,134 @@ for (const dirName of ["scripts"]) {
   }
 }
 
+// ── Toast 文案不得含 HTML 标签（P1-6）──────────────────────
+// `showToast` 用 `textContent` 写入（防 XSS，必须保持），所以文案里的 HTML 换行标签
+// 会被原样显示成字面量。换行请写 `\n`，由 `.toast` 的 `white-space: pre-line` 渲染。
+//
+// 只扫 `showToast(...)` 的**实参文本**，不误伤页面里合法拼装的 innerHTML / 内联 SVG。
+// 括注配对时会跳过字符串与注释，故多行调用、实参里含 `(` `)` 都能正确取到边界。
+//
+// 定位调用起点前先屏蔽注释：否则注释掉的 showToast 调用（实参里带 HTML 标签）会被当成真调用
+// 而误报（这类误报会让闸门被开发者忽略，比漏报更糟）。屏蔽时保持字符偏移量不变，
+// 实参仍从**原文**切片，故字符串内容不会丢。
+function maskComments(src) {
+  const out = src.split("");
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (c === "/" && d === "*") {
+      const j = src.indexOf("*/", i + 2);
+      const e = j < 0 ? src.length : j + 2;
+      for (let k = i; k < e; k++) if (out[k] !== "\n") out[k] = " ";
+      i = e;
+      continue;
+    }
+    if (c === "/" && d === "/") {
+      let j = i;
+      while (j < src.length && src[j] !== "\n") j++;
+      for (let k = i; k < j; k++) out[k] = " ";
+      i = j;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === "\\") j += 2;
+        else if (src[j] === c) break;
+        else j++;
+      }
+      i = j + 1;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+
+function toastCallArgs(src) {
+  const args = [];
+  const masked = maskComments(src);
+  const re = /\bshowToast\s*\(/g;
+  let m;
+  while ((m = re.exec(masked))) {
+    const start = m.index + m[0].length;
+    let i = start;
+    let depth = 1;
+    while (i < src.length && depth > 0) {
+      const c = src[i];
+      const d = src[i + 1];
+      if (c === "/" && d === "*") {
+        const j = src.indexOf("*/", i + 2);
+        i = j < 0 ? src.length : j + 2;
+        continue;
+      }
+      if (c === "/" && d === "/") {
+        const j = src.indexOf("\n", i);
+        i = j < 0 ? src.length : j;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === "`") {
+        let j = i + 1;
+        while (j < src.length) {
+          if (src[j] === "\\") j += 2;
+          else if (src[j] === c) break;
+          else j++;
+        }
+        i = j + 1;
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0) break;
+      }
+      i++;
+    }
+    args.push(src.slice(start, i));
+    re.lastIndex = i; // 跳过已扫描区间，避免同一调用被重复计入
+  }
+  return args;
+}
+
+for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
+  if (!f.endsWith(".js")) continue;
+  const src = read(path.join(DIST, "scripts", f));
+  for (const argText of toastCallArgs(src)) {
+    const tag = argText.match(/<\/?[a-zA-Z][a-zA-Z0-9]*\s*\/?>/);
+    if (tag) {
+      errors.push(
+        `scripts/${f}: showToast 文案含 HTML 标签 ${tag[0]}` +
+          `（showToast 走 textContent，会显示成字面量；换行请用 \\n）`,
+      );
+    }
+  }
+}
+
+// ── `.toast` 必须能渲染换行（P1-6 的另一半）────────────────
+// showToast 的文案是纯文本（textContent），换行靠 `\n` + `white-space: pre-line`。
+// 少了这条样式，上面那批 `\n` 会退化成空格、两行提示挤成一行——
+// 与「文案里写 HTML 换行标签」是同一个 bug 的两面，故必须成对守住。
+{
+  const css = read(path.join(DIST, "styles", "base.css"));
+  // 注意 `.toast` 会同时出现在两处：① 与 tooltip 共用的「flyout surface」选择器组
+  // （组的最后一行正好是 `.toast {`，故也会被匹配到，且它确实作用于 .toast）；
+  // ② 独立的 `.toast` 规则块。同特异性下后者覆盖前者，故按出现顺序取
+  // **最后一次声明的 white-space 值**——这就是该属性的层叠结果。
+  const rules = [...css.matchAll(/^\.toast\s*\{([^}]*)\}/gm)];
+  let effective = null;
+  for (const r of rules) {
+    const decl = r[1].match(/white-space\s*:\s*([^;]+);/);
+    if (decl) effective = decl[1].trim();
+  }
+  if (effective !== "pre-line") {
+    errors.push(
+      `base.css: .toast 的 white-space 应为 pre-line，实为 ${effective ?? "(未声明)"}` +
+        `（toast 文案里的 \\n 将不换行）`,
+    );
+  }
+}
+
 // ── 版本号一致性：五处须为同一版本 ─────────────────────────
 // tauri.conf.json / Cargo.toml [package] / Cargo.lock(PeriTray) /
 // package.json / settings.html 关于页占位文案

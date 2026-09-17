@@ -732,6 +732,14 @@ window.closeDialog = function (overlay) {
 
 // ── Toast 通知 ──────────────────────────────────────────
 
+/**
+ * 弹出一条 toast。
+ *
+ * ⚠️ **文案是纯文本，不是 HTML**：本函数用 `textContent` 写入（防 XSS，必须保持），
+ * 所以文案里若写 HTML 换行标签，会被原样显示成字面量的标签文本。
+ * 需要换行请写 `\n`——`.toast` 已设 `white-space: pre-line`（见 base.css）。
+ * `tools/check.mjs` 会扫描本函数的实参并在出现 HTML 标签时报错（P1-6）。
+ */
 window.showToast = function (msg, onClick, isError, durationMs) {
   let el = document.querySelector(".toast");
   if (!el) {
@@ -781,12 +789,12 @@ window.__TAURI__.event.listen("update-available", (event) => {
   const isStore = info.release_url && info.release_url.startsWith("ms-windows-store://");
   if (isStore) {
     window.showToast(
-      "Microsoft Store 有新版本可用<br>点击前往更新",
+      "Microsoft Store 有新版本可用\n点击前往更新",
       () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
     );
   } else {
     window.showToast(
-      `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
+      `发现新版本 ${info.latest_version}（当前 ${info.current_version}）\n点击前往下载`,
       () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
     );
   }

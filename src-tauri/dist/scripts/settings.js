@@ -500,12 +500,12 @@ async function runUpdateCheck(btnId) {
     renderUpdateInfobar(status);
     if (status.status === "update") {
       showToast(
-        `检测到新版本 ${status.latestVersion}（当前 ${status.currentVersion}）<br>点击前往下载`,
+        `检测到新版本 ${status.latestVersion}（当前 ${status.currentVersion}）\n点击前往下载`,
         () => invoke("open_url", { url: status.releaseUrl })
       );
     } else if (status.status === "storeUpdate") {
       showToast(
-        "Microsoft Store 存在更新版本<br>点击前往更新",
+        "Microsoft Store 存在更新版本\n点击前往更新",
         () => invoke("open_url", { url: status.releaseUrl })
       );
     } else if (status.status === "latest") {
