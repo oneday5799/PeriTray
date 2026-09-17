@@ -9,6 +9,32 @@ use crate::{standard_log, verbose_log};
 // 每个 (设备名, 阈值) 组合只通知一次；重启后清空重新检测
 static NOTIFIED: OnceLock<Mutex<HashSet<(String, i32)>>> = OnceLock::new();
 
+/// 回差（hysteresis）：电量必须比阈值高出这么多，才把「已通知」标记清掉。
+///
+/// ── 为什么需要回差（P3-3）────────────────────────────────────────
+/// 修复前 `notified` 只会**插入**、从不移除 ⇒ 一台设备掉到 20% 弹过一次提醒后，
+/// 即便用户插上电源充到 100%、拔掉再一路掉回 20%，也**永远不会再提醒**。
+/// 这个标记只有在进程重启（`NOTIFIED` 是 `OnceLock`，随进程清零）后才失效，
+/// 于是「提醒过一次就永久静默」——比不提醒更糟：用户会以为功能坏了。
+///
+/// 但清标记不能直接写「电量 > 阈值就清」：电量在阈值附近抖动（19% ↔ 20%）
+/// 时会变成「充电一下、放电一下」反复弹窗，同样扰人。留 5% 回差，
+/// 让「重新武装」需要一个明确的、有意义的电量回升。
+const HYSTERESIS_PERCENT: i32 = 5;
+
+/// 判断电量是否已回升到「可以把 (设备, 阈值) 重新武装」的程度。
+///
+/// 边界取**严格大于** `threshold + HYSTERESIS_PERCENT`：
+/// - `level <= threshold`：仍在告警区，不重新武装；
+/// - `threshold < level <= threshold + HYSTERESIS_PERCENT`：**抖动带**，保持静默
+///   （这正是回差存在的意义）；
+/// - `level > threshold + HYSTERESIS_PERCENT`：明确回升，允许下次再提醒。
+///
+/// 抽成纯函数以便边界两侧都断言（项目既有范式）。
+fn is_rearmed(level: i32, threshold: i32) -> bool {
+    level > threshold + HYSTERESIS_PERCENT
+}
+
 /// 一条待弹出的低电量通知（**纯数据**，不含任何已解析的句柄或资源）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingBatteryNotice {
@@ -24,8 +50,9 @@ pub struct PendingBatteryNotice {
 /// 抽出来的理由与项目既有范式一致（见 P2-4 的 `should_restart` / `is_time_jump`）：
 /// 判定语义可以在单测里钉死，不必依赖真实配置与真实通知器。
 ///
-/// `notified` 是「已通知过」的集合，本函数会**就地更新**它
-/// （命中即插入，用于跨轮去重）——这也是它唯一的副作用，且是纯内存的。
+/// `notified` 是「已通知过」的集合，本函数会**就地更新**它：
+/// 命中即插入（跨轮去重）；电量明确回升（见 `is_rearmed`）即移除
+/// （让下一次掉电还能提醒）。这是它唯一的副作用，且是纯内存的。
 ///
 /// 参数里的 `Enabled/Selected/Thresholds/DeviceNames` 都是在**锁外**取好的快照，
 /// 故本函数不可能落在任何锁的作用域里。
@@ -67,6 +94,20 @@ fn select_pending_notices(
             .unwrap_or_else(|| d.name.clone());
 
         for &threshold in thresholds {
+            // 先处理「重新武装」：电量明确回升时清掉去重标记（P3-3）。
+            // 必须**早于**命中判定 —— 否则同一轮里水位刚好跨过回差线时，
+            // 「先判命中（清标记前已插入过）→ 再清标记」的次序会让标记
+            // 被清掉却又在同一轮弹了一次，下一轮再弹一次。
+            if is_rearmed(level, threshold) && notified.remove(&(d.name.clone(), threshold)) {
+                verbose_log!(
+                    "[battery-notify] {} 电量回升到 {}%（阈值 {}% + 回差 {}%），重新武装",
+                    d.name,
+                    level,
+                    threshold,
+                    HYSTERESIS_PERCENT
+                );
+            }
+
             if level <= threshold {
                 // 去重：insert 返回 false 表示已存在（已通知过）
                 if !notified.insert((d.name.clone(), threshold)) {
@@ -182,7 +223,7 @@ pub fn emit_notifications(notices: &[PendingBatteryNotice]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{select_pending_notices, PendingBatteryNotice};
+    use super::{is_rearmed, select_pending_notices, PendingBatteryNotice};
     use crate::device::{DevType, Device};
     use std::collections::{HashMap, HashSet};
 
@@ -388,5 +429,173 @@ mod tests {
 
         assert_eq!(pending.len(), 1, "只应有耳机命中: {pending:?}");
         assert_eq!(pending[0].display_name, "耳机");
+    }
+
+    // ── P3-3：回差（重新武装）──────────────────────────────────────
+
+    /// 回差判据边界**两侧都断言**：`threshold + 5` 不武装、`threshold + 6` 武装。
+    #[test]
+    fn rearm_boundary_excludes_the_jitter_band() {
+        assert!(!is_rearmed(20, 20), "仍在阈值上，不武装");
+        assert!(!is_rearmed(21, 20), "抖动带内，不武装");
+        assert!(
+            !is_rearmed(25, 20),
+            "恰好 = 阈值 + 回差，不武装（边界取严格大于）"
+        );
+        assert!(is_rearmed(26, 20), "超出回差 1%，武装");
+        assert!(is_rearmed(100, 20), "充满，武装");
+        assert!(!is_rearmed(19, 20), "低于阈值，不武装");
+    }
+
+    /// 核心回归：**放电 → 充满 → 再放电，应重新提醒**。
+    /// 修复前 `notified` 只插不删，第二次掉到阈值会被永久静默。
+    #[test]
+    fn recharge_then_drain_notifies_again() {
+        let mut notified = HashSet::new();
+        let sel_ear = sel(&["耳机"]);
+
+        // ① 掉到 20%（= 阈值）→ 提醒
+        let first = select_pending_notices(
+            &[dev("耳机", Some(20))],
+            true,
+            &sel_ear,
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert_eq!(first.len(), 1, "首次掉到阈值应提醒");
+
+        // ② 同一水位再跑一轮 → 不重复提醒
+        let dup = select_pending_notices(
+            &[dev("耳机", Some(20))],
+            true,
+            &sel_ear,
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert!(dup.is_empty(), "同一水位不得重复提醒");
+
+        // ③ 充到 100%（远超阈值 + 回差）→ 标记应被清掉
+        let charging = select_pending_notices(
+            &[dev("耳机", Some(100))],
+            true,
+            &sel_ear,
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert!(charging.is_empty(), "充电中不应弹提醒");
+        assert!(
+            !notified.contains(&("耳机".to_string(), 20)),
+            "电量明确回升后，去重标记应被清除"
+        );
+
+        // ④ 再次掉到 20% → **必须重新提醒**（这是修复的核心）
+        let again = select_pending_notices(
+            &[dev("耳机", Some(20))],
+            true,
+            &sel_ear,
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert_eq!(again.len(), 1, "充满后再放电应重新提醒（修复前此处为空）");
+    }
+
+    /// 抖动带内反复横跳**不得**反复弹窗：这正是回差存在的意义。
+    #[test]
+    fn jitter_within_band_does_not_re_alert() {
+        let mut notified = HashSet::new();
+        let sel_ear = sel(&["耳机"]);
+
+        // 首次 20% 提醒
+        let first = select_pending_notices(
+            &[dev("耳机", Some(20))],
+            true,
+            &sel_ear,
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert_eq!(first.len(), 1);
+
+        // 21~25 之间来回抖（插拔电源最典型的水位）——都在回差带内
+        for level in [21, 25, 24, 22, 25, 21] {
+            let pending = select_pending_notices(
+                &[dev("耳机", Some(level))],
+                true,
+                &sel_ear,
+                &[20],
+                &HashMap::new(),
+                &mut notified,
+            );
+            assert!(
+                pending.is_empty(),
+                "水位 {}% 在回差带内（≤ 阈值 + 5），不得重新提醒",
+                level
+            );
+        }
+
+        // 抖回阈值以下——标记仍在，不该再提醒
+        let back_down = select_pending_notices(
+            &[dev("耳机", Some(19))],
+            true,
+            &sel_ear,
+            &[20],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert!(back_down.is_empty(), "抖动带内回落后不得再提醒");
+    }
+
+    /// 各阈值独立重新武装：清掉一个不该影响另一个。
+    #[test]
+    fn rearm_is_per_threshold() {
+        let mut notified = HashSet::new();
+        let sel_ear = sel(&["耳机"]);
+
+        // 10% 时两个阈值都命中
+        let first = select_pending_notices(
+            &[dev("耳机", Some(10))],
+            true,
+            &sel_ear,
+            &[20, 10],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert_eq!(first.len(), 2);
+
+        // 回升到 16%：> 10 + 5 = 15 ⇒ 10% 这一档重新武装；
+        // 但 16 远不够 20 + 5 = 25 ⇒ 20% 那档**仍保持已通知**
+        let mid = select_pending_notices(
+            &[dev("耳机", Some(16))],
+            true,
+            &sel_ear,
+            &[20, 10],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert!(mid.is_empty(), "16% 高于所有阈值，本轮不弹");
+        assert!(
+            !notified.contains(&("耳机".to_string(), 10)),
+            "10% 档应已重新武装"
+        );
+        assert!(
+            notified.contains(&("耳机".to_string(), 20)),
+            "20% 档的回差线是 25%，16% 不足以重新武装它"
+        );
+
+        // 掉到 9%：只有 10% 档该重新提醒（20% 档仍未武装）
+        let drop = select_pending_notices(
+            &[dev("耳机", Some(9))],
+            true,
+            &sel_ear,
+            &[20, 10],
+            &HashMap::new(),
+            &mut notified,
+        );
+        assert_eq!(drop.len(), 1, "只应重新提醒 10% 档: {drop:?}");
+        assert_eq!(drop[0].threshold, 10);
     }
 }
