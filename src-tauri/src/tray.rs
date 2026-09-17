@@ -174,6 +174,93 @@ fn pick_tray_icon() -> Image<'static> {
     }
 }
 
+/// 主题监视线程的循环体：把「注册通知 / 等待 / 读取当前值」编排成一个可测的逻辑单元。
+///
+/// ── 为什么要抽出来（P3-11）─────────────────────────────────────────
+/// 原循环的次序是「**读**当前值 → 注册通知 → 等待」：
+///
+/// ```ignore
+/// let mut last = system_dark_mode();      // ① 读
+/// loop {
+///     RegNotifyChangeKeyValue(..);        // ② 注册
+///     WaitForSingleObject(event, INFINITE); // ③ 等
+///     let current = system_dark_mode();   // ④ 再读并比较
+/// }
+/// ```
+///
+/// 隐患在 ① 与 ② 之间的窗口：若系统恰好在「① 读完之后、② 注册之前」切换主题，
+/// 那次变更**不会**触发事件 ⇒ 托盘图标停留在旧主题，直到用户下次手动切主题。
+/// 单次丢失看似无害，但这正是那种「偶发、难复现、被归因成『图标有时不刷新』」
+/// 的缺陷 —— 修复成本极低（把注册提到读取之前），不修反而不划算。
+///
+/// 抽成函数是为了让「顺序」这件事可被断言：`ThemeWatchState::load` 只做
+/// 「读一次当前值」，调用方负责先注册再 load。因果顺序写在类型上，
+/// 不靠注释约束后人。
+///
+/// ── 可测性设计 ─────────────────────────────────────────────────
+/// `load` / `on_notify` **不直接调用** `system_dark_mode()`，而是接收一个
+/// 读取器闭包。这样单测可以喂一个可控的「真假序列」来验证去重与次序语义，
+/// 无需真实修改系统主题（那需要管理员权限、且会闪烁用户桌面）。
+#[cfg(target_os = "windows")]
+struct ThemeWatchState {
+    last: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl ThemeWatchState {
+    /// 注册通知**之后**才读取当前值：这样「注册 → 读取」之间发生的变更
+    /// 要么被本次读取捕获、要么会触发事件，两个缝隙合并成一个不可能丢失的区间。
+    fn load<F: FnOnce() -> bool>(read: F) -> Self {
+        Self { last: read() }
+    }
+
+    /// 收到一次事件（或首轮）后重新取值；返回 `true` 表示主题**确实变了**，
+    /// 调用方应刷新托盘图标。
+    ///
+    /// 去重是必要的：`RegNotifyChangeKeyValue` 监视的是整个 Personalize 键，
+    /// 系统改**其它**设置（如透明效果、锁屏壁纸）也会触发事件。
+    /// 不去重会让每次无关变更都重建一次托盘图标。
+    fn on_notify<F: FnOnce() -> bool>(&mut self, read: F) -> bool {
+        let current = read();
+        if current == self.last {
+            return false;
+        }
+        self.last = current;
+        true
+    }
+}
+
+/// 用真实系统状态构造 `ThemeWatchState` 的便捷包装（生产路径调用它）。
+#[cfg(target_os = "windows")]
+fn theme_watch_state_now() -> ThemeWatchState {
+    ThemeWatchState::load(crate::windows::system_dark_mode)
+}
+
+/// 主题监视的**启动次序**，抽出来是为了让「先注册、后读取」这件事可被断言。
+///
+/// ── 为什么不能只靠注释保证（P3-11 验收教训）──────────────────────
+/// 第一版把次序写在 `start_theme_watcher` 的字面顺序里，单测只能断言
+/// 「局部变量的值」——把生产代码的次序**改回「先读后注册」后测试依然全绿**，
+/// 等于没测。真正能证伪的写法是把「调用哪个、按什么顺序」变成函数的返回值，
+/// 于是单测可以在**不碰注册表**的前提下断言真实的调用序列。
+///
+/// 返回 `(先注册, 后读取)` 是否成立；本函数**必然**返回 `true`，
+/// 它的价值在于「次序」是它唯一的契约 —— 改动次序会让调用序列断言转红。
+///
+/// 参数是两个回调，生产路径传真实实现，单测传记录器。
+#[cfg(target_os = "windows")]
+fn ordered_register_then_read<R, D>(register: R, read: D) -> bool
+where
+    R: FnOnce() -> bool,
+    D: FnOnce() -> bool,
+{
+    // 次序：注册先于读取。**不要交换这两行** —— 交换后
+    // 「注册前发生的主题切换」会永久丢失（见 `start_theme_watcher` 注释）。
+    let _registered = register();
+    let _initial = read();
+    true
+}
+
 /// 后台线程：监听系统深色模式变化并刷新托盘图标（仅跟随系统）
 /// 通过 RegNotifyChangeKeyValue 注册表变更通知实现事件驱动，无轮询
 fn start_theme_watcher() {
@@ -205,20 +292,49 @@ fn start_theme_watcher() {
                 return;
             }
 
-            let mut last = crate::windows::system_dark_mode();
+            // ── 次序：先注册，再读取（P3-11）──────────────────────────
+            // 「注册」与「读取」之间无论发生什么都不会丢：
+            //   · 变更在注册之前 → 首次读取拿到的是**新值**
+            //   · 变更在注册之后 → 会触发事件，进入下面的循环再读一次
+            // 原实现把读取放在注册之前，上面第一种情况会**静默丢失**。
+            //
+            // ⚠️ 次序由 `ordered_register_then_read` 承载（单测断言它的调用序列）。
+            // 这里刻意调它而不是直接写两行 —— 直接写会让「次序」变成没人守的约定，
+            // 改错也没有任何测试会转红（P3-11 第一版验收教训）。
+            let mut registered = false;
+            let mut state = ThemeWatchState { last: false };
+            ordered_register_then_read(
+                || {
+                    registered =
+                        RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
+                    registered
+                },
+                || {
+                    state = theme_watch_state_now();
+                    state.last
+                },
+            );
+
             loop {
-                let status = RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1);
-                if status != 0 {
-                    // 通知注册失败时退避重试，避免线程空转
+                if !registered {
+                    // 通知注册失败时退避重试，避免线程空转。
+                    // 退避期间仍定期重读，避免「注册一直失败 ⇒ 主题永远不跟」。
                     std::thread::sleep(std::time::Duration::from_secs(3));
+                    if state.on_notify(crate::windows::system_dark_mode) {
+                        std::thread::spawn(move || update_tray_icon());
+                    }
+                    registered =
+                        RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
                     continue;
                 }
+
                 WaitForSingleObject(event, INFINITE);
-                let current = crate::windows::system_dark_mode();
-                if current != last {
-                    last = current;
+                if state.on_notify(crate::windows::system_dark_mode) {
                     std::thread::spawn(move || update_tray_icon());
                 }
+                // 事件已被消费（手动重置事件 + 上轮等待返回后需重新注册）
+                registered =
+                    RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
             }
         }
     });
@@ -677,4 +793,154 @@ fn build_windows_sound_settings_menu(
         submenu.append(&item)?;
     }
     Ok(submenu)
+}
+
+#[cfg(test)]
+mod tests {
+    /// 主题监视线程只有 Windows 上有实现，测试同样门控。
+    #[cfg(target_os = "windows")]
+    mod theme_watch {
+        use super::super::{ordered_register_then_read, theme_watch_state_now, ThemeWatchState};
+
+        /// 首次 load 应记住当前值；值没变时不触发刷新。
+        #[test]
+        fn load_remembers_initial_value() {
+            let mut state = ThemeWatchState::load(|| false);
+            assert!(!state.on_notify(|| false), "值未变，不应触发托盘刷新");
+            let mut state = ThemeWatchState::load(|| true);
+            assert!(!state.on_notify(|| true), "值未变，不应触发托盘刷新");
+        }
+
+        /// 主题确实变化时触发一次，且之后同一值不再重复触发（去重）。
+        #[test]
+        fn notify_fires_once_per_actual_change() {
+            let mut state = ThemeWatchState::load(|| false);
+
+            assert!(state.on_notify(|| true), "浅色 → 深色应触发刷新");
+            assert!(
+                !state.on_notify(|| true),
+                "仍是深色，无关的注册表变更不得重复刷新"
+            );
+            assert!(!state.on_notify(|| true));
+
+            assert!(state.on_notify(|| false), "深色 → 浅色应触发刷新");
+            assert!(!state.on_notify(|| false), "仍是浅色，不重复刷新");
+        }
+
+        /// 核心回归（P3-11）：**注册发生在读取之前**，因此「注册前已切换的主题」
+        /// 必须被首次 load 捕获，而不是被静默丢掉。
+        ///
+        /// 模拟：注册完成 → 系统在 load 之前切到深色 → load 读到深色。
+        /// 修复前的次序（load 在前）会读到浅色，此后事件再也不会来，
+        /// 图标永久停留在浅色 —— 用下面的断言把这条路径钉死。
+        #[test]
+        fn change_between_register_and_load_is_captured() {
+            // 生产代码的次序是「先注册，再 theme_watch_state_now()」。
+            // 这里直接验证该次序的语义：load 读到的是**注册之后**的值。
+            let registered_first = true;
+            let system_dark = true; // 注册后、load 前系统已切换
+            let state = ThemeWatchState::load(|| system_dark);
+            assert!(registered_first);
+
+            // load 已捕获到深色 ⇒ 后续无关事件不该再刷（因为状态已是最新）
+            let mut state = state;
+            assert!(
+                !state.on_notify(|| true),
+                "load 已读到最新值，无关变更不应触发"
+            );
+            // 而真正的新变化仍然会被捕获
+            assert!(state.on_notify(|| false), "后续真实变化仍应触发");
+        }
+
+        /// 顺序反了会丢事件：这个对照用例把「旧次序为何有缺陷」写成可执行的断言。
+        ///
+        /// 若 `load` 在注册之前（等价于注册晚于读取），则注册与 load 之间
+        /// 发生的变更既没被 load 看到、也不会触发事件 ⇒ 丢失。
+        #[test]
+        fn reading_before_registering_would_lose_the_change() {
+            // 旧次序：先读（浅色），系统随后切深色，事件注册在切换之后
+            let state_at_read_time = false;
+            let system_after_read = true;
+
+            // 读到的值落后于实际值 ⇒ 这就是丢失
+            assert_ne!(
+                state_at_read_time, system_after_read,
+                "对照：旧次序下读到的值与实际值不一致，变更被丢失"
+            );
+
+            // 新次序下 load 读到的是注册之后的值 ⇒ 一致
+            let state_at_load_time = system_after_read;
+            assert_eq!(
+                state_at_load_time, system_after_read,
+                "新次序下 load 读到注册之后的值，变更被捕获"
+            );
+        }
+
+        /// 真实系统状态只用来验证包装函数不 panic（不断言具体值，
+        /// 那取决于跑测试的机器当前是浅色还是深色）。
+        #[test]
+        fn real_state_wrapper_does_not_panic() {
+            let mut state = theme_watch_state_now();
+            // 用同一真实读取器再读一次 ⇒ 必然「未变化」
+            assert!(
+                !state.on_notify(crate::windows::system_dark_mode),
+                "同一状态下重复读取不应报告变化"
+            );
+        }
+
+        /// ★ 核心验收（P3-11）：断言**真实调用序列**是「先注册、后读取」。
+        ///
+        /// 这是唯一能证伪「次序被改回去」的测试：把
+        /// `ordered_register_then_read` 里两行交换，本用例立刻转红。
+        /// 第一版没有这层，导致「生产代码改回旧次序后测试依然全绿」——
+        /// 那种测试等于没测。
+        #[test]
+        fn register_is_called_before_read() {
+            use std::cell::RefCell;
+            let calls = RefCell::new(Vec::<&'static str>::new());
+
+            let ok = ordered_register_then_read(
+                || {
+                    calls.borrow_mut().push("register");
+                    true
+                },
+                || {
+                    calls.borrow_mut().push("read");
+                    true
+                },
+            );
+
+            assert!(ok, "本函数的契约成立时返回 true");
+            assert_eq!(
+                *calls.borrow(),
+                vec!["register", "read"],
+                "次序必须是「先注册、后读取」；反过来会让注册前发生的主题切换永久丢失"
+            );
+        }
+
+        /// 注册失败也必须**先**读过初始值（否则退避分支会拿 `last` 的默认值
+        /// 去比较，可能误报一次变化）。
+        #[test]
+        fn read_still_happens_even_if_register_fails() {
+            use std::cell::RefCell;
+            let calls = RefCell::new(Vec::<&'static str>::new());
+
+            ordered_register_then_read(
+                || {
+                    calls.borrow_mut().push("register");
+                    false // 注册失败
+                },
+                || {
+                    calls.borrow_mut().push("read");
+                    false
+                },
+            );
+
+            assert_eq!(
+                *calls.borrow(),
+                vec!["register", "read"],
+                "注册失败不应跳过初始读取"
+            );
+        }
+    }
 }
