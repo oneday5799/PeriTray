@@ -265,16 +265,62 @@ fn write_log(msg: &str) {
     enqueue(format!("[{}]{}\n", chrono_str(), msg));
 }
 
-/// 清理旧日志文件（根据保留时长设置）
-pub fn clean_old_logs() {
+/// 判断 `name` 是否是**本应用产出的**日志文件名。
+///
+/// 只认三种形态，其余一律不碰（P2-9）：
+/// - `debug_YYYYMMDD.log`：当前按天命名；
+/// - `debug_once_{pid}.log`：保留时长 = 「仅一次」时的命名（`{pid}` 为**纯数字**）；
+/// - `debug.log`：历史版本（迁移到 `logs/` 子目录前的根目录命名）。
+///
+/// **为什么不能再用 `starts_with("debug") && ends_with(".log")`**：
+/// 那条前缀规则会把用户自己放进 `logs/` 的无关文件（`debug_user.log`、
+/// `debug_2024_notes.log`……）一并当成「旧格式」删掉。删除是不可逆操作，
+/// 匹配必须「只删自己写的」，容错方向要偏向**不删**。
+fn is_managed_log_name(name: &str) -> bool {
+    if name == "debug.log" {
+        return true;
+    }
+    // debug_once_{pid}.log：pid 必须是纯数字，避免 debug_once_backup.log 之类被误判
+    if let Some(rest) = name
+        .strip_prefix("debug_once_")
+        .and_then(|r| r.strip_suffix(".log"))
+    {
+        return !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit());
+    }
+    // debug_YYYYMMDD.log：复用日期解析，天然要求严格的 8 位数字
+    parse_log_date(name).is_some()
+}
+
+/// 判定 `name` 对应的日志文件是否应当删除。
+///
+/// `today_days` 为「今天」的自 1970-01-01 起的天数，由调用方算好传入 ⇒
+/// 本函数**不读时钟**，单测可自由构造「今天」而无需等到特定日期。
+fn should_delete_log(name: &str, retention: crate::config::LogRetention, today_days: i64) -> bool {
     use crate::config::LogRetention;
 
+    if !is_managed_log_name(name) {
+        return false;
+    }
+    // 「仅一次」模式下，非本次运行的日志都该清掉（活动日志由调用方按当前文件名排除）
+    if retention == LogRetention::Once {
+        return true;
+    }
+    let Some((fy, fm, fd)) = parse_log_date(name) else {
+        // 非日期命名（`debug.log` / `debug_once_{pid}.log`）属历史格式，直接清掉
+        return true;
+    };
+    today_days - days_from_civil(fy as i64, fm as i64, fd as i64) >= retention_days(retention)
+}
+
+/// 清理旧日志文件（根据保留时长设置）
+pub fn clean_old_logs() {
     let retention = crate::config::with_config(|c| c.log_retention);
 
     // 根目录遗留：旧版本把日志写在 exe 根目录，这里无条件清除，避免根目录杂乱
     remove_legacy_root_logs();
 
-    let entries = match std::fs::read_dir(logs_dir()) {
+    let dir = logs_dir();
+    let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
         Err(_) => return,
     };
@@ -291,36 +337,33 @@ pub fn clean_old_logs() {
         if current_name.as_deref() == Some(name.as_os_str()) {
             continue;
         }
-        if !(name_str.starts_with("debug") && name_str.ends_with(".log")) {
+        if !should_delete_log(&name_str, retention, today_days) {
             continue;
         }
 
-        let delete = match retention {
-            LogRetention::Once => true,
-            _ => match parse_log_date(&name_str) {
-                Some((fy, fm, fd)) => {
-                    today_days - days_from_civil(fy as i64, fm as i64, fd as i64)
-                        >= retention_days(retention)
-                }
-                // 非日期命名（debug_once_*、debug.log、历史 debug_{pid}.log）一律视为旧格式删除
-                None => true,
-            },
-        };
-
-        if delete {
-            let _ = std::fs::remove_file(entry.path());
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => {
+                // 删除是不可逆的：留下一条可追溯的记录，否则「日志莫名少了」无法定位
+                crate::standard_log!("[process] 清理旧日志: {}", name_str);
+            }
+            Err(e) => {
+                // 单个文件删除失败（被占用 / 只读）不应影响其余文件的清理
+                crate::verbose_log!("[process] 清理旧日志失败: {} ({})", name_str, e);
+            }
         }
     }
 }
 
 /// 清除 exe 根目录下旧版本遗留的 debug*.log（迁移至 logs/ 前的历史文件）
+///
+/// 与 `clean_old_logs` 用同一套 `is_managed_log_name` 判定：根目录那种
+/// 「`debug` 开头 + `.log` 结尾」的宽匹配同样会误删用户的文件（P2-9）。
 fn remove_legacy_root_logs() {
     if let Ok(entries) = std::fs::read_dir(exe_dir()) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with("debug")
-                && name_str.ends_with(".log")
+            if is_managed_log_name(&name_str)
                 && entry.file_type().map(|t| t.is_file()).unwrap_or(false)
             {
                 let _ = std::fs::remove_file(entry.path());
@@ -535,6 +578,131 @@ mod tests {
         assert!(!note_drop(&counter), "第二次起不应再返回 true");
         assert!(!note_drop(&counter));
         assert_eq!(counter.load(Ordering::Relaxed), 3, "计数须如实累计");
+    }
+
+    #[test]
+    fn managed_log_name_accepts_only_own_formats() {
+        // 三种本应用产出的形态
+        assert!(is_managed_log_name("debug_20260918.log"), "按天命名");
+        assert!(is_managed_log_name("debug_once_12345.log"), "仅一次模式");
+        assert!(is_managed_log_name("debug.log"), "历史根目录命名");
+
+        // 用户自己放进 logs/ 的文件 —— 这是 P2-9 的核心：修复前会被删掉
+        assert!(
+            !is_managed_log_name("debug_user.log"),
+            "不应动用户的 debug_* 文件"
+        );
+        assert!(
+            !is_managed_log_name("debug_2024_notes.log"),
+            "非 8 位日期不算本应用格式"
+        );
+        assert!(
+            !is_managed_log_name("debug_once_backup.log"),
+            "pid 必须是纯数字"
+        );
+        assert!(!is_managed_log_name("debug_once_.log"), "空 pid 不算");
+        assert!(
+            !is_managed_log_name("debug_20260918.txt"),
+            "扩展名必须是 .log"
+        );
+        assert!(
+            !is_managed_log_name("mydebug_20260918.log"),
+            "前缀必须完全匹配"
+        );
+        assert!(!is_managed_log_name("debug_2026091.log"), "7 位日期不算");
+        assert!(!is_managed_log_name("debug_202609181.log"), "9 位日期不算");
+    }
+
+    #[test]
+    fn should_delete_log_respects_retention_boundary() {
+        use crate::config::LogRetention;
+        // 以「今天 = 第 N 天」构造，避免依赖真实日期
+        let today = days_from_civil(2026, 9, 18);
+
+        // 三天保留：9/15（差 3 天，恰好到界）删；9/16（差 2 天）留
+        assert!(should_delete_log(
+            "debug_20260915.log",
+            LogRetention::ThreeDays,
+            today
+        ));
+        assert!(
+            !should_delete_log("debug_20260916.log", LogRetention::ThreeDays, today),
+            "差 2 天 < 3 天，必须保留"
+        );
+        // 边界另一侧：差 4 天同样删
+        assert!(should_delete_log(
+            "debug_20260914.log",
+            LogRetention::ThreeDays,
+            today
+        ));
+
+        // 一天保留
+        assert!(should_delete_log(
+            "debug_20260917.log",
+            LogRetention::OneDay,
+            today
+        ));
+        assert!(!should_delete_log(
+            "debug_20260918.log",
+            LogRetention::OneDay,
+            today
+        ));
+
+        // 「仅一次」：任何本应用日志都删（活动文件由调用方按文件名排除）
+        assert!(should_delete_log(
+            "debug_20260918.log",
+            LogRetention::Once,
+            today
+        ));
+        assert!(should_delete_log(
+            "debug_once_999.log",
+            LogRetention::Once,
+            today
+        ));
+
+        // 非本应用文件：**任何保留策略下都不删**
+        for r in [
+            LogRetention::Once,
+            LogRetention::OneDay,
+            LogRetention::ThreeDays,
+            LogRetention::OneWeek,
+            LogRetention::OneMonth,
+        ] {
+            assert!(
+                !should_delete_log("debug_user.log", r, today),
+                "用户的文件在任何保留策略下都不该被删（策略 {:?}）",
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn should_delete_log_removes_legacy_non_dated_names() {
+        use crate::config::LogRetention;
+        let today = days_from_civil(2026, 9, 18);
+        // 历史格式无日期可比 ⇒ 直接视为过期
+        assert!(should_delete_log(
+            "debug.log",
+            LogRetention::OneMonth,
+            today
+        ));
+        assert!(should_delete_log(
+            "debug_once_777.log",
+            LogRetention::OneMonth,
+            today
+        ));
+    }
+
+    #[test]
+    fn should_delete_log_tolerates_future_dates() {
+        use crate::config::LogRetention;
+        // 未来日期（时钟回拨/篡改）差值 ≤ 0，不该被判过期而删掉
+        let today = days_from_civil(2026, 9, 18);
+        assert!(!should_delete_log(
+            "debug_20261231.log",
+            LogRetention::OneDay,
+            today
+        ));
     }
 
     /// 跨批次追加：同一路径多次 `write_batch` 不得截断已有内容
