@@ -92,6 +92,16 @@ pub fn get_config_load_error() -> Option<String> {
     config::get_load_error()
 }
 
+/// 注册失败的设备快捷键（P2-12）。空 = 当前没有失败项。
+///
+/// 前端在页面加载时**主动拉取**：失败事件在启动同步时发出，那一刻页面还没加载、
+/// 监听器尚未注册，事件必然落空。而「开机时快捷键被别的程序抢走」正是最常见也
+/// 最隐蔽的失效场景，必须靠这条拉取通道覆盖。
+#[tauri::command]
+pub fn get_shortcut_register_failed() -> Vec<String> {
+    crate::shortcut::get_register_failed()
+}
+
 /// 应用版本号（来自 tauri.conf.json 的真实包版本，供关于页动态显示，消除静态文案漂移）
 #[tauri::command]
 pub fn get_app_version(app: tauri::AppHandle) -> String {
@@ -123,7 +133,8 @@ pub fn update_config(app: tauri::AppHandle, base: Option<Config>, mut new_config
     if cycle_was_enabled && !new_config.enable_device_shortcut_cycle {
         // 关闭共享开关：清除被多个设备共用的快捷键
         clear_shared_device_shortcuts(&mut new_config);
-        crate::shortcut::sync_device_shortcuts(&app);
+        // 返回值（注册失败的键）已由 sync_device_shortcuts 自行上报（记录 + 广播）
+        let _ = crate::shortcut::sync_device_shortcuts(&app);
     }
     // 保留时长是否变化，必须比较**套用前后**的真值：套用是「按差异合并」，
     // 前端没改 log_retention 时它压根不会被写，拿 patch 的值比较会误判。
@@ -623,11 +634,52 @@ pub fn set_device_shortcut(
         name,
         key.as_deref().unwrap_or("None")
     );
+    // 记下改动前的状态，供注册失败时回滚（与 set_hotkey_config 的处置一致，见 P1-5）
+    let previous = config::with_config(|c| c.device_shortcuts.get(&device_id).cloned());
+    let requested = key.clone();
     set_device_shortcut_key(&device_id, &name, key);
-    crate::shortcut::sync_device_shortcuts(&app);
+
+    let failed = crate::shortcut::sync_device_shortcuts(&app);
+    // 上面那段 `is_registered` 校验只能发现**本进程内部**的冲突；被**其他程序**占用的键
+    // 只有真正调 `RegisterHotKey` 时才会失败（见 P2-12）。此时必须回滚配置：
+    // 否则界面显示「已设置 XX」、按键却毫无反应，用户完全无从察觉——
+    // 正是 P1-5 要消灭的那类不一致。
+    if let Some(k) = requested.as_deref() {
+        if failed.iter().any(|f| f == k) {
+            config::with_config_mut(|c| rollback_device_shortcut(c, &device_id, previous));
+            // 回滚后**必须再同步一次**：上面那次同步已经把旧键注销了
+            //（desired 里换成了新键），不重同步的话用户会「改键失败」
+            // 且**连原来能用的键也一起丢**。实测证据见提交信息。
+            let _ = crate::shortcut::sync_device_shortcuts(&app);
+            let config_snapshot = config::with_config(|c| c.clone());
+            let _ = app.emit("config-changed", config_snapshot);
+            return Err("快捷键已被其他程序占用".to_string());
+        }
+    }
+
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);
     Ok(())
+}
+
+/// 把某个设备的快捷键恢复到 `set_device_shortcut` 改动前的状态。
+///
+/// `previous == None` 表示改动前配置里**没有**这个设备（新建设备的首次设键），
+/// 此时回滚要把整条记录删掉，而不是留一条 `shortcut: None` 的空壳——
+/// 空壳会让该设备出现在「已配置快捷键」列表里。
+fn rollback_device_shortcut(
+    c: &mut Config,
+    device_id: &str,
+    previous: Option<crate::config::DeviceShortcut>,
+) {
+    match previous {
+        Some(prev) => {
+            c.device_shortcuts.insert(device_id.to_string(), prev);
+        }
+        None => {
+            c.device_shortcuts.remove(device_id);
+        }
+    }
 }
 
 fn set_device_shortcut_key(device_id: &str, name: &str, key: Option<String>) {
@@ -653,7 +705,8 @@ pub fn remove_device_shortcut(app: tauri::AppHandle, device_id: String) {
     config::with_config_mut(|c| {
         c.device_shortcuts.remove(&device_id);
     });
-    crate::shortcut::sync_device_shortcuts(&app);
+    // 返回值（注册失败的键）已由 sync_device_shortcuts 自行上报（记录 + 广播）
+    let _ = crate::shortcut::sync_device_shortcuts(&app);
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);
 }
@@ -676,7 +729,8 @@ pub fn check_material_support(material: String) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_allowed_open_url;
+    use super::{is_allowed_open_url, rollback_device_shortcut};
+    use crate::config::{Config, DeviceShortcut};
 
     /// P1-4 的可证伪单测：`open_url` 只放行白名单协议。
     ///
@@ -706,5 +760,60 @@ mod tests {
         ] {
             assert!(!is_allowed_open_url(bad), "非白名单协议必须拒绝: {bad}");
         }
+    }
+
+    // ── P2-12：注册失败后的回滚 ──────────────────────────────
+
+    fn entry(name: &str, shortcut: Option<&str>) -> DeviceShortcut {
+        DeviceShortcut {
+            name: name.to_string(),
+            shortcut: shortcut.map(|s| s.to_string()),
+        }
+    }
+
+    /// 改动前**已有**该设备 ⇒ 回滚必须还原成旧值（含旧 name），而不是删掉或留新值。
+    ///
+    /// 这正是「用户把一个能用的键改成被其他程序占用的键」时走的分支：
+    /// 不回滚的话配置里留着不可用的新键，界面显示已设置、按键却无反应（P2-12）。
+    #[test]
+    fn rollback_restores_previous_shortcut() {
+        let mut c = Config::default();
+        c.device_shortcuts
+            .insert("dev-1".to_string(), entry("新名字", Some("Ctrl+Alt+KeyJ")));
+
+        rollback_device_shortcut(
+            &mut c,
+            "dev-1",
+            Some(entry("旧名字", Some("Ctrl+Alt+KeyK"))),
+        );
+
+        let got = c.device_shortcuts.get("dev-1").expect("设备记录必须还在");
+        assert_eq!(
+            got.shortcut.as_deref(),
+            Some("Ctrl+Alt+KeyK"),
+            "必须还原旧键"
+        );
+        assert_eq!(
+            got.name, "旧名字",
+            "name 也要一起还原（改动是整条记录级的）"
+        );
+    }
+
+    /// 改动前**没有**该设备 ⇒ 回滚必须把整条记录删掉，不能留 `shortcut: None` 的空壳
+    /// （空壳会让设备出现在「已配置快捷键」列表里，用户会以为它配置过）。
+    #[test]
+    fn rollback_removes_newly_created_entry() {
+        let mut c = Config::default();
+        c.device_shortcuts.insert(
+            "dev-2".to_string(),
+            entry("探针设备", Some("Ctrl+Alt+KeyJ")),
+        );
+
+        rollback_device_shortcut(&mut c, "dev-2", None);
+
+        assert!(
+            !c.device_shortcuts.contains_key("dev-2"),
+            "新建的设备在回滚后必须整条消失，而不是留下空壳"
+        );
     }
 }

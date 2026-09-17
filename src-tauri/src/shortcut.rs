@@ -1,12 +1,40 @@
 use crate::standard_log;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use tauri::Emitter;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 static DEVICE_REGISTERED_KEYS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// 最近一次同步里**注册失败**的设备快捷键键（**非清除式**，两个窗口都能读到）。
+///
+/// 为什么除了广播事件还要有它：失败事件在**启动同步**时发出，而那一刻前端页面
+/// 还没加载、事件监听尚未注册 ⇒ 事件必然落空。而「开机时快捷键被别的程序抢走」
+/// 恰恰是这类失效最常见也最隐蔽的场景（重启一次电脑，快捷键就再也不灵，
+/// 界面却仍显示已设置）——必须另给一条**可拉取**的通道才能覆盖启动期。
+///
+/// 每次同步都**整份替换**：一次同步里没有失败项，就说明当前所有键都注册上了
+/// （失败过的键不会进注册表，故它只要还在配置里就必然每次都被重新尝试并再次失败）。
+static REGISTER_FAILED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+/// 上报本次同步的注册失败项：记录（供前端拉取）+ 广播（供已打开的页面即时提示）。
+fn report_register_failed(app: &tauri::AppHandle, keys: Vec<String>) {
+    let slot = REGISTER_FAILED.get_or_init(|| Mutex::new(Vec::new()));
+    *crate::state::lock_unpoisoned(slot) = keys.clone();
+    if !keys.is_empty() {
+        let _ = app.emit("shortcut-register-failed", keys);
+    }
+}
+
+/// 供前端查询的「注册失败的设备快捷键」。空 = 当前没有失败项。
+pub fn get_register_failed() -> Vec<String> {
+    REGISTER_FAILED
+        .get()
+        .map(|slot| crate::state::lock_unpoisoned(slot).clone())
+        .unwrap_or_default()
+}
 
 pub fn register_shortcuts(app: &tauri::AppHandle) {
     let app = app.clone();
@@ -71,6 +99,10 @@ fn diff_keys(
 /// 同一快捷键键仅注册一次，action 为 `device_shortcut_key:<key>`，
 /// 多个设备可共用同一键（触发后在设备间循环切换）。
 ///
+/// **返回值 = 本次注册失败的键**（已**不**计入注册表，故下次同步会重试）。
+/// 失败典型原因是该键被**其他程序**占用——`is_registered` 只反映本进程的注册表，
+/// 查不到外部占用，只有 `on_shortcut` 真的去调 `RegisterHotKey` 才会暴露。
+///
 /// ⚠️ **锁纪律**：本函数分三段，`DEVICE_REGISTERED_KEYS` 只在第 1、3 段（纯内存差集
 /// 计算与集合更新）持有，**所有 `global_shortcut()` 调用都必须在第 2 段（锁外）**。
 /// 原因：该插件的 `register` / `unregister` / `on_shortcut` 内部经 `run_main_thread!`
@@ -80,7 +112,7 @@ fn diff_keys(
 /// 就是 AB/BA 死锁——与 P0-4（`tray.rs` 持配置锁调菜单 API）完全同型。
 /// 当前调用点都在主线程（主线程内 `send_user_message` 走内联执行，暂不自锁），
 /// 但一旦有子线程调用本函数即会复现，故此处按锁纪律写死。
-pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
+pub fn sync_device_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
     let desired: HashSet<String> = crate::config::with_config(|c| {
         c.device_shortcuts
             .values()
@@ -102,26 +134,41 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
     }
 
     let mut newly_registered: Vec<String> = Vec::with_capacity(to_register.len());
+    let mut failed: Vec<String> = Vec::new();
     for key in &to_register {
         let sc = match tauri_plugin_global_shortcut::Shortcut::try_from(key.as_str()) {
             Ok(sc) => sc,
             Err(_) => {
+                // 键本身无法解析（配置值非法）：同样不计入注册表，下次同步重试。
+                // 与下面的「注册失败」分开记日志——两者的处置办法不同。
                 standard_log!("[shortcut] invalid key: {}", key);
                 continue;
             }
         };
         let action = format!("device_shortcut_key:{}", key);
         let key_str = key.clone();
-        standard_log!("[shortcut] registered {} -> {}", key, action);
-        let _ = app
+        let action_for_log = action.clone();
+        // ⚠️ 原实现是 `let _ = on_shortcut(...)` 且**无条件** insert 进注册表：
+        // 失败（典型是被其他程序占用）也会被当成「已注册」，此后 `diff_keys` 永远
+        // 认为它无需注册 ⇒ 该快捷键**静默永久失效**，且日志里连一行失败都没有。
+        // 现在：只有 `Ok` 才计入注册表，失败则记入 `failed` 供调用方提示用户。
+        match app
             .global_shortcut()
             .on_shortcut(sc, move |_app, _shortcut, event| {
                 if event.state != ShortcutState::Pressed {
                     return;
                 }
                 dispatch_shortcut_action(_app, &action, &key_str);
-            });
-        newly_registered.push(key.clone());
+            }) {
+            Ok(()) => {
+                standard_log!("[shortcut] registered {} -> {}", key, action_for_log);
+                newly_registered.push(key.clone());
+            }
+            Err(e) => {
+                standard_log!("[shortcut] 注册失败 {} -> {}: {}", key, action_for_log, e);
+                failed.push(key.clone());
+            }
+        }
     }
 
     // ── 第 3 段：锁内只更新集合（纯内存）──────────────────────────
@@ -132,6 +179,13 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) {
             registered.insert(key);
         }
     }
+
+    // 无论有无失败都上报：整份替换，无失败即清掉上一轮遗留的告警。
+    // 广播 + 记录两条通道都要——事件在启动期必然落空（页面还没加载、监听未注册），
+    // 拉取通道（[`get_register_failed`]）负责兜住启动期。用户主动设键走的是
+    // `set_device_shortcut` 的 `Err` 分支，那条路径必然有界面反馈。
+    report_register_failed(app, failed.clone());
+    failed
 }
 
 fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) {

@@ -505,6 +505,7 @@ fn main() {
             commands::get_cached_devices,
             commands::get_config,
             commands::get_config_load_error,
+            commands::get_shortcut_register_failed,
             commands::get_app_version,
             commands::set_window_theme,
             commands::update_config,

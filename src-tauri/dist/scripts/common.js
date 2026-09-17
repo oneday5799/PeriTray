@@ -453,6 +453,11 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
 // 快捷键保存失败文案归一：后端错误串 -> 用户可读提示（toast/hint 呈现方式由调用方决定）
 window.describeShortcutError = function (err, display) {
   const msg = String(err);
+  // 顺序要紧：「已被其他程序占用」不含「已被占用」子串，但仍显式先判，
+  // 以免日后有人把文案改成含该子串而落到下面那条更含糊的提示上（P2-12）。
+  if (msg.includes("被其他程序占用")) {
+    return `"${display}" 已被其他程序占用，请换一个快捷键。`;
+  }
   return msg.includes("已被占用")
     ? `"${display}" 已被其他功能占用，请选择其他快捷键。`
     : "暂不支持该快捷键。";
@@ -780,6 +785,52 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   } catch (_) {
     // 提示失败不得影响主流程
+  }
+
+  // P2-12：注册失败的设备快捷键。**必须主动拉取**——失败事件在启动同步时发出，
+  // 那一刻本页面还没加载、监听器尚未注册，事件必然落空。而「开机时快捷键被别的
+  // 程序抢走」正是这类失效最常见也最隐蔽的场景（界面显示已设置、按键却无反应）。
+  try {
+    const keys = await invoke("get_shortcut_register_failed");
+    if (Array.isArray(keys) && keys.length) {
+      window.showToast(
+        `快捷键 ${keys.join("、")} 注册失败：可能已被其他程序占用`,
+        null,
+        true,
+        15000
+      );
+      invoke("frontend_log", {
+        tag: "shortcut-register-failed",
+        msg: `启动拉取 ${keys.join(",")}`,
+      }).catch(() => {});
+    }
+  } catch (_) {
+    // 同上：提示失败不得影响主流程
+  }
+});
+
+// ── 设备快捷键注册失败（P2-12）─────────────────────────
+// 被**其他程序**占用的键，只有真正调注册 API 时才会失败——本进程的注册表查不到外部占用。
+// 后端在失败时广播本事件，避免「界面显示已设置、按键却毫无反应」这种无从察觉的失效。
+// 注：用户主动设键走 `set_device_shortcut`，那条路径会返回错误并自行提示；
+// 本监听覆盖的是启动同步、关闭共享开关、删除设备等没有直接返回值的路径。
+window.__TAURI__.event.listen("shortcut-register-failed", (event) => {
+  const keys = Array.isArray(event.payload) ? event.payload : [];
+  if (!keys.length) return;
+  window.showToast(
+    `快捷键 ${keys.join("、")} 注册失败：可能已被其他程序占用`,
+    null,
+    true,
+    8000
+  );
+  // 留一条后端记录：证明提示链路真的走到了前端（否则异常会被静默吞掉，
+  // 而「用户到底有没有被告知」将无从查证）——与 P1-7 的 config 提示同一手法。
+  const invoke = getInvoke();
+  if (invoke) {
+    invoke("frontend_log", {
+      tag: "shortcut-register-failed",
+      msg: keys.join(","),
+    }).catch(() => {});
   }
 });
 
