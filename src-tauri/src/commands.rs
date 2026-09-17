@@ -13,6 +13,26 @@ pub fn set_shortcut_recording(recording: bool) {
 }
 
 /// 在 tokio blocking 线程中执行阻塞操作
+///
+/// ── 命令的线程模型（B4，勿破坏）────────────────────────────────────────
+/// `#[tauri::command]`（**不带** `(async)`）的**同步**命令，其函数体在**主线程**上
+/// 执行——前端 `invoke` 进来后由 IPC 处理路径直接调用。因此命令体内任何
+/// 阻塞调用都会**直接冻结 UI**：COM（`IPolicyConfig`、WMI）、`ShellExecuteW`、
+/// 文件 I/O、`sync_all()` 均属此列。P0-4 的探针日志已经实证过这一点：死锁当时
+/// 主线程正卡在 `set_window_material` 这个同步命令里。
+///
+/// 故凡命令体含上述调用者，一律写成 `#[tauri::command(async)] pub async fn …`
+/// 并把阻塞部分交给本函数（`spawn_blocking`），使其落在 tokio 阻塞线程池上。
+///
+/// **注意两处副作用**（已在各命令处注明）：
+/// ① 异步命令的后续语句（含 `app.emit`）运行在**异步运行时线程**而非主线程。
+///    事件监听回调是在 `emit` 的**调用线程**上同步执行的（见
+///    `tauri-2.11.5/src/event/listener.rs:204`），故监听器内的菜单/托盘 API
+///    会变成「子线程 → `run_on_main_thread + recv` → 主线程」的跨线程等待。
+///    这在无锁前提下是安全的，且 `toggle_device_tray` 等命令早已是这个形态；
+/// ② 同一命令的两次并发 `invoke` 不再保证按调用顺序完成（各自占一个阻塞线程）。
+///    对「设置类」命令这是可接受的（前端有乐观 UI 与刷新兜底），但**不要**
+///    把需要严格定序的读改写序列拆进异步命令。
 async fn run_blocking<F, T>(f: F) -> Result<T, String>
 where
     F: FnOnce() -> T + Send + 'static,
@@ -150,9 +170,9 @@ pub fn toggle_audio_device_hidden(app: tauri::AppHandle, name: String) {
     let _ = app.emit("audio-devices-changed", ());
 }
 
-#[tauri::command]
-pub fn open_bt_settings() -> Result<(), String> {
-    process::shell_open("ms-settings:bluetooth", None)
+#[tauri::command(async)]
+pub async fn open_bt_settings() -> Result<(), String> {
+    run_blocking(|| process::shell_open("ms-settings:bluetooth", None)).await?
 }
 
 /// `open_url` 允许的目标协议白名单。
@@ -168,13 +188,16 @@ fn is_allowed_open_url(url: &str) -> bool {
 /// **必须白名单**：`ShellExecuteW` 会执行任意已注册协议，不加限制时前端一旦被注入
 /// （XSS / 恶意扩展）即可借 `open_url` 用 `file:`、自定义协议等做本地落地，
 /// 而本命令是前端唯一能触达「系统执行」的入口（见代码审查报告 P1-4）。
-#[tauri::command]
-pub fn open_url(url: String) -> Result<(), String> {
+///
+/// 白名单判定是纯字符串比较，留在主线程完成（校验失败无需付线程切换成本）；
+/// 只有 `ShellExecuteW` 本体交给阻塞线程（B4）。
+#[tauri::command(async)]
+pub async fn open_url(url: String) -> Result<(), String> {
     if !is_allowed_open_url(&url) {
         standard_log!("[cmd] open_url 拒绝非白名单协议: {}", url);
         return Err(format!("不允许的链接协议: {}", url));
     }
-    process::shell_open(&url, None)
+    run_blocking(move || process::shell_open(&url, None)).await?
 }
 
 #[tauri::command]
@@ -241,17 +264,22 @@ pub fn frontend_log(tag: String, msg: String) {
     standard_log!("[{tag}] {msg}");
 }
 
-#[tauri::command]
-pub fn open_24g_device_file() -> Result<(), String> {
-    let path = crate::device_data::user_data_path();
-    if !path.exists() {
-        // 内置 2.4G 库已废除，全新安装环境可能没有 data 目录
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+/// 用系统默认程序打开 2.4G 设备数据文件（`create_dir_all` + `write` + `ShellExecuteW`）。
+/// 首启路径还会新建 data 目录与占位文件，全是磁盘 I/O，故整体移出主线程（B4）。
+#[tauri::command(async)]
+pub async fn open_24g_device_file() -> Result<(), String> {
+    run_blocking(|| {
+        let path = crate::device_data::user_data_path();
+        if !path.exists() {
+            // 内置 2.4G 库已废除，全新安装环境可能没有 data 目录
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
         }
-        std::fs::write(&path, "{}").map_err(|e| e.to_string())?;
-    }
-    process::shell_open(&path.to_string_lossy(), None)
+        process::shell_open(&path.to_string_lossy(), None)
+    })
+    .await?
 }
 
 const TRAY_DEVICE_LIMIT: usize = 4;
@@ -378,10 +406,18 @@ pub async fn get_sessions_device_names(
     run_blocking(move || crate::audio::resolve_session_device_names(&pids)).await
 }
 
-#[tauri::command]
-pub fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<(), String> {
+/// 切换系统默认输出设备。
+///
+/// `crate::audio::set_default_device` 走 `IPolicyConfig` COM 接口，实测耗时
+/// 数十至数百毫秒（还要等音频服务响应），原先作为**同步命令**在主线程执行
+/// ⇒ 每次点击设备名都会冻结 UI 同等时长（B4）。
+/// `emit` 放在 `.await` 之后，与既有的 `toggle_device_tray` 形态一致。
+#[tauri::command(async)]
+pub async fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<(), String> {
     standard_log!("[cmd] set_default_device: {}", device_id);
-    crate::audio::set_default_device(&device_id).map_err(|e| e.to_string())?;
+    run_blocking(move || crate::audio::set_default_device(&device_id))
+        .await?
+        .map_err(|e| e.to_string())?;
     let _ = app.emit("audio-devices-changed", ());
     Ok(())
 }
@@ -404,11 +440,15 @@ pub async fn set_spatial_sound(
     .await?
 }
 
-#[tauri::command]
-pub fn open_log_dir() -> Result<(), String> {
-    let dir = crate::process::logs_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    process::shell_open(&dir.to_string_lossy(), None)
+/// 打开日志目录（`create_dir_all` + `ShellExecuteW`），磁盘 I/O 移出主线程（B4）。
+#[tauri::command(async)]
+pub async fn open_log_dir() -> Result<(), String> {
+    run_blocking(|| {
+        let dir = crate::process::logs_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        process::shell_open(&dir.to_string_lossy(), None)
+    })
+    .await?
 }
 
 #[tauri::command(async)]
