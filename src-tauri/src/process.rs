@@ -2,6 +2,10 @@
 //! 本地时间戳 chrono_str（GetLocalTime 直取系统本地时间）、exe 路径、
 //! Win32 互操作（to_wide/shell_open）与各类系统面板/文件打开器。
 //! 为全仓约三分之二模块提供公共依赖，新增跨模块基础工具优先落于此处。
+//!
+//! **日志写入自 B5 起是异步的**：`append_log` / `append_verbose_log` 只把行推入
+//! 有界队列（`try_send`，永不阻塞），落盘由独立线程 `peritray-log` 按批完成。
+//! 故进程退出前须调用 [`flush_log`] 等待队列排空，否则会丢掉最后几行。
 
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -73,45 +77,192 @@ macro_rules! verbose_log {
 /// 落盘失败计数：首次失败告警，后续静默（防止高频日志重复刷屏）
 static LOG_WRITE_FAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// 缓存日志文件句柄与对应路径，避免每次写入都重新打开文件
-static LOG_FILE: std::sync::OnceLock<
-    std::sync::Mutex<Option<(std::path::PathBuf, std::fs::File)>>,
-> = std::sync::OnceLock::new();
+// ═══════════════════════════════════════════════════════════════
+// 日志写入：独立写线程 + 有界队列（B5）
+//
+// 旧实现是「全进程共用一把 `Mutex<Option<(PathBuf, File)>>` + 无缓冲 write_all」：
+// 调用方在锁内完成 `log_path()`（读配置锁）→ 建目录 → 打开文件 → `write_all`
+// 落盘。`logcost` 探针实测 `write=0ms`、耗时全在 `lock=`，即瓶颈是**锁排队**，
+// 而本机杀软实时扫描下单行落盘约 21ms ⇒ 高频日志会串行化成整进程瓶颈，
+// 且这条路径就在**主线程**的命令处理上（`update_config`、`toggle_device_hidden` …）。
+//
+// 新结构把「生产」与「落盘」彻底分离：
+//   · 业务线程只做 `try_send`（入队）——**永不阻塞**，队列满则丢弃并计数；
+//   · 专用写线程独占文件句柄，按批落盘（文件句柄缓存不再需要任何锁）；
+//   · 跨天 / `log_once` 切换由写线程按批重新求值 `log_path()` 处理。
+// 这样既摘掉了业务路径上的文件锁，也顺带把「每次写日志都读一次配置锁」消掉。
+// ═══════════════════════════════════════════════════════════════
 
-fn write_log(msg: &str) {
+/// 日志队列容量（行）。满则丢弃——**绝不阻塞调用方**，这是本设计的全部意义。
+const LOG_QUEUE_CAP: usize = 4096;
+
+/// 单批最多落盘行数：摊薄系统调用开销，同时避免批量过大导致日志延迟可见。
+const LOG_BATCH_MAX: usize = 256;
+
+/// 已成功入队 / 已落盘的行数。二者相等即「队列已排空」，`flush_log` 据此等待。
+static LOG_QUEUED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LOG_WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 因队列已满被丢弃的行数
+static LOG_DROPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+static LOG_TX: std::sync::OnceLock<std::sync::mpsc::SyncSender<String>> =
+    std::sync::OnceLock::new();
+
+/// 取日志队列发送端，首次调用时惰性启动写线程。
+fn log_sender() -> &'static std::sync::mpsc::SyncSender<String> {
+    LOG_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(LOG_QUEUE_CAP);
+        // 线程名便于在调试器 / 任务管理器里辨认
+        if std::thread::Builder::new()
+            .name("peritray-log".to_string())
+            .spawn(move || writer_loop(rx))
+            .is_err()
+        {
+            // 线程创建失败（资源耗尽等极端情况）：`rx` 随闭包结束被丢弃，
+            // 后续 `try_send` 一律返回 `Disconnected`，`enqueue` 会自动退回同步写。
+            eprintln!("[process] 日志写线程创建失败，退回同步写入");
+        }
+        tx
+    })
+}
+
+/// 记录一次丢弃；返回是否为「首次丢弃」（用于只告警一次）。
+/// 抽成接收计数器的纯函数以便单测（不改全局状态）。
+fn note_drop(counter: &std::sync::atomic::AtomicU64) -> bool {
+    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0
+}
+
+/// 入队一行日志。**本函数永不阻塞**：这是 B5 的核心契约。
+fn enqueue(line: String) {
+    use std::sync::mpsc::TrySendError;
+    match log_sender().try_send(line) {
+        Ok(()) => {
+            LOG_QUEUED.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
+        Err(TrySendError::Full(_dropped)) => {
+            // 队列满 = 落盘速度跟不上日志产生速度。丢弃是刻意选择：
+            // 宁可少几行日志，也不能让业务线程（含主线程）在这里排队。
+            if note_drop(&LOG_DROPPED) {
+                eprintln!(
+                    "[process] 日志队列已满（容量 {} 行），开始丢弃日志；不影响应用运行",
+                    LOG_QUEUE_CAP
+                );
+            }
+        }
+        Err(TrySendError::Disconnected(line)) => {
+            // 写线程不可用（创建失败或已异常退出）：退回同步写。
+            // 这条路径正常永不触发，性能不重要，正确性优先。
+            write_line_sync(&line);
+        }
+    }
+}
+
+/// 同步落盘一行（降级路径，仅当写线程不可用时使用）
+fn write_line_sync(line: &str) {
     use std::io::Write;
-    let timestamp = chrono_str();
-    let line = format!("[{}]{}\n", timestamp, msg);
     let path = log_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let cache = LOG_FILE.get_or_init(|| std::sync::Mutex::new(None));
-    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
-    // 路径变化时（跨天 / log_once 切换）重建文件句柄
-    if let Some((ref cached_path, _)) = *guard {
-        if *cached_path != path {
-            *guard = None;
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            let _ = f.write_all(line.as_bytes());
         }
-    }
-    if guard.is_none() {
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            Ok(f) => *guard = Some((path.clone(), f)),
-            Err(_) => {
-                if !LOG_WRITE_FAILS.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    eprintln!("[process] 日志写入失败，日志可能丢失: {:?}", path);
-                }
-                return;
+        Err(_) => {
+            if !LOG_WRITE_FAILS.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                eprintln!("[process] 日志写入失败，日志可能丢失: {:?}", path);
             }
         }
     }
-    if let Some((_, ref mut file)) = *guard {
-        let _ = file.write_all(line.as_bytes());
+}
+
+/// 写线程主体：阻塞取首行 → 尽可能多取（至多 `LOG_BATCH_MAX`）→ 批量落盘。
+/// 发送端是静态量、进程存续期内不会析构，故 `recv()` 只在写线程异常时才返回 `Err`。
+fn writer_loop(rx: std::sync::mpsc::Receiver<String>) {
+    let mut sink = LogSink::default();
+    let mut batch: Vec<String> = Vec::with_capacity(LOG_BATCH_MAX);
+    while let Ok(first) = rx.recv() {
+        batch.clear();
+        batch.push(first);
+        while batch.len() < LOG_BATCH_MAX {
+            match rx.try_recv() {
+                Ok(m) => batch.push(m),
+                Err(_) => break,
+            }
+        }
+        // 按批重新求值路径：跨天轮转与 `log_once` 切换在此自然生效
+        sink.write_batch(&log_path(), &batch);
+        LOG_WRITTEN.fetch_add(batch.len() as u64, std::sync::atomic::Ordering::Release);
     }
+}
+
+/// 把队列中的日志尽快落盘，最长等待 2 秒。
+///
+/// 用途：进程退出前调用，避免丢掉最后几行（关停路径恰恰是排查时最想看的部分）。
+/// **不得在持有配置锁时调用**：写线程每批都要经 `log_path()` 读配置锁，
+/// 持锁等待会把「等队列排空」变成「等自己」（本函数有 2s 上限，会退化为超时而非死锁）。
+pub fn flush_log() {
+    use std::sync::atomic::Ordering;
+    let queued = LOG_QUEUED.load(Ordering::Acquire);
+    if LOG_WRITTEN.load(Ordering::Acquire) >= queued {
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2000);
+    while LOG_WRITTEN.load(Ordering::Acquire) < queued && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// 日志文件句柄缓存。**由写线程独占持有**，故不再需要任何锁
+/// （旧实现需要一把全进程共用的 Mutex，正是 B5 要消除的瓶颈）。
+#[derive(Default)]
+struct LogSink {
+    cached: Option<(std::path::PathBuf, std::fs::File)>,
+}
+
+impl LogSink {
+    /// 把一批行追加到 `path`；路径与缓存不一致时（跨天 / `log_once` 切换）重建句柄。
+    fn write_batch(&mut self, path: &std::path::Path, lines: &[String]) {
+        use std::io::Write;
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Some((ref cached_path, _)) = self.cached {
+            if cached_path.as_path() != path {
+                self.cached = None;
+            }
+        }
+        if self.cached.is_none() {
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                Ok(f) => self.cached = Some((path.to_path_buf(), f)),
+                Err(_) => {
+                    if !LOG_WRITE_FAILS.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        eprintln!("[process] 日志写入失败，日志可能丢失: {:?}", path);
+                    }
+                    return;
+                }
+            }
+        }
+        if let Some((_, ref mut file)) = self.cached {
+            for line in lines {
+                let _ = file.write_all(line.as_bytes());
+            }
+        }
+    }
+}
+
+/// 组装一行日志（时间戳前缀 + 换行）并入队
+fn write_log(msg: &str) {
+    enqueue(format!("[{}]{}\n", chrono_str(), msg));
 }
 
 /// 清理旧日志文件（根据保留时长设置）
@@ -359,4 +510,131 @@ pub fn open_sound_panel(panel: &str) {
 /// 打开现代 Windows 设置页面 (ms-settings:)
 pub fn open_settings_page(page: &str) {
     let _ = shell_open(&format!("ms-settings:{}", page), None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 每个用例独立的临时路径（沿用仓库既有写法：temp_dir + tag + pid）
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("peritray_logsink_{}_{}", tag, std::process::id()))
+    }
+
+    fn lines(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| format!("{}\n", s)).collect()
+    }
+
+    /// 丢弃计数只在**首次**丢弃时返回 true ⇒ 告警只打一次，
+    /// 不会在日志风暴中把 stderr 刷爆。
+    #[test]
+    fn note_drop_only_reports_first_drop() {
+        let counter = AtomicU64::new(0);
+        assert!(note_drop(&counter), "第一次丢弃应返回 true（需要告警）");
+        assert!(!note_drop(&counter), "第二次起不应再返回 true");
+        assert!(!note_drop(&counter));
+        assert_eq!(counter.load(Ordering::Relaxed), 3, "计数须如实累计");
+    }
+
+    /// 跨批次追加：同一路径多次 `write_batch` 不得截断已有内容
+    /// （若误用 `create(true)` 而漏掉 `append(true)`，本用例会红）。
+    #[test]
+    fn write_batch_appends_across_calls() {
+        let path = tmp_path("append").with_extension("log");
+        std::fs::remove_file(&path).ok();
+        let mut sink = LogSink::default();
+        sink.write_batch(&path, &lines(&["first", "second"]));
+        sink.write_batch(&path, &lines(&["third"]));
+        let content = std::fs::read_to_string(&path).expect("日志文件应存在");
+        assert_eq!(content, "first\nsecond\nthird\n");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 路径变化（跨天轮转 / `log_once` 切换）时必须换文件写：
+    /// 旧文件保持原样，新行全部落到新文件。
+    /// 这条钉的是句柄缓存的轮转逻辑——漏掉轮转会把新日志写进旧文件。
+    #[test]
+    fn write_batch_switches_file_when_path_changes() {
+        let a = tmp_path("switch_a").with_extension("log");
+        let b = tmp_path("switch_b").with_extension("log");
+        std::fs::remove_file(&a).ok();
+        std::fs::remove_file(&b).ok();
+        let mut sink = LogSink::default();
+        sink.write_batch(&a, &lines(&["into_a"]));
+        sink.write_batch(&b, &lines(&["into_b"]));
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "into_a\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "into_b\n");
+        std::fs::remove_file(&a).ok();
+        std::fs::remove_file(&b).ok();
+    }
+
+    /// **进程重启后必须追加到当天已有日志，不得截断**。
+    /// 新 `LogSink`（等价于新进程）打开已存在的文件时须保留原有内容——
+    /// 若把 `append(true)` 漏成 `truncate(true)`，用户重启一次就丢掉当天全部历史，
+    /// 而这正是排查「启动期问题」时最需要的那段日志。
+    #[test]
+    fn fresh_sink_appends_to_existing_file() {
+        let path = tmp_path("restart").with_extension("log");
+        std::fs::remove_file(&path).ok();
+        LogSink::default().write_batch(&path, &lines(&["from_previous_run"]));
+        LogSink::default().write_batch(&path, &lines(&["from_this_run"]));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "from_previous_run\nfrom_this_run\n"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 父目录不存在时须自动创建（首启、日志目录被清理后都会走到）
+    #[test]
+    fn write_batch_creates_missing_parent_dir() {
+        let dir = tmp_path("mkdir");
+        std::fs::remove_dir_all(&dir).ok();
+        let path = dir.join("nested").join("debug.log");
+        let mut sink = LogSink::default();
+        sink.write_batch(&path, &lines(&["hello"]));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 打不开目标（此处指向一个已存在的目录）时：不得 panic，也不得写坏进程状态。
+    /// 旧实现在此处是 `return`，新实现同样如此；本用例防止把 `unwrap` 引回来。
+    #[test]
+    fn write_batch_failure_does_not_panic() {
+        let dir = tmp_path("open_fail");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sink = LogSink::default();
+        // 目标是目录 ⇒ OpenOptions 必然失败
+        sink.write_batch(&dir, &lines(&["should not land"]));
+        // 再写一次，确认失败后 sink 处于可继续使用的状态
+        sink.write_batch(&dir, &lines(&["still no panic"]));
+        assert!(dir.is_dir(), "失败路径不应破坏目标");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 端到端冒烟：入队 → 写线程落盘 → `flush_log()` 返回后内容必须在文件里。
+    ///
+    /// 走 `enqueue` 而非 `append_log`，是为了绕开日志级别开关
+    /// （`LOG_LEVEL` 是 `config.rs` 的私有静态量，单测里没有初始化配置的入口），
+    /// 直接验证 B5 新增的那条链路本身。
+    ///
+    /// 本用例的判别力在于「写线程确实启动、确实把队列落到 `log_path()`、
+    /// `flush_log` 确实能等到排空」——它抓不住「flush 提前返回」这类竞态
+    /// （那种情况下断言可能碰巧成立），那属于契约而非断言能覆盖的范围。
+    #[test]
+    fn enqueued_lines_reach_disk_after_flush() {
+        let path = log_path();
+        let before = std::fs::read_to_string(&path).unwrap_or_default();
+        let marker = format!("peritray_b5_probe_{}", std::process::id());
+        enqueue(format!("{}\n", marker));
+        flush_log();
+        let after = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            after.len() > before.len(),
+            "flush 返回后日志文件应已增长（写线程未落盘？）"
+        );
+        assert!(after.contains(&marker), "标记行必须已落盘: {}", marker);
+    }
 }

@@ -99,6 +99,8 @@ fn watchdog_self_restart() {
     process::append_log("[watchdog] EVENT LOOP STUCK — self-restarting");
     let exe = std::env::current_exe().unwrap_or_default();
     if exe.as_os_str().is_empty() {
+        // 走 process::exit 不经过 RunEvent::Exit，故此处显式排空日志队列（B5）
+        process::flush_log();
         std::process::exit(0);
     }
     let arg = format!("--watchdog-restart={}", std::process::id());
@@ -110,6 +112,9 @@ fn watchdog_self_restart() {
         process::append_log("[watchdog] respawn FAILED, exiting anyway");
     }
     std::thread::sleep(std::time::Duration::from_millis(300));
+    // 同上：这条路径同样绕过 RunEvent::Exit，必须显式 flush，
+    // 否则「EVENT LOOP STUCK」这段最关键的现场日志会随进程一起消失
+    process::flush_log();
     std::process::exit(0);
 }
 
@@ -490,12 +495,19 @@ fn main() {
         Ok(app) => app,
         Err(e) => {
             show_error_box(&format!("应用初始化失败：\n{}", e));
+            // 日志已改为独立写线程（B5），退出前须等队列排空，否则启动期日志会丢
+            crate::process::flush_log();
             std::process::exit(1);
         }
     };
-    app.run(|_app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = event {
+    app.run(|_app_handle, event| match event {
+        RunEvent::ExitRequested { .. } => {
             crate::audio_notify::request_shutdown();
         }
+        // 兜底 flush：`RunEvent::Exit` 是所有正常退出路径（含托盘菜单 `app.exit`）
+        // 的必经点，在此等日志队列排空，避免丢掉关停路径的最后几行——
+        // 那恰是排查时最想看的部分。flush 幂等（队列已空则立即返回）。
+        RunEvent::Exit => crate::process::flush_log(),
+        _ => {}
     });
 }
