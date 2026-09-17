@@ -315,23 +315,51 @@ pub async fn open_24g_device_file() -> Result<(), String> {
 
 const TRAY_DEVICE_LIMIT: usize = 4;
 
-#[tauri::command(async)]
-pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(), String> {
-    let (already_added, count) =
-        config::with_config(|c| (c.tray_devices.contains(&name), c.tray_devices.len()));
-    if !already_added && count >= TRAY_DEVICE_LIMIT {
-        standard_log!(
-            "[cmd] toggle_device_tray: {} 达上限({})拒绝",
-            name,
-            TRAY_DEVICE_LIMIT
-        );
+/// 切换「托盘设备」列表中的某个设备：存在则移除，不存在则加入（受上限保护）。
+///
+/// ── 为什么必须是「只接 `&mut Config` 的单函数」（P2-8）──────────────────
+/// 原实现是「先 `with_config` 读一次（查重 + 数上限）→ 再 `with_config_mut` 写一次」
+/// ——**两次独立加锁**，中间还夹着一次 `run_blocking` 线程切换，于是：
+///
+/// ```text
+/// 线程 A: 读 count=3（未达上限）...................... 写 → 4 个
+/// 线程 B:          读 count=3（未达上限）→ 写 → 5 个   ← 上限被击穿
+/// ```
+///
+/// 用户快速连点两次「添加到托盘」（两个并发 `invoke`）即可命中，
+/// 结果是 `tray_devices.len() > TRAY_DEVICE_LIMIT`，托盘菜单出现 5 个设备。
+///
+/// 抽成本函数后，调用方只剩
+/// `with_config_mut(|c| try_toggle_tray_device(c, &name))` ——
+/// **读与写物理上处于同一次加锁内**，「检查与写入分离」在类型层面不再可能发生。
+/// 这也是决策 2「不补 `tauri` test feature、改抽纯函数」的落点：
+/// 单测直接构造 `Config::default()` 调用它，**不需要 `AppHandle`**。
+fn try_toggle_tray_device(c: &mut Config, name: &str) -> Result<(), String> {
+    let already_added = c.tray_devices.iter().any(|v| v == name);
+    if !already_added && c.tray_devices.len() >= TRAY_DEVICE_LIMIT {
         return Err(format!("托盘最多添加 {} 个设备", TRAY_DEVICE_LIMIT));
     }
-    standard_log!("[cmd] toggle_device_tray: {}", name);
-    run_blocking(move || {
-        config::with_config_mut(|c| toggle_vec_item(&mut c.tray_devices, &name));
-    })
-    .await?;
+    toggle_vec_item(&mut c.tray_devices, name);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let log_name = name.clone();
+    // 上限拒绝与写入在同一次 `with_config_mut` 内完成（P2-8），并发连点不会击穿上限。
+    let outcome =
+        run_blocking(move || config::with_config_mut(|c| try_toggle_tray_device(c, &name))).await?;
+
+    if let Err(msg) = outcome {
+        standard_log!(
+            "[cmd] toggle_device_tray: {} 达上限({})拒绝",
+            log_name,
+            TRAY_DEVICE_LIMIT
+        );
+        return Err(msg);
+    }
+
+    standard_log!("[cmd] toggle_device_tray: {}", log_name);
     crate::tray::refresh_tray_tooltip(&app);
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);
@@ -729,7 +757,9 @@ pub fn check_material_support(material: String) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_allowed_open_url, rollback_device_shortcut};
+    use super::{
+        is_allowed_open_url, rollback_device_shortcut, try_toggle_tray_device, TRAY_DEVICE_LIMIT,
+    };
     use crate::config::{Config, DeviceShortcut};
 
     /// P1-4 的可证伪单测：`open_url` 只放行白名单协议。
@@ -815,5 +845,78 @@ mod tests {
             !c.device_shortcuts.contains_key("dev-2"),
             "新建的设备在回滚后必须整条消失，而不是留下空壳"
         );
+    }
+
+    /// P2-8 的可证伪单测：`try_toggle_tray_device` 的**上限拒绝**必须
+    /// ① 返回 `Err`，且 ② **不写入**（列表长度不变）。
+    ///
+    /// 修复前「检查」与「写入」在两次独立加锁里（中间还夹一次 `run_blocking`
+    /// 线程切换），并发连点可击穿上限；抽成「只接 `&mut Config` 的单函数」后，
+    /// 两条语义被同一个函数体锁死，本用例才有确定的判据可断言。
+    ///
+    /// 断言 `len` 而不只是返回值是关键：只断言 `Err` 的话，
+    /// 「先写进去再报错」这种半吊子实现也会通过。
+    #[test]
+    fn tray_device_limit_rejects_without_writing() {
+        let mut c = Config::default();
+        c.tray_devices = (0..TRAY_DEVICE_LIMIT)
+            .map(|i| format!("已满-{i}"))
+            .collect();
+
+        let err = try_toggle_tray_device(&mut c, "第 N+1 个");
+
+        assert!(err.is_err(), "已达上限时必须拒绝");
+        assert_eq!(
+            c.tray_devices.len(),
+            TRAY_DEVICE_LIMIT,
+            "被拒绝的请求不得写进列表，否则上限保护形同虚设"
+        );
+        assert!(
+            !c.tray_devices.iter().any(|v| v == "第 N+1 个"),
+            "被拒绝的设备名不得出现在列表中"
+        );
+    }
+
+    /// 上限判据的**另一侧**：差一个到上限时仍应放行并写入。
+    ///
+    /// 与上一用例成对——只测「拒绝」的话，一个「永远拒绝」的实现也能通过。
+    #[test]
+    fn tray_device_limit_allows_when_one_below() {
+        let mut c = Config::default();
+        c.tray_devices = (0..TRAY_DEVICE_LIMIT - 1)
+            .map(|i| format!("未满-{i}"))
+            .collect();
+
+        let res = try_toggle_tray_device(&mut c, "最后一个名额");
+
+        assert!(res.is_ok(), "未达上限时必须放行: {res:?}");
+        assert_eq!(
+            c.tray_devices.len(),
+            TRAY_DEVICE_LIMIT,
+            "放行后应恰好达到上限"
+        );
+        assert!(c.tray_devices.iter().any(|v| v == "最后一个名额"));
+    }
+
+    /// 已在列表中 ⇒ 移除，且**移除不受上限约束**。
+    ///
+    /// 「已达上限时移除已有项」是必须放行的路径——否则用户会卡在满员状态：
+    /// 想加新的加不进，想先删一个又因「已达上限」被拒。
+    #[test]
+    fn tray_device_toggle_removes_existing_even_at_limit() {
+        let mut c = Config::default();
+        c.tray_devices = (0..TRAY_DEVICE_LIMIT)
+            .map(|i| format!("已满-{i}"))
+            .collect();
+
+        let res = try_toggle_tray_device(&mut c, "已满-0");
+
+        assert!(res.is_ok(), "移除已有项不得被上限拦截: {res:?}");
+        assert_eq!(
+            c.tray_devices.len(),
+            TRAY_DEVICE_LIMIT - 1,
+            "移除后应少一个"
+        );
+        assert!(!c.tray_devices.iter().any(|v| v == "已满-0"));
     }
 }
