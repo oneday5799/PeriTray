@@ -732,7 +732,7 @@ window.closeDialog = function (overlay) {
 
 // ── Toast 通知 ──────────────────────────────────────────
 
-window.showToast = function (msg, onClick, isError) {
+window.showToast = function (msg, onClick, isError, durationMs) {
   let el = document.querySelector(".toast");
   if (!el) {
     el = document.createElement("div");
@@ -751,8 +751,29 @@ window.showToast = function (msg, onClick, isError) {
     el.classList.remove("error");
     el.onclick = null;
     el.style.cursor = "default";
-  }, 5000);
+  }, durationMs || 5000);
 };
+
+// ── 启动时配置解析失败提示（P1-7）───────────────────────
+// 后端解析 config.toml 失败时会回退默认值，并把磁盘原文备份为 config.toml.bak。
+// 不提示的话，用户只会看到「设置全变回默认」，容易误判成静默丢数据。
+// 两个页面都加载 common.js，故提示逻辑放在这里（非清除式，两个窗口都能看到）。
+window.addEventListener("DOMContentLoaded", async () => {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  try {
+    const msg = await invoke("get_config_load_error");
+    // 停留时间给足：消息里含备份文件的完整路径，5s 读不完
+    if (msg) {
+      window.showToast(msg, null, true, 15000);
+      // 留一条后端记录：证明提示链路真的走到了前端（否则异常会被 catch 静默吞掉，
+      // 而「用户到底有没有被告知」将无从查证）
+      invoke("frontend_log", { tag: "config-notice", msg: msg }).catch(() => {});
+    }
+  } catch (_) {
+    // 提示失败不得影响主流程
+  }
+});
 
 // ── 启动时更新检测（全局监听） ─────────────────────────
 window.__TAURI__.event.listen("update-available", (event) => {

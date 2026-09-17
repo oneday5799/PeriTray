@@ -64,6 +64,14 @@ pub fn get_config() -> Config {
     config::with_config(|c| c.clone())
 }
 
+/// 启动期配置解析失败的原因（含备份路径）；`None` = 本次启动读取正常。
+/// 前端在页面加载后调用一次并提示用户——「设置突然全部恢复默认」必须被解释，
+/// 否则会被当成静默丢数据（P1-7）。
+#[tauri::command]
+pub fn get_config_load_error() -> Option<String> {
+    config::get_load_error()
+}
+
 /// 应用版本号（来自 tauri.conf.json 的真实包版本，供关于页动态显示，消除静态文案漂移）
 #[tauri::command]
 pub fn get_app_version(app: tauri::AppHandle) -> String {

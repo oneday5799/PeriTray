@@ -55,15 +55,35 @@ pub struct DeviceShortcut {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    // ── 字段级 serde 默认值（P1-7）─────────────────────────────
+    // 每个字段都必须有默认值：任何一个字段缺失或类型不符，都会让**整份**
+    // `Config` 反序列化失败，进而回退到 `Config::default()`——用户全部个性化
+    // 配置一次性丢失（唯一不可逆项）。补默认值时**逐字段比对
+    // `Config::default()`**，绝不可一律写裸 `#[serde(default)]`：
+    // 裸默认给的是「零值」，而下列字段的真实默认值是**非零值**。
+    #[serde(default)]
     pub auto_start: bool,
+    #[serde(default)]
     pub hidden_devices: Vec<String>,
+    /// ⚠️ 具名 helper：真实默认是隐藏 `Battery` / `Monitor` 两组，
+    /// 裸 `#[serde(default)]` 会得到空数组 ⇒ 升级后默认隐藏的分组突然出现。
+    #[serde(default = "default_hidden_groups")]
     pub hidden_groups: Vec<String>,
+    #[serde(default)]
     pub device_names: std::collections::HashMap<String, String>,
+    #[serde(default)]
     pub device_groups: std::collections::HashMap<String, String>,
+    #[serde(default = "default_true")]
     pub filter_enabled: bool,
+    /// ⚠️ 具名 helper：真实默认是内置过滤正则，
+    /// 裸 `#[serde(default)]` 会得到空串 ⇒ 设备过滤被静默整体关闭。
+    #[serde(default = "default_filter_regex")]
     pub filter_regex: String,
+    #[serde(default = "default_true")]
     pub dedup_devices: bool,
+    #[serde(default)]
     pub show_unnamed_bt: bool,
+    #[serde(default)]
     pub use_system_bt: bool,
     #[serde(default = "default_true")]
     pub wireless_only: bool,
@@ -142,6 +162,15 @@ pub struct Config {
 fn default_true() -> bool {
     true
 }
+/// `hidden_groups` 的 serde 默认值。与 `Config::default()` 共用同一份定义，
+/// 避免「字段缺失」与「整体默认」两条路径给出不同的默认隐藏分组（P1-7）。
+fn default_hidden_groups() -> Vec<String> {
+    vec!["Battery".to_string(), "Monitor".to_string()]
+}
+/// `filter_regex` 的 serde 默认值（复用 `Config::default_filter_regex`，单一来源）
+fn default_filter_regex() -> String {
+    Config::default_filter_regex()
+}
 fn default_popup_tab() -> String {
     "devices".to_string()
 }
@@ -166,11 +195,11 @@ impl Default for Config {
         Self {
             auto_start: false,
             hidden_devices: vec![],
-            hidden_groups: vec!["Battery".to_string(), "Monitor".to_string()],
+            hidden_groups: default_hidden_groups(),
             device_names: std::collections::HashMap::new(),
             device_groups: std::collections::HashMap::new(),
             filter_enabled: true,
-            filter_regex: Self::default_filter_regex(),
+            filter_regex: default_filter_regex(),
             dedup_devices: true,
             show_unnamed_bt: false,
             use_system_bt: false,
@@ -271,6 +300,38 @@ fn config_path() -> std::path::PathBuf {
     crate::process::exe_dir().join("config.toml")
 }
 
+/// 启动时配置解析失败的原因（含备份路径）。只在 `init_config` 写入一次，供前端提示。
+/// 非清除式：popup 与 settings 两个窗口都会读，读到的是同一条信息。
+static CONFIG_LOAD_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn set_load_error(msg: String) {
+    let slot = CONFIG_LOAD_ERROR.get_or_init(|| Mutex::new(None));
+    *crate::state::lock_unpoisoned(slot) = Some(msg);
+}
+
+/// 供前端查询的「启动期配置错误」。`None` 表示本次启动读取正常。
+pub fn get_load_error() -> Option<String> {
+    CONFIG_LOAD_ERROR
+        .get()
+        .and_then(|slot| crate::state::lock_unpoisoned(slot).clone())
+}
+
+/// 解析失败时把磁盘原文另存为 `config.toml.bak`。
+///
+/// 为什么必须备份：解析失败后进程内是默认值，而**后续任意一次写入都会用默认值
+/// 覆盖 config.toml**——原始配置会被永久销毁。备份是这条不可逆路径上唯一的救生索。
+/// 备份失败不阻断启动，但要把「无法备份」写进给用户的提示里。
+fn backup_broken_config(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let bak = path.with_extension("toml.bak");
+    match std::fs::copy(path, &bak) {
+        Ok(_) => Some(bak),
+        Err(e) => {
+            eprintln!("[config] 备份损坏配置失败: {}", e);
+            None
+        }
+    }
+}
+
 pub fn init_config() {
     CONFIG.set(Mutex::new(Config::default())).ok();
     let config = {
@@ -279,9 +340,17 @@ pub fn init_config() {
             Ok(content) => match toml::from_str(&content) {
                 Ok(config) => config,
                 Err(e) => {
+                    // 解析失败：**先备份磁盘原文，再回退默认值**——默认值一旦被后续
+                    // 写入落盘，原始配置就永久消失（P1-7 的唯一不可逆路径）。
+                    let bak = backup_broken_config(&path);
+                    let hint = match &bak {
+                        Some(p) => format!("原配置已备份为 {}，可据此手工恢复", p.display()),
+                        None => "原配置备份失败，请先手工复制 config.toml 再改设置".to_string(),
+                    };
                     // stderr 直出：日志门控依赖本文件解析成功，失败时必须可见
-                    eprintln!("[config] parse error: {}", e);
-                    standard_log!("[config] parse error: {}", e);
+                    eprintln!("[config] parse error: {}（{}）", e, hint);
+                    standard_log!("[config] parse error: {}（{}）", e, hint);
+                    set_load_error(format!("配置文件解析失败，已恢复默认设置。{}", hint));
                     Config::default()
                 }
             },
@@ -296,6 +365,17 @@ pub fn init_config() {
         let mut guard = crate::state::lock_unpoisoned(CONFIG.get().unwrap());
         *guard = config;
         sync_log_cache(&guard);
+    }
+    // 解析失败时强制开启标准级日志，并把错误补写进日志文件。
+    //
+    // 为什么必须强制：回退用的 `Config::default()` 里 `log_level` 是 "off"
+    // （见 `default_log_level`），于是**恰恰在最需要现场的时候，日志目录里空无一物**；
+    // 安装版没有控制台，上面那句 `eprintln!` 也无处可见。若不强制打开，
+    // 「配置为什么坏了」将没有任何可查的证据（只剩前端一条提示）。
+    // 注意：仅本次运行生效，不写盘、不改用户配置。
+    if let Some(err) = get_load_error() {
+        LOG_LEVEL.store(1, Ordering::Relaxed);
+        standard_log!("[config] {}", err);
     }
     // 初始化脏检查缓存：读取磁盘文件内容作为基准
     if let Ok(content) = std::fs::read_to_string(config_path()) {
@@ -454,6 +534,114 @@ mod tests {
         assert!(
             !revision_is_latest(first),
             "先取号者被后取号者超越后必须判为过期，否则会乱序覆盖新内容"
+        );
+    }
+
+    /// P1-7 回归：**字段缺失时必须补成 `Config::default()` 的逐字段默认值，而不是零值**。
+    ///
+    /// 失效模式（本条要防的）：升级后旧 config.toml 里没有新字段 → 若该字段没写
+    /// `#[serde(default)]`，**整份** `Config` 反序列化失败 → 全部个性化配置丢失；
+    /// 若写成裸 `#[serde(default)]`，则「零值」会冒充默认值——
+    /// `hidden_groups` 变空数组（默认隐藏的 Battery / Monitor 突然出现）、
+    /// `dedup_devices` 变 false（设备去重被静默关闭）、`filter_regex` 变空串
+    /// （设备过滤整体失效）。两者都不可接受，故本测试逐字段钉住。
+    #[test]
+    fn missing_fields_fall_back_to_field_defaults_not_zero_values() {
+        // 模拟「旧版 config.toml + 手工删掉两行」：只写出部分字段
+        let partial = "auto_start = true\n\
+                       filter_enabled = false\n\
+                       show_unnamed_bt = true\n\
+                       device_names = { \"HID\\\\VID_1234\" = \"我的手柄\" }\n";
+        let cfg: super::Config =
+            toml::from_str(partial).expect("部分字段的配置必须能解析，否则升级即丢全部个性化配置");
+        let d = super::Config::default();
+
+        // ① 已写出的字段必须原样保留（这一条在修复前必然失败）
+        assert!(
+            cfg.auto_start,
+            "已写出的 auto_start 必须保留；失败说明整份配置被回退成了默认值"
+        );
+        assert!(!cfg.filter_enabled, "已写出的 filter_enabled 必须保留");
+        assert!(cfg.show_unnamed_bt, "已写出的 show_unnamed_bt 必须保留");
+        assert_eq!(
+            cfg.device_names.get("HID\\VID_1234").map(String::as_str),
+            Some("我的手柄"),
+            "已写出的 device_names 必须保留（自定义设备名丢失是用户直接可见的损失）"
+        );
+
+        // ② 缺失字段必须补「逐字段默认值」，而不是零值
+        assert_eq!(
+            cfg.hidden_groups, d.hidden_groups,
+            "hidden_groups 缺失时必须等于 Config::default()（默认隐藏 Battery/Monitor），\
+             裸 #[serde(default)] 会给出空数组"
+        );
+        assert_eq!(
+            cfg.filter_regex, d.filter_regex,
+            "filter_regex 缺失时必须等于内置过滤正则，裸 #[serde(default)] 会给出空串（过滤整体失效）"
+        );
+        assert_eq!(
+            cfg.dedup_devices, d.dedup_devices,
+            "dedup_devices 缺失时必须为 true，否则去重被静默关闭"
+        );
+        assert_eq!(cfg.log_level, d.log_level);
+        assert_eq!(cfg.default_popup_tab, d.default_popup_tab);
+        assert_eq!(cfg.popup_size, d.popup_size);
+        assert_eq!(cfg.theme_mode, d.theme_mode);
+        assert_eq!(cfg.window_material, d.window_material);
+        assert_eq!(cfg.low_battery_thresholds, d.low_battery_thresholds);
+        assert_eq!(cfg.low_battery_refresh_secs, d.low_battery_refresh_secs);
+        assert_eq!(cfg.hidden_devices, d.hidden_devices);
+        assert_eq!(cfg.use_system_bt, d.use_system_bt);
+
+        // ③ 空文档（极端情况）也必须能解析为全默认值
+        let empty: super::Config = toml::from_str("").expect("空配置必须能解析为全默认值");
+        assert_eq!(empty.hidden_groups, d.hidden_groups);
+        assert_eq!(empty.dedup_devices, d.dedup_devices);
+
+        // ④ 写回磁盘的内容就是 `toml::to_string_pretty(&config)`（见 persist_if_changed），
+        //    故这里直接断言「下一次写盘的内容」里缺失字段已被补成正确默认值——
+        //    等价于手工验证里的「改一次设置 → 看 config.toml 是否补全」。
+        let written = toml::to_string_pretty(&cfg).expect("解析结果必须可序列化（写盘用）");
+        let reread: super::Config = toml::from_str(&written).expect("写盘内容必须可回读");
+        assert_eq!(
+            reread.hidden_groups, d.hidden_groups,
+            "写回磁盘后 hidden_groups 必须是默认隐藏组，否则用户下次启动会看到本该隐藏的分组"
+        );
+        assert!(reread.dedup_devices, "写回磁盘后 dedup_devices 必须为 true");
+        assert_eq!(reread.filter_regex, d.filter_regex);
+        assert!(reread.auto_start, "写回后已写出的字段仍必须保留");
+    }
+
+    /// P1-7 回归：默认配置必须能**原样往返**（序列化 → 反序列化 → 序列化）。
+    ///
+    /// 这条是「逐字段补默认值」的兜底检查：任何字段的 serde 属性写错
+    /// （拼错 helper 名、漏了 `skip_serializing_if`、枚举字符串不匹配），
+    /// 往返后都会在这里露出差异。
+    #[test]
+    fn default_config_roundtrips_unchanged() {
+        let cfg = super::Config::default();
+        let once = toml::to_string_pretty(&cfg).expect("默认配置必须可序列化");
+        let back: super::Config = toml::from_str(&once).expect("序列化结果必须可回读");
+        let twice = toml::to_string_pretty(&back).expect("回读结果必须可再序列化");
+        assert_eq!(
+            once, twice,
+            "默认配置往返后内容发生变化，说明有字段的 serde 属性不一致"
+        );
+    }
+
+    /// P1-7 回归：**单个字段值非法时不得让整份配置失效**（与字段缺失区分开）。
+    ///
+    /// 目前 `log_retention` 的 `Deserialize` 对未知值直接 `Err`，而 `#[serde(default)]`
+    /// 只在字段缺失时生效 ⇒ 一个非法值仍会打掉整份配置。本测试把该现状钉住，
+    /// 作为 P3-9「改枚举 / 集中校验」的基线：**修好后这条断言要翻转**。
+    #[test]
+    fn invalid_enum_value_currently_kills_whole_config_baseline() {
+        let text = "log_retention = \"not_a_real_value\"\n";
+        let parsed: Result<super::Config, _> = toml::from_str(text);
+        assert!(
+            parsed.is_err(),
+            "现状（P3-9 未做）：单个枚举字段取值非法会让整份 Config 解析失败。\
+             若此断言失败，说明已改为「非法值降级 + 告警」，请同步更新本测试与 P3-9 状态"
         );
     }
 }
