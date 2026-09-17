@@ -583,13 +583,43 @@ fn build_audio_devices_menu(
     Ok(submenu)
 }
 
+/// 音频菜单重建的单飞标志 / 合并标志（B3）。
+///
+/// 触发源有三个且都在**各自新开的线程**上：`config-changed`（一次连做
+/// 图标 + 菜单 + 设备缓存 + tooltip）、`tray-devices-changed`、
+/// `audio-devices-changed`。改造前它们各自独立重建菜单，撞车时「后写覆盖」——
+/// 较慢的那次会用稍旧的一份菜单盖掉较新的一份，且整棵菜单（含 COM 枚举）
+/// 会被重复构造。现由 [`crate::state::run_coalesced`] 收敛为「单飞 + 合并」。
+static MENU_REBUILD_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static MENU_REBUILD_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// 更新音频设备切换子菜单（在设备列表变化时调用）
+///
+/// 入口做「单飞 + 合并」：同一时刻只有一轮在重建，期间到达的请求被合并进
+/// 收尾的补跑轮次（详见 `state::run_coalesced`）。
+fn update_audio_devices_menu() {
+    let rounds = crate::state::run_coalesced(
+        &MENU_REBUILD_RUNNING,
+        &MENU_REBUILD_PENDING,
+        rebuild_audio_devices_menu_once,
+    );
+    if let Some(n) = rounds {
+        if n > 1 {
+            // 合并生效的证据：一次触发期间到达了额外请求，但没有重建 n 次菜单树
+            standard_log!("[tray] audio menu rebuild coalesced: {} rounds", n);
+        }
+    }
+}
+
+/// 重建一次音频设备切换子菜单（原 `update_audio_devices_menu` 的函数体）
 ///
 /// 锁纪律：`TRAY_ICON` 只用于「取句柄」和「换菜单」两个瞬时动作，
 /// 中间的 COM 枚举（`build_audio_devices_menu`）与全量菜单构造（`build_full_menu`）
 /// 一律在锁外完成——否则会与 `update_tray_icon` 等持锁路径互相排队，
 /// 把一次设备热插拔放大成可见卡顿。
-fn update_audio_devices_menu() {
+fn rebuild_audio_devices_menu_once() {
     // 第一段：仅取 app 句柄，取到即释放锁
     let app = {
         let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
