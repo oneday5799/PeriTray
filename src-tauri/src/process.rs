@@ -366,7 +366,12 @@ fn remove_legacy_root_logs() {
             if is_managed_log_name(&name_str)
                 && entry.file_type().map(|t| t.is_file()).unwrap_or(false)
             {
-                let _ = std::fs::remove_file(entry.path());
+                // 失败记 verbose 级，与 `clean_old_logs` 对同类操作的处理保持一致（P3-7）。
+                // 清理失败不算状态不一致（下次启动会重试），但完全静默会让
+                // 「根目录日志删不掉」无从归因。
+                if let Err(e) = std::fs::remove_file(entry.path()) {
+                    verbose_log!("[process] 清理根目录旧日志失败 {}: {}", name_str, e);
+                }
             }
         }
     }

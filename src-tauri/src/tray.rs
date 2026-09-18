@@ -462,7 +462,18 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     if !device_id.is_empty() {
                         standard_log!("[tray] set_default_device: {}", device_id);
                         std::thread::spawn(move || {
-                            let _ = audio::set_default_device(&device_id);
+                            // 失败必须可见（P3-7）：菜单此刻已经关闭，用户会认为
+                            // 「切换成功」，而实际默认设备没变 —— 这是「失败后状态与
+                            // 用户操作不一致」的典型。本路径没有返回值可上报
+                            // （托盘菜单事件没有调用方），只能记标准级日志。
+                            // 对照：`shortcut.rs` 与 `commands.rs` 的同类调用都处理了 Err。
+                            if let Err(e) = audio::set_default_device(&device_id) {
+                                standard_log!(
+                                    "[tray] set_default_device FAILED: {} ({})",
+                                    device_id,
+                                    e
+                                );
+                            }
                             update_audio_devices_menu();
                         });
                     }
