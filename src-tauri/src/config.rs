@@ -34,10 +34,17 @@ impl<'de> Deserialize<'de> for LogRetention {
             "three_days" | "threedays" => Ok(Self::ThreeDays),
             "one_week" | "oneweek" => Ok(Self::OneWeek),
             "one_month" | "onemonth" => Ok(Self::OneMonth),
-            _ => Err(serde::de::Error::custom(format!(
-                "unknown log_retention: {}",
-                s
-            ))),
+            // 未知取值降级为默认，而不是让整份 Config 反序列化失败（P3-9）。
+            //
+            // 为什么不能返回 Err：`#[serde(default)]` **只在字段缺失时生效**，
+            // 字段存在但值非法时错误会一路上抛 ⇒ 整份 `Config` 解析失败 ⇒
+            // `init_config` 回退 `Config::default()`，用户全部个性化配置被一次性
+            // 抹掉（P1-7 修的就是这条不可逆路径）。配置是用户数据，一个字段的
+            // 取值无法识别不应牵连其余字段。
+            //
+            // 降级后由 `normalize_config` 在写盘前把该字段稳定成 `one_day`，
+            // 避免未知值被原样持久化、下次启动再走一遍同样的分支。
+            _ => Ok(Self::default()),
         }
     }
 }
@@ -191,6 +198,90 @@ fn default_battery_refresh_secs() -> u32 {
     10
 }
 
+/// 各「字符串枚举」字段的合法取值（**单一来源**）——取自前端下拉框的
+/// `data-value` 集合（`settings.html`）。改前端选项时必须同步这里，
+/// 否则新选项会被归一化回默认值（表现为「选了没生效」）。
+const VALID_LOG_LEVELS: &[&str] = &["off", "standard", "verbose"];
+const VALID_POPUP_TABS: &[&str] = &["devices", "volume"];
+const VALID_POPUP_SIZES: &[&str] = &["small", "default", "large"];
+const VALID_THEME_MODES: &[&str] = &["follow_system", "light", "dark"];
+const VALID_WINDOW_MATERIALS: &[&str] = &["default", "acrylic", "mica"];
+
+/// 低电量阈值个数上限（与前端 `settings-devices.js` 的「最多5个阈值」一致）
+const MAX_BATTERY_THRESHOLDS: usize = 5;
+/// 电量刷新间隔的合法区间（秒），与前端 blur 校验的「须为10-3600的整数」一致。
+/// 注意 `tray.rs` 读取时只用 `.max(10)` 钳制了下界，上界原本无兜底。
+const MIN_BATTERY_REFRESH_SECS: u32 = 10;
+const MAX_BATTERY_REFRESH_SECS: u32 = 3600;
+
+/// 把 `value` 收敛到 `allowed` 内；非法时替换为 `fallback`。
+/// 返回是否发生了替换（供调用方决定要不要记日志）。
+fn normalize_choice(value: &mut String, allowed: &[&str], fallback: &str) -> bool {
+    if allowed.contains(&value.as_str()) {
+        return false;
+    }
+    // 原地改写而不是 `*value = fallback.to_string()`：保留已有容量，避免多一次分配
+    value.clear();
+    value.push_str(fallback);
+    true
+}
+
+/// 低电量阈值集合的合法性：1~5 个、每个在 0~100、互不重复。
+/// 四条与前端 blur 校验逐条对应（`parts.length === 0` / `> 5` /
+/// `n < 0 || n > 100` / `new Set(nums).size !== nums.length`）。
+fn battery_thresholds_valid(thresholds: &[i32]) -> bool {
+    if thresholds.is_empty() || thresholds.len() > MAX_BATTERY_THRESHOLDS {
+        return false;
+    }
+    thresholds.iter().all(|v| (0..=100).contains(v))
+        && thresholds
+            .iter()
+            .enumerate()
+            .all(|(i, v)| !thresholds[..i].contains(v))
+}
+
+/// 集中归一化：把「可从 `config.toml` / 前端直接写入」的字段收敛到应用支持的取值集合。
+///
+/// **为什么需要它**：`log_level` / `popup_size` / `theme_mode` / `window_material` /
+/// `default_popup_tab` 在 `Config` 里是自由 `String`，非法值会被**原样持久化**，
+/// 之后又在各处被各自解析（`popup_size_dims` 的 `_ => (360.0, 520.0)`、
+/// `parse_log_level` 的 `_ => 0`、`check_material_support` 的 `_ => false`…）
+/// ⇒ 同一个非法值在不同调用点有不同兜底行为，且磁盘上长期留着脏数据。
+/// 这里把校验收敛成单一来源。
+///
+/// **为什么是「归一化」而不是「报错」**：这些值来自用户可直接编辑的 `config.toml`。
+/// 报错会让一个字段牵连整份配置（P1-7 那条不可逆路径），归一化则只影响该字段本身。
+///
+/// 纯函数：不读全局状态、不持锁、不做 I/O ⇒ 可被加载路径与写入路径复用，也便于单测。
+/// 返回 `true` 表示至少有一个字段被替换。
+fn normalize_config(config: &mut Config) -> bool {
+    let mut changed = false;
+
+    changed |= normalize_choice(&mut config.log_level, VALID_LOG_LEVELS, "off");
+    changed |= normalize_choice(&mut config.default_popup_tab, VALID_POPUP_TABS, "devices");
+    changed |= normalize_choice(&mut config.popup_size, VALID_POPUP_SIZES, "default");
+    changed |= normalize_choice(&mut config.theme_mode, VALID_THEME_MODES, "follow_system");
+    changed |= normalize_choice(
+        &mut config.window_material,
+        VALID_WINDOW_MATERIALS,
+        "default",
+    );
+
+    if !battery_thresholds_valid(&config.low_battery_thresholds) {
+        config.low_battery_thresholds = default_battery_thresholds();
+        changed = true;
+    }
+
+    if !(MIN_BATTERY_REFRESH_SECS..=MAX_BATTERY_REFRESH_SECS)
+        .contains(&config.low_battery_refresh_secs)
+    {
+        config.low_battery_refresh_secs = default_battery_refresh_secs();
+        changed = true;
+    }
+
+    changed
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -333,13 +424,31 @@ fn backup_broken_config(path: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
+/// 从磁盘原文构造进程内配置：**解析 → 归一化**（P3-9）。
+///
+/// 抽成独立函数是为了让单测能用**任意文本**验证「一个坏字段不会牵连整份配置」，
+/// 而不必去碰真实的 `config.toml`。返回的 `bool` 表示是否发生了归一化替换。
+///
+/// 归一化放在**解析之后、交给进程之前**：这样「首次读取」就已经是干净值，
+/// 不会让脏值先经 `get_config` 发给前端。
+fn parse_config_text(text: &str) -> Result<(Config, bool), toml::de::Error> {
+    let mut config: Config = toml::from_str(text)?;
+    let normalized = normalize_config(&mut config);
+    Ok((config, normalized))
+}
+
 pub fn init_config() {
     CONFIG.set(Mutex::new(Config::default())).ok();
+    // 归一化结果要延后到日志级别缓存建立之后再上报，见下方注释。
+    let mut normalized_on_load = false;
     let config = {
         let path = config_path();
         match std::fs::read_to_string(&path) {
-            Ok(content) => match toml::from_str(&content) {
-                Ok(config) => config,
+            Ok(content) => match parse_config_text(&content) {
+                Ok((config, normalized)) => {
+                    normalized_on_load = normalized;
+                    config
+                }
                 Err(e) => {
                     // 解析失败：**先备份磁盘原文，再回退默认值**——默认值一旦被后续
                     // 写入落盘，原始配置就永久消失（P1-7 的唯一不可逆路径）。
@@ -366,6 +475,18 @@ pub fn init_config() {
         let mut guard = crate::state::lock_unpoisoned(CONFIG.get().unwrap());
         *guard = config;
         sync_log_cache(&guard);
+    }
+    // 「载入时归一化」必须记在**日志级别缓存建立之后**。
+    //
+    // 踩过的坑：这一行原先写在解析分支里（即 `sync_log_cache` 之前），
+    // 而那时 `LOG_LEVEL` 还是静态初值 0 ⇒ `standard_log_enabled()` 判为关闭，
+    // 这行日志**永远不会输出**（等于死代码）。归一化发生在日志缓存之前，
+    // 是它天然会踩到的时间差。
+    //
+    // 仍然受用户配置的 `log_level` 门控：归一化是**修复**而非数据丢失，
+    // 用户主动把日志关掉时不打扰他（对照：解析失败那条必须强开日志）。
+    if normalized_on_load {
+        standard_log!("[config] 载入时归一化：存在非法字段，已回退为默认值");
     }
     // 解析失败时强制开启标准级日志，并把错误补写进日志文件。
     //
@@ -701,7 +822,23 @@ where
     f(&guard)
 }
 
-/// 可变访问配置（改内存 + 同步日志缓存 + 序列化快照，落盘交给写线程）。
+/// 写入路径的「归一化 → 同步日志缓存 → 序列化」三步（P3-9）。
+///
+/// 抽成独立函数是为了让**接线顺序**成为结构性保证而不是注释约定，并可被单测直接调用
+/// （无需初始化全局 `CONFIG`）：
+/// ① 先归一化，否则非法值会被原样写进 `config.toml`；
+/// ② 再同步日志级别缓存，使其反映**最终**的 `log_level`；
+/// ③ 最后序列化，快照必须是归一化之后的内容。
+/// 三步都是纯内存操作（微秒级），故保留在配置锁内。
+///
+/// 返回 `(是否发生归一化, 待落盘快照)`。
+fn finalize_before_persist(config: &mut Config) -> (bool, Option<String>) {
+    let normalized = normalize_config(config);
+    sync_log_cache(config);
+    (normalized, toml::to_string_pretty(&*config).ok())
+}
+
+/// 可变访问配置（改内存 + 归一化 + 同步日志缓存 + 序列化快照，落盘交给写线程）。
 ///
 /// **锁纪律（P0 死锁防护，勿破坏）**：同 [`with_config`]——闭包内只允许纯内存操作，
 /// 严禁调用任何会向主线程分发并同步等待的 Tauri API、COM/WMI 查询或文件 I/O。
@@ -709,20 +846,25 @@ pub fn with_config_mut<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Config) -> R,
 {
-    // 配置锁只覆盖「改内存 + 同步日志缓存 + 序列化」，三者都是纯内存操作。
+    // 配置锁只覆盖「改内存 + 归一化 + 同步日志缓存 + 序列化」，四者都是纯内存操作。
     // 落盘走两级外移，两级都是必需的：
     // ① **移出配置锁**（P1-3）：否则这段时间内所有 `with_config` 读取者——托盘 tooltip、
     //    设备查询、电量通知、快捷键分发、看门狗探活——都会阻塞在配置锁上；
     // ② **移出调用线程**（B11）：落盘交给 `peritray-config` 写线程，
     //    否则主线程上的 9 个同步命令与托盘菜单事件会各自卡一次 `sync_all()`。
-    let (result, snapshot) = {
+    let (result, normalized, snapshot) = {
         let mut guard =
             crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
         let result = f(&mut guard);
-        // 日志级别缓存必须与配置内容同拍更新，故留在锁内（纯内存，微秒级）
-        sync_log_cache(&guard);
-        (result, toml::to_string_pretty(&*guard).ok())
+        let (normalized, snapshot) = finalize_before_persist(&mut guard);
+        (result, normalized, snapshot)
     }; // ← 配置锁在此释放
+    if normalized {
+        // 放在锁外：日志虽已异步化（B5），也没必要让它落在配置锁的临界区内。
+        // 走到这里说明**前端送来了应用不支持的取值**（本应在前端就被拦住），
+        // 属契约被破坏，故用标准级而非详细级记录。
+        standard_log!("[config] 写入时归一化：存在非法字段，已回退为默认值");
+    }
     if let Some(content) = snapshot {
         enqueue_persist(content);
     }
@@ -732,9 +874,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_revision, config_path, enqueue_persist, flush_persist, merge_config,
-        revision_is_latest, write_config_atomically, Config, MERGED_FIELD_NAMES, PERSIST_DONE,
-        PERSIST_QUEUED,
+        claim_revision, config_path, default_battery_refresh_secs, default_battery_thresholds,
+        enqueue_persist, finalize_before_persist, flush_persist, merge_config, normalize_config,
+        parse_config_text, revision_is_latest, write_config_atomically, Config, MERGED_FIELD_NAMES,
+        PERSIST_DONE, PERSIST_QUEUED,
     };
     use std::sync::atomic::Ordering;
 
@@ -853,20 +996,204 @@ mod tests {
         );
     }
 
-    /// P1-7 回归：**单个字段值非法时不得让整份配置失效**（与字段缺失区分开）。
+    // ── P3-9：单个非法字段不得牵连整份配置 + 集中归一化 ────────────
+
+    /// P3-9 回归：**单个字段值非法时不得让整份配置失效**（与字段缺失区分开）。
     ///
-    /// 目前 `log_retention` 的 `Deserialize` 对未知值直接 `Err`，而 `#[serde(default)]`
-    /// 只在字段缺失时生效 ⇒ 一个非法值仍会打掉整份配置。本测试把该现状钉住，
-    /// 作为 P3-9「改枚举 / 集中校验」的基线：**修好后这条断言要翻转**。
+    /// 失效模式（本条要防的）：`LogRetention` 的 `Deserialize` 曾对未知值直接返回 `Err`，
+    /// 而 `#[serde(default)]` **只在字段缺失时生效** ⇒ 一个非法枚举值就会让**整份**
+    /// `Config` 反序列化失败 ⇒ `init_config` 回退 `Config::default()`，
+    /// 用户全部个性化配置一次性丢失（P1-7 修掉的那条不可逆路径被重新打开）。
     #[test]
-    fn invalid_enum_value_currently_kills_whole_config_baseline() {
-        let text = "log_retention = \"not_a_real_value\"\n";
-        let parsed: Result<super::Config, _> = toml::from_str(text);
+    fn invalid_enum_value_does_not_kill_whole_config() {
+        let text = "auto_start = true\n\
+                    log_level = \"verbose\"\n\
+                    log_retention = \"not_a_real_value\"\n";
+        let cfg: super::Config =
+            toml::from_str(text).expect("单个枚举字段取值非法不得让整份 Config 解析失败");
+
+        // ① 同一份文件里的其它字段必须原样保留（修复前这里会整份回退成默认值）
         assert!(
-            parsed.is_err(),
-            "现状（P3-9 未做）：单个枚举字段取值非法会让整份 Config 解析失败。\
-             若此断言失败，说明已改为「非法值降级 + 告警」，请同步更新本测试与 P3-9 状态"
+            cfg.auto_start,
+            "非法枚举值不得牵连其它字段（失败说明整份配置被回退成了默认值）"
         );
+        assert_eq!(cfg.log_level, "verbose", "非法枚举值不得牵连其它字段");
+
+        // ② 非法字段本身降级为默认值
+        assert_eq!(
+            cfg.log_retention,
+            super::LogRetention::OneDay,
+            "未知 log_retention 应降级为默认值 OneDay"
+        );
+
+        // ③ 写回磁盘的内容必须稳定：不能把未知值原样持久化，
+        //    否则每次启动都要重新降级，且磁盘上长期留着脏数据。
+        let written = toml::to_string_pretty(&cfg).expect("解析结果必须可序列化");
+        assert!(
+            written.contains("log_retention = \"one_day\""),
+            "未知值必须被稳定成 one_day：{written}"
+        );
+    }
+
+    /// P3-9：**加载路径**必须把非法字段归一化掉（而不只是「让反序列化别失败」）。
+    ///
+    /// 这条覆盖 `parse_config_text` 里「解析 → 归一化」这一步的真实接线：
+    /// 若把归一化从加载路径删掉，非法值会原样进入进程内存并被 `get_config`
+    /// 发给前端，本用例即转红。
+    #[test]
+    fn load_path_normalizes_invalid_values() {
+        let text = "theme_mode = \"sepia\"\n\
+                    popup_size = \"huge\"\n\
+                    log_level = \"verbose\"\n\
+                    auto_start = true\n";
+        let (cfg, normalized) = parse_config_text(text).expect("非法字段值不得让整份配置解析失败");
+
+        assert!(normalized, "加载路径应报告发生了归一化");
+        assert_eq!(cfg.theme_mode, "follow_system", "非法主题模式应回退默认值");
+        assert_eq!(cfg.popup_size, "default", "非法尺寸档位应回退默认值");
+        assert_eq!(cfg.log_level, "verbose", "合法字段不得被改动");
+        assert!(cfg.auto_start, "合法字段不得被改动");
+    }
+
+    /// P3-9：**写入路径**必须「先归一化、后序列化」。
+    ///
+    /// 覆盖 `finalize_before_persist` 的接线顺序：若把归一化挪到序列化之后（或删掉），
+    /// 非法值会被原样写进 `config.toml`，本用例即转红。
+    #[test]
+    fn write_path_finalize_normalizes_before_serializing() {
+        let mut cfg = Config::default();
+        cfg.log_level = "trace".to_string();
+        cfg.theme_mode = "sepia".to_string();
+        cfg.window_material = "blur".to_string();
+
+        let (normalized, snapshot) = finalize_before_persist(&mut cfg);
+
+        assert!(normalized, "存在非法值时必须报告已替换");
+        assert_eq!(cfg.log_level, "off", "内存中的值必须已被替换");
+        assert_eq!(cfg.window_material, "default");
+
+        let text = snapshot.expect("配置必须可序列化");
+        assert!(
+            text.contains("theme_mode = \"follow_system\""),
+            "落盘快照必须是归一化后的值：{text}"
+        );
+        for dirty in ["sepia", "blur", "trace"] {
+            assert!(
+                !text.contains(dirty),
+                "落盘快照里不得残留非法值 {dirty}：{text}"
+            );
+        }
+    }
+
+    /// P3-9：非法值被归一化到默认值，且**只影响自身**、不触碰无关字段。
+    #[test]
+    fn normalize_config_replaces_invalid_values_field_by_field() {
+        let mut cfg = Config::default();
+        cfg.auto_start = true; // 无关字段：必须原样保留
+        cfg.device_names
+            .insert("VID_1".to_string(), "我的鼠标".to_string());
+        cfg.log_level = "trace".to_string();
+        cfg.default_popup_tab = "settings".to_string();
+        cfg.popup_size = "huge".to_string();
+        cfg.theme_mode = "sepia".to_string();
+        cfg.window_material = "blur".to_string();
+        cfg.low_battery_thresholds = vec![10, 10, 101];
+        cfg.low_battery_refresh_secs = 9;
+
+        assert!(normalize_config(&mut cfg), "存在非法值时必须报告已替换");
+
+        assert_eq!(cfg.log_level, "off");
+        assert_eq!(cfg.default_popup_tab, "devices");
+        assert_eq!(cfg.popup_size, "default");
+        assert_eq!(cfg.theme_mode, "follow_system");
+        assert_eq!(cfg.window_material, "default");
+        assert_eq!(cfg.low_battery_thresholds, default_battery_thresholds());
+        assert_eq!(cfg.low_battery_refresh_secs, default_battery_refresh_secs());
+
+        assert!(cfg.auto_start, "归一化不得触碰无关字段");
+        assert_eq!(
+            cfg.device_names.get("VID_1").map(String::as_str),
+            Some("我的鼠标"),
+            "归一化不得触碰无关字段（用户自定义设备名丢失是直接可见的损失）"
+        );
+    }
+
+    /// P3-9：**合法值必须原样保留**（含各区间的边界值）。
+    ///
+    /// 与上一条构成对照：只做上一条的话，「把所有值都改成默认值」的错误实现也能通过，
+    /// 必须靠这一条把「合法值不被触碰」钉住。
+    #[test]
+    fn normalize_config_keeps_valid_values_untouched() {
+        let mut cfg = Config::default();
+        cfg.log_level = "verbose".to_string();
+        cfg.default_popup_tab = "volume".to_string();
+        cfg.popup_size = "large".to_string();
+        cfg.theme_mode = "dark".to_string();
+        cfg.window_material = "mica".to_string();
+        cfg.low_battery_thresholds = vec![100, 0, 50];
+        cfg.low_battery_refresh_secs = 3600;
+        let before = cfg.clone();
+
+        assert!(!normalize_config(&mut cfg), "全合法时不应报告替换");
+        assert_eq!(cfg, before, "合法配置归一化后必须逐字段相等");
+
+        // 区间下边界：刷新间隔 10 秒合法（9 秒非法，见上一条用例）
+        let mut lo = Config::default();
+        lo.low_battery_refresh_secs = 10;
+        assert!(!normalize_config(&mut lo));
+        assert_eq!(lo.low_battery_refresh_secs, 10, "下边界 10 秒必须被接受");
+
+        // 默认配置本身必须全合法：否则每次启动都会「静默修正」一次自己的默认值
+        let mut d = Config::default();
+        assert!(
+            !normalize_config(&mut d),
+            "Config::default() 必须是归一化的不动点，否则默认值与前端口径不一致"
+        );
+    }
+
+    /// P3-9：低电量阈值的四条约束逐条钉住（与前端 blur 校验一一对应）。
+    #[test]
+    fn normalize_config_battery_threshold_rules_match_frontend() {
+        // ① 空数组非法（前端文案：「请输入至少一个阈值」）
+        let mut empty = Config::default();
+        empty.low_battery_thresholds = vec![];
+        assert!(normalize_config(&mut empty));
+        assert_eq!(empty.low_battery_thresholds, default_battery_thresholds());
+
+        // ② 超过 5 个非法（前端文案：「最多5个阈值」）
+        let mut too_many = Config::default();
+        too_many.low_battery_thresholds = vec![1, 2, 3, 4, 5, 6];
+        assert!(normalize_config(&mut too_many));
+        assert_eq!(
+            too_many.low_battery_thresholds,
+            default_battery_thresholds()
+        );
+
+        // ③ 越界非法（前端文案：「超出范围(0-100)」）——两侧都验
+        let mut too_low = Config::default();
+        too_low.low_battery_thresholds = vec![-1];
+        assert!(normalize_config(&mut too_low));
+        assert_eq!(too_low.low_battery_thresholds, default_battery_thresholds());
+
+        let mut too_high = Config::default();
+        too_high.low_battery_thresholds = vec![101];
+        assert!(normalize_config(&mut too_high));
+        assert_eq!(
+            too_high.low_battery_thresholds,
+            default_battery_thresholds()
+        );
+
+        // ④ 重复值非法（前端文案：「有重复值」）
+        let mut dup = Config::default();
+        dup.low_battery_thresholds = vec![15, 15];
+        assert!(normalize_config(&mut dup));
+        assert_eq!(dup.low_battery_thresholds, default_battery_thresholds());
+
+        // 恰好 5 个、含两端边界 ⇒ 合法
+        let mut ok = Config::default();
+        ok.low_battery_thresholds = vec![0, 25, 50, 75, 100];
+        assert!(!normalize_config(&mut ok));
+        assert_eq!(ok.low_battery_thresholds, vec![0, 25, 50, 75, 100]);
     }
 
     // ── P1-11：整份覆盖 ⇒ 按差异合并 ────────────────────────────
