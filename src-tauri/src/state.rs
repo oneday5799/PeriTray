@@ -19,7 +19,7 @@
 //! |---|---|---|---|
 //! | 1 | `DEVICES_CACHE` → `CONFIG` | `tray.rs::build_tooltip_text` | 两条临界区内都只剩纯内存操作（`format!` / 字段读）。落盘已被 P1-3 移出配置锁、B11 移出调用线程 |
 //! | 2 | `PERSIST_LOCK` → `LAST_CONFIG_CONTENT` | `config.rs::persist_now` | 只在 `peritray-config` 写线程（或队列满时的同步兜底）上执行，不与 UI 线程争抢 |
-//! | 3 | `BT_LOCK` → `BLE_CONN` | `bluetooth.rs::bt_action` → `bt_ble::ble_connect` / `ble_disconnect` | `BT_LOCK` 是蓝牙操作的串行锁，`BLE_CONN` 是连接表。⚠️ `BLE_CONN` 内目前有持锁 WinRT 调用，见「四」 |
+//! | 3 | `BT_LOCK` → `BLE_CONN` | `bluetooth.rs::bt_action` → `bt_ble::ble_connect` / `ble_disconnect` | `BT_LOCK` 是蓝牙操作的串行锁，`BLE_CONN` 是连接表。两条临界区内都只剩纯内存操作（查表/摘表/换表）——原先的持锁 WinRT 调用与日志 I/O 已在 P3-10 修复，见「四」 |
 //!
 //! ## 二、禁止的反向边（一旦出现即构成 AB/BA 死锁条件）
 //!
@@ -83,11 +83,16 @@
 //!   调用 `SetMasterVolumeLevelScalar`（COM）。这与 `toast.rs` 已修过的是**完全同类**
 //!   的 edition 2021 临时量陷阱（`if let Some(x) = lock().take()` 会让守卫活到整个
 //!   `if` 块）；现已把 `remove` 落到独立语句。
+//! - ✅ `bt_ble.rs` 的 `.lock().map_err(..)`：P3-10 的最后一个遗留项，已收敛到统一的
+//!   `state::lock_unpoisoned`。原先把它当作「命令边界可上报中毒」的**唯一例外**，
+//!   但该理由在此站不住脚：`BLE_CONN` 是无不变式的纯缓存，而 Mutex 中毒是**永久性**的
+//!   ⇒ 「上报」换不来任何安全性，只会把「一次 panic」放大成「蓝牙连接/断开在进程余下
+//!   生命周期内彻底失效」；更糟的是 `ble_connect` 的换表步骤若在加锁处 Err，会在
+//!   **未改动缓存**的情况下返回 ⇒ 缓存仍指向那个已被释放的旧连接，重试将直接返回
+//!   "already connected"，而实际什么都没连上（即同文件在 GATT 未确认时特意避免的
+//!   「幽灵连接」）。细节见 `bt_ble.rs::ble_conn` 的注释。
 //!
-//! 仍待处理：
-//!
-//! - `bt_ble.rs` 用 `.lock().map_err(..)` 而非统一的 `state::lock_unpoisoned`，
-//!   与 P2-11 确立的统一入口约定不一致（中毒时会让蓝牙操作报错而非继续）。
+//! **本类问题（持锁做 I/O、以及加锁入口不一致）至此全部收敛，无遗留。**
 //!
 //! ## 五、自查方法
 //!
@@ -99,10 +104,14 @@
 //!
 //! # ② 确认配置锁的闭包里没有取其他锁（有输出即缺陷）
 //! grep -rn -A6 "with_config_mut(" src-tauri/src/ | grep -E "lock_unpoisoned|read_unpoisoned|\.lock\(\)"
+//!
+//! # ③ 加锁入口唯一性：`.lock()` 只允许出现在本文件的 lock_unpoisoned 实现与中毒单测中。
+//! #    命中里会混进注释中的历史说明，需人工剔除；本次实测 state.rs 之外仅 2 处，均为注释。
+//! grep -rn "\.lock()" src-tauri/src/
 //! ```
 //!
-//! ⚠️ 这两条命令只做**提示**：闭包可以跨很多行，也可能经由被调用函数间接取锁
-//! （白名单第 1、3 条正是这种形态）。真正的把关仍是人读代码。
+//! ⚠️ 这三条命令只做**提示**：闭包可以跨很多行，也可能经由被调用函数间接取锁
+//! （白名单第 1、3 条正是这种形态）；③ 的命中还混有注释。真正的把关仍是人读代码。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -252,9 +261,12 @@ pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceL
 ///   中毒即**静默跳过整个临界区**。写入侧跳过尤其致命：缓存/句柄会永久停在旧值
 ///   （如 `TRAY_ICON` 永不被赋值 ⇒ tooltip 此后再也刷不动）。
 ///
-/// **唯一例外**：需要把中毒**上报给调用方**的命令边界可用
-/// `.lock().map_err(|e| e.to_string())?`（见 `bt_ble.rs`）——那里返回 `Result`，
-/// 中毒属于可报告的错误，而非应当吞掉的内部状态。
+/// **曾经的「唯一例外」已取消（P3-10 收敛）**：`bt_ble.rs` 原先用
+/// `.lock().map_err(|e| e.to_string())?` 把中毒上报给调用方（那里返回 `Result`）。
+/// 取消的理由：Mutex 中毒是**永久性**的，而该处锁保护的是**无不变式的纯缓存** ⇒
+/// 「上报」换不来任何安全性，只会把「一次 panic」放大成「该功能在进程余下生命周期内
+/// 彻底失效」，并会在 `ble_connect` 的换表步骤制造「缓存指向已释放连接」的幽灵连接。
+/// ⇒ **全仓一律走本函数，无例外**；机械判据见模块文档 §五。
 ///
 /// > 本注释刻意不把被禁写法写成**连续字面量**（上一条已按该规则改写），
 /// > 以便「全仓 grep 该字面量 = 0」这条验收可机械执行、无需先剥离注释。

@@ -23,6 +23,25 @@ struct BLEConnection {
 
 static BLE_CONN: OnceLock<Mutex<HashMap<String, BLEConnection>>> = OnceLock::new();
 
+/// 取 BLE 连接表的加锁入口。
+///
+/// 一律经 `state::lock_unpoisoned`（P2-11 的统一入口）：`BLE_CONN` 是**纯缓存**
+/// （临界区内只有 `contains_key` / `remove` / `insert`），没有可被 panic 破坏的
+/// 不变式，故中毒时接管内部数据继续用是安全的——这正是项目对静态量的既定策略
+/// （「panic 后仅需可用，而非严格一致」）。
+///
+/// **为什么不用 `.lock().map_err(..)?` 把中毒上报给调用方**（本文件原先如此，
+/// P3-10 收敛掉了这个「唯一例外」）：
+/// ① Mutex 中毒是**永久性**的，上报的实际效果是「一次 panic 之后，蓝牙连接与断开
+///    在本进程余下生命周期内彻底失效」（两个入口都在第一个加锁点就 Err），
+///    而用户只会看到一句无意义的 poisoned lock；
+/// ② `ble_connect` 的「换表」步骤若在 GATT 已连通后于加锁处 Err，函数会在**未改动
+///    缓存**的情况下返回 ⇒ 缓存仍持有那个已被释放的旧连接，`contains_key` 为真
+///    ⇒ 重试直接返回 "already connected"，而实际什么都没连上。这正是本文件在
+///    GATT 未确认时特意避免的「幽灵连接」，不该在加锁失败这条路上重新引入。
+///
+/// 附带事实：release 是 `panic = "abort"`，中毒只可能在 debug 出现——但 debug 下
+/// 的表现恰是最差的那种（永久哑掉 + 状态不一致）。
 fn ble_conn() -> &'static Mutex<HashMap<String, BLEConnection>> {
     BLE_CONN.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -44,7 +63,7 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
 
     // 若已有连接且是同一设备，直接返回
     {
-        let guard = ble_conn().lock().map_err(|e| e.to_string())?;
+        let guard = crate::state::lock_unpoisoned(ble_conn());
         if guard.contains_key(device_id) {
             return Ok("already connected".into());
         }
@@ -139,7 +158,7 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
     // （P3-10 锁序登记表 §四）。旧连接在锁内**摘出**（`remove` 交出所有权），
     // 锁外再释放——与 P2-7 的低电量通知同款：锁内取数据，锁外做 I/O。
     let old = {
-        let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
+        let mut guard = crate::state::lock_unpoisoned(ble_conn());
         let old = guard.remove(device_id);
         guard.insert(device_id.to_string(), conn);
         old
@@ -162,7 +181,7 @@ fn ble_disconnect(device_id: &str) -> Result<String, String> {
     // 锁内只做「摘表」：Close 是 WinRT 调用、日志是文件 I/O，都不能持锁做
     // （P3-10 锁序登记表 §四）。
     let conn = {
-        let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
+        let mut guard = crate::state::lock_unpoisoned(ble_conn());
         guard.remove(device_id)
     }; // ← BLE_CONN 在此释放
 
@@ -209,5 +228,59 @@ fn trigger_connection(device: &BluetoothLEDevice) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("GATT status: {:?}", result.Status()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 钉住 `bt_ble` 所依赖的契约：`BLE_CONN` 是**无不变式的纯缓存**，
+    /// 因此中毒后仍可被 `lock_unpoisoned` 接管继续使用——这正是本轮取消
+    /// 「中毒上报」这个唯一例外时所依据的前提。
+    ///
+    /// ⚠️ **本用例的可证伪性边界（必须说清，否则就是假验收）**：
+    /// 它调用的是 `lock_unpoisoned` 自身，**看不见 `bt_ble` 的调用点**——
+    /// 若有人把 `ble_connect` / `ble_disconnect` 的加锁改回
+    /// `.lock().map_err(..)?`，本用例**仍然通过**。
+    /// 故本批的验收是**两半合起来**才完整：
+    /// ① 行为侧（本用例）：helper 能接管中毒的 `BLE_CONN`；
+    /// ② 结构侧（机械判据）：全仓 `.lock()` 只允许出现在 `state.rs` ——
+    ///    保证所有调用点确实走了 ① 覆盖的那条路。
+    /// 任一半单独都不足以支撑「蓝牙操作容忍中毒」这个结论。
+    ///
+    /// 注：本用例会把全局 `BLE_CONN` 永久置为中毒态（进程内无法复原），
+    /// 这对其余用例无影响——没有任何用例使用 `BLE_CONN`。
+    #[test]
+    fn ble_conn_lock_tolerates_poison() {
+        // 注入：持 BLE_CONN 时 panic，令其中毒
+        // （会向 stderr 打印一行默认 hook 的 `thread panicked at ...`，属预期噪声）
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = crate::state::lock_unpoisoned(ble_conn());
+            panic!("注入：持锁 panic，令 BLE_CONN 中毒");
+        }));
+
+        // 前提断言用 `try_lock` 而非 `.lock()`：后者会让本文件出现裸加锁，
+        // 与「`state.rs` 之外不得出现 `.lock()`」这条机械判据冲突。
+        assert!(
+            matches!(
+                ble_conn().try_lock(),
+                Err(std::sync::TryLockError::Poisoned(_))
+            ),
+            "前提：注入后 BLE_CONN 必须已中毒"
+        );
+
+        // 读侧：`ble_connect` 开头的「是否已连接」判断走这条
+        assert!(
+            crate::state::lock_unpoisoned(ble_conn()).is_empty(),
+            "中毒不应影响缓存内容"
+        );
+        // 摘表侧：`ble_disconnect` 与 `ble_connect` 的换表步骤走这条
+        assert!(
+            crate::state::lock_unpoisoned(ble_conn())
+                .remove("probe")
+                .is_none(),
+            "中毒后仍应能正常摘表"
+        );
     }
 }

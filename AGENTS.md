@@ -74,6 +74,9 @@
   释放锁后再调用 API——参考 `tray::build_audio_devices_menu` / `update_audio_devices_menu`。
   **评审检查项**：任何 `with_config(_mut)`、`lock_unpoisoned(..)`、`.lock()` 的持锁区内，
   逐行确认没有 Tauri 菜单/窗口 API、没有 `run_on_main_thread`、没有 COM/WMI 与文件 I/O。
+  ⚠️ 顺带：**`.lock()` 本身就不该出现**——加锁一律走统一入口，`state.rs` 的
+  `lock_unpoisoned` 实现与其中毒单测除外（P3-10 收敛后**已无例外**）。判据见
+  `state.rs` 模块文档 §五③。
   **其中「菜单/托盘 API」这一半已有机械防线（B8）**：这类调用一律走 `tray.rs` 的薄包装
   （`apply_tooltip` / `apply_text` / `apply_icon` / `apply_menu`），包装内的
   `debug_assert!(!config::config_lock_held())` 会在**开发期立刻 panic** 并指出是哪个 API。
