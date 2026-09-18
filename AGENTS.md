@@ -135,7 +135,7 @@
 Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` 零警告校验
 （合计热增量约 3s）。
 
-**六类校验**：
+**七类校验**：
 1. HTML 引用与磁盘文件双向一致（含孤立文件检测）
 2. 跨文件调用审计：调用的标识符必有声明
 3. 跨文件同名全局函数检测：经典脚本后加载会遮蔽先加载（防 updateDeviceCard 类覆盖回归）
@@ -143,10 +143,15 @@ Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` �
 5. BOM 扫描（CSS/JS/HTML 禁止 UTF-8 BOM）
 6. 版本号一致性：tauri.conf.json / Cargo.toml / Cargo.lock / package.json /
    settings.html 占位 五处须为同一版本（防发版间隙漂移）
+7. Toast 契约（P1-6 的两半，必须成对）：`showToast` 实参不含 HTML 标签 +
+   `.toast` 的层叠 `white-space` 为 `pre-line`
 
 **防护边界**：结构完整性闸门。能拦引用缺失/孤立文件/未定义调用/同名全局函数覆盖/
-语法错误/BOM/版本漂移/Rust 格式不符/编译警告；拦不住 CSS 语义错误、其余合法语法下的
-逻辑 bug、运行时行为问题——这些仍需构建后人工回归。
+语法错误/BOM/版本漂移/Rust 格式不符/编译警告；拦不住下面这几类，改动后**必须人工回归**：
+CSS 语义（属性值/选择器/层叠覆盖）、其余合法语法下的逻辑 bug、运行时行为问题
+（事件时序）、**Rust 侧的一切**（锁纪律、异步上下文阻塞 sleep、锁序死锁）、
+未加守卫的 API 访问与未 catch 的 Promise。**同类清单另见 `tools/check.mjs` 头部注释
+（P3-8），两处是同一份边界的两种表述，改一处请同步另一处。**
 
 **例外通道**：
 - `git commit --no-verify` 可跳过钩子，仅限明知未完成的 WIP 中间提交
