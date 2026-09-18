@@ -45,6 +45,15 @@
   对 `let _guard = crate::state::lock_unpoisoned(&LOCK);` 这类内层 Drop-only 绑定，
   去掉下划线只会制造永久误报。详见代码审查报告 P3-14
 - **异步**：以 async/await 为主；fire-and-forget 场景可用 `.then().catch()` 链
+- **异步上下文禁止 `std::thread::sleep`（P2-10）**：`tauri::async_runtime::spawn` 的
+  async 块运行在 tokio 工作线程上，阻塞式 sleep 会**占死一个执行器线程**
+  （worker 数 ≈ CPU 核数，几处并发就足以让整条异步链路停摆）。一律改
+  `tokio::time::sleep(dur).await`（`tokio` 已启用 `time` feature）。
+  **反向同样要注意**：`tokio::time::sleep` 在没有运行时上下文的地方（`std::thread::spawn`
+  的真线程、同步函数体、`#[test]`）调用会 **panic**，那里用 `thread::sleep` 才是对的。
+  **评审检查项**：`async fn` / `async move { }` 块内出现 `thread::sleep` 即为违规；
+  反之在真线程里出现 `tokio::time::sleep` 也是违规。静态闸门覆盖不到这条
+  （见「防护边界」），只能靠评审
 - **事件回调不得在事件线程做阻塞工作**：`app.listen` 的回调在 Tauri 事件线程上执行，
   该线程同时负责派发窗口消息——在其中做 COM 枚举、设备/菜单重建、`Command::output()`
   等待等耗时操作，会表现为**窗口点不动、托盘无响应**（最短触发路径往往是托盘菜单单击）。

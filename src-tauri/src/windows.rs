@@ -26,6 +26,20 @@ pub fn open_settings_tab(app: &tauri::AppHandle, tab: &str) {
     open_settings_inner(app, Some(tab));
 }
 
+/// 设置窗口创建后的「DPI 稳定等待」（P2-10）。
+///
+/// 必须是 **异步** sleep：调用点在 `tauri::async_runtime::spawn` 的 async 块里，
+/// 运行于 tokio 工作线程；`std::thread::sleep` 会占死一个执行器线程
+/// （worker 数 ≈ CPU 核数），`tokio::time::sleep` 则让出线程、只注册一个定时器。
+/// 语义上两者都是「等 200ms 再继续」，故对调用方无差别。
+///
+/// 抽成具名函数不只是为了可读：**「让出执行器」这条性质因此可被单测证伪**
+/// （见 `dpi_settle_wait_yields_the_executor`）——若改回阻塞式 sleep，
+/// 同一运行时上的多次等待会串行化，用例即转红。
+async fn wait_for_dpi_settle() {
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+}
+
 fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
     if let Some(win) = app.get_webview_window("settings") {
         // 已有窗口的重开路径整体移出调用线程（菜单事件在事件线程上分发，
@@ -82,7 +96,8 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             }
             // 窗口状态插件恢复后即钳制：跨分辨率/DPI 下恢复的物理尺寸可能越界
             clamp_window_to_work_area(&win);
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            // 等 DPI 稳定（异步 sleep，见 wait_for_dpi_settle 的说明）
+            wait_for_dpi_settle().await;
             // 静置后 DPI 已稳定，再次钳制以兜底首帧缩放未就绪
             clamp_window_to_work_area(&win);
             let _ = win.show();
@@ -607,5 +622,45 @@ mod tests {
 
         assert_eq!(second, first, "两次调用应返回同一路径");
         assert_eq!(mtime_first, mtime_second, "第二次调用不应重写文件");
+    }
+
+    /// P2-10：`wait_for_dpi_settle` 必须**让出执行器**，而不是阻塞它。
+    ///
+    /// 判据用「多次等待的总耗时」：在 **current_thread** 运行时上并发跑 3 次等待，
+    /// - 异步 sleep ⇒ 三个定时器重叠，总耗时 ≈ 1×（200ms）；
+    /// - 阻塞 sleep ⇒ 三次串行，总耗时 ≈ 3×（600ms）。
+    ///
+    /// 之所以选 current_thread 运行时：单线程下「阻塞」无处可躲，
+    /// 多线程运行时会被其他 worker 吸收掉，测不出差别。
+    #[test]
+    fn dpi_settle_wait_yields_the_executor() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("应能构建 current_thread 运行时");
+
+        let started = std::time::Instant::now();
+        rt.block_on(async {
+            // 不用 `tokio::join!`：它需要 `macros` feature（本项目只启用了 rt/time），
+            // 为一个单测引入新 feature 不值得。`spawn` 在 current_thread 运行时上
+            // 同样共用唯一线程，判据等价。
+            let a = tokio::spawn(wait_for_dpi_settle());
+            let b = tokio::spawn(wait_for_dpi_settle());
+            let c = tokio::spawn(wait_for_dpi_settle());
+            a.await.expect("等待任务不应 panic");
+            b.await.expect("等待任务不应 panic");
+            c.await.expect("等待任务不应 panic");
+        });
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(450),
+            "3 次等待必须重叠（预期 ≈200ms）；实测 {elapsed:?}。\
+             若接近 600ms，说明 wait_for_dpi_settle 退化成了阻塞 sleep（P2-10 回归）"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(150),
+            "等待不得被跳过（实测 {elapsed:?}）"
+        );
     }
 }
