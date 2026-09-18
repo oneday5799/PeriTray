@@ -199,12 +199,60 @@ fn should_restart(stuck_streak: u32) -> bool {
     stuck_streak >= 2
 }
 
+/// 看门狗每轮的 sleep 间隔（B7 由 15s 收紧到 3s）。
+///
+/// 收紧的理由：探活的判据是「主线程能否在 [`PROBE_REPLY_TIMEOUT`] 内执行一个纯内存
+/// 的排队任务」，而连续 2 次超时才判定僵死 ⇒ 自愈延迟 ≈ 2×3s + 2×2s = 10s，
+/// 原先（15s + 5s，同步等待）最坏要 ~40s 才重启。
+const WATCHDOG_ROUND_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// 探活等待上限：主线程超过这个时间仍未执行排队的闭包即视为无响应。
+///
+/// 取 2s 而非更长：正常路径上主线程执行一次原子自增是**微秒级**的，2s 已经是
+/// 三个数量级的余量；再放长只会拖慢自愈。
+const PROBE_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 事件循环探活计数（B7）：每次探活闭包在主线程上执行即 +1。
+///
+/// 为什么保留一个计数而不只用 channel 回执：回执只能回答「这一次有没有被处理」，
+/// 累计值能区分「事件循环完全没跑」与「跑得很慢但一直在推进」——僵死日志带上它，
+/// 事后归因时不必再猜。
+static EVENT_LOOP_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 探活等待侧（B7）：`timeout` 内收到回执 ⇒ 事件循环有响应。
+///
+/// **必须用 `recv_timeout` 而不是 `recv`**：后者在事件循环僵死时会永久挂住调用线程
+/// ——原实现正是栽在这里（详见 [`spawn_watchdog`] 的注释）。抽成独立函数是为了让
+/// 这条契约有单测锚点：把它改回 `recv`，`probe_wait_returns_false_instead_of_hanging`
+/// 会直接挂死（即失败）。
+fn await_event_loop_reply(
+    rx: &std::sync::mpsc::Receiver<()>,
+    timeout: std::time::Duration,
+) -> bool {
+    rx.recv_timeout(timeout).is_ok()
+}
+
+/// 心跳日志节流：每 [`HEARTBEAT_EVERY_ROUNDS`] 轮记一次 `[heartbeat]`。
+///
+/// 探活节奏从 15s 收紧到 3s 后，若心跳跟着每轮记一次，日志量会涨 5 倍
+/// （每小时 1200 条），把真正有用的行淹掉。心跳的用途只是「证明进程还活着」，
+/// 15s 一次足够，故与探活节奏解耦。
+const HEARTBEAT_EVERY_ROUNDS: u64 = 5;
+
+/// 本轮是否应记录心跳日志。抽成纯函数以便边界单测。
+fn should_log_heartbeat(round: u64) -> bool {
+    round % HEARTBEAT_EVERY_ROUNDS == 0
+}
+
 /// 本轮 sleep 间隔是否长到可判定「系统经历过休眠 / 唤醒」（P2-4）。
 ///
-/// 期望 ~15s；>20s 说明中间发生了挂起 —— Suspend 期间渲染进程被暂停，
-/// 唤醒后需主动 Resume WebView2。抽成纯函数以便边界单测。
+/// 期望 ~3s（[`WATCHDOG_ROUND_INTERVAL`]）；超过 8s 说明中间发生了挂起 ——
+/// Suspend 期间渲染进程被暂停，唤醒后需主动 Resume WebView2。
+///
+/// ⚠️ 阈值与节奏**必须同步**：B7 把节奏从 15s 改成 3s 时，这里的 20s 若不同步下调，
+/// 阈值就永远够不到，休眠唤醒检测会彻底失效。抽成纯函数以便边界单测。
 fn is_time_jump(elapsed: std::time::Duration) -> bool {
-    elapsed > std::time::Duration::from_secs(20)
+    elapsed > std::time::Duration::from_secs(8)
 }
 
 /// 看门狗自愈重启的退出码。
@@ -345,10 +393,22 @@ fn spawn_startup_update_check(app: &tauri::AppHandle) {
 }
 
 /// 看门狗线程：心跳 + 事件循环探活 + 唤醒恢复。
-/// 探针原理：is_visible 经 proxy 往返（排队+recv），事件循环僵死则永挂；
-/// worker 结果经 channel 回传，主循环 recv_timeout 超时即计僵死。
-/// 连续 2 次超时（最坏 ~40s）判定僵死，自动重启自身进程自愈。
+///
+/// 探针原理（B7 改写）：主线程能否在 [`PROBE_REPLY_TIMEOUT`] 内执行一个**纯内存**
+/// 的排队任务。连续 2 次超时（≈10s）判定僵死，自动重启自身进程自愈。
 /// 时间跳变检测：唤醒后主动 Resume WebView2（B 类僵死根治）。
+///
+/// ⚠️ **不要改回「调 Tauri API + 同步等待」的写法**。原实现是
+/// `spawn` 一个线程调 `w.is_visible()`——它内部是 `run_on_main_thread(..)` +
+/// `rx.recv()`，**无超时地同步等待主线程**。事件循环真僵死时它永不返回，于是：
+/// ① **每轮泄漏一个永久挂住的探针线程**（本循环 3s 一轮）；
+/// ② 这些线程各自已在主线程队列里压了一个任务，主线程一旦恢复就会一次性全部执行；
+/// ③ 泄漏速度与「连续 2 次超时」的判定窗口叠加，僵死期间线程数持续增长。
+///
+/// 现在**不再 spawn 线程**：`run_on_main_thread` 只负责**排队**（立即返回，不等待），
+/// 闭包体内只有一次原子自增与一次 channel 通知（都不碰任何 Tauri API），
+/// 由看门狗线程自己 [`await_event_loop_reply`] 限时等待。主线程僵死 ⇒ 队列不被消费
+/// ⇒ 超时；无论成败都不留线程，堆积问题从结构上消失。
 fn spawn_watchdog(app: &tauri::AppHandle) {
     let app_handle = app.clone();
     std::thread::spawn(move || {
@@ -356,19 +416,24 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
 
         let mut stuck_streak = 0u32;
         let mut last_instant = Instant::now();
+        let mut round = 0u64;
 
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(15));
-            crate::process::append_log("[heartbeat]");
+            std::thread::sleep(WATCHDOG_ROUND_INTERVAL);
+            round = round.wrapping_add(1);
+            if should_log_heartbeat(round) {
+                crate::process::append_log("[heartbeat]");
+            }
 
-            // 时间跳变检测：期望 ~15s，>20s 说明系统经历过休眠/唤醒。
+            // 时间跳变检测：期望 ~3s，>8s 说明系统经历过休眠/唤醒。
             // 唤醒后主动 Resume WebView2 渲染进程（Suspend 期间渲染暂停）。
             //
             // ⚠️ 基准点 `last_instant` 必须取在**本轮探活结束之后**（见循环末尾），
             // 即只度量 sleep 间隔。若按直觉取在本行（sleep 之后、探活之前），
-            // 上一轮探活的超时耗时（最长 5s）会叠加进下一轮间隔，使 15s 变成
-            // 20.008s > 20s —— **每次探活超时都必然误报**为「系统休眠唤醒」，
-            // 进而执行一次不必要的 resume_webview（唤醒本应休眠的弹窗）。
+            // 上一轮探活的超时耗时（最长 2s）会叠加进下一轮间隔，使 3s 变成
+            // 5.008s —— 虽然仍够不到 8s 阈值，但这个「基准点位置」的约定必须守住：
+            // 阈值一旦收紧（或超时上限放大），同样的错位就会变成每次超时都误报
+            // 「系统休眠唤醒」，进而执行一次不必要的 resume_webview。
             let elapsed = Instant::now().duration_since(last_instant);
             if is_time_jump(elapsed) {
                 standard_log!(
@@ -381,30 +446,30 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
                 }
             }
 
-            let probe_app = app_handle.clone();
+            // ── 探活（B7）───────────────────────────────────────────────
             let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let result = probe_app
-                    .get_webview_window("popup")
-                    .map(|w| w.is_visible().is_ok())
-                    .unwrap_or(true);
-                let _ = tx.send(result);
+            let queued = app_handle.run_on_main_thread(move || {
+                EVENT_LOOP_TICK.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = tx.send(());
             });
-            match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-                Ok(true) => stuck_streak = 0,
-                _ => {
-                    stuck_streak += 1;
-                    standard_log!(
-                        "[watchdog] event loop unresponsive, streak={}",
-                        stuck_streak
-                    );
-                    if should_restart(stuck_streak) {
-                        watchdog_self_restart();
-                    }
+            // 排队失败（事件循环已退出）时 `tx` 随闭包一起被丢弃，`recv_timeout`
+            // 会立即返回 `Disconnected` ⇒ 同样判为无响应，无需单独分支。
+            let responded = queued.is_ok() && await_event_loop_reply(&rx, PROBE_REPLY_TIMEOUT);
+            if responded {
+                stuck_streak = 0;
+            } else {
+                stuck_streak += 1;
+                standard_log!(
+                    "[watchdog] event loop unresponsive, streak={} (tick={})",
+                    stuck_streak,
+                    EVENT_LOOP_TICK.load(std::sync::atomic::Ordering::SeqCst)
+                );
+                if should_restart(stuck_streak) {
+                    watchdog_self_restart();
                 }
             }
 
-            // 下一轮的时间基准：置于探活之后，使 elapsed 只含 sleep 间隔（~15s）
+            // 下一轮的时间基准：置于探活之后，使 elapsed 只含 sleep 间隔（~3s）
             last_instant = Instant::now();
         }
     });
@@ -699,14 +764,76 @@ mod tests {
         assert!(should_restart(3), "持续僵死应继续重启");
     }
 
+    /// B7 把看门狗节奏从 15s 收紧到 3s，阈值必须同步下调（20s → 8s）——
+    /// 否则阈值永远够不到，休眠唤醒检测会**彻底失效**（且没有任何报错）。
     #[test]
-    fn is_time_jump_is_strictly_greater_than_20s() {
-        assert!(!is_time_jump(std::time::Duration::from_secs(19)));
-        // 期望间隔 ~15s；20s 整仍视为正常抖动（判据是严格大于）
-        assert!(!is_time_jump(std::time::Duration::from_secs(20)));
-        assert!(is_time_jump(std::time::Duration::from_secs(21)));
+    fn is_time_jump_is_strictly_greater_than_8s() {
+        assert!(!is_time_jump(std::time::Duration::from_secs(7)));
+        // 期望间隔 ~3s；8s 整仍视为正常抖动（判据是严格大于）
+        assert!(!is_time_jump(std::time::Duration::from_secs(8)));
+        assert!(is_time_jump(std::time::Duration::from_secs(9)));
         // 真实休眠唤醒场景：几十分钟
         assert!(is_time_jump(std::time::Duration::from_secs(3600)));
+        // 与节奏常量的关系：阈值必须明显大于一轮间隔，否则正常轮次就会误报
+        assert!(
+            !is_time_jump(WATCHDOG_ROUND_INTERVAL),
+            "一轮正常的 sleep 间隔绝不能被判为时间跳变"
+        );
+    }
+
+    // ── B7：探活不再泄漏线程 ───────────────────────────
+
+    /// B7 的核心契约：事件循环僵死时，等待侧必须**限时返回 false**，不得挂住。
+    ///
+    /// 可证伪性：把 `await_event_loop_reply` 里的 `recv_timeout` 改回 `recv`，
+    /// 本用例会直接**挂死**（= 失败），而不是侥幸通过。原实现的
+    /// `is_visible()` 正是这种「无超时同步等待」，才导致每轮泄漏一个探针线程。
+    #[test]
+    fn probe_wait_returns_false_instead_of_hanging_when_no_reply() {
+        // 发送端保持存活但永不发送 = 模拟「闭包已排队、主线程僵死不消费队列」
+        let (_tx, rx) = std::sync::mpsc::channel::<()>();
+        let timeout = std::time::Duration::from_millis(120);
+
+        let started = std::time::Instant::now();
+        let responded = await_event_loop_reply(&rx, timeout);
+        let elapsed = started.elapsed();
+
+        assert!(!responded, "队列未被消费时必须判为「无响应」");
+        assert!(elapsed >= timeout, "必须等满超时才返回（实测 {elapsed:?}）");
+        assert!(
+            elapsed < timeout * 5,
+            "必须在超时后立即返回，不得挂住（实测 {elapsed:?}）"
+        );
+    }
+
+    /// 回执到达时应立即返回 true，不必等满超时——否则每轮都会白等 2s，
+    /// 正常路径下的节奏会从 3s 退化成 5s。
+    #[test]
+    fn probe_wait_returns_true_immediately_when_reply_arrives() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        tx.send(()).expect("发送端存活，应能发送");
+
+        let started = std::time::Instant::now();
+        let responded = await_event_loop_reply(&rx, PROBE_REPLY_TIMEOUT);
+
+        assert!(responded, "已有回执时必须判为「有响应」");
+        assert!(
+            started.elapsed() < PROBE_REPLY_TIMEOUT,
+            "有回执时不应等满超时（实测 {:?}）",
+            started.elapsed()
+        );
+    }
+
+    /// 心跳日志节流：节奏收紧到 3s 后不能每轮都记，否则日志量涨 5 倍。
+    #[test]
+    fn heartbeat_is_throttled_to_every_fifth_round() {
+        assert_eq!(HEARTBEAT_EVERY_ROUNDS, 5, "节流周期即「原 15s / 新 3s」");
+        let logged: Vec<u64> = (1..=15).filter(|r| should_log_heartbeat(*r)).collect();
+        assert_eq!(logged, vec![5, 10, 15], "应每 5 轮记一次，且第 5 轮即首记");
+        assert!(
+            !should_log_heartbeat(1),
+            "第 1 轮不记，避免刚启动就多一条日志"
+        );
     }
 
     #[test]
