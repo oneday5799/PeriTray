@@ -804,6 +804,61 @@ macro_rules! config_field_names_impl {
 }
 for_each_config_field!(config_field_names_impl);
 
+// ── B8：P0-4 类死锁的机械防线（debug-only）──────────────────────
+//
+// 为什么需要它：托盘/菜单 API（`set_menu` / `set_icon` / `set_tooltip` / `set_text`
+// 及 `MenuItem::with_id` 等构造 API）内部经 `run_item_main_thread!` 展开为
+// `run_on_main_thread(..) + rx.recv()`——**无超时地同步等主线程**；而主线程自身会通过
+// `with_config(_mut)` 读配置。于是「持配置锁 → 调菜单 API」与「主线程 → 等该锁」
+// 构成 **AB/BA 永久死锁**：整进程冻结，看门狗也救不回（其探活同样要主线程）。
+//
+// 这条纪律原先只写在 `AGENTS.md` 评审项与注释里，**没有任何机械防线**：
+// `tools/check.mjs` 不扫 Rust，编译器也看不见。B8 把「持锁深度」记下来，
+// 由 `tray.rs` 的薄包装在调用 API 前 `debug_assert!` —— 复发时开发期立刻 panic，
+// 而不是线上冻结 40 秒后被系统按「无响应」杀掉。
+//
+// ⚠️ 深度必须记在**线程局部**里，不能用全局原子量：锁是线程级资源，
+// 全局计数会让「A 线程持锁、B 线程调菜单」这种完全无害的组合误报。
+#[cfg(debug_assertions)]
+thread_local! {
+    static CONFIG_LOCK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// 当前线程是否正持有配置锁。供 `tray.rs` 的薄包装做 `debug_assert!`。
+#[cfg(debug_assertions)]
+pub fn config_lock_held() -> bool {
+    CONFIG_LOCK_DEPTH.with(|d| d.get() > 0)
+}
+
+/// release 版恒为 `false`。`debug_assert!` 在 release 下整块被编译掉、不会求值，
+/// 保留这个同名函数只是为了让调用点在两种构建下都能编译（否则 `dead_code` 会报警）。
+#[cfg(not(debug_assertions))]
+pub fn config_lock_held() -> bool {
+    false
+}
+
+/// 进出配置锁的深度守卫（B8）。用 RAII 而不是「进 +1 / 出 -1 两句」：
+/// 闭包 `f` panic 时也能正确回退，否则一次 panic 会让计数永久偏高，
+/// 此后**所有**断言都变成误报（比没有防线更糟）。
+#[cfg(debug_assertions)]
+struct ConfigLockDepthGuard;
+
+#[cfg(debug_assertions)]
+impl ConfigLockDepthGuard {
+    fn enter() -> Self {
+        CONFIG_LOCK_DEPTH.with(|d| d.set(d.get() + 1));
+        Self
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for ConfigLockDepthGuard {
+    fn drop(&mut self) {
+        // saturating_sub：即便出现「多退一次」的编程错误，也不会回绕成天文数字
+        CONFIG_LOCK_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 /// 只读访问配置。
 ///
 /// **锁纪律（P0 死锁防护，勿破坏）**：闭包内**只允许纯内存操作**（读字段、clone、算术）。
@@ -825,6 +880,8 @@ where
     F: FnOnce(&Config) -> R,
 {
     let guard = crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
+    #[cfg(debug_assertions)]
+    let _depth = ConfigLockDepthGuard::enter();
     f(&guard)
 }
 
@@ -861,6 +918,9 @@ where
     let (result, normalized, snapshot) = {
         let mut guard =
             crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
+        // B8：debug 下登记「本线程正持配置锁」，供 `tray.rs` 的薄包装断言
+        #[cfg(debug_assertions)]
+        let _depth = ConfigLockDepthGuard::enter();
         let result = f(&mut guard);
         let (normalized, snapshot) = finalize_before_persist(&mut guard);
         (result, normalized, snapshot)
@@ -880,12 +940,109 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_revision, config_path, default_battery_refresh_secs, default_battery_thresholds,
-        enqueue_persist, finalize_before_persist, flush_persist, merge_config, normalize_config,
-        parse_config_text, revision_is_latest, write_config_atomically, Config, MERGED_FIELD_NAMES,
-        PERSIST_DONE, PERSIST_QUEUED,
+        claim_revision, config_lock_held, config_path, default_battery_refresh_secs,
+        default_battery_thresholds, enqueue_persist, finalize_before_persist, flush_persist,
+        merge_config, normalize_config, parse_config_text, revision_is_latest, with_config,
+        write_config_atomically, Config, CONFIG, MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED,
     };
     use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+
+    // ── B8：P0-4 防复发断言的判据 ────────────────────────────
+
+    /// 确保 `CONFIG` 已初始化。`OnceLock` 幂等，多个用例重复调用无妨。
+    fn ensure_config_ready() {
+        CONFIG.get_or_init(|| Mutex::new(Config::default()));
+    }
+
+    /// B8 的核心判据：`config_lock_held()` 必须精确反映「**本线程**是否正持有配置锁」。
+    ///
+    /// 可证伪性：把 `with_config` 里的 `ConfigLockDepthGuard::enter()` 删掉，
+    /// 锁内的断言会立刻转红（`config_lock_held()` 恒为 false）；把守卫改成
+    /// 「进 +1 / 出 -1 两句」则下面的 `#[should_panic]` 用例（panic 后回退）转红。
+    #[test]
+    fn config_lock_held_reflects_actual_lock_state() {
+        ensure_config_ready();
+
+        assert!(!config_lock_held(), "锁外必须为 false");
+
+        with_config(|_| {
+            assert!(config_lock_held(), "锁内必须为 true");
+        });
+
+        assert!(!config_lock_held(), "出锁后必须回到 false");
+    }
+
+    /// 判据必须是**线程局部**的：别的线程持锁不得让本线程误报。
+    ///
+    /// 可证伪性：把 `CONFIG_LOCK_DEPTH` 从 `thread_local!` 换成全局 `AtomicUsize`，
+    /// 本用例转红——而那种误报会让「A 线程读配置、B 线程刷托盘」这种完全无害的
+    /// 组合在开发期直接 panic，比没有防线更糟。
+    #[test]
+    fn config_lock_held_is_thread_local() {
+        ensure_config_ready();
+
+        // 子线程在**持有配置锁**的同时通知主线程去查判据
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            with_config(|_| {
+                tx.send(()).expect("主线程应仍在等待");
+                // 等主线程查完判据再出锁
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            });
+        });
+
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .expect("子线程应已进入配置锁");
+        assert!(
+            !config_lock_held(),
+            "子线程持锁期间，本线程的判据必须仍为 false"
+        );
+
+        handle.join().expect("子线程不应 panic");
+    }
+
+    /// 守卫必须是 RAII：闭包 panic 后深度也要回退。
+    ///
+    /// 可证伪性：把 `ConfigLockDepthGuard` 换成「进入时 +1、返回后 -1」两句写法，
+    /// panic 会让深度永久停在 1，此后**每次** `config_lock_held()` 都返回 true
+    /// ——防线退化成「任何菜单调用都误报」，比没有防线更糟。本用例即转红。
+    #[test]
+    fn lock_depth_recovers_after_panic_in_closure() {
+        ensure_config_ready();
+
+        let caught = std::panic::catch_unwind(|| {
+            with_config(|_: &Config| -> () {
+                panic!("模拟闭包内 panic");
+            });
+        });
+        assert!(caught.is_err(), "闭包 panic 应向上传播");
+
+        // `Mutex` 此时已中毒，`with_config` 内部的统一入口会忽略中毒，仍可用
+        let inside = with_config(|_| config_lock_held());
+        assert!(inside, "重新持锁时应为 true");
+        assert!(
+            !config_lock_held(),
+            "出锁后深度必须已回退——否则后续所有断言都会误报"
+        );
+    }
+
+    /// B8 端到端等价验证：`tray.rs` 薄包装里的断言形态，在配置锁内必须 panic。
+    ///
+    /// 这里复现的是**同一判据**（`config_lock_held()` 是两处唯一的公共依赖），
+    /// 不是复制实现：包装体里也只有 `debug_assert!(!config_lock_held(), …)`。
+    #[test]
+    #[should_panic(expected = "P0-4")]
+    fn menu_style_assertion_panics_inside_config_lock() {
+        ensure_config_ready();
+
+        with_config(|_| {
+            debug_assert!(
+                !config_lock_held(),
+                "P0-4：持配置锁时调用菜单 API，会与主线程构成 AB/BA 永久死锁"
+            );
+        });
+    }
 
     /// 落盘版本号判据：**先取号者永远不得落盘**（当已有更新者取过号时）。
     ///

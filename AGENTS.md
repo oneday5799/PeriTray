@@ -72,7 +72,12 @@
   **正确写法**：锁内只取纯数据快照或句柄克隆（`TrayIcon`/`MenuItem` 均 `Clone`），
   释放锁后再调用 API——参考 `tray::build_audio_devices_menu` / `update_audio_devices_menu`。
   **评审检查项**：任何 `with_config(_mut)`、`lock_unpoisoned(..)`、`.lock()` 的持锁区内，
-  逐行确认没有 Tauri 菜单/窗口 API、没有 `run_on_main_thread`、没有 COM/WMI 与文件 I/O
+  逐行确认没有 Tauri 菜单/窗口 API、没有 `run_on_main_thread`、没有 COM/WMI 与文件 I/O。
+  **其中「菜单/托盘 API」这一半已有机械防线（B8）**：这类调用一律走 `tray.rs` 的薄包装
+  （`apply_tooltip` / `apply_text` / `apply_icon` / `apply_menu`），包装内的
+  `debug_assert!(!config::config_lock_held())` 会在**开发期立刻 panic** 并指出是哪个 API。
+  ⚠️ **新增托盘/菜单 setter 调用必须走包装，不要直接调** —— 直接调会绕过断言。
+  其余几类（窗口 getter、COM/WMI、文件 I/O）仍只能靠评审
 - **锁序登记在 `state.rs` 模块文档（P3-10）**：全局锁的**层级**、**允许的嵌套边白名单**
   （当前仅 3 条：`DEVICES_CACHE→CONFIG`、`PERSIST_LOCK→LAST_CONFIG_CONTENT`、
   `BT_LOCK→BLE_CONN`）、**禁止的反向边**（一旦出现即构成 AB/BA 死锁条件）、

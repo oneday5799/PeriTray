@@ -16,6 +16,52 @@ use crate::windows;
 
 static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new();
 
+// ── B8：主线程分发 API 的薄包装 ──────────────────────────────────
+//
+// 下面 4 个函数是**唯一**允许直接调用托盘/菜单 setter 的地方。每个包装体内断言
+// 「当前线程未持有配置锁」——理由见 `config.rs` 的 B8 说明：这类 API 会**无超时地
+// 同步等主线程**，而主线程自身要取配置锁 ⇒ 持锁调用即构成 AB/BA 永久死锁
+// （整进程冻结，看门狗也救不回）。
+//
+// 为什么必须**收口**而不是让各调用点自己写断言：断言散在 4 处，新增第 5 个调用点
+// 时很容易忘。收口后「调用 setter」这个动作被收敛到一处——新代码要么走包装
+// （自动受保护），要么直接调 API（评审时一眼可见）。
+//
+// `debug_assert!` 在 release 下整块被编译掉，故线上零成本；开发期一旦有人在锁内
+// 加了一次菜单调用，这里会立刻 panic 并指出具体是哪一个 API。
+
+fn apply_tooltip(tray: &TrayIcon<tauri::Wry>, tooltip: String) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 TrayIcon::set_tooltip，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
+fn apply_text(item: &MenuItem<tauri::Wry>, text: &str) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 MenuItem::set_text，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = item.set_text(text);
+}
+
+fn apply_icon(tray: &TrayIcon<tauri::Wry>, icon: Image<'static>) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 TrayIcon::set_icon，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = tray.set_icon(Some(icon));
+}
+
+fn apply_menu(tray: &TrayIcon<tauri::Wry>, menu: Menu<tauri::Wry>) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 TrayIcon::set_menu，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = tray.set_menu(Some(menu));
+}
+
 /// 将查询结果写回设备缓存，返回是否发生变化（新旧列表比较）。
 fn apply_devices_cache(new_devices: Vec<crate::device::Device>) -> bool {
     let cache = get_devices_cache();
@@ -85,7 +131,7 @@ fn update_tooltip() {
             None => return,
         }
     };
-    let _ = tray.set_tooltip(Some(tooltip));
+    apply_tooltip(&tray, tooltip);
 }
 
 /// 后台刷新线程：定期查询设备并更新缓存，状态变化时自动更新 tooltip
@@ -628,7 +674,7 @@ fn update_auto_text() {
     } else {
         "开机自启"
     };
-    let _ = item.set_text(text);
+    apply_text(&item, text);
 }
 
 /// 根据默认打开页面与系统深色模式更新托盘图标
@@ -642,7 +688,7 @@ fn update_tray_icon() {
             None => return,
         }
     };
-    let _ = tray.set_icon(Some(icon));
+    apply_icon(&tray, icon);
 }
 
 /// 简化设备名称：仅保留括号内内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
@@ -783,7 +829,7 @@ fn rebuild_audio_devices_menu_once() {
             None => return,
         }
     };
-    let _ = tray.set_menu(Some(menu));
+    apply_menu(&tray, menu);
 }
 
 /// 构建 Windows 声音设置子菜单
