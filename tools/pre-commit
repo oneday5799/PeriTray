@@ -21,4 +21,8 @@ if git diff --cached --name-only -- src-tauri/src src-tauri/Cargo.toml src-tauri
     exit 1
   fi
   printf '%s\n' "$out" | tail -1
+  echo "[pre-commit] 运行 cargo clippy（存量基线见 tools/check-clippy.mjs）..."
+  # --optional：本机没装 clippy 组件时告警跳过，避免环境问题卡死提交；
+  # CI 调用同一条命令但**不带** --optional（硬失败），故本地跳过不会漏网。
+  node tools/check-clippy.mjs --optional || exit 1
 fi

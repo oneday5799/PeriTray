@@ -28,9 +28,10 @@
 
 - 发版的版本号 bump 单独成提交：`chore(release): vX.Y.Z`
 - 涉及 `src-tauri/dist/` 的提交会被 pre-commit 钩子自动校验（见下节）
-- **Rust 改动提交前必须过 `cargo fmt --check` 与 `cargo check` 零警告**
+- **Rust 改动提交前必须过 `cargo fmt --check`、`cargo check` 零警告、`cargo clippy`**
   （main.rs 有 `#![warn(unused_imports, dead_code)]`）；由 pre-commit 钩子自动执行——
-  Rust 文件有暂存改动时增量运行（合计热增量约 3s），格式不符或有 warning 即拦截
+  Rust 文件有暂存改动时增量运行（`fmt` + `check` 热增量约 3s，clippy 另加约 6~14s），
+  格式不符、有 warning 或 clippy 未通过即拦截
 
 ## 代码与注释风格
 
@@ -156,7 +157,8 @@
 
 每次提交全量运行 `.git/hooks/pre-commit` → `node tools/check.mjs`（<1s）；
 Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` 零警告校验
-（合计热增量约 3s）。
+（约 3s），再追加 `node tools/check-clippy.mjs --optional`（约 6~14s，
+**未装 clippy 组件时告警跳过**——CI 上同一条命令**不带** `--optional`，是硬失败）。
 
 **七类校验**：
 1. HTML 引用与磁盘文件双向一致（含孤立文件检测）
@@ -168,6 +170,25 @@ Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` �
    settings.html 占位 五处须为同一版本（防发版间隙漂移）
 7. Toast 契约（P1-6 的两半，必须成对）：`showToast` 实参不含 HTML 标签 +
    `.toast` 的层叠 `white-space` 为 `pre-line`
+
+**Rust 侧另有 `cargo clippy` 闸门**（`node tools/check-clippy.mjs`，CI 与 pre-commit 共用
+同一条命令，**单一来源在该脚本**）。它不是裸 `-D warnings`，而是
+**`-D warnings` + 20 条存量基线 `-A` + 3 条显式开启**：
+
+- **为什么带基线**：2026-09-18 实测当前 HEAD 默认集报 **88 条**（bin 44 个唯一位置 + test
+  单元重复计数），全是风格类（`redundant_closure` 16 / `field_reassign_with_default` 16 /
+  `manual_clamp` 8 …），**与本次审查的 40 条发现零交集** ⇒ 裸 `-D warnings` 只会让 CI
+  首次即红，逼人做无收益的风格改动。故存量按 lint 粒度封存，
+  **修掉一条就从基线删一条**（基线即待办）。
+- **3 条显式开启**（实测当前 0 命中，直接对应「持锁区只能做纯内存操作」）：
+  `clippy::await_holding_lock` / `clippy::await_holding_refcell_ref` / `clippy::mutex_atomic`。
+- **边界（勿读成「Rust 侧已闭合」）**：基线那 20 条**对新增代码同样放行**；
+  `.lock().unwrap()` **clippy 默认不覆盖**（`unwrap_used` 属 restriction 组、默认关闭，
+  开启后全仓 94 条）；`let _ =` 丢弃 must_use **无机械防线**
+  （`SingleFlightGuard` 没有 `#[must_use]`，而 `let _x = guard` 被语言规范主动豁免）；
+  异步上下文里的 `thread::sleep`（全仓 24 处）**无对应 lint**。
+  基线里 lint 名写错**不会静默失效**（`-D warnings` 把 `unknown_lints` 升级为 `E0602`），
+  但**改基线必须实跑一次**。**详见 `tools/check-clippy.mjs` 头部注释。**
 
 **防护边界**：结构完整性闸门。能拦引用缺失/孤立文件/未定义调用/同名全局函数覆盖/
 语法错误/BOM/版本漂移/Rust 格式不符/编译警告；拦不住下面这几类，改动后**必须人工回归**：

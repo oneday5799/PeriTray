@@ -15,7 +15,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -44,6 +44,10 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         working-directory: src-tauri
+
+      # 与 tools/pre-commit 共用同一条命令（含 20 条存量基线，单一来源见该脚本）
+      - name: Cargo clippy (deny warnings, baseline-pinned)
+        run: node tools/check-clippy.mjs
 
       - name: Cargo test
         run: cargo test
