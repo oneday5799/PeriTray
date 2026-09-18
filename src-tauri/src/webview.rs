@@ -84,8 +84,15 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 // ═══════════════════════════════════════════════════════════════
 //
 // popup 关闭后：IsVisible(FALSE) + TrySuspend → 渲染进程完全休眠，
-//   系统睡眠时 COM 不活跃，不阻塞事件循环（B 类僵死根治）。
+//   系统睡眠时 COM 不活跃，不阻塞事件循环（仅针对**休眠唤醒**这一类）。
 // popup 打开前 / 唤醒后：Resume + IsVisible(TRUE) → 恢复渲染。
+//
+// ⚠️ 范围限定（2026-09-18）：上面这条**不是**「运行期窗口冻结」的解释。
+//   实测（`AppHangTransient` / 退出码 `0xcfffffff`）证明那次冻结的根因是
+//   **锁序死锁（P0-4）**——子线程持配置锁调菜单 API（`run_item_main_thread!` =
+//   无超时 `rx.recv()`）⇄ 主线程等同一把配置锁 ⇒ 永久互等，与 WebView2 挂起态、
+//   DWM、GPU、杀软沙箱**全部无关**。遇到「窗口完全无响应」请**先查锁序**
+//   （登记表见 `state.rs` 模块文档），不要停在「挂起态」这个方向上。
 //
 // 调用链：PlatformWebview.controller() → ICoreWebView2Controller
 //   → CoreWebView2() → ICoreWebView2 → cast::<ICoreWebView2_3>()

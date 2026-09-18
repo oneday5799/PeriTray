@@ -374,7 +374,10 @@ fn animate_close(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64
     let _ = window.hide();
     // popup 关闭后 Suspend WebView2 渲染进程：
     // - 释放 CPU/内存（渲染进程休眠）
-    // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（B 类僵死根治）
+    // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（仅针对**休眠唤醒**这一类）
+    //   ⚠️ 范围限定（2026-09-18）：这**不是**「运行期窗口冻结」的解释——实测根因是
+    //   **锁序死锁（P0-4）**，与挂起态无关；遇到「窗口完全无响应」请先查锁序
+    //   （登记表见 `state.rs` 模块文档）。
     let wv: &tauri::Webview = window.as_ref();
     webview::suspend_webview(wv);
 }
