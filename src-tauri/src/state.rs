@@ -1,3 +1,105 @@
+//! 全局状态与锁。
+//!
+//! # 锁序登记（P3-10）
+//!
+//! 本模块是**全局锁的登记处**。新增任何 `static … Mutex` / `RwLock` 之前，先在这里
+//! 登记它的层级以及它与既有锁的获取关系。
+//!
+//! 为什么必须集中登记：**锁序缺陷（AB/BA 死锁）不产生编译错误，也不产生 panic 栈**。
+//! 它的表现是整个进程静默僵死（窗口点不动、日志停在同一行），事后只能靠人把两条
+//! 路径的加锁顺序摆在一起看。原先的锁序说明散落在 4 个文件的行内注释里
+//! （`battery_notify.rs` / `config.rs` / `device_data.rs` / `tray.rs`），挡不住新调用点
+//! ——新代码只要在闭包里顺手取一次另一把锁，死锁条件就齐备了，而没有任何一处会报错。
+//!
+//! 因此下面给出**白名单**：**不在白名单里的「持 A 取 B」一律按缺陷处理**。
+//!
+//! ## 一、允许的嵌套边（白名单，当前仅此三条）
+//!
+//! | # | 边（持 → 取） | 现存实例 | 为什么允许 |
+//! |---|---|---|---|
+//! | 1 | `DEVICES_CACHE` → `CONFIG` | `tray.rs::build_tooltip_text` | 两条临界区内都只剩纯内存操作（`format!` / 字段读）。落盘已被 P1-3 移出配置锁、B11 移出调用线程 |
+//! | 2 | `PERSIST_LOCK` → `LAST_CONFIG_CONTENT` | `config.rs::persist_now` | 只在 `peritray-config` 写线程（或队列满时的同步兜底）上执行，不与 UI 线程争抢 |
+//! | 3 | `BT_LOCK` → `BLE_CONN` | `bluetooth.rs::bt_action` → `bt_ble::ble_connect` / `ble_disconnect` | `BT_LOCK` 是蓝牙操作的串行锁，`BLE_CONN` 是连接表。⚠️ `BLE_CONN` 内目前有持锁 WinRT 调用，见「四」 |
+//!
+//! ## 二、禁止的反向边（一旦出现即构成 AB/BA 死锁条件）
+//!
+//! | 边 | 当前状态 | 为什么必须守住 |
+//! |---|---|---|
+//! | `CONFIG` → `DEVICES_CACHE` | **不存在** | 与白名单第 1 条反向。全仓 66 处 `with_config` / `with_config_mut` 调用点（2026-09-18 复核）目前都是纯字段读写；只要有一处在闭包里取设备缓存锁，死锁条件立刻齐备 |
+//! | `LAST_CONFIG_CONTENT` → `PERSIST_LOCK` | **不存在** | 与白名单第 2 条反向 |
+//! | `BLE_CONN` → `BT_LOCK` | **不存在** | 与白名单第 3 条反向 |
+//!
+//! ## 三、锁清单
+//!
+//! ### 顶层锁
+//!
+//! 可以被白名单中的下层锁依赖；自身**不得**在持有其他锁时获取。
+//!
+//! | 符号 | 定义处 | 说明 |
+//! |---|---|---|
+//! | `CONFIG` | `config.rs` | 配置。**临界区内只允许纯内存操作**（P1-3 / B11 已把落盘全部外移） |
+//! | `DEVICES_CACHE` | 本文件 | 设备列表缓存（托盘 tooltip 与弹窗卡片的数据源） |
+//! | `TRAY_ICON` | `tray.rs` | 托盘句柄。锁内只取句柄/换菜单，**调用 API 前必须先释放**（`set_icon` / `set_tooltip` / `set_menu` 会同步等主线程） |
+//! | `AUTO_MENU_ITEM` | 本文件 | 自启菜单项，同 `TRAY_ICON`（`set_text` 同步等主线程） |
+//! | `DEVICE_REGISTERED_KEYS` | `shortcut.rs` | 已注册快捷键集合。锁内只算差集，插件 API 调用在锁外 |
+//! | `PERSIST_LOCK` | `config.rs` | 落盘串行锁，**故意跨 I/O 持有**（防两次落盘交错写坏文件）；只在写线程上执行 |
+//! | `BT_LOCK` | `bluetooth.rs` | 蓝牙连接/断开的串行锁 |
+//!
+//! ### 叶子锁
+//!
+//! **不得在其中再获取任何锁。**
+//!
+//! | 符号 | 定义处 | 说明 |
+//! |---|---|---|
+//! | `LAST_CONFIG_CONTENT` | `config.rs` | 脏检查基准（上次成功写盘的内容） |
+//! | `CONFIG_LOAD_ERROR` | `config.rs` | 启动期解析错误信息 |
+//! | `TRAY_POS` / `POPUP_POS` / `TRAY_MONITOR` | 本文件 | 坐标与托盘所在显示器信息 |
+//! | `LAST_MTIME` | `device_data.rs` | 用户数据文件 mtime（守卫必须收在块内，见该处注释） |
+//! | `DEVICE_DATA` | `device_data.rs` | `RwLock`，设备自定义数据 |
+//! | `BT_BATTERY` | `bluetooth.rs` | 蓝牙电量缓存 |
+//! | `BLE_CONN` | `bt_ble.rs` | BLE 连接表 |
+//! | `REGISTER_FAILED` | `shortcut.rs` | 注册失败的快捷键（供启动提示） |
+//! | `ICON_CACHE` / `NAME_CACHE` | `app_icon.rs` | 图标 / 进程名 LRU（读命中与回填分两次加锁，避免持锁做取图） |
+//! | `LAST_PROP_LOG` | `audio_notify.rs` | 属性日志去重时间戳 |
+//! | `PACKAGE_CACHE` | `audio_spatial.rs` | 包族查询 TTL 缓存 |
+//! | `NOTIFIED` | `battery_notify.rs` | 已提醒的低电量条目 |
+//! | `PREV_TOAST` | `toast.rs` | 上一条通知句柄（`take()` 必须落到独立语句，见该处注释） |
+//! | `LAST_STATUS` | `update.rs` | 更新状态 |
+//! | `CACHED_REGEX` | `wmi_query.rs` | 过滤正则缓存 |
+//! | `force_mute_prev_volume()` | `audio.rs` | 强制静音前的音量 |
+//! | `ANIM_TEST_LOCK` | 本文件（`#[cfg(test)]`） | 串行化动画相关用例 |
+//!
+//! ## 四、已知风险点（登记时如实记录，尚未修）
+//!
+//! 以下不属于锁序本身，但同属持锁纪律（`AGENTS.md`「持锁区不得调用…」），
+//! 集中记在这里以免遗漏：
+//!
+//! - `bt_ble.rs` 的 `ble_connect` / `ble_disconnect` 在持 `BLE_CONN` 时做两类 I/O：
+//!   ① WinRT 调用（`session.Close()` / `device.Close()`）；
+//!   ② **文件 I/O**（`verbose_log!` / `append_verbose_log` / `append_log` 会写日志文件，
+//!   `sync_all` 在杀软实时扫描下可达数十毫秒）。
+//!   修法同 P2-7：锁内只 `remove` 出待关闭的对象，锁外再 Close 与记日志。
+//! - `audio.rs` 的 `toggle_device_mute` 在持 `force_mute_prev_volume()` 时调用
+//!   `SetMasterVolumeLevelScalar`（COM）。这与 `toast.rs` 已修过的是**完全同类**的
+//!   edition 2021 临时量陷阱（`if let Some(x) = lock().take()` 会让守卫活到整个 `if` 块）。
+//! - `bt_ble.rs` 用 `.lock().map_err(..)` 而非统一的 `state::lock_unpoisoned`，
+//!   与 P2-11 确立的统一入口约定不一致（中毒时会让蓝牙操作报错而非继续）。
+//!
+//! ## 五、自查方法
+//!
+//! 改动涉及锁时，在仓库根执行：
+//!
+//! ```bash
+//! # ① 列出全部加锁点，逐个人工确认没有白名单之外的新边
+//! grep -rn "lock_unpoisoned(\|read_unpoisoned(\|write_unpoisoned(\|\.lock()" src-tauri/src/
+//!
+//! # ② 确认配置锁的闭包里没有取其他锁（有输出即缺陷）
+//! grep -rn -A6 "with_config_mut(" src-tauri/src/ | grep -E "lock_unpoisoned|read_unpoisoned|\.lock\(\)"
+//! ```
+//!
+//! ⚠️ 这两条命令只做**提示**：闭包可以跨很多行，也可能经由被调用函数间接取锁
+//! （白名单第 1、3 条正是这种形态）。真正的把关仍是人读代码。
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tauri::menu::MenuItem;
@@ -243,7 +345,10 @@ pub(crate) fn run_coalesced(
     }
 }
 
-/// 设备缓存，用于托盘 tooltip 显示，避免重复 WMI 查询
+/// 设备缓存，用于托盘 tooltip 显示，避免重复 WMI 查询。
+///
+/// 锁序：本锁是**顶层锁**，白名单允许它 → `CONFIG`（唯一实例在
+/// `tray.rs::build_tooltip_text`）。完整登记见本文件头的模块文档。
 static DEVICES_CACHE: OnceLock<Mutex<Vec<Device>>> = OnceLock::new();
 
 /// 获取设备缓存的引用

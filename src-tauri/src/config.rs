@@ -339,6 +339,7 @@ impl Config {
     }
 }
 
+/// 配置锁。**锁序登记见 `state.rs` 模块文档**（本锁在其中的层级、允许/禁止的嵌套边）。
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
 /// 日志级别进程缓存：0=关闭 1=标准 2=详细
 static LOG_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -653,8 +654,13 @@ pub fn flush_persist() {
 /// （`enqueue_persist` 的兜底分支是唯一例外，那时写线程已不可用）。
 fn persist_now(job: &PersistJob) {
     // 串行锁**故意**跨 I/O 持有：保证两次落盘不交错（各写一半 = 半个文件）。
-    // 它是专用的叶子锁，不与任何其他锁构成嵌套，故无锁序风险；
-    // 且本函数已只在写线程上执行，长时间持锁不影响 UI。
+    // 且本函数已只在写线程上执行（`enqueue_persist` 的兜底分支除外），长时间持锁不影响 UI。
+    //
+    // 锁序（P3-10，集中登记见 `state.rs` 模块文档）：本函数在持 `PERSIST_LOCK` 时
+    // 取 `LAST_CONFIG_CONTENT`（下面两处），即白名单第 2 条
+    // `PERSIST_LOCK → LAST_CONFIG_CONTENT`。**反向边不存在**——没有任何路径在持
+    // `LAST_CONFIG_CONTENT` 时取 `PERSIST_LOCK`，故不构成 AB/BA。
+    // （早先这里写的是「不与任何其他锁构成嵌套」，与下面的事实不符，已改正。）
     let _serial = crate::state::lock_unpoisoned(&PERSIST_LOCK);
 
     // 已有更新的写入取过号 → 本次内容已过期，丢弃（防乱序覆盖）

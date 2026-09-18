@@ -73,6 +73,14 @@
   释放锁后再调用 API——参考 `tray::build_audio_devices_menu` / `update_audio_devices_menu`。
   **评审检查项**：任何 `with_config(_mut)`、`lock_unpoisoned(..)`、`.lock()` 的持锁区内，
   逐行确认没有 Tauri 菜单/窗口 API、没有 `run_on_main_thread`、没有 COM/WMI 与文件 I/O
+- **锁序登记在 `state.rs` 模块文档（P3-10）**：全局锁的**层级**、**允许的嵌套边白名单**
+  （当前仅 3 条：`DEVICES_CACHE→CONFIG`、`PERSIST_LOCK→LAST_CONFIG_CONTENT`、
+  `BT_LOCK→BLE_CONN`）、**禁止的反向边**（一旦出现即构成 AB/BA 死锁条件）、
+  以及自查命令，全部集中在 `src-tauri/src/state.rs` 文件头的模块文档里。
+  新增锁、或新增任何「持 A 取 B」之前**先查那张表**——**不在白名单里的边一律按缺陷处理**。
+  为什么单列这一条：AB/BA 死锁既不报编译错、也不产生 panic 栈，只表现为进程静默僵死
+  （日志停在同一行、窗口点不动），散落在各文件的行内注释挡不住新调用点。
+  与「防护边界」同理，此处只做指针，**表本身以 `state.rs` 为单一来源**，勿在此重复列举。
 - **注释语言**：一律中文；专有名词 / 算法名 / 标准名可保留英文原文（如 WinRT、COM、牛顿迭代）
 - **分区样式**：`// ── 分区名 ──…` 长横线补齐对齐，Rust 与 JS 同款
 - **Rust 文档注释与日志**：`///` 用于 pub 项；日志统一走 `process::append_log`（标准级）
