@@ -194,10 +194,25 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 - 结构：popup/settings 双页体系，脚本"分区在前、入口最后"，命名镜像
   （`popup-{devices,audio}.js ↔ settings-{devices,audio}.js`），全部 JS 带标准头注释
   （四要素：文件职责 / 加载序 N/N · 提供：… / 依赖：…）
-- **invoke 双轨是有意设计，勿"统一"**：popup 页经 common.js 的 `getInvoke()`
-  防御式获取（弹窗生命周期内 webview 注入时序敏感）；settings 页依赖 common.js
-  顶层的 `const { invoke } = window.__TAURI__.core` 全局词法绑定裸用——
-  重排加载序或迁移文件时须保持各自语义
+- **invoke 双轨是有意设计，勿"统一"**：两页**都已是「惰性 + 防御式」**（P2-3 改造后），
+  差别在**取用形式与「未就绪」的表达能力**：
+  - popup 页走 common.js 挂在 `window` 上的 `getInvoke()`——返回**函数或 `null`**，
+    调用方以 `const invoke = getInvoke(); if (!invoke) return;` 判空降级；
+  - settings 页（含 settings-about.js）**裸用 `invoke(...)`**，它绑定到 common.js 顶层的
+    `const invoke = (...args) => …` 箭头函数（经典脚本的顶层 `const` **不是 `window` 属性**，
+    但同页后续脚本可见，属**跨脚本全局词法绑定**）。该包装内部**每次调用重新解析**
+    `window.__TAURI__.core`，未就绪时返回 **rejected Promise**，交给调用方既有的
+    `.catch()` / `try-catch` 降级。
+  ⇒ 关键差异：`getInvoke()` 能表达「未就绪」（`null`，可判空跳过），裸 `invoke` 不能
+  （只能给一个被拒的 Promise）。**故不要"统一"成一种写法。**
+  ⚠️ 两页的顶层代码都**隐式依赖 common.js 先执行**（settings 页顶层就调
+  `registerContextMenu(...)`，popup 页顶层就调 `initTheme()` / `loadDevices()`）。
+  **实测**把 common.js 排到最后：`check.mjs` 仍报「前端完整性检查通过」——第 2 类审计的
+  声明池**按页汇总且无序**，看不见顺序；而运行时报
+  `Uncaught ReferenceError: registerContextMenu is not defined @settings.js:120`。
+  词法 `const` 同理（顶层调 `invoke` 得 `ReferenceError: invoke is not defined`——
+  定义脚本执行前**该全局绑定根本不存在**，是 `not defined` 而**不是** TDZ）。
+  **重排加载序或迁移文件时须保持各自语义。**
 - 已否决路线：方案乙 ESM 迁移（触发重启条件：前端规模翻倍 / 多人协作 /
   config 共享实际出 bug；届时可先考虑 config 抽为经典脚本单例的廉价中间路线）
 - 材质系统收敛（删除 settings-general 回调手动三件套）暂缓，

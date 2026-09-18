@@ -8,7 +8,9 @@
  *             clampMenuPosition/hideAllContextMenus/createSubmenuShell/createCheckIcon/
  *             showRenameDialog/createDialog/closeDialog/showToast/describeShortcutError/
  *             bindShortcutRecorder
- * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖 */
+ * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖
+ *       ⚠️ 本文件顶层的 `const invoke` 同时是 **settings 页全部脚本的 invoke 来源**
+ *       （它们以裸 `invoke(...)` 跨脚本词法绑定使用，见下方注释） */
 //
 // Tauri API 一律「惰性获取 + 防御式降级」（P2-3）。
 // 顶层直接解构 `window.__TAURI__.core` 会在运行时未注入（或注入晚于本文件执行）时
@@ -17,6 +19,15 @@
 //   · `invoke` 包装为「每次调用重新解析」，未就绪时返回 rejected Promise，
 //     交给调用方既有的 `.catch()` / `try-catch` 走降级路径；
 //   · 顶层事件监听一律经 `onTauriEvent()`，未就绪时静默跳过并返回 false。
+//   · ⚠️ 下面这个 `invoke` 包装**同时是 settings 页的 invoke 来源**：settings*.js
+//     以裸 `invoke(...)` 跨脚本词法绑定使用它（顶层 `const` 不是 `window` 属性，
+//     但同页后续脚本可见）⇒ **不要搬出本文件、不要改成 `window.invoke`、不要让
+//     settings.html 把它排到 common.js 之前**。实测把本文件排到最后：`check.mjs`
+//     仍报通过（声明池按页汇总且无序，看不见顺序），而运行时报
+//     `ReferenceError: registerContextMenu is not defined`（顶层调用的 `window.*`）、
+//     `ReferenceError: invoke is not defined`（词法 `const`——定义脚本执行前该全局
+//     绑定根本不存在，是 not defined 而非 TDZ）。两页取用形式的差异见 `AGENTS.md`
+//     「前端架构备忘」，**勿统一**。
 const invoke = (...args) => {
   const core = window.__TAURI__ && window.__TAURI__.core;
   if (!core || typeof core.invoke !== "function") {
