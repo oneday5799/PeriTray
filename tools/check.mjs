@@ -26,6 +26,13 @@
  *   异步上下文里的阻塞 sleep（P2-10）、锁序死锁、RAII 守卫未释放……一概拦不住。
  * - **未加守卫的 API 访问**：未判空的 `window.__TAURI__` 使用、未 `.catch()` 的
  *   Promise、`try/catch` 漏网（P2-3 那类「运行时未注入即整文件停摆」）。
+ * - **跨文件加载序**：第 2 类审计的声明池由 `pageJs` **按页汇总**，是个**无序集合**
+ *   ⇒ 重排 `<script>` 顺序、把定义搬到别的文件、或在「顶层声明」与 `window.` 挂载
+ *   之间改形式，本脚本**一律看不见**。实测把 `settings.html` 的 common.js 排到最后：
+ *   本脚本仍输出「前端完整性检查通过」，而页面运行时报
+ *   `Uncaught ReferenceError: registerContextMenu is not defined @settings.js:120`
+ *   （两页顶层代码都隐式依赖 common.js 先执行；详见 `AGENTS.md`「防护边界」
+ *   与 Wiki 04 §3.1）。
  * - **同名检测的边界**：第 3 类只认**顶层 `function` 声明**；`const f = () => {}`、
  *   对象方法、动态赋值（`window.f = …`）都不在检测范围内。
  *
