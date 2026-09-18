@@ -135,12 +135,20 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
 
     // 5. 缓存连接（覆盖旧连接并释放其 WinRT 资源）
     let conn = BLEConnection { device, session };
-    let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
-    if let Some(old) = guard.remove(device_id) {
+    // 锁内只做「换表」这一件事：Close 是 WinRT 调用、日志是文件 I/O，都不能持锁做
+    // （P3-10 锁序登记表 §四）。旧连接在锁内**摘出**（`remove` 交出所有权），
+    // 锁外再释放——与 P2-7 的低电量通知同款：锁内取数据，锁外做 I/O。
+    let old = {
+        let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
+        let old = guard.remove(device_id);
+        guard.insert(device_id.to_string(), conn);
+        old
+    }; // ← BLE_CONN 在此释放
+
+    if let Some(old) = old {
         let _ = old.session.as_ref().map(|s| s.Close());
         let _ = old.device.Close();
     }
-    guard.insert(device_id.to_string(), conn);
 
     crate::process::append_verbose_log("[bt:dbg] ble_connect: done");
     crate::process::append_log("[bt] BLE connect 完成");
@@ -151,23 +159,29 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
 
 fn ble_disconnect(device_id: &str) -> Result<String, String> {
     standard_log!("[bt] BLE disconnect: {}", device_id);
-    let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
+    // 锁内只做「摘表」：Close 是 WinRT 调用、日志是文件 I/O，都不能持锁做
+    // （P3-10 锁序登记表 §四）。
+    let conn = {
+        let mut guard = ble_conn().lock().map_err(|e| e.to_string())?;
+        guard.remove(device_id)
+    }; // ← BLE_CONN 在此释放
 
-    if let Some(conn) = guard.remove(device_id) {
-        verbose_log!(
-            "[bt:dbg] ble_disconnect: closing connection for {}",
-            device_id
-        );
-        // 显式 Close() 释放 WinRT BLE 连接资源，再 drop 释放 Rust 所有权
-        let _ = conn.session.as_ref().map(|s| s.Close());
-        let _ = conn.device.Close();
-        drop(conn.session);
-        drop(conn.device);
-        crate::process::append_verbose_log("[bt:dbg] ble_disconnect: done");
-        crate::process::append_log("[bt] BLE disconnect 完成");
-        Ok("disconnected".into())
-    } else {
-        Err("no BLE connection cached".into())
+    match conn {
+        Some(conn) => {
+            verbose_log!(
+                "[bt:dbg] ble_disconnect: closing connection for {}",
+                device_id
+            );
+            // 显式 Close() 释放 WinRT BLE 连接资源，再 drop 释放 Rust 所有权
+            let _ = conn.session.as_ref().map(|s| s.Close());
+            let _ = conn.device.Close();
+            drop(conn.session);
+            drop(conn.device);
+            crate::process::append_verbose_log("[bt:dbg] ble_disconnect: done");
+            crate::process::append_log("[bt] BLE disconnect 完成");
+            Ok("disconnected".into())
+        }
+        None => Err("no BLE connection cached".into()),
     }
 }
 

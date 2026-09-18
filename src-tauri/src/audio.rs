@@ -264,9 +264,17 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
             } else {
                 endpoint.SetMute(false, ptr::null())?;
                 if force_mute {
-                    // 恢复静音前的音量
-                    let mut guard = crate::state::lock_unpoisoned(force_mute_prev_volume());
-                    if let Some(prev) = guard.remove(&name) {
+                    // 恢复静音前的音量。
+                    //
+                    // ⚠️ `remove` 的结果必须先落到**独立语句**再进 `if let`：本仓是
+                    // edition 2021，`if let` 的临时量存活到整个 `if` 块结束，若写成
+                    // `if let Some(prev) = lock(..).remove(&name) { SetMasterVolumeLevelScalar(..) }`，
+                    // 则这个 COM 调用会在**持锁状态下**执行。拆成语句后 `MutexGuard`
+                    // 在分号处即释放，COM 调用全程无锁。
+                    // 与 `toast.rs` 的 `PREV_TOAST.take()` 是同一类坑（P3-10 锁序登记表 §四）。
+                    let prev =
+                        crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
+                    if let Some(prev) = prev {
                         let _ = endpoint
                             .SetMasterVolumeLevelScalar(prev.max(0.0).min(1.0), ptr::null());
                     }

@@ -69,19 +69,23 @@
 //! | `force_mute_prev_volume()` | `audio.rs` | 强制静音前的音量 |
 //! | `ANIM_TEST_LOCK` | 本文件（`#[cfg(test)]`） | 串行化动画相关用例 |
 //!
-//! ## 四、已知风险点（登记时如实记录，尚未修）
+//! ## 四、持锁做 I/O：历史与现状
 //!
-//! 以下不属于锁序本身，但同属持锁纪律（`AGENTS.md`「持锁区不得调用…」），
-//! 集中记在这里以免遗漏：
+//! 登记锁序时顺带扫出三处「持锁做 I/O」（同属 `AGENTS.md`「持锁区不得调用…」）。
+//! 前两处已在紧随 P3-10 的提交中修复，留档于此以免回归：
 //!
-//! - `bt_ble.rs` 的 `ble_connect` / `ble_disconnect` 在持 `BLE_CONN` 时做两类 I/O：
-//!   ① WinRT 调用（`session.Close()` / `device.Close()`）；
-//!   ② **文件 I/O**（`verbose_log!` / `append_verbose_log` / `append_log` 会写日志文件，
-//!   `sync_all` 在杀软实时扫描下可达数十毫秒）。
-//!   修法同 P2-7：锁内只 `remove` 出待关闭的对象，锁外再 Close 与记日志。
-//! - `audio.rs` 的 `toggle_device_mute` 在持 `force_mute_prev_volume()` 时调用
-//!   `SetMasterVolumeLevelScalar`（COM）。这与 `toast.rs` 已修过的是**完全同类**的
-//!   edition 2021 临时量陷阱（`if let Some(x) = lock().take()` 会让守卫活到整个 `if` 块）。
+//! - ✅ `bt_ble.rs` 的 `ble_connect` / `ble_disconnect`：原先在持 `BLE_CONN` 时
+//!   ① 调 WinRT（`session.Close()` / `device.Close()`）；② **写日志文件**
+//!   （`verbose_log!` / `append_verbose_log` / `append_log`，`sync_all` 在杀软实时
+//!   扫描下可达数十毫秒）。现改为锁内只「摘表/换表」，锁外再 Close 与记日志
+//!   ——与 P2-7 的低电量通知同款：锁内取数据，锁外做 I/O。
+//! - ✅ `audio.rs` 的 `toggle_device_mute`：原先在持 `force_mute_prev_volume()` 时
+//!   调用 `SetMasterVolumeLevelScalar`（COM）。这与 `toast.rs` 已修过的是**完全同类**
+//!   的 edition 2021 临时量陷阱（`if let Some(x) = lock().take()` 会让守卫活到整个
+//!   `if` 块）；现已把 `remove` 落到独立语句。
+//!
+//! 仍待处理：
+//!
 //! - `bt_ble.rs` 用 `.lock().map_err(..)` 而非统一的 `state::lock_unpoisoned`，
 //!   与 P2-11 确立的统一入口约定不一致（中毒时会让蓝牙操作报错而非继续）。
 //!
