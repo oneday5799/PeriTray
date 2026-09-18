@@ -301,7 +301,9 @@ fn should_delete_log(name: &str, retention: crate::config::LogRetention, today_d
     if !is_managed_log_name(name) {
         return false;
     }
-    // 「仅一次」模式下，非本次运行的日志都该清掉（活动日志由调用方按当前文件名排除）
+    // 「仅一次」模式下，非本次运行的日志都该清掉。不误删活动日志靠两道防线：
+    // 本进程的按文件名排除（调用方传 `current_name`），其他实例的靠活动性探测
+    // （见 `is_file_in_use`）。缺了后者，第二实例启动就会删掉主实例正在写的日志。
     if retention == LogRetention::Once {
         return true;
     }
@@ -312,37 +314,88 @@ fn should_delete_log(name: &str, retention: crate::config::LogRetention, today_d
     today_days - days_from_civil(fy as i64, fm as i64, fd as i64) >= retention_days(retention)
 }
 
-/// 清理旧日志文件（根据保留时长设置）
-pub fn clean_old_logs() {
-    let retention = crate::config::with_config(|c| c.log_retention);
+/// 判断日志文件是否正被**任意进程**持有（活动性探测）。
+///
+/// **为什么需要它**：`Once` 保留策略下 `should_delete_log` 一律返回 true，而
+/// 「跳过活动日志」原本只比对**本进程**的文件名（`log_path()` 按 pid 命名）。
+/// 于是第二个实例启动时——也就是用户双击图标的最高频路径——会把**主实例正在写**
+/// 的 `debug_once_{主pid}.log` 删掉；主实例的写线程仍缓存着该句柄（`LogSink`），
+/// 后续日志全部写进「已从目录删除」的文件 ⇒ 磁盘有数据但目录里看不见。
+/// `clean_old_logs()` 早于单实例插件注册（`main.rs`），故单实例机制帮不上忙。
+///
+/// **探测原理**：Rust 的 `File` 在 Windows 上默认以
+/// `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE` 打开，故用
+/// `share_mode(0)`（不共享）打开同一路径时，只要已有持有者就必然失败并返回
+/// `ERROR_SHARING_VIOLATION (32)`。本机实测：本进程持有与跨进程持有均返回 raw=32，
+/// 而同为默认共享模式打开则成功 ⇒ 失败确实源于共享位，而非权限或路径问题。
+///
+/// **容错方向**：只有 `NotFound` 判为「未占用」，其余错误（权限不足、杀软锁、
+/// 路径异常）一律判为**被占用**。删除不可逆：误判成「被占用」只是少清一个文件
+/// （下次启动会重试），误判成「未占用」则丢日志。
+///
+/// 注：本模块整体依赖 Win32（顶部 `OsStrExt` 等），无跨平台分支的必要。
+fn is_file_in_use(path: &std::path::Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+    {
+        Ok(_) => false,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
+}
 
-    // 根目录遗留：旧版本把日志写在 exe 根目录，这里无条件清除，避免根目录杂乱
-    remove_legacy_root_logs();
+/// 一次目录清理的计数结果（供单测断言，也让调用方可汇总）
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CleanOutcome {
+    /// 已删除的文件数
+    deleted: usize,
+    /// 因正被某个进程持有而跳过的文件数
+    in_use: usize,
+}
 
-    let dir = logs_dir();
-    let entries = match std::fs::read_dir(&dir) {
+/// 清理 `dir` 下按保留策略应删除的日志文件。
+///
+/// 与 `clean_old_logs` 拆开是为了**可测**：后者固定作用于 `logs_dir()`
+/// （= exe 目录），单测无法在不污染真实日志目录的前提下验证
+/// 「删除判据 + 活动性探测」这条接线是否真的接通。
+fn clean_log_dir(
+    dir: &std::path::Path,
+    retention: crate::config::LogRetention,
+    current_name: Option<&std::ffi::OsStr>,
+    today_days: i64,
+) -> CleanOutcome {
+    let mut out = CleanOutcome::default();
+    let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(_) => return out,
     };
-
-    let current_name = log_path().file_name().map(|n| n.to_owned());
-    let (y, m, d) = local_date();
-    let today_days = days_from_civil(y as i64, m as i64, d as i64);
 
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        // 跳过当前正在写入的日志文件（任何触发时机都不误删活动日志）
-        if current_name.as_deref() == Some(name.as_os_str()) {
+        // 第一道防线：跳过本进程正在写入的日志（按文件名，零系统调用）。
+        // 探测法也能挡住它，但这一条更廉价，且不依赖「句柄已建立」这一前提。
+        if current_name == Some(name.as_os_str()) {
             continue;
         }
         if !should_delete_log(&name_str, retention, today_days) {
             continue;
         }
+        // 第二道防线：**其他实例**正在写的日志。按文件名排除覆盖不到它们，
+        // 这是 `Once` 模式下唯一的防线（也正是本函数被拆出来的原因）。
+        if is_file_in_use(&entry.path()) {
+            out.in_use += 1;
+            crate::verbose_log!("[process] 跳过被占用的日志: {}", name_str);
+            continue;
+        }
 
         match std::fs::remove_file(entry.path()) {
             Ok(()) => {
+                out.deleted += 1;
                 // 删除是不可逆的：留下一条可追溯的记录，否则「日志莫名少了」无法定位
                 crate::standard_log!("[process] 清理旧日志: {}", name_str);
             }
@@ -352,6 +405,22 @@ pub fn clean_old_logs() {
             }
         }
     }
+    out
+}
+
+/// 清理旧日志文件（根据保留时长设置）
+pub fn clean_old_logs() {
+    let retention = crate::config::with_config(|c| c.log_retention);
+
+    // 根目录遗留：旧版本把日志写在 exe 根目录，这里无条件清除，避免根目录杂乱。
+    // 自 B5 起 `log_path()` 恒指向 `logs/`，故根目录不可能存在活动日志，无需探测。
+    remove_legacy_root_logs();
+
+    let current_name = log_path().file_name().map(|n| n.to_owned());
+    let (y, m, d) = local_date();
+    let today_days = days_from_civil(y as i64, m as i64, d as i64);
+
+    clean_log_dir(&logs_dir(), retention, current_name.as_deref(), today_days);
 }
 
 /// 清除 exe 根目录下旧版本遗留的 debug*.log（迁移至 logs/ 前的历史文件）
@@ -563,6 +632,7 @@ pub fn open_settings_page(page: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// 每个用例独立的临时路径（沿用仓库既有写法：temp_dir + tag + pid）
@@ -809,5 +879,158 @@ mod tests {
             "flush 返回后日志文件应已增长（写线程未落盘？）"
         );
         assert!(after.contains(&marker), "标记行必须已落盘: {}", marker);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 活动性探测（`is_file_in_use` / `clean_log_dir`）
+    //
+    // 修的是这条真实缺陷：`retention = once` 时，第二个实例启动会删掉
+    // 主实例正在写的 `debug_once_{主pid}.log`（主实例的写线程仍缓存着句柄，
+    // 后续日志写进「已从目录删除」的文件 ⇒ 磁盘有数据但目录里看不见）。
+    // 触发路径是用户双击图标这一最高频操作。
+    // ═══════════════════════════════════════════════════════════════
+
+    /// 探测的前提：默认共享模式下打开的 `File` 会让 `share_mode(0)` 打开失败。
+    /// 本机实测该失败为 raw=32（`ERROR_SHARING_VIOLATION`），且 `kind()` 是
+    /// `Uncategorized` 而非 `PermissionDenied` ⇒ 判据不能只看 `kind()`。
+    #[test]
+    fn is_file_in_use_detects_held_file() {
+        let path = tmp_path("inuse").with_extension("log");
+        std::fs::remove_file(&path).ok();
+        std::fs::write(&path, b"x\n").unwrap();
+
+        // 无人持有 ⇒ 未占用
+        assert!(!is_file_in_use(&path), "无人持有的文件不该判为占用");
+
+        // 持有中（默认共享模式）⇒ 占用
+        let mut holder = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        holder.write_all(b"holding\n").unwrap();
+        assert!(is_file_in_use(&path), "被持有的文件必须判为占用");
+
+        // 释放 ⇒ 恢复为未占用（证明探测反映的是实时状态，不是一次性结果）
+        drop(holder);
+        assert!(!is_file_in_use(&path), "句柄释放后不该再判为占用");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// 文件不存在时判为「未占用」：否则首次启动（日志目录为空）会把
+    /// 「不存在」当成占用，虽不致命但会让计数与日志误导排查方向。
+    #[test]
+    fn is_file_in_use_false_for_missing_file() {
+        let path = tmp_path("inuse_missing").with_extension("log");
+        std::fs::remove_file(&path).ok();
+        assert!(!is_file_in_use(&path), "不存在的文件应判为未占用");
+    }
+
+    /// **核心回归**：被另一个写入者持有的过期日志不得被删除，同时其余过期日志
+    /// 必须照常删掉（后者是正控——否则「没删」可能只是清理压根没跑）。
+    #[test]
+    fn clean_log_dir_skips_file_held_by_another_writer() {
+        use crate::config::LogRetention;
+        let dir = tmp_path("clean_held");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let today = days_from_civil(2026, 9, 18);
+
+        // 两个都该被删的文件：一个被持有（模拟另一实例的活动日志），一个无人持有
+        let held = dir.join("debug_once_4242.log");
+        let idle = dir.join("debug_once_4243.log");
+        // 用户的文件：任何策略下都不该被碰（P2-9 在新代码路径上的回归）
+        let user = dir.join("debug_user.log");
+
+        let mut holder = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&held)
+            .unwrap();
+        holder.write_all(b"still writing\n").unwrap();
+        std::fs::write(&idle, b"stale\n").unwrap();
+        std::fs::write(&user, b"mine\n").unwrap();
+
+        // current_name = None 即「站在第二实例的视角看主实例的日志」
+        let out = clean_log_dir(&dir, LogRetention::Once, None, today);
+
+        // 先断言「文件是否还在」：注入验证失败时，报错信息才能直接指向缺陷本身，
+        // 而不是停在「计数不对」这种间接信号上。
+        assert!(
+            held.exists(),
+            "★ 被另一写入者持有的日志不得被删除（修复前此处会红）"
+        );
+        assert!(
+            !idle.exists(),
+            "无人持有的过期日志应被删除（证明清理确实在跑）"
+        );
+        assert!(user.exists(), "用户的 debug_user.log 任何情况下都不该被删");
+        assert_eq!(out.in_use, 1, "被持有的文件必须计入跳过计数");
+        assert_eq!(out.deleted, 1, "无人持有的过期文件必须被删掉（正控）");
+
+        drop(holder);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 按天命名下同样受益：主实例跨过午夜后仍在写昨天的文件，而第二实例的
+    /// `current_name` 已是今天 ⇒ 文件名排除失效，只有探测能挡住。
+    #[test]
+    fn clean_log_dir_skips_held_previous_day_log() {
+        use crate::config::LogRetention;
+        let dir = tmp_path("clean_prevday");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let today = days_from_civil(2026, 9, 18);
+
+        let held = dir.join("debug_20260917.log");
+        let mut holder = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&held)
+            .unwrap();
+        holder.write_all(b"crossed midnight\n").unwrap();
+
+        let out = clean_log_dir(
+            &dir,
+            LogRetention::OneDay,
+            Some(std::ffi::OsStr::new("debug_20260918.log")),
+            today,
+        );
+
+        assert!(held.exists(), "★ 被持有的跨天日志不得被删除");
+        assert_eq!(out.in_use, 1, "昨天的活动日志应被探测挡住");
+        assert_eq!(out.deleted, 0, "不该删掉任何被持有的文件");
+
+        drop(holder);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 第一道防线：本进程的日志即使尚未建立句柄（写线程惰性启动）也不得删。
+    /// 该文件此刻**无人持有** ⇒ 只有文件名判据能保住它，故本用例专测该判据。
+    #[test]
+    fn clean_log_dir_skips_current_file_by_name() {
+        use crate::config::LogRetention;
+        let dir = tmp_path("clean_current");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let today = days_from_civil(2026, 9, 18);
+
+        let current = dir.join("debug_once_7777.log");
+        std::fs::write(&current, b"mine\n").unwrap();
+        assert!(!is_file_in_use(&current), "前提：该文件此刻未被持有");
+
+        let out = clean_log_dir(
+            &dir,
+            LogRetention::Once,
+            Some(std::ffi::OsStr::new("debug_once_7777.log")),
+            today,
+        );
+
+        assert_eq!(out.deleted, 0, "当前日志不得被删");
+        assert!(out.in_use == 0, "它没被占用，不该计入 in_use");
+        assert!(current.exists(), "★ 按文件名排除失效时此处会红");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
