@@ -47,9 +47,15 @@
  * · **基线写错 lint 名不会静默失效**：`-D warnings` 会把 `unknown_lints`
  *   升级为 `error[E0602]` ⇒ 但**改基线必须实跑一次**，否则 CI 会以
  *   「unknown lint」的形式变红（已实测）。
- * · **工具链浮动**：CI 用 `dtolnay/rust-toolchain@stable`。Rust 若往
- *   `clippy::all` 里新增 lint，CI 会**无故变红**——这与既有的
- *   `RUSTFLAGS: -D warnings` 属**同一类既有风险**，本次既未新增也未修复。
+ * · **工具链版本已固定（2026-09-19，本节此前写「CI 用浮动 @stable」）**：版本由仓库根的
+ *   `rust-toolchain.toml` 指定；`ci.yml` / `release.yml` 都**从该文件读 channel 再安装**，
+ *   并在同一步断言「生效工具链 == 文件里的值」⇒ 本地与 CI 同版，
+ *   **「Rust 往 clippy::all 加新 lint ⇒ CI 无故变红」这一类风险已消除**。
+ *   代价是换成了「改 channel 的人必须自己把本脚本跑一遍」——故 `rust-toolchain.toml`
+ *   文件头写了升级三步（跑五道闸门 / 看 CI 十步全绿 / 同步 Wiki 08）。
+ *   立此条的实测依据：浮动的 `@stable` 推进到 1.98 后新增 `chunks_exact_to_as_chunks`，
+ *   命中**存量**代码 `src-tauri/src/app_icon.rs:477`，在 `-D warnings` 下成为编译错误
+ *   （已修，`d8a483c`）。
  * · `significant_drop_in_scrutinee`（nursery，默认关）实测命中 1 处
  *   （`src/windows.rs:146` 的 `if let Some(info) = *lock_unpoisoned(...)`，
  *   守卫活到 `if let` 结束）——该处 body 只有 `return info;`，**当前无害**；
@@ -58,6 +64,7 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
 import path from "node:path";
 
 const OPTIONAL = process.argv.includes("--optional");
@@ -127,6 +134,36 @@ if (!clippyAvailable) {
       "[check-clippy]    本机补装：rustup component add clippy"
   );
   process.exit(1);
+}
+
+// 工具链版本自检（**只告警，不拦截**）。版本固定在仓库根的 rust-toolchain.toml，
+// CI 那一步会硬断言；本地此前没有任何判据 —— 若被 RUSTUP_TOOLCHAIN 之类覆盖，
+// 本次 clippy 结果就不代表 CI 的结果（这正是 2026-09-19「本地绿、CI 红」的成因）。
+const pinned = (() => {
+  try {
+    const text = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");
+    const m = text.match(/^\s*channel\s*=\s*"([^"]*)"/m);
+    return m ? m[1] : null;
+  } catch {
+    return null; // 文件不存在：说明是旧检出，不做判断
+  }
+})();
+
+if (pinned) {
+  try {
+    const active = execFileSync("rustup", ["show", "active-toolchain"], {
+      cwd: CARGO_DIR,
+      encoding: "utf8",
+    }).trim();
+    if (!active.startsWith(pinned)) {
+      console.warn(
+        `[check-clippy] ⚠️ 生效工具链「${active}」与 rust-toolchain.toml 固定的「${pinned}」不一致\n` +
+          "[check-clippy]    本次 clippy 结果**不代表 CI 的结果**。常见原因：设了 RUSTUP_TOOLCHAIN。"
+      );
+    }
+  } catch {
+    // rustup 不在 PATH（非 rustup 管理的工具链）：跳过自检，不影响闸门本身
+  }
 }
 
 console.log("[check-clippy] 运行 cargo clippy --all-targets（基线 20 条 + 显式开启 3 条）...");

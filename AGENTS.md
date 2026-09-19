@@ -193,6 +193,18 @@ Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` �
   基线里 lint 名写错**不会静默失效**（`-D warnings` 把 `unknown_lints` 升级为 `E0602`），
   但**改基线必须实跑一次**。**详见 `tools/check-clippy.mjs` 头部注释。**
 
+**Rust 工具链版本是固定的（2026-09-19）**：由仓库根的 `rust-toolchain.toml` 指定
+（当前 `1.98.1`）。rustup 对仓库内**任何** `cargo` / `rustc` / `rustfmt` / `clippy` 调用
+都会读它，优先级 `RUSTUP_TOOLCHAIN` 环境变量 > `rust-toolchain.toml` > `rustup default`
+⇒ **本地与 CI 同版，且不需要改本机 `rustup default`**。`ci.yml` 与 `release.yml` 都
+**从该文件读 channel 再安装**，并在同一步断言「生效工具链 == 文件里的值」——
+若被环境变量之类覆盖，那一步当场变红，而不是让两边静默跑在不同版本上
+（`tools/check-clippy.mjs` 在本地也有同款**只告警**自检）。
+⚠️ **改 channel 必须自己先把五道闸门跑一遍**：新版本往 `clippy::all` 加 lint 会命中
+**存量**代码，在 `-D warnings` 下直接变编译错误——2026-09-19 的
+`clippy::chunks_exact_to_as_chunks`（命中 `app_icon.rs`）正是此例，当时本地 `stable`
+是 1.96 而 CI 已到 1.98，于是「本地绿、CI 红」。升级三步写在 `rust-toolchain.toml` 文件头。
+
 **文档侧另有 `node tools/doc-table-audit.mjs`**（落地 §8.3 第 15 / 18 条；**CI 接入，
 pre-commit 不接**——文档变更频率低，且 pre-commit 要保持既有的 <1s + 3s + 14s 预算）。
 它做两件事：**表格列数体检**（同一张表内列数必须一致）与**自指型断言体检**
@@ -287,4 +299,5 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   为 `debug_once_<pid>.log`）；分「标准/详细」两级，级别关闭时 `append_log` 不落盘；
   设置页「通用 → 日志」可开关/调级；排查启动问题先看 `[main] startup complete`
 - **远程校验**：push 到 main 与 PR 由 CI 工作流（.github/workflows/ci.yml）
-  复跑本地闸门全套（check.mjs / rustfmt / cargo check -D warnings / cargo test）
+  复跑本地闸门全套（check.mjs / rustfmt / cargo check -D warnings / cargo test），
+  Rust 工具链按仓库根的 `rust-toolchain.toml` 安装并断言生效版本（见「提交自动闸门」）

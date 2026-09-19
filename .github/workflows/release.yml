@@ -19,14 +19,38 @@ jobs:
             rust_target: aarch64-pc-windows-msvc
 
     runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust stable (${{ matrix.target }})
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
+      # 与 ci.yml 的同名步骤**刻意保持同一份逻辑**（只多一个矩阵 target），
+      # 免得两处漂移。工具链版本同样取自仓库根的 rust-toolchain.toml。
+      # ⚠️ 矩阵 target 必须装在**固定**的那个工具链上：若沿用浮动的 @stable 装
+      # aarch64，而 cargo 随后按 rust-toolchain.toml 切到别的版本，交叉编译会因
+      # 该版本没有 aarch64 的 std 而失败。
+      - name: Install Rust toolchain (pinned by rust-toolchain.toml)
+        shell: bash
+        run: |
+          pinned=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          if [ -z "$pinned" ]; then
+            echo "::error::rust-toolchain.toml 里读不到 channel（文件被改名或改了格式？）"
+            exit 1
+          fi
+          echo "rust-toolchain.toml 固定版本：$pinned"
+          rustup toolchain install "$pinned" --profile minimal \
+            --target "${{ matrix.rust_target }}" --no-self-update
+          rustup default "$pinned"
+          active=$(rustup show active-toolchain)
+          echo "生效工具链：$active"
+          case "$active" in
+            "$pinned"*) echo "OK：正在使用固定的工具链 $pinned" ;;
+            *)
+              echo "::error::工具链漂移 —— rust-toolchain.toml 固定 $pinned，但生效的是 $active"
+              exit 1
+              ;;
+          esac
 
       - name: Install Node.js
         uses: actions/setup-node@v4

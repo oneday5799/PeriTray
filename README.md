@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Rust-1.85+-black?style=flat-square&logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/Rust-1.98.1-black?style=flat-square&logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/Tauri-2.x-blue?style=flat-square&logo=tauri" alt="Tauri">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64%2FARM64)-0078d4?style=flat-square&logo=windows" alt="Platform">
   <img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square" alt="License">
@@ -158,6 +158,10 @@ PeriTray/
 npm install
 npm run tauri dev
 ```
+
+> Rust 工具链版本由仓库根的 `rust-toolchain.toml` **固定**（当前 `1.98.1`），本地与 CI 同版；
+> rustup 会自动按该文件安装对应版本，无需手动切换、也不必改本机 `rustup default`。
+> 徽章上的版本号即该固定版本，**不是「最低支持」**——改版本见该文件头注释里的升级流程。
 
 ## 开发须知
 

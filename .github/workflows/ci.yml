@@ -8,14 +8,43 @@ on:
 jobs:
   check:
     runs-on: windows-latest
+    env:
+      # dtolnay/rust-toolchain 的 action 原本会设这个值，换成手写步骤后显式保留：
+      # CI 里增量编译只让 target 膨胀、缓存变大，没有收益。
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Rust 工具链版本固定在仓库根的 rust-toolchain.toml（本地与 CI 单一来源；
+      # 固定原因见该文件头注释——浮动的 stable 曾造成「本地绿、CI 红」）。
+      # 本步**显式按该文件安装，并断言生效工具链就是它**：rustup 的优先级是
+      # RUSTUP_TOOLCHAIN 环境变量 > rust-toolchain.toml > rustup default，
+      # 故将来若有人往 env 里塞 RUSTUP_TOOLCHAIN，本步会当场变红，
+      # 而不是让本地与 CI 静默跑在两个版本上。
+      # 该断言已在本机做过可证伪验证：注入 RUSTUP_TOOLCHAIN ⇒ exit 1；
+      # 把 channel 从文件里删掉 ⇒ 同样 exit 1。
+      - name: Install Rust toolchain (pinned by rust-toolchain.toml)
+        shell: bash
+        run: |
+          pinned=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+          if [ -z "$pinned" ]; then
+            echo "::error::rust-toolchain.toml 里读不到 channel（文件被改名或改了格式？）"
+            exit 1
+          fi
+          echo "rust-toolchain.toml 固定版本：$pinned"
+          rustup toolchain install "$pinned" --profile minimal \
+            --component rustfmt --component clippy --no-self-update
+          rustup default "$pinned"
+          active=$(rustup show active-toolchain)
+          echo "生效工具链：$active"
+          case "$active" in
+            "$pinned"*) echo "OK：CI 正在使用固定的工具链 $pinned" ;;
+            *)
+              echo "::error::工具链漂移 —— rust-toolchain.toml 固定 $pinned，但生效的是 $active"
+              exit 1
+              ;;
+          esac
 
       - name: Install Node.js
         uses: actions/setup-node@v4
