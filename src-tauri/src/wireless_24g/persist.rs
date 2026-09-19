@@ -61,7 +61,7 @@ pub(crate) fn load(path: &Path) -> HashMap<(String, String), (i32, u64)> {
                     // 旧格式裸整数：无时间戳，按当前时间补 seen（保留一周期）
                     RawValue::Level(lv) => (lv, now),
                     // 新格式：seen==0 视为旧值，同样按当前时间补齐
-                    RawValue::Entry(Entry { level, seen }) if seen == 0 => (level, now),
+                    RawValue::Entry(Entry { level, seen: 0 }) => (level, now),
                     RawValue::Entry(Entry { level, seen }) => (level, seen),
                 };
                 if now.saturating_sub(seen) > MAX_AGE_SECS {

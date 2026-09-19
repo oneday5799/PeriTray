@@ -79,7 +79,7 @@ jobs:
           RUSTFLAGS: -D warnings
         working-directory: src-tauri
 
-      # 与 tools/pre-commit 共用同一条命令（含 20 条存量基线，单一来源见该脚本）
+      # 与 tools/pre-commit 共用同一条命令（含存量基线，条数见该脚本的 BASELINE_ALLOW）
       - name: Cargo clippy (deny warnings, baseline-pinned)
         run: node tools/check-clippy.mjs
 

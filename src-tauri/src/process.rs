@@ -528,10 +528,10 @@ fn chrono_str() -> String {
         use windows_sys::Win32::System::SystemInformation::GetLocalTime;
         let mut st: SYSTEMTIME = unsafe { std::mem::zeroed() };
         unsafe { GetLocalTime(&mut st) };
-        return format!(
+        format!(
             "{:04}.{:02}.{:02} {:02}:{:02}:{:02}.{:03}",
             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds
-        );
+        )
     }
     #[cfg(not(target_os = "windows"))]
     {

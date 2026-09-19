@@ -241,7 +241,7 @@ const HEARTBEAT_EVERY_ROUNDS: u64 = 5;
 
 /// 本轮是否应记录心跳日志。抽成纯函数以便边界单测。
 fn should_log_heartbeat(round: u64) -> bool {
-    round % HEARTBEAT_EVERY_ROUNDS == 0
+    round.is_multiple_of(HEARTBEAT_EVERY_ROUNDS)
 }
 
 /// 本轮 sleep 间隔是否长到可判定「系统经历过休眠 / 唤醒」（P2-4）。

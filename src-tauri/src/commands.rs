@@ -71,7 +71,7 @@ pub async fn get_devices_fresh() -> Result<Vec<device::Device>, String> {
 #[tauri::command]
 pub fn get_cached_devices() -> Vec<device::Device> {
     let cache = crate::state::get_devices_cache();
-    crate::state::lock_unpoisoned(&cache).clone()
+    crate::state::lock_unpoisoned(cache).clone()
 }
 
 #[tauri::command]
@@ -286,7 +286,7 @@ pub async fn connect_bluetooth_device(device_id: String, is_ble: bool) -> Result
 
 #[tauri::command(async)]
 pub async fn check_bt_connection(device_id: String) -> Result<Option<bool>, String> {
-    Ok(run_blocking(move || crate::bluetooth::check_device_connection(&device_id)).await?)
+    run_blocking(move || crate::bluetooth::check_device_connection(&device_id)).await
 }
 
 /// 前端行为埋点：写入运行日志（受日志级别门控，标准级可见）
@@ -575,7 +575,7 @@ pub fn set_hotkey_config(
                                          // 同键重设必须放行：此刻旧键尚未注销（校验先于副作用），它必然处于已注册状态，
                                          // 若按「已占用」拒绝，用户重新选中同一个键就会失败。
             let same_as_prev = prev_sc.as_ref() == Some(&sc);
-            if !same_as_prev && app.global_shortcut().is_registered(sc.clone()) {
+            if !same_as_prev && app.global_shortcut().is_registered(sc) {
                 return Err("快捷键已被占用".to_string()); // 被占用：状态零变化
             }
             Some(sc)
@@ -632,7 +632,7 @@ pub fn set_device_shortcut(
     if let Some(ref new_key_str) = key {
         let sc = parse_shortcut(new_key_str)?;
         // 若键已被注册且不是另一设备快捷键（不在当前设备快捷键集合中）→ 与非设备功能冲突
-        if app.global_shortcut().is_registered(sc.clone()) {
+        if app.global_shortcut().is_registered(sc) {
             let share_enabled = crate::config::with_config(|c| c.enable_device_shortcut_cycle);
             let (used_by_any_device, used_by_other_device) = crate::config::with_config(|c| {
                 let any = c

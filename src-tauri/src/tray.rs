@@ -559,7 +559,6 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     // 显示器枚举/配置读取/窗口操作全部移出，
                     // 防止唤醒后子窗口消息队列卡死拖垮整个事件循环
                     let app = app.clone();
-                    let rect = rect;
                     std::thread::spawn(move || {
                         if let Some(pos) = TRAY_POS.get() {
                             // 物理坐标需整体转逻辑：仅除 x 会让 y 携带物理值，

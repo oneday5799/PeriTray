@@ -55,7 +55,7 @@ unsafe fn xinput_proc(name: &[u8]) -> Option<RawXinputFn> {
     if ptr.is_null() {
         None
     } else {
-        Some(std::mem::transmute(ptr))
+        Some(std::mem::transmute::<*mut c_void, RawXinputFn>(ptr))
     }
 }
 

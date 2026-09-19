@@ -183,16 +183,19 @@ Rust 文件有暂存改动时增量追加 `cargo fmt --check` + `cargo check` �
 
 **Rust 侧另有 `cargo clippy` 闸门**（`node tools/check-clippy.mjs`，CI 与 pre-commit 共用
 同一条命令，**单一来源在该脚本**）。它不是裸 `-D warnings`，而是
-**`-D warnings` + 20 条存量基线 `-A` + 3 条显式开启**：
+**`-D warnings` + 一份存量基线 `-A`（条数见脚本）+ 3 条显式开启**：
 
 - **为什么带基线**：2026-09-18 实测当前 HEAD 默认集报 **88 条**（bin 44 个唯一位置 + test
   单元重复计数），全是风格类（`redundant_closure` 16 / `field_reassign_with_default` 16 /
   `manual_clamp` 8 …），**与本次审查的 40 条发现零交集** ⇒ 裸 `-D warnings` 只会让 CI
   首次即红，逼人做无收益的风格改动。故存量按 lint 粒度封存，
   **修掉一条就从基线删一条**（基线即待办）。
+  ⚠️ **别在任何文档里写基线的条数**——它随修复递减，写死必然漂移。
+  **条数以 `tools/check-clippy.mjs` 的 `BASELINE_ALLOW` 为准**（该脚本的运行期消息
+  也从数组长度派生，不是硬编码）。进度：截至 2026-09-20 已由 20 类降到 8 类。
 - **3 条显式开启**（实测当前 0 命中，直接对应「持锁区只能做纯内存操作」）：
   `clippy::await_holding_lock` / `clippy::await_holding_refcell_ref` / `clippy::mutex_atomic`。
-- **边界（勿读成「Rust 侧已闭合」）**：基线那 20 条**对新增代码同样放行**；
+- **边界（勿读成「Rust 侧已闭合」）**：基线里那些 lint**对新增代码同样放行**；
   `.lock().unwrap()` **clippy 默认不覆盖**（`unwrap_used` 属 restriction 组、默认关闭，
   开启后全仓 94 条）；`let _ =` 丢弃 must_use **无机械防线**
   （`SingleFlightGuard` 没有 `#[must_use]`，而 `let _x = guard` 被语言规范主动豁免）；

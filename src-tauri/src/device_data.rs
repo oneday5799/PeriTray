@@ -103,7 +103,7 @@ fn merge_maps(
 ) -> HashMap<String, HashMap<String, DeviceInfo>> {
     let mut result = base;
     for (vid, pids) in overlay {
-        let entry = result.entry(vid).or_insert_with(HashMap::new);
+        let entry = result.entry(vid).or_default();
         for (pid, info) in pids {
             entry.insert(pid, info);
         }
@@ -249,7 +249,7 @@ mod tests {
         let mut map: HashMap<String, HashMap<String, DeviceInfo>> = HashMap::new();
         for (vid, pid, name, t) in entries {
             map.entry(vid.to_string())
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(pid.to_string(), info(name, t));
         }
         map

@@ -83,7 +83,7 @@ pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
 /// （校验位自身先清零再参与求和）。include_rid=true 时首字节补
 /// Report ID 占位 0x00，校验位索引右移至 32
 fn build_query(len: usize, include_rid: bool) -> Option<Vec<u8>> {
-    if len < 4 || len > 255 {
+    if !(4..=255).contains(&len) {
         return None;
     }
     let mut buf = vec![0u8; len];
@@ -112,6 +112,7 @@ fn apply_checksum(bytes: &mut [u8], checksum_index: usize) {
 /// 自适应解析电量百分比：
 /// - mac 形态 `[0]=0x20 [1]=0x01` → 百分比在 byte[3]
 /// - win 形态 `[1]=0x20 [2]=0x01` → 百分比在 byte[4]
+///
 /// 有效范围 1..=100，越界或长度不足返回 None
 fn parse_battery_percent(buf: &[u8]) -> Option<i32> {
     let pct = if buf.first() == Some(&0x20) && buf.get(1) == Some(&0x01) {

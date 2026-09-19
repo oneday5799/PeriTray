@@ -5,8 +5,9 @@
  *       （未装 clippy 时告警跳过，pre-commit 用；CI 一律硬失败）
  *
  * ── 为什么单独成脚本 ────────────────────────────────────────
- * CI 与 `tools/pre-commit` 都要跑**同一条** clippy 命令，而它带 20 条存量基线
- * （见下 `BASELINE_ALLOW`）。本仓反复吃过「同一份清单写在两处、改一处漏一处」的
+ * CI 与 `tools/pre-commit` 都要跑**同一条** clippy 命令，而它带一份存量基线
+ * （见下 `BASELINE_ALLOW`，**条数随修复递减，不要在任何地方写死**）。
+ * 本仓反复吃过「同一份清单写在两处、改一处漏一处」的
  * 亏（`AGENTS.md` ↔ Wiki 的 invoke 双轨描述、主方案 §5.3 ↔ §6.3 的 0/1 冲突），
  * 故把命令行收敛到本文件一处，CI 与钩子都只调用它。
  *
@@ -29,7 +30,7 @@
  *   · `clippy::mutex_atomic`              —— 该用原子量却用 `Mutex<bool>`
  *
  * ── 已知边界（**勿当成「Rust 侧已闭合」**，与 `AGENTS.md`「防护边界」互为表里）──
- * · `-A` 基线里的 20 条**对新增代码同样放行**——它们是「封存存量」，
+ * · `-A` 基线里的那些 lint**对新增代码同样放行**——它们是「封存存量」，
  *   **不是「这类问题不重要」**。要真拦住，得先修完存量再删对应 `-A`。
  * · 实测**默认集不含** `.lock().unwrap()` 的对应 lint：`clippy::unwrap_used`
  *   属 restriction 组、**默认关闭**；显式开启后全仓 **94 条**
@@ -70,30 +71,24 @@ import path from "node:path";
 const OPTIONAL = process.argv.includes("--optional");
 
 /**
- * 存量基线（2026-09-18 实测）。数字是**实测**命中数，不是估计；
- * 合计 88 条（含 test 单元的重复计数）。修掉一条就删一行。
+ * 存量基线（2026-09-18 首次实测；此后按批修复，**修掉一条就删一行**）。
+ *
+ * 注释里的数字是 2026-09-20 实测的**唯一位置数**——同一处源码会在 bin 与 test 两个
+ * 编译单元里各报一次，故 `cargo` 输出的原始告警行数约为它的两倍。两种口径都写清，
+ * 免得下一个人对着 `cargo clippy` 的条数说「对不上」。
+ *
+ * ⚠️ 每次改动本数组都必须**实跑一次** `node tools/check-clippy.mjs`：lint 名写错会以
+ *    `unknown lint (E0602)` 的形式让 CI 变红，而不是静默失效（已实测）。
  */
 const BASELINE_ALLOW = [
-  "clippy::redundant_closure", // 16
-  "clippy::field_reassign_with_default", // 16
-  "clippy::manual_clamp", //  8
-  "clippy::manual_c_str_literals", //  8
-  "clippy::type_complexity", //  5
-  "clippy::clone_on_copy", //  4
-  "clippy::too_many_arguments", //  4
-  "clippy::unwrap_or_default", //  3
-  "clippy::useless_conversion", //  2
-  "clippy::needless_borrow", //  2
-  "clippy::needless_question_mark", //  2
-  "clippy::derivable_impls", //  2
-  "clippy::needless_return", //  2
-  "clippy::nonminimal_bool", //  2
-  "clippy::redundant_locals", //  2
-  "clippy::manual_range_contains", //  2
-  "clippy::doc_lazy_continuation", //  2
-  "clippy::redundant_guards", //  2
-  "clippy::missing_transmute_annotations", //  2
-  "clippy::manual_is_multiple_of", //  2
+  "clippy::field_reassign_with_default", // 15
+  "clippy::redundant_closure", //  8
+  "clippy::manual_clamp", //  4
+  "clippy::manual_c_str_literals", //  4
+  "clippy::type_complexity", //  3
+  "clippy::too_many_arguments", //  2
+  "clippy::derivable_impls", //  1
+  "clippy::useless_conversion", //  1
 ];
 
 /** 显式开启（实测当前 0 命中）：与「持锁区只能做纯内存操作」直接相关。 */
@@ -166,7 +161,10 @@ if (pinned) {
   }
 }
 
-console.log("[check-clippy] 运行 cargo clippy --all-targets（基线 20 条 + 显式开启 3 条）...");
+console.log(
+  `[check-clippy] 运行 cargo clippy --all-targets（基线 ${BASELINE_ALLOW.length} 条` +
+    ` + 显式开启 ${ENFORCE_DENY.length} 条）...`
+);
 const res = spawnSync("cargo", args, { cwd: CARGO_DIR, stdio: "inherit" });
 
 if (res.error) {
@@ -176,7 +174,8 @@ if (res.error) {
 if (res.status !== 0) {
   console.error(
     "\n[check-clippy] ❌ clippy 闸门未通过，提交/CI 被拦截。\n" +
-      "[check-clippy]    若命中的是 `BASELINE_ALLOW` 里那 20 类**存量**风格问题，\n" +
+      `[check-clippy]    若命中的是 BASELINE_ALLOW 里那 ${BASELINE_ALLOW.length} 类` +
+        "**存量**风格问题，\n" +
       "[check-clippy]    正确做法是**就地修掉并从基线删掉那一行**，不要新加 `-A`；\n" +
       "[check-clippy]    若是 `unknown lint`（E0602），说明基线里的 lint 名写错了。"
   );
