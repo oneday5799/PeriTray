@@ -115,6 +115,23 @@ pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
     result
 }
 
+/// 把音量标量收敛到 `[0.0, 1.0]`。
+///
+/// ⚠️ 不能直接写 `v.clamp(0.0, 1.0)`：`f32::max` 会把 NaN 折成另一个操作数
+/// （`f32::NAN.max(0.0) == 0.0`），而 `clamp` 对 NaN **原样返回 NaN** ⇒ 会把 NaN
+/// 交给 `SetMasterVolumeLevelScalar` / `SetMasterVolume`，换来一个 `E_INVALIDARG`。
+/// 收敛点收成一处，既保住「NaN 视为 0.0」的既有语义，也让 `clippy::manual_clamp` 无话可说。
+///
+/// 唯一的残留差异：`-0.0` 经 `clamp` 仍是 `-0.0`（原写法给 `+0.0`）——
+/// 两者数值相等，且 Windows 侧按 `0.0 <= level <= 1.0` 校验，行为一致。
+fn sanitize_volume(v: f32) -> f32 {
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(0.0, 1.0)
+    }
+}
+
 /// 枚举指定方向的音频设备（output=eRender / input=eCapture），并标记系统默认
 fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
     unsafe {
@@ -198,7 +215,7 @@ pub fn set_device_volume(device_id: &str, volume: f32) -> Result<()> {
             let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
             let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
             let was_muted = endpoint.GetMute()?.as_bool();
-            let mut target = volume.max(0.0).min(1.0);
+            let mut target = sanitize_volume(volume);
             if mute_lock && was_muted {
                 let current = endpoint.GetMasterVolumeLevelScalar()?;
                 target = target.min(current);
@@ -223,7 +240,7 @@ pub fn set_shutdown_volumes(devices: &std::collections::HashMap<String, f32>) {
                             device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
                         {
                             let _ = endpoint
-                                .SetMasterVolumeLevelScalar(level.max(0.0).min(1.0), ptr::null());
+                                .SetMasterVolumeLevelScalar(sanitize_volume(level), ptr::null());
                             standard_log!(
                                 "[audio_notify] shutdown: set '{}' to {:.0}%",
                                 name,
@@ -277,8 +294,8 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
                     let prev =
                         crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
                     if let Some(prev) = prev {
-                        let _ = endpoint
-                            .SetMasterVolumeLevelScalar(prev.max(0.0).min(1.0), ptr::null());
+                        let _ =
+                            endpoint.SetMasterVolumeLevelScalar(sanitize_volume(prev), ptr::null());
                     }
                 }
             }
@@ -474,7 +491,7 @@ pub fn set_session_volume(session_id: &str, device_id: &str, volume: f32) -> Res
     );
     unsafe {
         let sv = find_session_volume(session_id, device_id)?;
-        sv.SetMasterVolume(volume.max(0.0).min(1.0), ptr::null())?;
+        sv.SetMasterVolume(sanitize_volume(volume), ptr::null())?;
     }
     Ok(())
 }

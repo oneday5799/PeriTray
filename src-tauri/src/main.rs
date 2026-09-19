@@ -745,11 +745,13 @@ mod tests {
 
     /// 「弹框」的替身：把弹框正文记进 Vec，避免测试真的弹模态框。
     type DialogLog = Arc<Mutex<Vec<String>>>;
+    /// 注入给被测代码的「弹框函数」。
+    type DialogFn = Box<dyn Fn(&str) + Send + Sync>;
 
-    fn recorder() -> (DialogLog, Box<dyn Fn(&str) + Send + Sync>) {
+    fn recorder() -> (DialogLog, DialogFn) {
         let log: DialogLog = Arc::new(Mutex::new(Vec::new()));
         let handle = log.clone();
-        let f: Box<dyn Fn(&str) + Send + Sync> =
+        let f: DialogFn =
             Box::new(move |msg: &str| crate::state::lock_unpoisoned(&handle).push(msg.to_string()));
         (log, f)
     }

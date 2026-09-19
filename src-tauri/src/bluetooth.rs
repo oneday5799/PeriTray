@@ -453,13 +453,20 @@ fn ble_device_from_info(
     Some((name, connected, device_id.to_string(), device))
 }
 
+/// 蓝牙枚举的中间行：`(name, connected, battery, device_id, is_ble)`。
+///
+/// 具名是为了让返回类型可读（`clippy::type_complexity`）。5 个元素全是**位置语义**，
+/// 顺序写错编译器不会报错，故名字本身就是文档。`pub` 是因为
+/// `find_paired_bluetooth_devices` 是 `pub`（否则触发 `E0446` 私有类型泄漏）。
+pub type BtDeviceRow = (String, bool, Option<u8>, String, bool);
+
 /// 蓝牙设备发现入口：枚举配对设备并附带电量。
 /// fresh=false 时电量走 SWR 缓存（过期/缺失排入后台补查，主轮询不阻塞）；
 /// fresh=true（手动刷新）时同步现查电量并写回缓存，BLE 复用枚举阶段已打开的
 /// 设备对象（避免二次 FromIdAsync），与后台补查互斥（后台在跑则降级读缓存）。
 pub fn find_paired_bluetooth_devices(
     fresh: bool,
-) -> Result<Vec<(String, bool, Option<u8>, String, bool)>, Box<dyn std::error::Error>> {
+) -> Result<Vec<BtDeviceRow>, Box<dyn std::error::Error>> {
     // 每次枚举入口顺手淘汰超龄条目，防止 device_id 长期累积
     evict_stale_bt_entries();
 

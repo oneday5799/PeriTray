@@ -43,14 +43,18 @@ mod material {
 
     fn get_set_window_composition() -> Option<SetWindowCompositionAttrFn> {
         *SET_WINDOW_COMPOSITION.get_or_init(|| unsafe {
-            let user32 =
-                windows_sys::Win32::System::LibraryLoader::LoadLibraryA(b"user32.dll\0".as_ptr());
+            // ⚠️ 用 windows-sys 的 `s!`，不要改成 `c"user32.dll".as_ptr()`：
+            // `CStr::as_ptr()` 给 `*const i8`，而 `PCSTR` 是 `*const u8` ⇒ 直接传会 `E0308`。
+            // `s!` 展开即 `concat!($s, '\0').as_ptr()`，类型天然是 `PCSTR`，NUL 也由编译器保证。
+            let user32 = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(windows_sys::s!(
+                "user32.dll"
+            ));
             if user32.is_null() {
                 return None;
             }
             let proc = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
                 user32,
-                b"SetWindowCompositionAttribute\0".as_ptr(),
+                windows_sys::s!("SetWindowCompositionAttribute"),
             );
             proc.map(|f| std::mem::transmute(f))
         })
@@ -212,13 +216,13 @@ pub fn check_material_support(material: &str) -> bool {
 
     let build = unsafe {
         let ntdll =
-            windows_sys::Win32::System::LibraryLoader::LoadLibraryA(b"ntdll.dll\0".as_ptr());
+            windows_sys::Win32::System::LibraryLoader::LoadLibraryA(windows_sys::s!("ntdll.dll"));
         if ntdll.is_null() {
             return false;
         }
         let proc = windows_sys::Win32::System::LibraryLoader::GetProcAddress(
             ntdll,
-            b"RtlGetVersion\0".as_ptr(),
+            windows_sys::s!("RtlGetVersion"),
         );
         let Some(f): Option<RtlGetVersionFn> = proc.map(|f| std::mem::transmute(f)) else {
             return false;

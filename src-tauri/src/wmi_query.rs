@@ -17,7 +17,14 @@ use crate::{standard_log, verbose_log};
 /// 蓝牙设备状态字符串：WMI 查询构造与托盘图标判断共用，避免字面量散落
 pub const BT_STATUS_CONNECTED: &str = "已连接";
 pub const BT_STATUS_PAIRED: &str = "已配对";
-static CACHED_REGEX: OnceLock<Mutex<Option<(String, Arc<Regex>)>>> = OnceLock::new();
+
+/// 正则缓存的一格：`(pattern, 编译结果)`。
+///
+/// 具名是为了让 `CACHED_REGEX` 的类型可读（`clippy::type_complexity`）。
+/// 两者必须同进同出——只换其中一个会让后续查询拿旧 pattern 配新正则。
+type RegexCacheEntry = (String, Arc<Regex>);
+
+static CACHED_REGEX: OnceLock<Mutex<Option<RegexCacheEntry>>> = OnceLock::new();
 
 fn get_cached_regex(pattern: &str) -> Option<Arc<Regex>> {
     let cache = CACHED_REGEX.get_or_init(|| Mutex::new(None));

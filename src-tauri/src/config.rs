@@ -4,9 +4,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LogRetention {
     Once,
+    /// 默认保留期。`Default` 由 derive 生成，与下方 `Deserialize` 的未知值降级
+    /// 共用同一处语义（两者都指向 `OneDay`）。
+    #[default]
     OneDay,
     ThreeDays,
     OneWeek,
@@ -46,12 +49,6 @@ impl<'de> Deserialize<'de> for LogRetention {
             // 避免未知值被原样持久化、下次启动再走一遍同样的分支。
             _ => Ok(Self::default()),
         }
-    }
-}
-
-impl Default for LogRetention {
-    fn default() -> Self {
-        Self::OneDay
     }
 }
 

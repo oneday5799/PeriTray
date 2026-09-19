@@ -18,8 +18,9 @@
  * `field_reassign_with_default` 16 / `manual_clamp` 8 / `manual_c_str_literals` 8 /
  * `type_complexity` 5 …——**当前剩余量只看下面的 `BASELINE_ALLOW`，别引本段数字**），
  * 与本次代码审查的 40 条发现**零交集** ⇒ 在「收尾批」里批量改它们**纯风险无收益**
- * （`manual_clamp` 改 `.clamp()` 还有 `min > max` 时 panic 的语义差异，
- * `derivable_impls` 直指 P1-7 刚整过的 `Config::default`）。
+ * （当时记的两条顾虑：`manual_clamp` 改 `.clamp()` 有 NaN 语义差异；`derivable_impls`
+ * 被记成「直指 P1-7 刚整过的 `Config::default`」——**后者是错的**：实测命中的是
+ * `LogRetention` 这个枚举的 `Default`，与 `Config::default` 无关，批 3 已订正并改掉）。
  * 故采用**显式基线**：存量按 lint 粒度封存，新增违规一律拦下；
  * **每修掉一条，就从 `BASELINE_ALLOW` 删一条**（基线即待办清单）。
  *
@@ -82,11 +83,13 @@ const OPTIONAL = process.argv.includes("--optional");
  *    `unknown lint (E0602)` 的形式让 CI 变红，而不是静默失效（已实测）。
  */
 const BASELINE_ALLOW = [
-  "clippy::manual_clamp", //  4
-  "clippy::manual_c_str_literals", //  4
-  "clippy::type_complexity", //  3
+  // ⚠️ 这是**有意保留的决定，不是遗漏**（2026-09-20 批 3 逐处判过）：
+  // 两处命中是 `dedup.rs::try_insert`（14 参 / 107 行 / 2 个调用点）与
+  // `wmi_query.rs::query_pnp_devices`（8 参 / 115 行 / 1 个调用点）。
+  // 清掉它得把参数收进结构体——那是**真重构**（约 222 行 + 3 个调用点），
+  // 不是等价改写，且正落在设备去重 / WMI 枚举这段语义最讲究的代码上。
+  // 收尾批里做它纯风险无收益；要真做，应作为独立批次、配独立的回归判据。
   "clippy::too_many_arguments", //  2
-  "clippy::derivable_impls", //  1
 ];
 
 /** 显式开启（实测当前 0 命中）：与「持锁区只能做纯内存操作」直接相关。 */
