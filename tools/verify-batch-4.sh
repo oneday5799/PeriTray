@@ -73,6 +73,9 @@ chk_test P2-4 tests::is_time_jump_is_strictly_greater_than_8s
 chk_test P2-5 audio::tests::apartment_mode_conflict_is_recognized_and_not_over_broad
 # P2-6：图标只写一次（比对两次调用的路径与 mtime）
 chk_test P2-6 windows::tests::toast_icon_is_written_once_then_cached
+# P2-7：★ 本条的可证伪主判据——两个探针直接断言「发送阶段设备缓存锁已释放」。
+#        注入旧形态（guard 活到发送处）后该用例转红，故它不是存在性检查。
+chk_test P2-7 battery_notify::tests::cache_lock_is_released_before_emit
 # P2-8：上限判定抽成只接 `&mut Config` 的纯函数后，可脱离 AppHandle 直接测
 chk_test P2-8 commands::tests::tray_device_limit_rejects_without_writing
 chk_test P2-8 commands::tests::tray_device_limit_allows_when_one_below
@@ -132,8 +135,17 @@ chk_eq "P2-3：惰性事件订阅入口 onTauriEvent 存在" "$n" 1
 # P2-7：锁内只收集、锁外发送——两个阶段必须拆成独立函数才可能做到
 n=$(grep -c "pub fn collect_pending_notices" src-tauri/src/battery_notify.rs || true)
 chk_eq "P2-7：收集阶段 collect_pending_notices 存在" "$n" 1
-n=$(grep -c "pub fn emit_notifications" src-tauri/src/battery_notify.rs || true)
+n=$(code_count 'fn emit_notifications[(]' src-tauri/src/battery_notify.rs)
 chk_eq "P2-7：发送阶段 emit_notifications 存在" "$n" 1
+# ★ 本条的**可证伪判据**是单测 `cache_lock_is_released_before_emit`（见上面「命令类」段），
+#   它用两个探针直接断言「发送阶段锁已释放」，注入旧形态即转红。
+#   下面三条结构判据只负责堵住「绕过唯一入口」这一层，不能替代上面的单测。
+n=$(code_count 'pub fn emit_notifications' src-tauri/src/battery_notify.rs)
+chk_eq "P2-7：emit_notifications 不得为 pub（杜绝仓内第二处持锁调用）" "$n" 0
+n=$(code_count 'fn notify_low_battery[(]' src-tauri/src/battery_notify.rs)
+chk_eq "P2-7：两段式承载点 notify_low_battery 存在" "$n" 1
+n=$(code_count 'emit_notifications' src-tauri/src/tray.rs)
+chk_eq "P2-7：tray.rs 不得直接调用 emit_notifications（只走 notify_low_battery）" "$n" 0
 
 # P2-8：读与写必须物理上落在同一次加锁内 ⇒ 调用方只允许出现一次 `with_config_mut`
 # ⚠️ 必须用 code_count 而非 `grep -c`：`commands.rs:333` 的**文档注释**里引用了同一调用
@@ -179,16 +191,25 @@ echo
 cat <<'EOF'
 MANUAL  以下条目按主方案 §六「验证」列只能靠**注入**或**评审**，脚本不做（会误报）：
 
-  · P2-3【注入】在 DevTools 里 `delete window.__TAURI__`，随后触发一次事件监听路径，
-    断言走防御式分支（invoke 返回 rejected Promise，而不是抛 `TypeError`），再刷新恢复。
-    ⚠️ 主方案第二十一轮已明确：`node tools/check.mjs` 与「两页手测」都验不了本条
-       （前者不查运行时时序，后者时序敏感、修复前后都可能通过）。上面那条结构判据
-       只是「边界检查」，**不能替代本注入项**。
+  · P2-3【已由等价判据覆盖，2026-09-19 实跑】原注入项是「DevTools 里
+    `delete window.__TAURI__` 后触发一次事件监听路径，断言走防御式分支」。
+    等价判据是 `node tools/verify-l1l2.mjs` 的 H 组：无头 Edge 加载**真实 popup.html**，
+    桩把 `window.__TAURI__` 做成**部分注入**（`event` 在、`core` 不在）——
+    这正是原注入项要构造的场景。其中 H0 是**前置断言**（此刻 `getInvoke()` 为 null，
+    否则 H1/H2 是恒真）、H0b 是**对照**（旧形态确实抛 `TypeError` ⇒ 守卫非多余）。
+    ⚠️ 可证伪性已实测：`--inject-broken=l1` ⇒ H2 转红（多打一条误导性错误日志）；
+    正常模式 H 组全绿。上面那条结构判据（common.js 之外 0 处裸访问）只是**边界检查**，
+    不能替代 H 组，但它负责堵住「别处又冒出一个裸访问」。
   · P2-5【评审】COM 公寓契约的文字部分（「进程内统一 STA，不做反初始化」）只能人读。
-  · P2-7【注入】在 `emit_notifications` 发送通知前 `get_devices_cache().try_lock()`，
-    断言**成功**（修复前在锁内发送会失败）。
-    ⚠️ 主方案第二十二轮：真实符号是 `state.rs` 的 `get_devices_cache()`，
-       **不是** `BT_CACHE_LOCK`（后者全仓不存在，原稿是凭空写的）。
+  · P2-7【已固化为常驻单测，2026-09-19】原注入项（发送前 `get_devices_cache().try_lock()`
+    应**成功**）已落成 `battery_notify::tests::cache_lock_is_released_before_emit`：
+    两个 `#[cfg(test)]` 探针在两个**真实函数**入口记录锁状态，三段式断言
+    ——① 前置：收集阶段**确实持锁**；② 正控：两阶段都被走到（探针被写过）；
+    ③ 被测：发送阶段锁**可获取**。对照判据已实测：把 `emit_notifications` 挪进
+    guard 所在的花括号后，该用例报 `left: 0, right: 1` 转红。
+    配套改动：`emit_notifications` 降为**私有**，仓内不再存在「持锁发送」的第二处入口。
+    ⇒ **本条已从 MANUAL 移出**（上面「命令类」段已登记该用例）。
+    仍属 MANUAL 的部分：真实硬件上的低电量通知**外观**，那与锁范围无关，不在本轮范围。
   · P2-8【压力手测】脚本化并发发起 N 次 `toggle_device_tray`，断言
     `tray_devices.len()` 从不超过 `TRAY_DEVICE_LIMIT`（= 4）。人手的连点间隔远大于
     竞态窗口，**修复前后都可能通过**，故不算验收。
@@ -197,8 +218,18 @@ MANUAL  以下条目按主方案 §六「验证」列只能靠**注入**或**评
   · P3-7【评审】`let _ =` 分类表本身。
   · P3-8【评审】check.mjs 头部与 AGENTS.md「防护边界」的一致性。
   · P3-10【评审】锁序白名单与「持锁区不得调用」清单的语义正确性（脚本只能查存在性）。
-  · P3-11【注入】在「读取点」插入 `sleep(50ms)` 人为撑开窗口，切换主题，观察是否被捕获。
-    （现有四个 theme_watch 单测已用可注入桩覆盖了同一机制，注入项是端到端补充。）
+  · P3-11【机制层已由等价判据覆盖，2026-09-19 实跑；端到端注入不再执行，接受残余风险】
+    原注入项是「在读取点插 `sleep(50ms)` 人为撑开窗口，切换主题，观察是否被捕获」。
+    它要证的机制是「注册先于读取 ⇒ 窗口内发生的变更不会丢」，而这正是
+    `register_is_called_before_read` 的**唯一契约**：它断言
+    `ordered_register_then_read` 的**真实调用序列**。可证伪性已实测：把该函数里
+    `register()` 与 `read()` 两行交换后，`register_is_called_before_read` 与
+    `read_still_happens_even_if_register_fails` **两条同时转红**
+    （`left: ["read","register"]`）。
+    ⇒ 端到端注入相对它的**唯一增量**是「注册表通知链路本身可用」，该层已由
+    `real_state_wrapper_does_not_panic` 覆盖到「不 panic」；而真实切换系统主题会
+    **闪烁用户桌面**，故**不单独执行该注入，接受这一残余风险**（主方案 §8.3 第 14 条
+    允许的第二种落地方式）。
 
   另注：**P3-4 不在本批**。它是 P1-10 的硬前置条件，已在第二批执行并验收
   （见 tools/verify-batch-2.sh），主方案第二十三轮已把它的「改法+验证」正式移出 §六。

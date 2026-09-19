@@ -88,7 +88,7 @@ else
   for n in $(printf '%s\n' "$RESULTS" | sed -n 's/.*result: ok\. \([0-9]*\) passed.*/\1/p'); do
     total=$((total + n))
   done
-  chk_ge "闸门 5/5：cargo test --no-default-features 通过数" "$total" 175
+  chk_ge "闸门 5/5：cargo test --no-default-features 通过数" "$total" 176
 fi
 
 # ── 2) 文档段 ────────────────────────────────────────────────────────
@@ -147,9 +147,18 @@ MANUAL  以下条目脚本不做（会误报），须按主方案指定方式另
     「提及 ≠ 使用」归入 INFO，**这些仍需人工确认没有真断指针混在里面**。
   · §8.3 第 16 / 17 条【评审】专题 / 批次 / 未闭合项三套编排语言的对账；
     「建议」抽共用产物者必须给设计或显式标注「尚未设计」。
-  · 注入类：P2-3（`delete window.__TAURI__`）、P2-7（发送前 `try_lock` 断言成功）、
-    P3-11（读取点插 sleep 撑开窗口）、P0-4 类锁序（见 `tools/verify-b14.mjs`）。
-    前三条的注入要点已在 `tools/verify-batch-4.sh` 的 MANUAL 段逐条写明。
+  · 注入类三项的最终结论（2026-09-19，详见 tools/verify-batch-4.sh 的 MANUAL 段）：
+    · P2-3 —— **已由等价判据覆盖**：`node tools/verify-l1l2.mjs` 的 H 组在**部分注入**
+      （`event` 在、`core` 不在）下加载真实 popup.html；H0 是前置断言、H0b 是对照。
+      可证伪性实跑：`--inject-broken=l1` ⇒ H2 转红。
+    · P2-7 —— **已固化为常驻单测** `battery_notify::tests::cache_lock_is_released_before_emit`
+      （两个探针 + 三段式断言）；对照判据实跑：guard 活到发送处 ⇒ `left: 0, right: 1` 转红。
+      同时 `emit_notifications` 已降为私有，杜绝第二处持锁调用入口。**已移出 MANUAL**。
+    · P3-11 —— **机制层已由等价判据覆盖**：`register_is_called_before_read` 断言真实调用序列，
+      实跑交换两行 ⇒ 2 条用例转红。端到端「插 sleep + 真实切主题」的增量只剩
+      「注册表通知链路可用」（已由 `real_state_wrapper_does_not_panic` 覆盖到「不 panic」），
+      而真实切主题会闪烁用户桌面 ⇒ **不再执行，显式接受残余风险**（§8.3 第 14 条允许的第二种方式）。
+    · P0-4 类锁序：见 `tools/verify-b14.mjs`。
 EOF
 
 echo

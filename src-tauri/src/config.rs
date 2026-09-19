@@ -527,6 +527,17 @@ pub fn init_config() {
     }
 }
 
+/// 测试专用：确保全局 `CONFIG` 已初始化，**不读磁盘**。
+///
+/// `OnceLock` 幂等，多个用例重复调用无妨。给那些「会经由 `with_config` 读配置、
+/// 但不想依赖真实 `config.toml`」的用例用（如 `battery_notify` 的 P2-7 探针用例）。
+/// 取 `Config::default()`：其中 `low_battery_devices` 为空 ⇒ 通知路径会提前返回，
+/// 用例不会真的弹系统通知。
+#[cfg(test)]
+pub(crate) fn ensure_config_ready() {
+    CONFIG.get_or_init(|| Mutex::new(Config::default()));
+}
+
 /// 落盘取号：调用方**必须已持有内容快照**后再调用，否则版本号与内容不对应。
 fn claim_revision() -> u64 {
     CONFIG_REVISION.fetch_add(1, Ordering::SeqCst) + 1
@@ -943,17 +954,15 @@ mod tests {
         claim_revision, config_lock_held, config_path, default_battery_refresh_secs,
         default_battery_thresholds, enqueue_persist, finalize_before_persist, flush_persist,
         merge_config, normalize_config, parse_config_text, revision_is_latest, with_config,
-        write_config_atomically, Config, CONFIG, MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED,
+        write_config_atomically, Config, MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED,
     };
     use std::sync::atomic::Ordering;
-    use std::sync::Mutex;
 
     // ── B8：P0-4 防复发断言的判据 ────────────────────────────
 
-    /// 确保 `CONFIG` 已初始化。`OnceLock` 幂等，多个用例重复调用无妨。
-    fn ensure_config_ready() {
-        CONFIG.get_or_init(|| Mutex::new(Config::default()));
-    }
+    // 测试用的「确保 CONFIG 已初始化」已提升为 `super::ensure_config_ready()`
+    // （`battery_notify` 的 P2-7 探针用例也要用同一份实现，避免两处各写一遍）。
+    use super::ensure_config_ready;
 
     /// B8 的核心判据：`config_lock_held()` 必须精确反映「**本线程**是否正持有配置锁」。
     ///

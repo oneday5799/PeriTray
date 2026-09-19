@@ -9,6 +9,28 @@ use crate::{standard_log, verbose_log};
 // 每个 (设备名, 阈值) 组合只通知一次；重启后清空重新检测
 static NOTIFIED: OnceLock<Mutex<HashSet<(String, i32)>>> = OnceLock::new();
 
+// ── P2-7 验收探针（仅测试构建存在，release 下零代码）────────────────
+//
+// 「发送阶段设备缓存锁已释放」这条性质**没有返回值可断言**，只能观测调用时刻的
+// 锁状态，故在两个真实函数的入口各放一个探针，由
+// `tests::cache_lock_is_released_before_emit` 读回。
+// 取值：`-1` 未观测；`0` 观测到**锁被持有**；`1` 观测到**锁可获取**。
+#[cfg(test)]
+static COLLECT_LOCK_PROBE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+#[cfg(test)]
+static EMIT_LOCK_PROBE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+
+/// 记录「此刻设备缓存锁是否可获取」到指定探针（仅测试构建存在）。
+///
+/// ⚠️ 判据必须用 `try_lock` 而不是「再 `lock()` 一次」：后者在同线程重入时**挂死**，
+/// 会把「缺陷」表现成「测试卡住」而不是「断言失败」（本仓既有教训）。
+#[cfg(test)]
+fn record_devices_cache_lock_state(probe: &std::sync::atomic::AtomicI8) {
+    use std::sync::atomic::Ordering;
+    let free = crate::state::get_devices_cache().try_lock().is_ok();
+    probe.store(i8::from(free), Ordering::Relaxed);
+}
+
 /// 回差（hysteresis）：电量必须比阈值高出这么多，才把「已通知」标记清掉。
 ///
 /// ── 为什么需要回差（P3-3）────────────────────────────────────────
@@ -156,6 +178,9 @@ fn select_pending_notices(
 /// 拆成 `collect_*`（纯内存判定，可由调用方在锁内调用）+ `emit_notifications`
 /// （出锁后显示）后，锁的持有范围退化成「把缓存换成待通知列表」这一次调用。
 pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> {
+    #[cfg(test)]
+    record_devices_cache_lock_state(&COLLECT_LOCK_PROBE);
+
     // 一次性把需要的配置全部 `clone` 出来，避免在循环里反复取配置锁。
     // 原先第 53 行的「每台设备取一次配置锁」在设备多时是 O(N) 次加锁，
     // 而 `device_names` 是同一份快照，取一次即可。
@@ -195,12 +220,46 @@ pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> 
     )
 }
 
+/// 设备缓存锁的**两段式**执行器：锁内收集、**锁外**发送（P2-7 的唯一承载点）。
+///
+/// ── 为什么要有这一层（P2-7）────────────────────────────────────────
+/// 「锁内只收集、锁外再发通知」这条纪律原先只由**调用方的花括号**承载：
+///
+/// ```ignore
+/// let pending = { let g = lock_unpoisoned(cache); collect_pending_notices(&g) };
+/// emit_notifications(&pending);
+/// ```
+///
+/// 一旦有人把它压回一行 `check(&lock_unpoisoned(cache))`，`guard` 就是**临时量**、
+/// 存活到**整条语句结束**（本仓反复踩的坑，见 `AGENTS.md`）⇒ 通知（WinRT/COM）
+/// 与图标文件 I/O 全落进锁内，并与配置锁构成 AB/BA：主线程的命令先取配置锁，
+/// 而 `apply_devices_cache` 会取设备缓存锁。
+///
+/// 把这段结构收进本函数后，「先让 guard 落域、再发送」由**函数体**保证，
+/// 不再依赖读代码的人是否细心；`emit_notifications` 同时降为**私有**，
+/// 仓内不再存在「持锁调用发送」的第二处入口。
+/// 该性质由 `tests::cache_lock_is_released_before_emit` 直接证伪。
+pub fn notify_low_battery(cache: &Mutex<Vec<Device>>) {
+    let pending = {
+        let guard = crate::state::lock_unpoisoned(cache);
+        collect_pending_notices(&guard)
+    }; // ← 设备缓存锁在此释放，下面一行不得挪进上面的花括号
+    emit_notifications(&pending);
+}
+
 /// 把待通知条目逐条弹成系统通知（**必须在释放配置锁 / 设备缓存锁之后调用**）。
 ///
 /// 图标解析放在这里而不是 `collect_*`：`resolve_toast_icon()` 会碰文件系统
 /// （首次写入 `%TEMP%`），属于「锁内不得做的 I/O」。它本身有 `OnceLock` 缓存，
 /// 循环内重复调用只读一次内存（P2-6）。
-pub fn emit_notifications(notices: &[PendingBatteryNotice]) {
+///
+/// ⚠️ **刻意不 `pub`**（P2-7）：本函数必须在锁外调用，而「锁外」无法用类型表达。
+/// 保持私有 ⇒ 全仓只有 [`notify_low_battery`] 能调到它，而那一处的花括号
+/// 已经把 guard 落域，于是「持锁发送」在结构上不可达。
+fn emit_notifications(notices: &[PendingBatteryNotice]) {
+    #[cfg(test)]
+    record_devices_cache_lock_state(&EMIT_LOCK_PROBE);
+
     for n in notices {
         #[cfg(target_os = "windows")]
         {
@@ -223,9 +282,66 @@ pub fn emit_notifications(notices: &[PendingBatteryNotice]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_rearmed, select_pending_notices, PendingBatteryNotice};
+    use super::{
+        is_rearmed, notify_low_battery, select_pending_notices, PendingBatteryNotice,
+        COLLECT_LOCK_PROBE, EMIT_LOCK_PROBE,
+    };
     use crate::device::{DevType, Device};
     use std::collections::{HashMap, HashSet};
+
+    /// ★ 核心验收（P2-7）：**发送阶段设备缓存锁必须已释放**。
+    ///
+    /// 这条性质没有返回值可断言，只能观测调用时刻的锁状态，故由两个真实函数
+    /// 入口处的探针（`COLLECT_LOCK_PROBE` / `EMIT_LOCK_PROBE`）读回。
+    ///
+    /// ── 三段式（缺一即可能写成恒真判据）──────────────────────────────
+    /// ① **前置断言**：收集阶段必须**确实持锁**（探针 = 0）。若收集阶段压根没持锁，
+    ///    下面「发送阶段锁可用」就是恒真的废话。
+    /// ② **正控**：两个探针都必须被写到（`!= -1`），证明两阶段真的都执行了
+    ///    —— 否则「函数没被调用」会被读成「锁已释放」。
+    /// ③ **对照判据**：把 `notify_low_battery` 的 `guard` 挪到 `emit_notifications`
+    ///    之前（即恢复成「持锁发送」的旧形态）后，本用例必须转红。
+    ///
+    /// 实得（2026-09-19）：正常形态 ①=0 / ②均被写 / ③=1 全绿；
+    /// 注入「guard 活到发送处」后 ③ 报 `left: 0, right: 1` 转红。
+    #[test]
+    fn cache_lock_is_released_before_emit() {
+        use std::sync::atomic::Ordering;
+
+        // `collect_pending_notices` 会经 `with_config` 读配置；不初始化会 panic。
+        // 取 `Config::default()`（**不读磁盘**）：其中未选任何设备 ⇒ 不会真的弹通知。
+        crate::config::ensure_config_ready();
+
+        COLLECT_LOCK_PROBE.store(-1, Ordering::Relaxed);
+        EMIT_LOCK_PROBE.store(-1, Ordering::Relaxed);
+
+        notify_low_battery(crate::state::get_devices_cache());
+
+        // ② 正控：两阶段都必须被走到（探针被写过）
+        let collect_probe = COLLECT_LOCK_PROBE.load(Ordering::Relaxed);
+        let emit_probe = EMIT_LOCK_PROBE.load(Ordering::Relaxed);
+        assert_ne!(
+            collect_probe, -1,
+            "正控失败：collect_pending_notices 未被调用，本用例无法说明任何问题"
+        );
+        assert_ne!(
+            emit_probe, -1,
+            "正控失败：emit_notifications 未被调用，本用例无法说明任何问题"
+        );
+
+        // ① 前置断言：收集阶段确实持有设备缓存锁
+        assert_eq!(
+            collect_probe, 0,
+            "前置断言失败：收集阶段竟未持有设备缓存锁 ⇒ 本用例失去意义（先查锁是否还在）"
+        );
+
+        // ③ 被测性质：发送阶段锁已释放
+        assert_eq!(
+            emit_probe, 1,
+            "P2-7 回归：emit_notifications 运行时仍持有设备缓存锁 —— \
+             通知里的 COM 调用与图标文件 I/O 会落进锁内，并与配置锁构成 AB/BA"
+        );
+    }
 
     /// 造一台只关心名字与电量的设备（其余字段与本轮判定无关）。
     fn dev(name: &str, battery: Option<i32>) -> Device {
