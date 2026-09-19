@@ -1,0 +1,161 @@
+#!/bin/sh
+# 收尾验收脚本
+#
+# 用法：在仓库根执行 `sh tools/verify-final.sh`
+# 依据：主方案 §8.3 第 1 / 5 / 9 / 15 / 18 条 + §6.3 的统一口径。
+#
+# ⚠️ 硬约定（沿用 `verify-batch-{0,1,2,4}.sh`）：
+#   · `grep -c` 零匹配时退出码为 1 ⇒ 一律**赋值后比较**，不用 `set -e` / `&&`。
+#   · 判据只能锚在**会真正变化的符号**上；写不出命令的条目一律进 MANUAL，
+#     **不给评审类条目编造「命令」**（主方案 §6.3 明文批评过这种伪装）。
+#   · 本脚本**不接入** pre-commit 与 CI（与其它 `verify-*.sh` 同性质：一次性验收实用脚本）。
+#     其中文档体检（第 2 段）**已单独接入 CI**——它是可长期承重的闸门，见 `.github/workflows/ci.yml`。
+#
+# 四段：
+#   1) 闸门段 —— §8.3 第 1 条的四道回归闸门 + clippy（§8.3 第 5 条）
+#   2) 文档段 —— §8.3 第 15 / 18 条，并**自测这两条判据是否仍然承重**
+#   3) 脚本段 —— 四批验收脚本的语法机检 + 第四批实跑
+#   4) MANUAL —— 评审类 / 需真实进程的端到端项（脚本不做，会误报）
+
+cd "$(dirname "$0")/.." || exit 2
+
+fail=0
+chk_eq() { # chk_eq <名称> <实得> <期望>
+  if [ "$2" = "$3" ]; then
+    printf 'PASS  %s（实得 %s）\n' "$1" "$2"
+  else
+    printf 'FAIL  %s（期望 %s，实得 %s）\n' "$1" "$3" "$2"
+    fail=1
+  fi
+}
+chk_ge() { # chk_ge <名称> <实得> <下界>
+  if [ "$2" -ge "$3" ] 2>/dev/null; then
+    printf 'PASS  %s（实得 %s ≥ %s）\n' "$1" "$2" "$3"
+  else
+    printf 'FAIL  %s（下界 %s，实得 %s）\n' "$1" "$3" "$2"
+    fail=1
+  fi
+}
+gate() { # gate <名称> <工作目录> <命令...>
+  name="$1"; dir="$2"; shift 2
+  if out=$(cd "$dir" && "$@" 2>&1); then
+    printf 'PASS  %s\n' "$name"
+  else
+    printf 'FAIL  %s\n' "$name"
+    printf '%s\n' "$out" | tail -25
+    fail=1
+  fi
+}
+
+echo "== 收尾验收 =="
+
+# ── 1) 闸门段 ────────────────────────────────────────────────────────
+echo
+echo "-- 1) 闸门段（§8.3 第 1 条的四道回归闸门 + §8.3 第 5 条的 clippy）--"
+
+gate "闸门 1/5：前端完整性（node tools/check.mjs）" . node tools/check.mjs
+gate "闸门 2/5：cargo fmt --check" src-tauri cargo fmt --check
+
+# 第 3 道：cargo check 零告警。⚠️ **判据机制必须与 `tools/pre-commit` 一致**：
+# 裸 `cargo check` 有告警也返回 0，故须**解析输出里的 `^warning`**（钩子用的就是这个），
+# **不要改用 `RUSTFLAGS=-D warnings`**——那会因指纹变化触发**全量重编**（实测 >4 分钟），
+# 而本机钩子路径只要约 3s。零告警要求见 AGENTS.md「提交自动闸门」。
+out=$(cd src-tauri && cargo check --no-default-features --all-targets 2>&1)
+rc=$?
+if [ "$rc" != "0" ]; then
+  printf 'FAIL  闸门 3/5：cargo check --no-default-features --all-targets 失败\n'
+  printf '%s\n' "$out" | tail -25
+  fail=1
+elif printf '%s\n' "$out" | grep -q '^warning'; then
+  printf 'FAIL  闸门 3/5：cargo check 存在 warning（要求零告警）\n'
+  printf '%s\n' "$out" | grep -n '^warning' | head -10
+  fail=1
+else
+  printf 'PASS  闸门 3/5：cargo check --no-default-features --all-targets（零告警）\n'
+fi
+
+# 第 4 道：clippy（§8.3 第 5 条，单一来源在 tools/check-clippy.mjs；本地带 --optional）
+gate "闸门 4/5：cargo clippy（node tools/check-clippy.mjs --optional）" . node tools/check-clippy.mjs --optional
+
+# 第 5 道：测试套件。逐行取 `test result: ok. N passed` 求和（套件含多个测试二进制）。
+RESULTS=$(cd src-tauri && cargo test --no-default-features 2>&1)
+if printf '%s\n' "$RESULTS" | grep -q 'FAILED'; then
+  printf 'FAIL  闸门 5/5：测试套件有失败用例\n'
+  printf '%s\n' "$RESULTS" | grep -E 'FAILED|test result:' | tail -10
+  fail=1
+else
+  total=0
+  for n in $(printf '%s\n' "$RESULTS" | sed -n 's/.*result: ok\. \([0-9]*\) passed.*/\1/p'); do
+    total=$((total + n))
+  done
+  chk_ge "闸门 5/5：cargo test --no-default-features 通过数" "$total" 175
+fi
+
+# ── 2) 文档段 ────────────────────────────────────────────────────────
+echo
+echo "-- 2) 文档段（§8.3 第 15 条列数体检 + 第 18 条自指型断言体检）--"
+
+gate "文档体检：6 份文档的表格列数 + 自指型指针（node tools/doc-table-audit.mjs）" . \
+  node tools/doc-table-audit.mjs
+
+# 元判据：**判据自身是否仍然承重**。自测夹具故意含 4 种缺陷，
+# 期望「退出码 1 且恰好报 4 个问题」——少于 4 即某条判据已失效（例如正则被写窄）。
+out=$(node tools/doc-table-audit.mjs tools/doc-table-audit.selftest.md 2>&1)
+rc=$?
+n=$(printf '%s\n' "$out" | grep -c '✗' || true)
+chk_eq "文档段：自测夹具仍能转红（退出码）" "$rc" 1
+chk_eq "文档段：自测夹具的问题数（4 条判据各自承重）" "$n" 4
+
+# §8.3 第 5 条落地形态：clippy 与文档体检都必须真的在 CI 里
+n=$(grep -c 'node tools/check-clippy.mjs' .github/workflows/ci.yml || true)
+chk_eq "§8.3 第 5 条：CI 已接入 check-clippy.mjs" "$n" 1
+n=$(grep -c 'node tools/doc-table-audit.mjs' .github/workflows/ci.yml || true)
+chk_eq "§8.3 第 15/18 条：CI 已接入 doc-table-audit.mjs" "$n" 1
+
+# ── 3) 脚本段 ────────────────────────────────────────────────────────
+echo
+echo "-- 3) 脚本段（四批验收脚本的语法机检 + 第四批实跑）--"
+
+for s in tools/verify-batch-0.sh tools/verify-batch-1.sh tools/verify-batch-2.sh \
+         tools/verify-batch-4.sh tools/verify-final.sh; do
+  if sh -n "$s" 2>/dev/null; then
+    printf 'PASS  语法机检：%s\n' "$s"
+  else
+    printf 'FAIL  语法机检：%s\n' "$s"
+    fail=1
+  fi
+done
+
+gate "第四批验收：sh tools/verify-batch-4.sh" . sh tools/verify-batch-4.sh
+
+# ── 4) MANUAL ────────────────────────────────────────────────────────
+echo
+cat <<'EOF'
+MANUAL  以下条目脚本不做（会误报），须按主方案指定方式另行执行：
+
+  · §8.3 第 9 条【回归轮】重点覆盖配置读写（P1-3/P1-7/P1-11）、快捷键（P1-5/P2-12）、
+    弹窗动画（P1-8/P3-6，**两条路径都要**）、CSP 生效后的前端全功能（P1-10，
+    6 个下拉框各点一次）。**已在 ⑧-e 用真实进程 + CDP 执行完毕**，
+    10 项判据与实得见《后续修复计划_2026-09-17.md》§7.6 的表。
+  · §8.3 第 14 条【评审】「回归风险 → 验证」覆盖关系：凡「回归风险」出现
+    需确认 / 需扫一遍 / 必须核对 / 需逐处确认 / 需前后端同步改 的，落地前必须
+    二者其一（提升为「验证」/ 显式写「接受该风险，不验证」）。**「什么算确认动作」有边界模糊，
+    故本条判据是评审，不要给它编造命令。**
+  · §8.3 第 18 条【评审】`见 §…` 指针的**第二、三级**（「指对」+「内容相符」）：
+    脚本只能做第一级（存在性）与「裸占位符」的机械检出；**「目标章节是否真的含有所指内容」
+    只能人读**。本仓实测：引号内的 `§N.x` 一律是元文本（引用旧文本），脚本按
+    「提及 ≠ 使用」归入 INFO，**这些仍需人工确认没有真断指针混在里面**。
+  · §8.3 第 16 / 17 条【评审】专题 / 批次 / 未闭合项三套编排语言的对账；
+    「建议」抽共用产物者必须给设计或显式标注「尚未设计」。
+  · 注入类：P2-3（`delete window.__TAURI__`）、P2-7（发送前 `try_lock` 断言成功）、
+    P3-11（读取点插 sleep 撑开窗口）、P0-4 类锁序（见 `tools/verify-b14.mjs`）。
+    前三条的注入要点已在 `tools/verify-batch-4.sh` 的 MANUAL 段逐条写明。
+EOF
+
+echo
+if [ "$fail" = "0" ]; then
+  echo "收尾验收：通过（MANUAL 项需另行执行）"
+else
+  echo "收尾验收：**未通过**"
+  exit 1
+fi
