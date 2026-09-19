@@ -108,7 +108,9 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
 pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
     // #29 先保存原始指针，确保无论 to_string 成功与否都能释放 COM 内存
     let ptr = pwstr.as_ptr();
-    let result = pwstr.to_string().map_err(|e| windows::core::Error::from(e));
+    // to_string() 的错误类型是 FromUtf16Error（不是 windows::core::Error），
+    // 需要 From 转换；直接传关联函数即可，不必再包一层闭包。
+    let result = pwstr.to_string().map_err(windows::core::Error::from);
     CoTaskMemFree(Some(ptr as *const c_void));
     result
 }

@@ -1233,10 +1233,12 @@ mod tests {
     /// 非法值会被原样写进 `config.toml`，本用例即转红。
     #[test]
     fn write_path_finalize_normalizes_before_serializing() {
-        let mut cfg = Config::default();
-        cfg.log_level = "trace".to_string();
-        cfg.theme_mode = "sepia".to_string();
-        cfg.window_material = "blur".to_string();
+        let mut cfg = Config {
+            log_level: "trace".to_string(),
+            theme_mode: "sepia".to_string(),
+            window_material: "blur".to_string(),
+            ..Default::default()
+        };
 
         let (normalized, snapshot) = finalize_before_persist(&mut cfg);
 
@@ -1260,17 +1262,19 @@ mod tests {
     /// P3-9：非法值被归一化到默认值，且**只影响自身**、不触碰无关字段。
     #[test]
     fn normalize_config_replaces_invalid_values_field_by_field() {
-        let mut cfg = Config::default();
-        cfg.auto_start = true; // 无关字段：必须原样保留
+        let mut cfg = Config {
+            auto_start: true, // 无关字段：必须原样保留
+            log_level: "trace".to_string(),
+            default_popup_tab: "settings".to_string(),
+            popup_size: "huge".to_string(),
+            theme_mode: "sepia".to_string(),
+            window_material: "blur".to_string(),
+            low_battery_thresholds: vec![10, 10, 101],
+            low_battery_refresh_secs: 9,
+            ..Default::default()
+        };
         cfg.device_names
             .insert("VID_1".to_string(), "我的鼠标".to_string());
-        cfg.log_level = "trace".to_string();
-        cfg.default_popup_tab = "settings".to_string();
-        cfg.popup_size = "huge".to_string();
-        cfg.theme_mode = "sepia".to_string();
-        cfg.window_material = "blur".to_string();
-        cfg.low_battery_thresholds = vec![10, 10, 101];
-        cfg.low_battery_refresh_secs = 9;
 
         assert!(normalize_config(&mut cfg), "存在非法值时必须报告已替换");
 
@@ -1296,22 +1300,26 @@ mod tests {
     /// 必须靠这一条把「合法值不被触碰」钉住。
     #[test]
     fn normalize_config_keeps_valid_values_untouched() {
-        let mut cfg = Config::default();
-        cfg.log_level = "verbose".to_string();
-        cfg.default_popup_tab = "volume".to_string();
-        cfg.popup_size = "large".to_string();
-        cfg.theme_mode = "dark".to_string();
-        cfg.window_material = "mica".to_string();
-        cfg.low_battery_thresholds = vec![100, 0, 50];
-        cfg.low_battery_refresh_secs = 3600;
+        let mut cfg = Config {
+            log_level: "verbose".to_string(),
+            default_popup_tab: "volume".to_string(),
+            popup_size: "large".to_string(),
+            theme_mode: "dark".to_string(),
+            window_material: "mica".to_string(),
+            low_battery_thresholds: vec![100, 0, 50],
+            low_battery_refresh_secs: 3600,
+            ..Default::default()
+        };
         let before = cfg.clone();
 
         assert!(!normalize_config(&mut cfg), "全合法时不应报告替换");
         assert_eq!(cfg, before, "合法配置归一化后必须逐字段相等");
 
         // 区间下边界：刷新间隔 10 秒合法（9 秒非法，见上一条用例）
-        let mut lo = Config::default();
-        lo.low_battery_refresh_secs = 10;
+        let mut lo = Config {
+            low_battery_refresh_secs: 10,
+            ..Default::default()
+        };
         assert!(!normalize_config(&mut lo));
         assert_eq!(lo.low_battery_refresh_secs, 10, "下边界 10 秒必须被接受");
 
@@ -1327,14 +1335,18 @@ mod tests {
     #[test]
     fn normalize_config_battery_threshold_rules_match_frontend() {
         // ① 空数组非法（前端文案：「请输入至少一个阈值」）
-        let mut empty = Config::default();
-        empty.low_battery_thresholds = vec![];
+        let mut empty = Config {
+            low_battery_thresholds: vec![],
+            ..Default::default()
+        };
         assert!(normalize_config(&mut empty));
         assert_eq!(empty.low_battery_thresholds, default_battery_thresholds());
 
         // ② 超过 5 个非法（前端文案：「最多5个阈值」）
-        let mut too_many = Config::default();
-        too_many.low_battery_thresholds = vec![1, 2, 3, 4, 5, 6];
+        let mut too_many = Config {
+            low_battery_thresholds: vec![1, 2, 3, 4, 5, 6],
+            ..Default::default()
+        };
         assert!(normalize_config(&mut too_many));
         assert_eq!(
             too_many.low_battery_thresholds,
@@ -1342,13 +1354,17 @@ mod tests {
         );
 
         // ③ 越界非法（前端文案：「超出范围(0-100)」）——两侧都验
-        let mut too_low = Config::default();
-        too_low.low_battery_thresholds = vec![-1];
+        let mut too_low = Config {
+            low_battery_thresholds: vec![-1],
+            ..Default::default()
+        };
         assert!(normalize_config(&mut too_low));
         assert_eq!(too_low.low_battery_thresholds, default_battery_thresholds());
 
-        let mut too_high = Config::default();
-        too_high.low_battery_thresholds = vec![101];
+        let mut too_high = Config {
+            low_battery_thresholds: vec![101],
+            ..Default::default()
+        };
         assert!(normalize_config(&mut too_high));
         assert_eq!(
             too_high.low_battery_thresholds,
@@ -1356,14 +1372,18 @@ mod tests {
         );
 
         // ④ 重复值非法（前端文案：「有重复值」）
-        let mut dup = Config::default();
-        dup.low_battery_thresholds = vec![15, 15];
+        let mut dup = Config {
+            low_battery_thresholds: vec![15, 15],
+            ..Default::default()
+        };
         assert!(normalize_config(&mut dup));
         assert_eq!(dup.low_battery_thresholds, default_battery_thresholds());
 
         // 恰好 5 个、含两端边界 ⇒ 合法
-        let mut ok = Config::default();
-        ok.low_battery_thresholds = vec![0, 25, 50, 75, 100];
+        let mut ok = Config {
+            low_battery_thresholds: vec![0, 25, 50, 75, 100],
+            ..Default::default()
+        };
         assert!(!normalize_config(&mut ok));
         assert_eq!(ok.low_battery_thresholds, vec![0, 25, 50, 75, 100]);
     }
@@ -1463,13 +1483,15 @@ mod tests {
         use std::collections::BTreeSet;
 
         // 把默认 `None` 的可选字段填上，使它们进入序列化结果（见上方 ⚠️）
-        let mut probe = Config::default();
-        probe.legacy_log_enabled = Some(true);
-        probe.shortcut_devices = Some("A".to_string());
-        probe.shortcut_volume = Some("B".to_string());
-        probe.shortcut_volume_up = Some("C".to_string());
-        probe.shortcut_volume_down = Some("D".to_string());
-        probe.shortcut_volume_mute = Some("E".to_string());
+        let probe = Config {
+            legacy_log_enabled: Some(true),
+            shortcut_devices: Some("A".to_string()),
+            shortcut_volume: Some("B".to_string()),
+            shortcut_volume_up: Some("C".to_string()),
+            shortcut_volume_down: Some("D".to_string()),
+            shortcut_volume_mute: Some("E".to_string()),
+            ..Default::default()
+        };
 
         let text = toml::to_string_pretty(&probe).expect("Config 应可序列化为 TOML");
         let serialized: BTreeSet<String> = toml::from_str::<toml::Table>(&text)

@@ -858,10 +858,12 @@ mod tests {
     /// 「先写进去再报错」这种半吊子实现也会通过。
     #[test]
     fn tray_device_limit_rejects_without_writing() {
-        let mut c = Config::default();
-        c.tray_devices = (0..TRAY_DEVICE_LIMIT)
-            .map(|i| format!("已满-{i}"))
-            .collect();
+        let mut c = Config {
+            tray_devices: (0..TRAY_DEVICE_LIMIT)
+                .map(|i| format!("已满-{i}"))
+                .collect(),
+            ..Default::default()
+        };
 
         let err = try_toggle_tray_device(&mut c, "第 N+1 个");
 
@@ -882,10 +884,12 @@ mod tests {
     /// 与上一用例成对——只测「拒绝」的话，一个「永远拒绝」的实现也能通过。
     #[test]
     fn tray_device_limit_allows_when_one_below() {
-        let mut c = Config::default();
-        c.tray_devices = (0..TRAY_DEVICE_LIMIT - 1)
-            .map(|i| format!("未满-{i}"))
-            .collect();
+        let mut c = Config {
+            tray_devices: (0..TRAY_DEVICE_LIMIT - 1)
+                .map(|i| format!("未满-{i}"))
+                .collect(),
+            ..Default::default()
+        };
 
         let res = try_toggle_tray_device(&mut c, "最后一个名额");
 
@@ -904,10 +908,12 @@ mod tests {
     /// 想加新的加不进，想先删一个又因「已达上限」被拒。
     #[test]
     fn tray_device_toggle_removes_existing_even_at_limit() {
-        let mut c = Config::default();
-        c.tray_devices = (0..TRAY_DEVICE_LIMIT)
-            .map(|i| format!("已满-{i}"))
-            .collect();
+        let mut c = Config {
+            tray_devices: (0..TRAY_DEVICE_LIMIT)
+                .map(|i| format!("已满-{i}"))
+                .collect(),
+            ..Default::default()
+        };
 
         let res = try_toggle_tray_device(&mut c, "已满-0");
 

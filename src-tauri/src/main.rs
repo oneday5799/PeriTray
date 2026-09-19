@@ -705,7 +705,7 @@ fn main() {
             process::append_log("[main] startup complete");
             Ok(())
         })
-        .on_window_event(|window, event| handle_window_event(window, event));
+        .on_window_event(handle_window_event);
     let app = match builder.build(tauri::generate_context!()) {
         Ok(app) => app,
         Err(e) => {

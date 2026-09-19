@@ -208,9 +208,9 @@ fn ble_disconnect(device_id: &str) -> Result<String, String> {
 
 fn create_session(device: &BluetoothLEDevice) -> Result<GattSession, windows::core::Error> {
     let bt_device_id = device.BluetoothDeviceId()?;
-    GattSession::FromDeviceIdAsync(&bt_device_id)?
-        .join()
-        .map_err(|e| windows::core::Error::from(e))
+    // join() 的错误类型本就是 windows::core::Error：再套一层
+    // `|e| Error::from(e)` 是同类型恒等转换，clippy 会判为 useless_conversion。
+    GattSession::FromDeviceIdAsync(&bt_device_id)?.join()
 }
 
 fn trigger_connection(device: &BluetoothLEDevice) -> Result<(), String> {

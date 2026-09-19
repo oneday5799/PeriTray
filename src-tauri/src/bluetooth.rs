@@ -735,8 +735,11 @@ fn read_btc_batteries(device_ids: &[&str]) -> HashMap<String, u8> {
     };
 
     for index in 0..u32::MAX {
-        let mut devinfo = SP_DEVINFO_DATA::default();
-        devinfo.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+        // SP_DEVINFO_DATA 的 Default 是 derive 出来的全零，逐字段初始化更直白
+        let mut devinfo = SP_DEVINFO_DATA {
+            cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+            ..Default::default()
+        };
 
         let ok = unsafe { SetupDiEnumDeviceInfo(handle, index, &mut devinfo) };
         if ok == 0 {

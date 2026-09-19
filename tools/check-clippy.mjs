@@ -14,8 +14,9 @@
  * ── 为什么不直接用 `cargo clippy -- -D warnings` ─────────────────
  * 2026-09-18 在当前 HEAD 上实测：默认 lint 集报 **88 条**（bin 44 个唯一位置，
  * 另加 test 编译单元的重复计数）。裸 `-D warnings` 会让 CI **首次运行即红**；
- * 而这 88 条**全是风格类**（`redundant_closure` 16 / `field_reassign_with_default` 16 /
- * `manual_clamp` 8 / `manual_c_str_literals` 8 / `type_complexity` 5 …），
+ * 而这 88 条**全是风格类**（当时的分布：`redundant_closure` 16 /
+ * `field_reassign_with_default` 16 / `manual_clamp` 8 / `manual_c_str_literals` 8 /
+ * `type_complexity` 5 …——**当前剩余量只看下面的 `BASELINE_ALLOW`，别引本段数字**），
  * 与本次代码审查的 40 条发现**零交集** ⇒ 在「收尾批」里批量改它们**纯风险无收益**
  * （`manual_clamp` 改 `.clamp()` 还有 `min > max` 时 panic 的语义差异，
  * `derivable_impls` 直指 P1-7 刚整过的 `Config::default`）。
@@ -81,14 +82,11 @@ const OPTIONAL = process.argv.includes("--optional");
  *    `unknown lint (E0602)` 的形式让 CI 变红，而不是静默失效（已实测）。
  */
 const BASELINE_ALLOW = [
-  "clippy::field_reassign_with_default", // 15
-  "clippy::redundant_closure", //  8
   "clippy::manual_clamp", //  4
   "clippy::manual_c_str_literals", //  4
   "clippy::type_complexity", //  3
   "clippy::too_many_arguments", //  2
   "clippy::derivable_impls", //  1
-  "clippy::useless_conversion", //  1
 ];
 
 /** 显式开启（实测当前 0 命中）：与「持锁区只能做纯内存操作」直接相关。 */

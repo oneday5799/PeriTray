@@ -172,7 +172,7 @@ fn start_device_watcher(app: &tauri::AppHandle) {
             };
             if has_tray && changed {
                 crate::process::append_verbose_log("[tray] 设备缓存变化，更新 tooltip");
-                std::thread::spawn(move || update_tooltip());
+                std::thread::spawn(update_tooltip);
                 let _ = handle.emit("devices-changed", ());
             }
 
@@ -362,7 +362,7 @@ fn start_theme_watcher() {
                     // 退避期间仍定期重读，避免「注册一直失败 ⇒ 主题永远不跟」。
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     if state.on_notify(crate::windows::system_dark_mode) {
-                        std::thread::spawn(move || update_tray_icon());
+                        std::thread::spawn(update_tray_icon);
                     }
                     registered =
                         RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
@@ -371,7 +371,7 @@ fn start_theme_watcher() {
 
                 WaitForSingleObject(event, INFINITE);
                 if state.on_notify(crate::windows::system_dark_mode) {
-                    std::thread::spawn(move || update_tray_icon());
+                    std::thread::spawn(update_tray_icon);
                 }
                 // 事件已被消费（手动重置事件 + 上轮等待返回后需重新注册）
                 registered =
@@ -637,12 +637,12 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     app.listen("tray-devices-changed", move |_| {
-        std::thread::spawn(move || update_tooltip());
+        std::thread::spawn(update_tooltip);
     });
 
     app.listen("audio-devices-changed", |_| {
         // 同 config-changed：菜单重建内含 COM 枚举，不能在回调里同步跑
-        std::thread::spawn(|| update_audio_devices_menu());
+        std::thread::spawn(update_audio_devices_menu);
     });
 
     // 启动后台设备监控线程
