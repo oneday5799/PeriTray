@@ -23,9 +23,47 @@ static LAST_PROP_LOG: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new(
 /// WM_SYNC_CALLBACKS 合并标志：已排队则跳过，处理时复位
 static SYNC_CALLBACKS_PENDING: AtomicBool = AtomicBool::new(false);
 
+/// 投递 WM_SYNC_CALLBACKS。单独一层是为了让单测能注入「必然失败」的桩，
+/// 从而直接断言失败路径的回滚行为（见文件末尾单测）。
+fn post_sync_callbacks(hwnd: HWND) -> windows::core::Result<()> {
+    // SAFETY: hwnd 由调用方保证是本模块消息窗口的有效句柄
+    unsafe { PostMessageW(Some(hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0)) }
+}
+
+/// 请求一次回调同步：CAS 抢占合并标志 → 投递消息。
+///
+/// **投递失败必须回滚标志**：标志已置 `true` 而消息未入队时，消息处理器永不运行，
+/// 标志会**永久停在 `true`**，此后所有设备变更回调都在 CAS 处失败并静默跳过 ——
+/// 音频设备变更通知彻底失效，且不产生任何日志。原实现写作 `let _ = PostMessageW(...)`，
+/// 恰好把这个失败吞掉了（见代码审查报告 P3-12）。
+///
+/// 4 个 COM 回调统一走本函数，避免下次再漏改其中一处。
+fn request_sync_callbacks(hwnd: HWND) {
+    request_sync_callbacks_with(hwnd, post_sync_callbacks);
+}
+
+/// `request_sync_callbacks` 的可注入版本（投递动作由 `post` 提供，便于单测）。
+fn request_sync_callbacks_with(hwnd: HWND, post: fn(HWND) -> windows::core::Result<()>) {
+    if SYNC_CALLBACKS_PENDING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // 已有一次同步在排队，本轮合并掉
+        return;
+    }
+    if post(hwnd).is_err() {
+        // 回滚：否则合并标志永久为 true，后续回调全部被静默跳过
+        SYNC_CALLBACKS_PENDING.store(false, Ordering::SeqCst);
+        verbose_log!("[audio_notify] PostMessageW(WM_SYNC_CALLBACKS) 失败，已回滚合并标志");
+    }
+}
+
 fn log_throttle_property(id: &str) {
     let lock = LAST_PROP_LOG.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut map = lock.lock().unwrap();
+    // 走统一入口（P2-2）：本函数由 COM 回调调用，若用 `Mutex::lock()` + `unwrap()`，
+    // 锁中毒时的 panic 会穿过 FFI/COM 边界向外抛（未定义行为），
+    // 且此后每次属性变更回调都会再炸一次。
+    let mut map = crate::state::lock_unpoisoned(lock);
     let now = Instant::now();
     if let Some(last) = map.get(id) {
         if now.duration_since(*last) < Duration::from_secs(2) {
@@ -164,13 +202,8 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 (*pwstrdeviceid).to_string().unwrap_or_default(),
                 dwnewstate.0
             );
-            // 合并：已排队则跳过
-            if SYNC_CALLBACKS_PENDING
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
-            }
+            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
+            request_sync_callbacks(self.hwnd);
         }
         Ok(())
     }
@@ -181,13 +214,8 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceAdded id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             );
-            // 合并：已排队则跳过
-            if SYNC_CALLBACKS_PENDING
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
-            }
+            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
+            request_sync_callbacks(self.hwnd);
         }
         Ok(())
     }
@@ -198,13 +226,8 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceRemoved id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             );
-            // 合并：已排队则跳过
-            if SYNC_CALLBACKS_PENDING
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
-            }
+            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
+            request_sync_callbacks(self.hwnd);
         }
         Ok(())
     }
@@ -222,13 +245,8 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 erender.0,
                 (*pwstrdefaultdeviceid).to_string().unwrap_or_default()
             );
-            // 合并：已排队则跳过
-            if SYNC_CALLBACKS_PENDING
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                let _ = PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS, WPARAM(0), LPARAM(0));
-            }
+            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
+            request_sync_callbacks(self.hwnd);
         }
         Ok(())
     }
@@ -469,7 +487,21 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
     std::thread::spawn(move || unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         if hr.is_err() {
-            crate::process::append_log("[audio_notify] CoInitializeEx failed");
+            // 区分「公寓模型冲突」与真失败（P2-5）：前者说明有代码抢先把本线程初始化
+            // 成了 MTA（约定是进程内统一 STA）。原先只记一句 "failed" 且不带 HRESULT
+            // ⇒ 整条音频通知链路静默失效，却无从归因。
+            let code = hr.0;
+            if crate::audio::is_apartment_mode_conflict(code) {
+                crate::process::append_log(
+                    "[audio_notify] CoInitializeEx 公寓模型冲突（RPC_E_CHANGED_MODE）：\
+                     本线程已是 MTA，音频通知消息窗口无法建立，音量/会话回调将不可用",
+                );
+            } else {
+                crate::process::append_log(&format!(
+                    "[audio_notify] CoInitializeEx failed: 0x{:08X}",
+                    code as u32
+                ));
+            }
             return;
         }
 
@@ -636,5 +668,38 @@ extern "system" fn audio_msg_wnd_proc(
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P3-12 的可证伪单测：**投递失败后合并标志必须回到 `false`**。
+    ///
+    /// 修复前该路径写作 `let _ = PostMessageW(...)`，失败被吞掉、标志留在 `true`，
+    /// 此后所有设备变更回调都在 CAS 处失败并静默跳过 —— 音频变更通知永久静默。
+    /// 本测试通过注入必然失败的投递桩直接命中该路径：把回滚那一行删掉即失败。
+    #[test]
+    fn sync_pending_flag_rolls_back_when_post_fails() {
+        let fake = HWND(std::ptr::null_mut());
+
+        // ① 投递失败 → 标志回滚
+        SYNC_CALLBACKS_PENDING.store(false, Ordering::SeqCst);
+        request_sync_callbacks_with(fake, |_| Err(windows::core::Error::from(E_FAIL)));
+        assert!(
+            !SYNC_CALLBACKS_PENDING.load(Ordering::SeqCst),
+            "投递失败后合并标志必须回到 false，否则后续回调会被永久合并掉"
+        );
+
+        // ② 投递成功 → 标志保持 true，等消息处理器复位
+        request_sync_callbacks_with(fake, |_| Ok(()));
+        assert!(
+            SYNC_CALLBACKS_PENDING.load(Ordering::SeqCst),
+            "投递成功后应保持已排队状态"
+        );
+
+        // 复原，避免影响其它测试
+        SYNC_CALLBACKS_PENDING.store(false, Ordering::SeqCst);
     }
 }

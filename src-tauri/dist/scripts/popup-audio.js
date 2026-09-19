@@ -1,7 +1,7 @@
 /* popup-audio.js — 主窗口·音量控制 tab：设备/会话音量滑块渲染与调节/mute 切换/
  *            滚轮微调与 tooltip/强制静音记账/volume-changed 监听
  * 加载序 2/4 · 提供：loadAudioDevices()/loadAudioSessions()（render* 为内部函数）
- * 依赖：common.js(getInvoke/describeShortcutError/attachSessionTooltip/showToast/createSubmenuShell/
+ * 依赖：common.js(getInvoke/onTauriEvent/describeShortcutError/attachSessionTooltip/showToast/createSubmenuShell/
  *       formatDeviceName/registerContextMenu/clampMenuPosition/hideAllContextMenus/
  *       showRenameDialog/createDialog/closeDialog/bindShortcutRecorder/attachTooltip) */
 let audioDevices = [];
@@ -78,73 +78,77 @@ function updateSessionCard(session) {
   }
 }
 
-if (window.__TAURI__ && window.__TAURI__.event) {
-  window.__TAURI__.event.listen("volume-changed", (event) => {
-    const changes = event.payload;
-    if (Array.isArray(changes)) {
-      for (const change of changes) {
-        const device = audioDevices.find(d => d.id === change.device_id);
-        if (device) {
-          const isFM = forceMuteDevices.includes(device.name);
-          const hold = isFM ? forceMuteHold[device.name] : null;
-          if (hold) {
-            device.is_muted = hold.muted;
-            device.volume = hold.volume;
-          } else if (isFM && change.is_muted) {
-            device.is_muted = true;
-          } else {
-            device.volume = change.volume;
-            device.is_muted = change.is_muted;
-          }
-          if (!device.is_muted) {
-            device.permanentMute = false;
-            buttonMutedDevices.delete(device.id);
-          }
-          applyAudioDeviceChange(device);
+// 事件订阅统一经 common.js 的 onTauriEvent()（P2-3）：它就绪检查在内、未就绪静默跳过，
+// 不再各自用 `if (window.__TAURI__ && window.__TAURI__.event)` 包一层裸访问。
+onTauriEvent("volume-changed", (event) => {
+  const changes = event.payload;
+  if (Array.isArray(changes)) {
+    for (const change of changes) {
+      const device = audioDevices.find(d => d.id === change.device_id);
+      if (device) {
+        const isFM = forceMuteDevices.includes(device.name);
+        const hold = isFM ? forceMuteHold[device.name] : null;
+        if (hold) {
+          device.is_muted = hold.muted;
+          device.volume = hold.volume;
+        } else if (isFM && change.is_muted) {
+          device.is_muted = true;
+        } else {
+          device.volume = change.volume;
+          device.is_muted = change.is_muted;
         }
-        if (change.session_id) {
-          const session = audioSessions.find(s => s.id === change.session_id);
-          if (session) {
-            session.volume = change.volume;
-            session.is_muted = change.is_muted;
-            updateSessionCard(session);
-          }
+        if (!device.is_muted) {
+          device.permanentMute = false;
+          buttonMutedDevices.delete(device.id);
+        }
+        applyAudioDeviceChange(device);
+      }
+      if (change.session_id) {
+        const session = audioSessions.find(s => s.id === change.session_id);
+        if (session) {
+          session.volume = change.volume;
+          session.is_muted = change.is_muted;
+          updateSessionCard(session);
         }
       }
     }
-  });
+  }
+});
 
-  window.__TAURI__.event.listen("audio-devices-changed", () => {
-    loadAudioDevices();
-  });
+onTauriEvent("audio-devices-changed", () => {
+  loadAudioDevices();
+});
 
-  window.__TAURI__.event.listen("config-changed", async (event) => {
-    try {
-      // 后端传递完整 config 快照，直接使用
-      let cfg;
-      if (event.payload) {
-        cfg = event.payload;
-      } else {
-        // 向后兼容：旧版后端可能传递空 payload
-        cfg = await getInvoke()("get_config");
-      }
-      applyAudioRuntimeConfig(cfg);
-      for (const d of audioDevices) {
-        d.permanentMute = muteLockEnabled && buttonMutedDevices.has(d.id);
-      }
-      for (const s of audioSessions) {
-        s.permanentMute = muteLockEnabled && !!(s.is_muted && s.volume > 0);
-      }
-      document.querySelectorAll(".volume-slider").forEach(s => {
-        s.step = fineAdjustEnabled ? "0.1" : "1";
-      });
-      renderAudioDevices();
-      renderAudioSessions();
-    } catch (e) {
-      console.error("Failed to reload mute lock config:", e);
+onTauriEvent("config-changed", async (event) => {
+  try {
+    // 后端传递完整 config 快照，直接使用
+    let cfg;
+    if (event.payload) {
+      cfg = event.payload;
+    } else {
+      // 向后兼容：旧版后端可能传递空 payload
+      const fn = getInvoke();
+      // L1：getInvoke() 未就绪时返回 null（P2-3）。既无 payload 又取不到 invoke，
+      // 就拿不到 config；直接跳过本次刷新，别让 undefined 进 applyAudioRuntimeConfig。
+      if (!fn) return;
+      cfg = await fn("get_config");
     }
-  });
-}
+    applyAudioRuntimeConfig(cfg);
+    for (const d of audioDevices) {
+      d.permanentMute = muteLockEnabled && buttonMutedDevices.has(d.id);
+    }
+    for (const s of audioSessions) {
+      s.permanentMute = muteLockEnabled && !!(s.is_muted && s.volume > 0);
+    }
+    document.querySelectorAll(".volume-slider").forEach(s => {
+      s.step = fineAdjustEnabled ? "0.1" : "1";
+    });
+    renderAudioDevices();
+    renderAudioSessions();
+  } catch (e) {
+    console.error("Failed to reload mute lock config:", e);
+  }
+});
 
 function applyAudioDeviceChange(device) {
   const cards = document.querySelectorAll(".card.audio-device");
@@ -475,7 +479,12 @@ async function loadAudioDevices() {
     }
   } catch (e) {
     if (list.querySelectorAll(".card.audio-device").length === 0) {
-      list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
+      // 错误对象文本不拼进 innerHTML：以 textContent 写入，避免其被当标记解析
+      list.innerHTML = "";
+      const failEl = document.createElement("div");
+      failEl.className = "loading";
+      failEl.textContent = `加载失败: ${e}`;
+      list.appendChild(failEl);
     }
   }
 }
@@ -653,17 +662,54 @@ async function loadAudioSessions(deviceId) {
   }
   try {
     audioSessions = (await invoke("get_audio_sessions", { deviceId })).map(s => ({ ...s, permanentMute: muteLockEnabled && !!(s.is_muted && s.volume > 0) }));
-    const devInfo = await invoke("get_sessions_device_names", { pids: audioSessions.map(s => s.pid) }).catch(() => ({}));
-    audioSessions = audioSessions.map(s => {
-      const info = devInfo[s.pid] || {};
-      return { ...s, outputDevice: info.output || null, inputDevice: info.input || null };
-    });
+    // 先把会话卡片渲染出来，再异步回填「已设置的输出/输入设备名」（P1-9）：
+    // 解析要逐 pid 走 IPolicyConfig 查询，实测百毫秒级；原先把它串行 await 在
+    // 渲染之前，会让首屏卡片一起等这段时间。设备名只影响图标上的「已路由」
+    // 标记与 tooltip，晚一点到不影响卡片本身可用。
     renderAudioSessions();
+    refreshSessionDeviceNames(invoke);
   } catch (e) {
     if (list.querySelectorAll(".card.session").length === 0) {
-      list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
+      // 同上：失败文案以 textContent 写入
+      list.innerHTML = "";
+      const failEl = document.createElement("div");
+      failEl.className = "loading";
+      failEl.textContent = `加载失败: ${e}`;
+      list.appendChild(failEl);
     }
   }
+}
+
+// 会话卡片图标解析的回填代际号。
+//
+// 解析是异步的，期间用户可能切了设备或再次刷新 ⇒ 旧请求的结果会落到新列表上。
+// 每次发起解析递增一次，回填前比对，代际不符就丢弃（P1-9）。
+let sessionNamesToken = 0;
+
+// 异步解析「各会话已设置的输出/输入设备名」并回填到已渲染的卡片上（P1-9）。
+//
+// 解析失败时**静默保持**「无设备名」：卡片本身已经渲染好了，设备名只是图标上的
+// 「已路由」标记与 tooltip 的补充信息，不值得为此打扰用户。
+async function refreshSessionDeviceNames(invoke) {
+  const pids = audioSessions.map(s => s.pid);
+  if (pids.length === 0) {
+    return;
+  }
+  const token = ++sessionNamesToken;
+  let devInfo;
+  try {
+    devInfo = await invoke("get_sessions_device_names", { pids });
+  } catch (_) {
+    return;
+  }
+  if (token !== sessionNamesToken) {
+    return;
+  }
+  audioSessions = audioSessions.map(s => {
+    const info = devInfo[s.pid] || {};
+    return { ...s, outputDevice: info.output || null, inputDevice: info.input || null };
+  });
+  renderAudioSessions();
 }
 
 function renderAudioSessions() {

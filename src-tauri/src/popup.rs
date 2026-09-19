@@ -1,8 +1,7 @@
-use std::sync::atomic::Ordering;
 use tauri::Emitter;
 use tauri::Manager;
 
-use crate::state::{ANIMATING, POPUP_POS, TRAY_POS};
+use crate::state::{POPUP_POS, TRAY_POS};
 use crate::webview;
 use crate::window_material;
 use crate::windows;
@@ -100,7 +99,7 @@ fn placement_from(
 }
 
 pub fn toggle(app: &tauri::AppHandle, tab: &str) {
-    if ANIMATING.load(Ordering::Relaxed) {
+    if crate::state::animation_blocks() {
         return;
     }
 
@@ -123,7 +122,7 @@ pub fn toggle(app: &tauri::AppHandle, tab: &str) {
 }
 
 pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
-    if ANIMATING.load(Ordering::Relaxed) {
+    if crate::state::animation_blocks() {
         return;
     }
 
@@ -141,8 +140,30 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
     }
 }
 
+/// 在后台线程执行一段滑动动画，动画期间持有 `ANIMATING` 单飞守卫。
+///
+/// **`guard` 是必需参数**，这不是风格偏好：漏传即编译错误，从类型层面堵死
+/// 「置位了却没人复位」这条 P1-8 的复发路径（原先靠两处手工 `store(false)`，
+/// 漏一处就让弹窗永久打不开也关不掉）。
+///
+/// 闭包体内显式 `let _guard = guard;` 是**必须**的：`move` 闭包只有在体内
+/// 引用过该变量时才会真正捕获它，否则守卫会在调用方返回时立刻 Drop，
+/// 单飞语义直接退化为无保护（见 `AGENTS.md`「RAII 守卫的绑定命名」）。
+fn spawn_animation(
+    guard: crate::state::SingleFlightGuard<'static>,
+    f: impl FnOnce() + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        let _guard = guard;
+        f();
+    });
+}
+
 fn close(window: &tauri::WebviewWindow, target_x: f64, target_y: f64, start_y: f64) {
-    ANIMATING.store(true, Ordering::Relaxed);
+    // 守卫在函数顶部取得：取不到说明已有动画在跑（且未超时），本次放弃
+    let Some(guard) = crate::state::try_begin_animation() else {
+        return;
+    };
     // 下滑全程保持低于任务栏（防御性重沉：若窗口曾被抬回波段顶则归位）
     if let Ok(hwnd) = window.hwnd() {
         windows::place_below_taskbar(hwnd.0 as isize);
@@ -152,14 +173,13 @@ fn close(window: &tauri::WebviewWindow, target_x: f64, target_y: f64, start_y: f
         .map(|m| *crate::state::lock_unpoisoned(m))
         .unwrap_or((target_x, target_y));
     let win = window.clone();
-    std::thread::spawn(move || {
+    spawn_animation(guard, move || {
         animate_close(&win, cx, cy, start_y);
-        ANIMATING.store(false, Ordering::Relaxed);
     });
 }
 
 pub fn close_popup(app: &tauri::AppHandle) {
-    if ANIMATING.load(Ordering::Relaxed) {
+    if crate::state::animation_blocks() {
         return;
     }
     let p = compute_position(app);
@@ -178,6 +198,11 @@ fn show(
     popup_w: f64,
     popup_h: f64,
 ) {
+    // 守卫在函数顶部取得（取不到说明已有动画在跑且未超时，放弃本次显示）
+    let Some(guard) = crate::state::try_begin_animation() else {
+        return;
+    };
+
     // popup 打开前 Resume WebView2 渲染进程（可能因关闭后 Suspend 或系统唤醒处于挂起状态）
     let wv: &tauri::Webview = window.as_ref();
     webview::resume_webview(wv);
@@ -187,7 +212,6 @@ fn show(
     // 按当前工作区动态尺寸调整窗口（换显示器/换分辨率/改档位后尺寸可能变化）
     let _ = window.set_size(tauri::LogicalSize::new(popup_w, popup_h));
 
-    ANIMATING.store(true, Ordering::Relaxed);
     // 先移到屏幕外，再置顶，最后显示：滑动全程位于其他窗口之上，
     // 避免非置顶状态下被前台窗口遮挡（表现为动画"丢失"或部分不可见）
     let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
@@ -201,9 +225,8 @@ fn show(
         windows::place_below_taskbar(hwnd.0 as isize);
     }
     let win = window.clone();
-    std::thread::spawn(move || {
+    spawn_animation(guard, move || {
         animate_open(&win, target_x, start_y, target_y);
-        ANIMATING.store(false, Ordering::Relaxed);
     });
 }
 
@@ -351,7 +374,10 @@ fn animate_close(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64
     let _ = window.hide();
     // popup 关闭后 Suspend WebView2 渲染进程：
     // - 释放 CPU/内存（渲染进程休眠）
-    // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（B 类僵死根治）
+    // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（仅针对**休眠唤醒**这一类）
+    //   ⚠️ 范围限定（2026-09-18）：这**不是**「运行期窗口冻结」的解释——实测根因是
+    //   **锁序死锁（P0-4）**，与挂起态无关；遇到「窗口完全无响应」请先查锁序
+    //   （登记表见 `state.rs` 模块文档）。
     let wv: &tauri::Webview = window.as_ref();
     webview::suspend_webview(wv);
 }

@@ -3,9 +3,8 @@
  * 提供：loadDevices(fresh24g, opts)（供 popup.js 的刷新按钮/focus 刷新调用，
  *       刷新按钮传 true 走 get_devices_fresh 强制现查 2.4G 电量）；
  *       快照水合与 24g-battery-updated/devices-changed 推送订阅（静默重拉）
- * 依赖：common.js（getInvoke/CATEGORIES/getDisplayName/showToast/registerContextMenu/
- *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell/reconcileCards） /
- *       window.__TAURI__.event（后端推送：电量变更/设备增删）
+ * 依赖：common.js（getInvoke/onTauriEvent/CATEGORIES/getDisplayName/showToast/registerContextMenu/
+ *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell/reconcileCards）
  */
 let allDevices = [];
 let hiddenDevices = [];
@@ -102,7 +101,14 @@ async function loadDevices(fresh24g = false, opts = {}) {
     // 失败保留既有渲染（水合快照或上一轮数据）
     if (gen === loadGen) {
       if (notify) showToast("刷新失败", null, true);
-      else if (!hasCards && !hydrated) list.innerHTML = `<div class="loading">加载失败: ${e}</div>`;
+      else if (!hasCards && !hydrated) {
+        // 错误对象文本不拼进 innerHTML：以 textContent 写入，避免其被当标记解析
+        list.innerHTML = "";
+        const failEl = document.createElement("div");
+        failEl.className = "loading";
+        failEl.textContent = `加载失败: ${e}`;
+        list.appendChild(failEl);
+      }
     }
   }
 }
@@ -441,11 +447,10 @@ function scheduleSilentRefresh() {
   }, 500);
 }
 
-if (window.__TAURI__ && window.__TAURI__.event) {
-  window.__TAURI__.event.listen("24g-battery-updated", scheduleSilentRefresh);
-  window.__TAURI__.event.listen("bt-battery-updated", scheduleSilentRefresh);
-  window.__TAURI__.event.listen("devices-changed", scheduleSilentRefresh);
-}
+// 后端推送（电量变更/设备增删）统一经 common.js 的 onTauriEvent()（P2-3）
+onTauriEvent("24g-battery-updated", scheduleSilentRefresh);
+onTauriEvent("bt-battery-updated", scheduleSilentRefresh);
+onTauriEvent("devices-changed", scheduleSilentRefresh);
 
 function showContextMenu(x, y, dev) {
   hideAllContextMenus();

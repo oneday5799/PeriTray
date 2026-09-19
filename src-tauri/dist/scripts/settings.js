@@ -6,6 +6,112 @@
  *       updateFlyoutBackdrop 等框架级共享函数
  * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/about) */
 let config = null;
+// 「基线副本」= 本页**上次从后端收到的整份快照**（P1-11）。
+// saveConfig() 会把它随请求一起发回，后端据此算出用户真正改了哪些字段，
+// 只套用这些字段 —— 否则整份覆盖会抹掉弹窗侧并发的改名/隐藏等改动。
+// ⚠️ 必须是独立深拷贝：各分区脚本都直接在 config 上就地改字段，
+// 若与 config 指向同一对象，差异永远是空集，修复即失效。
+let configBase = null;
+
+/**
+ * 深比较两个配置值（字段级）。
+ * ⚠️ **不能用引用相等**：本页各分区脚本大量**就地改嵌套对象**
+ * （如 `config.device_names[id] = name`、`config.device_groups[id] = g`），
+ * 引用不变但内容已变；而 `configBase` 是独立深拷贝，两边引用必然不同。
+ * 数组与对象一律按「内容相等」判定，**元素顺序敏感**（本仓数组字段都是小集合，
+ * 顺序由用户操作决定，顺序变化即视为一次真实改动）。
+ */
+function isSameConfigValue(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!isSameConfigValue(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+/**
+ * 算出「本页尚未落盘的本地改动」——`configBase` → `config` 的**稀疏补丁**
+ * （只含值发生变化的顶层字段）。无改动时返回 `null`。
+ */
+function localPendingPatch() {
+  if (!config || !configBase) return null;
+  const keys = new Set([...Object.keys(configBase), ...Object.keys(config)]);
+  const patch = {};
+  let changed = 0;
+  for (const key of keys) {
+    if (!isSameConfigValue(configBase[key], config[key])) {
+      patch[key] = structuredClone(config[key]);
+      changed++;
+    }
+  }
+  return changed === 0 ? null : patch;
+}
+
+/**
+ * 把「本页尚未落盘的改动」重放到一份新快照上（B14）。
+ *
+ * 逐字段**三态判定**（`B` = 旧基线 `configBase`、`L` = 本页当前值 `config`、
+ * `S` = 新快照）：
+ * - `L === B`：该字段本页没改过 → 直接用 `S`（外部改动正常生效）。
+ * - `S === L`：快照里已经是本地值 → 无事可做。
+ * - `S === B`：**快照没动这个字段** ⇒ 外部改动与本地改动互不相干，
+ *   **保留 `L`**。这是本条要修的核心场景——用户刚点了一下、还没落盘，
+ *   外部快照到达，这一下不能被吞掉。
+ * - 三者互不相同（真三方冲突）：**采纳 `S`** 并 `console.warn` 点名。
+ *   为什么不是「本页优先」：后端是唯一权威，且这种形态最常见的成因是
+ *   **后端对我们刚保存的值做了归一化**（`normalize_config`，P3-9）——
+ *   若本页硬保留原值，UI 会永远显示未归一化的旧值且每次保存都被改回去。
+ *   取舍：**宁可让外部覆盖，也不与后端对峙**；冲突有 warn 日志可追。
+ */
+function mergeLocalEdits(snapshot) {
+  const pending = localPendingPatch();
+  if (!pending) return snapshot;
+  const out = structuredClone(snapshot);
+  const conflicted = [];
+  for (const key of Object.keys(pending)) {
+    if (isSameConfigValue(snapshot[key], pending[key])) continue;
+    if (isSameConfigValue(snapshot[key], configBase[key])) out[key] = pending[key];
+    else conflicted.push(key);
+  }
+  if (conflicted.length) {
+    console.warn(
+      "[settings] 本地未落盘改动与后端快照冲突，已采纳后端：" + conflicted.join(", ")
+    );
+  }
+  return out;
+}
+
+/**
+ * 接受一份来自后端的整份配置快照：同时刷新工作副本与基线副本。
+ * **只有来自后端的快照**才走这里；本地派生的浅拷贝（如 `{ ...config }`）不走，
+ * 否则会把用户的未落盘改动误当成基线，差异被清零。
+ *
+ * `keepLocalEdits`（B14）**默认为 `true`**——即「外部/后端快照到达时，
+ * 保留本页尚未落盘的改动」。这样设计是为了让**忘记传参**也不会造成静默丢改动
+ * （安全的那一侧做默认值）；确实需要「无条件整份采纳」时，必须**显式**
+ * 传 `false` 并写明理由。
+ *
+ * ⚠️ 本函数有**多处调用点**，改动语义时务必一并核对（`grep -rn "acceptConfig"`）：
+ *   `settings.js`（首份快照 = 唯一的 `false`、`config-changed` 处理器）
+ *   `settings-audio.js:10/60`、`settings-devices.js:14/118`、
+ *   `settings-shortcut.js:131/166`
+ *   ——后 6 处都是「改完后端某个字段后重新拉取整份配置」，
+ *   **它们同样会吞掉用户在别处（如刚改的日志级别）的未落盘改动**，
+ *   所以必须保留本地改动（这也是「只修 `config-changed` 一处」不够用的原因：
+ *   该处理器自己就会经 `loadDevicesAsync()` 走到这里）。
+ */
+function acceptConfig(snapshot, { keepLocalEdits = true } = {}) {
+  if (!snapshot) return;
+  config = keepLocalEdits ? mergeLocalEdits(snapshot) : snapshot;
+  configBase = structuredClone(snapshot);
+}
 let activeSettingsMenu = null;
 // 导航就绪门：get_config 往返期间各标签页内容尚未初始化，
 // 此期间的点击/托盘事件先记录、init 完成后统一补执行（防首次切换播在空白面板上）
@@ -25,7 +131,8 @@ document.addEventListener("pointerleave", (e) => {
 
 async function saveConfig() {
   try {
-    await invoke("update_config", { newConfig: config });
+    // base + newConfig 一起送：后端只套用两者之间的差异（P1-11）
+    await invoke("update_config", { base: configBase, newConfig: config });
   } catch (e) {
     console.error("Failed to save config:", e);
   }
@@ -290,12 +397,15 @@ function initComboBox(comboId, selectedValue, onChange) {
   }
 
   function onScroll() {
-    if (flyout.style.display !== "none") positionFlyout();
+    if (combo.classList.contains("is-open")) positionFlyout();
   }
 
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const isOpen = flyout.style.display !== "none" && flyout.style.visibility !== "hidden";
+    // 状态源是类，不是内联样式：`is-open` 由下方开/closeFlyout 完整维护。
+    // 原先回读 `flyout.style.display`，而初始态一旦改由样式表给出（CSP 收紧后必须如此），
+    // 内联值就是空串、该表达式恒为 true，首点会走 closeFlyout()（关一个本来就关着的浮层）。
+    const isOpen = combo.classList.contains("is-open");
     if (isOpen) {
       closeFlyout();
     } else {
@@ -479,12 +589,12 @@ async function runUpdateCheck(btnId) {
     renderUpdateInfobar(status);
     if (status.status === "update") {
       showToast(
-        `检测到新版本 ${status.latestVersion}（当前 ${status.currentVersion}）<br>点击前往下载`,
+        `检测到新版本 ${status.latestVersion}（当前 ${status.currentVersion}）\n点击前往下载`,
         () => invoke("open_url", { url: status.releaseUrl })
       );
     } else if (status.status === "storeUpdate") {
       showToast(
-        "Microsoft Store 存在更新版本<br>点击前往更新",
+        "Microsoft Store 存在更新版本\n点击前往更新",
         () => invoke("open_url", { url: status.releaseUrl })
       );
     } else if (status.status === "latest") {
@@ -685,7 +795,10 @@ async function init() {
   if (hash) selectTab(hash);
 
   try {
-    config = await invoke("get_config");
+    // 首份快照：本页还没有任何本地改动，**这是全仓唯一显式 `keepLocalEdits: false`**。
+    // 其余调用点（含下方 config-changed 处理器与各分区脚本的「重新拉取」）一律
+    // 走默认的 `true` —— 保留本页未落盘改动（B14）。
+    acceptConfig(await invoke("get_config"), { keepLocalEdits: false });
 
     applyThemeMode(config.theme_mode || "follow_system");
     initGeneralTab();
@@ -733,13 +846,21 @@ async function init() {
 }
 
 // config-changed: 使用 payload 中的 config 快照，无需再调用 get_config
-window.__TAURI__.event.listen("config-changed", async (event) => {
-  // 后端传递完整 config 快照，直接使用
+onTauriEvent("config-changed", async (event) => {
+  // 后端传递完整 config 快照，直接使用。
+  // ⚠️ B14：这是**外部**变更（弹窗侧改名/隐藏、另一窗口保存），到达时本页可能有
+  // 「刚点、还没落盘」的改动，整份替换会静默吞掉它们。`keepLocalEdits: true`
+  // 是 `acceptConfig` 的**默认值**，这里仍显式写出——它是本条缺陷的原始现场，
+  // 显式声明便于检索与评审。
+  // 另注意：下面 `loadDevicesAsync()` / `loadAudioDevicesAsync()` 内部也会
+  // `acceptConfig(await invoke("get_config"))`，**它们同样必须保留本地改动**，
+  // 否则本处理器刚保住的那点改动会在紧随其后的渲染里被二次覆盖
+  // （只改本函数是无效的，实测已确认）。
   if (event.payload) {
-    config = event.payload;
+    acceptConfig(event.payload, { keepLocalEdits: true });
   } else {
     // 向后兼容：旧版后端可能传递空 payload
-    config = await invoke("get_config");
+    acceptConfig(await invoke("get_config"), { keepLocalEdits: true });
   }
   await loadDevicesAsync();
   await loadAudioDevicesAsync();
@@ -754,7 +875,7 @@ window.__TAURI__.event.listen("config-changed", async (event) => {
 });
 
 // 托盘「关于」指向设置页关于标签（窗口已存在时）
-window.__TAURI__.event.listen("settings-tab", (e) => {
+onTauriEvent("settings-tab", (e) => {
   selectTab(e.payload);
 });
 

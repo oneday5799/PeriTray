@@ -1,5 +1,5 @@
 /* common.js — 共享基础层（popup/settings 两页最先加载）：Tauri invoke/主题与材质应用/
- *            右键菜单族（注册/钳位/关闭/子菜单外壳 createSubmenuShell/勾选图标 createCheckIcon）/
+ *            右键菜单族（默认菜单屏蔽/注册/钳位/关闭/子菜单外壳 createSubmenuShell/勾选图标 createCheckIcon）/
  *            设备显示名解析（simplifyDeviceName/formatDeviceName/getDisplayName）/
  *            对话框与 toast/快捷键录制器（码表为本文件内部实现细节，不对外）
  * 加载序 1/N · 提供：window 全局 API —— CATEGORIES/initTheme/applyThemeMode/applyMaterialMode/
@@ -8,8 +8,43 @@
  *             clampMenuPosition/hideAllContextMenus/createSubmenuShell/createCheckIcon/
  *             showRenameDialog/createDialog/closeDialog/showToast/describeShortcutError/
  *             bindShortcutRecorder
- * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖 */
-const { invoke } = window.__TAURI__.core;
+ * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖
+ *       ⚠️ 本文件顶层的 `const invoke` 同时是 **settings 页全部脚本的 invoke 来源**
+ *       （它们以裸 `invoke(...)` 跨脚本词法绑定使用，见下方注释） */
+//
+// Tauri API 一律「惰性获取 + 防御式降级」（P2-3）。
+// 顶层直接解构 `window.__TAURI__.core` 会在运行时未注入（或注入晚于本文件执行）时
+// 抛 TypeError ⇒ **本文件后续所有 `window.*` API 都不再定义**，两页功能整体失效
+// ——这不是降级，是全崩。故：
+//   · `invoke` 包装为「每次调用重新解析」，未就绪时返回 rejected Promise，
+//     交给调用方既有的 `.catch()` / `try-catch` 走降级路径；
+//   · 顶层事件监听一律经 `onTauriEvent()`，未就绪时静默跳过并返回 false。
+//   · ⚠️ 下面这个 `invoke` 包装**同时是 settings 页的 invoke 来源**：settings*.js
+//     以裸 `invoke(...)` 跨脚本词法绑定使用它（顶层 `const` 不是 `window` 属性，
+//     但同页后续脚本可见）⇒ **不要搬出本文件、不要改成 `window.invoke`、不要让
+//     settings.html 把它排到 common.js 之前**。实测把本文件排到最后：`check.mjs`
+//     仍报通过（声明池按页汇总且无序，看不见顺序），而运行时报
+//     `ReferenceError: registerContextMenu is not defined`（顶层调用的 `window.*`）、
+//     `ReferenceError: invoke is not defined`（词法 `const`——定义脚本执行前该全局
+//     绑定根本不存在，是 not defined 而非 TDZ）。两页取用形式的差异见 `AGENTS.md`
+//     「前端架构备忘」，**勿统一**。
+const invoke = (...args) => {
+  const core = window.__TAURI__ && window.__TAURI__.core;
+  if (!core || typeof core.invoke !== "function") {
+    return Promise.reject(new Error("Tauri API 未就绪"));
+  }
+  return core.invoke(...args);
+};
+
+// 顶层注册 Tauri 事件监听（P2-3）。用 `function` 声明以便被提升，文件内任意位置可用。
+function onTauriEvent(name, handler) {
+  const ev = window.__TAURI__ && window.__TAURI__.event;
+  if (!ev || typeof ev.listen !== "function") {
+    return false;
+  }
+  ev.listen(name, handler);
+  return true;
+}
 
 window.CATEGORIES = [
   { key: "Audio", label: "音频设备", subtitle: "扬声器、耳机等音频设备", icon: "🔊" },
@@ -73,7 +108,7 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 // config-changed: 设置页切主题时，主窗口/设置页实时同步
-window.__TAURI__.event.listen("config-changed", () => {
+onTauriEvent("config-changed", () => {
   initTheme();
 });
 
@@ -92,7 +127,7 @@ window.applyMaterialMode = function (material) {
 })();
 
 // 材质变更时由 Rust 发出 material-changed；设置页切换过程中跳过（防闪烁时序由 settings.js 控制）
-window.__TAURI__.event.listen("material-changed", (e) => {
+onTauriEvent("material-changed", (e) => {
   if (!window.__materialChangeInProgress) applyMaterialMode(e.payload);
 });
 
@@ -237,6 +272,10 @@ window.hideAllContextMenus = function () {
 
 document.addEventListener("click", hideAllContextMenus);
 
+// 禁用浏览器默认右键菜单（两页共用）。原先写在 <body oncontextmenu="return false"> 上，
+// 属内联事件属性，会被不含 'unsafe-inline' 的 CSP `script-src` 拦掉 —— 改为在此注册。
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
 // 勾选图标（context-menu-check）：各菜单选中态的统一构造入口
 window.createCheckIcon = function () {
   const check = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -249,13 +288,35 @@ window.createCheckIcon = function () {
   return check;
 };
 
+// 子菜单展开箭头（内部实现细节，不对外）：与 createCheckIcon 同款 createElementNS 组装
+function createChevronIcon() {
+  const chevron = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  chevron.setAttribute("class", "context-menu-chevron");
+  chevron.setAttribute("width", "10");
+  chevron.setAttribute("height", "10");
+  chevron.setAttribute("viewBox", "0 0 12 12");
+  chevron.setAttribute("fill", "none");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M4 2L8 6L4 10");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.5");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  chevron.appendChild(path);
+  return chevron;
+}
+
 // 子菜单外壳：悬停展开的二级菜单（分组/输出设备/会话路由/空间音效共用）。
 // positionFn(submenu, groupItem, menu) 可注入自定义定位策略；缺省为锚定 groupItem 视口矩形。
 window.createSubmenuShell = function (menu, label, positionFn) {
   const groupItem = document.createElement("div");
   groupItem.className = "context-menu-item context-menu-subitem";
-  groupItem.innerHTML = "<span>" + label + "</span>" +
-    '<svg class="context-menu-chevron" width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  // label 来自调用点（含设备名等外部数据），一律以 textContent 写入，
+  // 不拼 innerHTML —— 拼字符串会把设备名里的标记当结构解析（见 P1-10 残留注入面）
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  groupItem.appendChild(labelEl);
+  groupItem.appendChild(createChevronIcon());
 
   const submenu = document.createElement("div");
   submenu.className = "context-menu context-submenu";
@@ -427,6 +488,11 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
 // 快捷键保存失败文案归一：后端错误串 -> 用户可读提示（toast/hint 呈现方式由调用方决定）
 window.describeShortcutError = function (err, display) {
   const msg = String(err);
+  // 顺序要紧：「已被其他程序占用」不含「已被占用」子串，但仍显式先判，
+  // 以免日后有人把文案改成含该子串而落到下面那条更含糊的提示上（P2-12）。
+  if (msg.includes("被其他程序占用")) {
+    return `"${display}" 已被其他程序占用，请换一个快捷键。`;
+  }
   return msg.includes("已被占用")
     ? `"${display}" 已被其他功能占用，请选择其他快捷键。`
     : "暂不支持该快捷键。";
@@ -516,7 +582,7 @@ function ensureShortcutRecordListener() {
   shortcutRecordListenerReady = true;
   // 已注册为全局快捷键的组合键，其按键事件可能被系统吞掉而收不到 keydown，
   // 由后端在录制期间直接上报按下的组合键。
-  window.__TAURI__.event.listen("shortcut-recorded", (event) => {
+  onTauriEvent("shortcut-recorded", (event) => {
     const key = event.payload;
     if (!key) return;
     for (const rec of shortcutRecorders) rec.recordFromBackend(key);
@@ -529,7 +595,7 @@ window.bindShortcutRecorder = function (input, clearBtn, getSavedKey, onSaved, o
 
   function setRecordingFlag(on) {
     try {
-      window.__TAURI__.core.invoke("set_shortcut_recording", { recording: on }).catch(() => {});
+      invoke("set_shortcut_recording", { recording: on }).catch(() => {});
     } catch (_) {}
   }
 
@@ -706,7 +772,15 @@ window.closeDialog = function (overlay) {
 
 // ── Toast 通知 ──────────────────────────────────────────
 
-window.showToast = function (msg, onClick, isError) {
+/**
+ * 弹出一条 toast。
+ *
+ * ⚠️ **文案是纯文本，不是 HTML**：本函数用 `textContent` 写入（防 XSS，必须保持），
+ * 所以文案里若写 HTML 换行标签，会被原样显示成字面量的标签文本。
+ * 需要换行请写 `\n`——`.toast` 已设 `white-space: pre-line`（见 base.css）。
+ * `tools/check.mjs` 会扫描本函数的实参并在出现 HTML 标签时报错（P1-6）。
+ */
+window.showToast = function (msg, onClick, isError, durationMs) {
   let el = document.querySelector(".toast");
   if (!el) {
     el = document.createElement("div");
@@ -725,22 +799,89 @@ window.showToast = function (msg, onClick, isError) {
     el.classList.remove("error");
     el.onclick = null;
     el.style.cursor = "default";
-  }, 5000);
+  }, durationMs || 5000);
 };
 
+// ── 启动时配置解析失败提示（P1-7）───────────────────────
+// 后端解析 config.toml 失败时会回退默认值，并把磁盘原文备份为 config.toml.bak。
+// 不提示的话，用户只会看到「设置全变回默认」，容易误判成静默丢数据。
+// 两个页面都加载 common.js，故提示逻辑放在这里（非清除式，两个窗口都能看到）。
+window.addEventListener("DOMContentLoaded", async () => {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  try {
+    const msg = await invoke("get_config_load_error");
+    // 停留时间给足：消息里含备份文件的完整路径，5s 读不完
+    if (msg) {
+      window.showToast(msg, null, true, 15000);
+      // 留一条后端记录：证明提示链路真的走到了前端（否则异常会被 catch 静默吞掉，
+      // 而「用户到底有没有被告知」将无从查证）
+      invoke("frontend_log", { tag: "config-notice", msg: msg }).catch(() => {});
+    }
+  } catch (_) {
+    // 提示失败不得影响主流程
+  }
+
+  // P2-12：注册失败的设备快捷键。**必须主动拉取**——失败事件在启动同步时发出，
+  // 那一刻本页面还没加载、监听器尚未注册，事件必然落空。而「开机时快捷键被别的
+  // 程序抢走」正是这类失效最常见也最隐蔽的场景（界面显示已设置、按键却无反应）。
+  try {
+    const keys = await invoke("get_shortcut_register_failed");
+    if (Array.isArray(keys) && keys.length) {
+      window.showToast(
+        `快捷键 ${keys.join("、")} 注册失败：可能已被其他程序占用`,
+        null,
+        true,
+        15000
+      );
+      invoke("frontend_log", {
+        tag: "shortcut-register-failed",
+        msg: `启动拉取 ${keys.join(",")}`,
+      }).catch(() => {});
+    }
+  } catch (_) {
+    // 同上：提示失败不得影响主流程
+  }
+});
+
+// ── 设备快捷键注册失败（P2-12）─────────────────────────
+// 被**其他程序**占用的键，只有真正调注册 API 时才会失败——本进程的注册表查不到外部占用。
+// 后端在失败时广播本事件，避免「界面显示已设置、按键却毫无反应」这种无从察觉的失效。
+// 注：用户主动设键走 `set_device_shortcut`，那条路径会返回错误并自行提示；
+// 本监听覆盖的是启动同步、关闭共享开关、删除设备等没有直接返回值的路径。
+onTauriEvent("shortcut-register-failed", (event) => {
+  const keys = Array.isArray(event.payload) ? event.payload : [];
+  if (!keys.length) return;
+  window.showToast(
+    `快捷键 ${keys.join("、")} 注册失败：可能已被其他程序占用`,
+    null,
+    true,
+    8000
+  );
+  // 留一条后端记录：证明提示链路真的走到了前端（否则异常会被静默吞掉，
+  // 而「用户到底有没有被告知」将无从查证）——与 P1-7 的 config 提示同一手法。
+  const invoke = getInvoke();
+  if (invoke) {
+    invoke("frontend_log", {
+      tag: "shortcut-register-failed",
+      msg: keys.join(","),
+    }).catch(() => {});
+  }
+});
+
 // ── 启动时更新检测（全局监听） ─────────────────────────
-window.__TAURI__.event.listen("update-available", (event) => {
+onTauriEvent("update-available", (event) => {
   const info = event.payload;
   const isStore = info.release_url && info.release_url.startsWith("ms-windows-store://");
   if (isStore) {
     window.showToast(
-      "Microsoft Store 有新版本可用<br>点击前往更新",
-      () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
+      "Microsoft Store 有新版本可用\n点击前往更新",
+      () => invoke("open_url", { url: info.release_url })
     );
   } else {
     window.showToast(
-      `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
-      () => window.__TAURI__.core.invoke("open_url", { url: info.release_url })
+      `发现新版本 ${info.latest_version}（当前 ${info.current_version}）\n点击前往下载`,
+      () => invoke("open_url", { url: info.release_url })
     );
   }
 });

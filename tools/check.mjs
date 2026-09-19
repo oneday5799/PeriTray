@@ -1,3 +1,44 @@
+/**
+ * 前端完整性闸门 —— **结构级静态检查**（< 1s）
+ *
+ * 运行：`node tools/check.mjs`（`.git/hooks/pre-commit` 与 CI 都会调用）
+ *
+ * ── 检查项（共 7 类）───────────────────────────────────────
+ * 1. HTML 引用 ↔ 磁盘文件双向一致（含孤立文件检测）
+ * 2. 跨文件调用审计：被调用的标识符必有声明
+ * 3. 跨文件同名全局函数检测（经典脚本后加载会遮蔽先加载的，属静默逻辑错误）
+ * 4. 全量 JS `node --check` 语法机检
+ * 5. BOM 扫描（CSS / JS / HTML 禁止 UTF-8 BOM）
+ * 6. 版本号一致性：tauri.conf.json / Cargo.toml / Cargo.lock /
+ *    package.json / settings.html 五处须为同一版本
+ * 7. Toast 契约（P1-6 的两半，必须成对）：`showToast` 实参不含 HTML 标签
+ *    + `.toast` 的层叠 `white-space` 为 `pre-line`
+ *
+ * ── 已知无法覆盖的类别（P3-8，务必知情）─────────────────────
+ * 本脚本只做**静态结构**检查。下面这些它一律看不见，改动后**必须人工回归**：
+ *
+ * - **CSS 语义**：属性值写错、选择器不匹配、层叠被更高优先级规则压掉
+ *   （例：`.toast` 的 `white-space` 被别的规则覆盖 —— 第 7 类只断言层叠结果，
+ *   改选择器结构仍可能绕过）。只能靠渲染验证（无头 Edge 截图 / 真机）。
+ * - **运行时逻辑**：合法语法下的逻辑 bug、状态机错误、事件时序问题
+ *   （例：P3-11 的「先读取后注册」窗口期丢事件，语法与结构全对）。
+ * - **Rust 侧完全不扫**：锁纪律（持锁调用会同步等主线程的 API，P0-4）、
+ *   异步上下文里的阻塞 sleep（P2-10）、锁序死锁、RAII 守卫未释放……一概拦不住。
+ * - **未加守卫的 API 访问**：未判空的 `window.__TAURI__` 使用、未 `.catch()` 的
+ *   Promise、`try/catch` 漏网（P2-3 那类「运行时未注入即整文件停摆」）。
+ * - **跨文件加载序**：第 2 类审计的声明池由 `pageJs` **按页汇总**，是个**无序集合**
+ *   ⇒ 重排 `<script>` 顺序、把定义搬到别的文件、或在「顶层声明」与 `window.` 挂载
+ *   之间改形式，本脚本**一律看不见**。实测把 `settings.html` 的 common.js 排到最后：
+ *   本脚本仍输出「前端完整性检查通过」，而页面运行时报
+ *   `Uncaught ReferenceError: registerContextMenu is not defined @settings.js:120`
+ *   （两页顶层代码都隐式依赖 common.js 先执行；详见 `AGENTS.md`「防护边界」
+ *   与 Wiki 04 §3.1）。
+ * - **同名检测的边界**：第 3 类只认**顶层 `function` 声明**；`const f = () => {}`、
+ *   对象方法、动态赋值（`window.f = …`）都不在检测范围内。
+ *
+ * 与 `AGENTS.md`「提交自动闸门 → 防护边界」是同一份边界的两种表述；
+ * 修改其一请同步另一处，避免两处说法漂移。
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -252,6 +293,134 @@ for (const dirName of ["scripts"]) {
     } catch (e) {
       errors.push(`语法错误 ${dirName}/${f}: ${e.stderr?.toString().split("\n")[0]}`);
     }
+  }
+}
+
+// ── Toast 文案不得含 HTML 标签（P1-6）──────────────────────
+// `showToast` 用 `textContent` 写入（防 XSS，必须保持），所以文案里的 HTML 换行标签
+// 会被原样显示成字面量。换行请写 `\n`，由 `.toast` 的 `white-space: pre-line` 渲染。
+//
+// 只扫 `showToast(...)` 的**实参文本**，不误伤页面里合法拼装的 innerHTML / 内联 SVG。
+// 括注配对时会跳过字符串与注释，故多行调用、实参里含 `(` `)` 都能正确取到边界。
+//
+// 定位调用起点前先屏蔽注释：否则注释掉的 showToast 调用（实参里带 HTML 标签）会被当成真调用
+// 而误报（这类误报会让闸门被开发者忽略，比漏报更糟）。屏蔽时保持字符偏移量不变，
+// 实参仍从**原文**切片，故字符串内容不会丢。
+function maskComments(src) {
+  const out = src.split("");
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (c === "/" && d === "*") {
+      const j = src.indexOf("*/", i + 2);
+      const e = j < 0 ? src.length : j + 2;
+      for (let k = i; k < e; k++) if (out[k] !== "\n") out[k] = " ";
+      i = e;
+      continue;
+    }
+    if (c === "/" && d === "/") {
+      let j = i;
+      while (j < src.length && src[j] !== "\n") j++;
+      for (let k = i; k < j; k++) out[k] = " ";
+      i = j;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === "\\") j += 2;
+        else if (src[j] === c) break;
+        else j++;
+      }
+      i = j + 1;
+      continue;
+    }
+    i++;
+  }
+  return out.join("");
+}
+
+function toastCallArgs(src) {
+  const args = [];
+  const masked = maskComments(src);
+  const re = /\bshowToast\s*\(/g;
+  let m;
+  while ((m = re.exec(masked))) {
+    const start = m.index + m[0].length;
+    let i = start;
+    let depth = 1;
+    while (i < src.length && depth > 0) {
+      const c = src[i];
+      const d = src[i + 1];
+      if (c === "/" && d === "*") {
+        const j = src.indexOf("*/", i + 2);
+        i = j < 0 ? src.length : j + 2;
+        continue;
+      }
+      if (c === "/" && d === "/") {
+        const j = src.indexOf("\n", i);
+        i = j < 0 ? src.length : j;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === "`") {
+        let j = i + 1;
+        while (j < src.length) {
+          if (src[j] === "\\") j += 2;
+          else if (src[j] === c) break;
+          else j++;
+        }
+        i = j + 1;
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0) break;
+      }
+      i++;
+    }
+    args.push(src.slice(start, i));
+    re.lastIndex = i; // 跳过已扫描区间，避免同一调用被重复计入
+  }
+  return args;
+}
+
+for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
+  if (!f.endsWith(".js")) continue;
+  const src = read(path.join(DIST, "scripts", f));
+  for (const argText of toastCallArgs(src)) {
+    const tag = argText.match(/<\/?[a-zA-Z][a-zA-Z0-9]*\s*\/?>/);
+    if (tag) {
+      errors.push(
+        `scripts/${f}: showToast 文案含 HTML 标签 ${tag[0]}` +
+          `（showToast 走 textContent，会显示成字面量；换行请用 \\n）`,
+      );
+    }
+  }
+}
+
+// ── `.toast` 必须能渲染换行（P1-6 的另一半）────────────────
+// showToast 的文案是纯文本（textContent），换行靠 `\n` + `white-space: pre-line`。
+// 少了这条样式，上面那批 `\n` 会退化成空格、两行提示挤成一行——
+// 与「文案里写 HTML 换行标签」是同一个 bug 的两面，故必须成对守住。
+{
+  const css = read(path.join(DIST, "styles", "base.css"));
+  // 注意 `.toast` 会同时出现在两处：① 与 tooltip 共用的「flyout surface」选择器组
+  // （组的最后一行正好是 `.toast {`，故也会被匹配到，且它确实作用于 .toast）；
+  // ② 独立的 `.toast` 规则块。同特异性下后者覆盖前者，故按出现顺序取
+  // **最后一次声明的 white-space 值**——这就是该属性的层叠结果。
+  const rules = [...css.matchAll(/^\.toast\s*\{([^}]*)\}/gm)];
+  let effective = null;
+  for (const r of rules) {
+    const decl = r[1].match(/white-space\s*:\s*([^;]+);/);
+    if (decl) effective = decl[1].trim();
+  }
+  if (effective !== "pre-line") {
+    errors.push(
+      `base.css: .toast 的 white-space 应为 pre-line，实为 ${effective ?? "(未声明)"}` +
+        `（toast 文案里的 \\n 将不换行）`,
+    );
   }
 }
 

@@ -15,7 +15,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -35,6 +35,11 @@ jobs:
       - name: Frontend integrity checks
         run: node tools/check.mjs
 
+      # §8.3 第 15/18 条：文档表格列数体检 + 自指型断言体检
+      # （单一来源见该脚本；本地收尾验收由 tools/verify-final.sh 调用同一条命令）
+      - name: Docs audit (tables + self-referential pointers)
+        run: node tools/doc-table-audit.mjs
+
       - name: Rust formatting
         run: cargo fmt --check
         working-directory: src-tauri
@@ -44,6 +49,10 @@ jobs:
         env:
           RUSTFLAGS: -D warnings
         working-directory: src-tauri
+
+      # 与 tools/pre-commit 共用同一条命令（含 20 条存量基线，单一来源见该脚本）
+      - name: Cargo clippy (deny warnings, baseline-pinned)
+        run: node tools/check-clippy.mjs
 
       - name: Cargo test
         run: cargo test

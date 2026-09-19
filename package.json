@@ -5,7 +5,8 @@
   "scripts": {
     "tauri": "tauri",
     "build": "tauri build --bundles nsis",
-    "check": "node tools/check.mjs"
+    "check": "node tools/check.mjs",
+    "check:clippy": "node tools/check-clippy.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

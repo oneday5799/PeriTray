@@ -31,4 +31,8 @@ Thumbs.db
 /src-tauri/msix/stage/
 /src-tauri/msix/output/
 
+# AI 协作的本地工作记忆（会话日志 + 项目笔记，含本机绝对路径，不适合共享）。
+# ⚠️ 只是不入库，**不是缓存、不要删除**：里面的约定与踩坑记录是本机独有的。
+/.workbuddy-ai/
+
 

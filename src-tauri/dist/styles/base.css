@@ -441,6 +441,12 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   color: var(--text-disabled, #a0a0a0);
 }
 
+/* 空态文案（「没有检测到…」）：原为内联 style="color:#888"，CSP `style-src 'self'`
+   会拦掉内联 style 属性使灰色丢失，故收敛为类，并改用主题令牌（暗色下同样成立） */
+.card-item-name--empty {
+  color: var(--text-tertiary, #888);
+}
+
 .card-item-controls {
   display: flex;
   align-items: center;
@@ -1167,6 +1173,9 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   pointer-events: none;
   max-width: 80%;
   text-align: center;
+  /* 文案里的 \n 要真的换行：showToast 用 textContent 写入（防 XSS），
+     故调用方传的是纯文本，换行只能靠 pre-line 渲染（P1-6）。 */
+  white-space: pre-line;
 }
 .toast.show {
   opacity: 1;

@@ -140,7 +140,12 @@ pub fn reload_device_data() {
         .ok();
 
     let last = LAST_MTIME.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = last.lock() {
+    // 守卫必须落在块内：下面要取 DEVICE_DATA 的写锁，持 LAST_MTIME 再拿写锁
+    // 会多出一条不必要的锁序（P0-4 类问题的温床）。
+    // P2-11：改用统一入口，中毒时不再静默跳过 —— 否则 mtime 永不更新，
+    // 此后每次 reload 都被误判为「未变化」而直接返回，设备名永久停在旧值。
+    {
+        let mut guard = crate::state::lock_unpoisoned(last);
         if *guard == Some(user_mtime) {
             return;
         }
@@ -149,16 +154,15 @@ pub fn reload_device_data() {
 
     if let Some(rw_lock) = DEVICE_DATA.get() {
         let new_data = build_registry(load_user_data(&user_data_path()));
-        if let Ok(mut data) = rw_lock.write() {
-            *data = new_data;
-        }
+        // P2-11：中毒时不再静默跳过（跳过 ⇒ 用户改过的设备名永远写不进去）
+        *crate::state::write_unpoisoned(rw_lock) = new_data;
     }
 }
 
 // ── 查询接口 ────────────────────────────────────────────
 
 pub fn is_wireless_24g(vid: &str, pid: &str) -> bool {
-    let data = DEVICE_DATA.get().and_then(|rw_lock| rw_lock.read().ok());
+    let data = DEVICE_DATA.get().map(crate::state::read_unpoisoned);
     data.as_ref()
         .and_then(|d| d.get(vid))
         .map(|pids| pids.contains_key(pid))
@@ -166,7 +170,7 @@ pub fn is_wireless_24g(vid: &str, pid: &str) -> bool {
 }
 
 pub(crate) fn get_device_name(vid: &str, pid: &str) -> Option<String> {
-    let data = DEVICE_DATA.get().and_then(|rw_lock| rw_lock.read().ok());
+    let data = DEVICE_DATA.get().map(crate::state::read_unpoisoned);
     data.as_ref()
         .and_then(|d| d.get(vid))
         .and_then(|pids| pids.get(pid))
@@ -174,7 +178,7 @@ pub(crate) fn get_device_name(vid: &str, pid: &str) -> Option<String> {
 }
 
 pub(crate) fn get_device_type(vid: &str, pid: &str) -> String {
-    let data = DEVICE_DATA.get().and_then(|rw_lock| rw_lock.read().ok());
+    let data = DEVICE_DATA.get().map(crate::state::read_unpoisoned);
     data.as_ref()
         .and_then(|d| d.get(vid))
         .and_then(|pids| pids.get(pid))
@@ -187,7 +191,7 @@ pub(crate) fn get_device_type(vid: &str, pid: &str) -> String {
 pub fn lookup(pnp_id: &str) -> Option<(bool, Option<String>, String)> {
     let (vid, pid) = extract_vid_pid(pnp_id)?;
     let is_24g = is_wireless_24g(&vid, &pid);
-    let data = DEVICE_DATA.get().and_then(|rw_lock| rw_lock.read().ok());
+    let data = DEVICE_DATA.get().map(crate::state::read_unpoisoned);
     let info = data
         .as_ref()
         .and_then(|d| d.get(&vid))

@@ -39,10 +39,16 @@ pub fn show_toast(title: &str, text: &str, icon: Option<&std::path::Path>) {
             return;
         };
 
-        // 隐藏旧通知（使用 lock_unpoisoned 防止 mutex 中毒 panic）
-        if let Some(prev) =
-            crate::state::lock_unpoisoned(PREV_TOAST.get_or_init(|| Mutex::new(None))).take()
-        {
+        // 隐藏旧通知（使用 lock_unpoisoned 防止 mutex 中毒 panic）。
+        //
+        // ⚠️ `take()` 的结果必须先落到**独立语句**再进 `if let`。本仓是
+        // edition 2021，`if let` 的临时量存活到整个 `if` 块结束，若写成
+        // `if let Some(prev) = lock(..).take() { notifier.Hide(&prev) }`，
+        // 则 `notifier.Hide(..)`（WinRT/COM 调用）会在**持锁状态下**执行。
+        // 拆成语句后，`MutexGuard` 在分号处即释放，`Hide` 全程无锁。
+        let prev =
+            crate::state::lock_unpoisoned(PREV_TOAST.get_or_init(|| Mutex::new(None))).take();
+        if let Some(prev) = prev {
             let _ = notifier.Hide(&prev);
         }
 

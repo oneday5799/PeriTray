@@ -1,7 +1,7 @@
 /* popup.js — 主窗口·入口：导航指示条/tab 切换动画/按钮与 focus 刷新/托盘联动
  * 加载序 4/4（common → popup-audio → popup-devices → 本文件）
  * 提供：（入口，无跨文件函数；switchToTab 为内部，由 switch-tab 事件/#volume 哈希驱动）；focus 处理器写入 popup-devices.js 的域缓存变量（同页全局作用域）
- * 依赖：common.js(initTheme/getInvoke) / popup-audio.js(loadAudioDevices/loadAudioSessions) /
+ * 依赖：common.js(initTheme/getInvoke/onTauriEvent) / popup-audio.js(loadAudioDevices/loadAudioSessions) /
  *       popup-devices.js(loadDevices/renderDevices)
  */
 document.getElementById("btn-refresh").addEventListener("click", async () => {
@@ -51,25 +51,35 @@ window.addEventListener("focus", async () => {
   try {
     const volumeTab = document.getElementById("tab-volume");
     const deviceTab = document.getElementById("tab-devices");
-    const scrollTop = (volumeTab.style.display !== "none" ? volumeTab : deviceTab).scrollTop;
+    // 判据读类而非内联样式：CSP 收紧后内联 style 属性被拦，`style.display` 恒为空串，
+    // 会让这里恒取 volumeTab —— 每次 focus 都读写错误元素的 scrollTop，
+    // 并无条件多跑一遍 loadAudioDevices()/loadAudioSessions()。
+    const isVolume = volumeTab.classList.contains("active");
+    const scrollTop = (isVolume ? volumeTab : deviceTab).scrollTop;
 
     // #16 复用 loadDevices 替代手工 config 赋值 + renderDevices
     await loadDevices();
 
-    if (volumeTab.style.display !== "none") {
+    if (isVolume) {
       await loadAudioDevices();
       if (selectedDeviceId) {
         await loadAudioSessions(selectedDeviceId);
       }
     }
-    (volumeTab.style.display !== "none" ? volumeTab : deviceTab).scrollTop = scrollTop;
+    (isVolume ? volumeTab : deviceTab).scrollTop = scrollTop;
     lastFocusRefresh = Date.now();
   } catch (e) {
     console.error("Failed to refresh on focus:", e);
   }
 });
 
-if (window.__TAURI__) {
+// ⚠️ 这里**有意保留一个「捕获载体」**：它决定首屏走「快照水合」还是
+// 「DOMContentLoaded 兜底」（浏览器/dev 打开时 Tauri 运行时不存在）。
+// 但载体不再直接读 `window.__TAURI__`，而是问抽象层「invoke 能力是否就绪」——
+// 与本分支真正需要的能力一致（`initTheme()` / `loadDevices()` 都只需 invoke），
+// 半初始化（`__TAURI__` 在、`.core` 不在）时也能正确落到兜底分支；
+// 顺带消掉非 common.js 文件里最后一处裸访问。
+if (getInvoke()) {
   initTheme();
   // 首屏水合：有快照则秒显旧数据并提示「正在刷新」，完成后换「已刷新」
   loadDevices(false, { notify: true });
@@ -193,8 +203,15 @@ let suppressNextSwitchAnimation = false;
 let tabAnimToken = 0;
 
 function applyTabContentDisplay(tabName) {
-  document.getElementById("tab-devices").style.display = tabName === "devices" ? "block" : "none";
-  document.getElementById("tab-volume").style.display = tabName === "volume" ? "block" : "none";
+  const isVolume = tabName === "volume";
+  const deviceTab = document.getElementById("tab-devices");
+  const volumeTab = document.getElementById("tab-volume");
+  deviceTab.style.display = isVolume ? "none" : "block";
+  volumeTab.style.display = isVolume ? "block" : "none";
+  // `active` 是标签可见性的语义状态源（样式表据它给出初始 display），
+  // 必须与内联 display 同步维护，否则读类的判据会读到过期状态。
+  deviceTab.classList.toggle("active", !isVolume);
+  volumeTab.classList.toggle("active", isVolume);
 }
 
 function animateTabSwitch(oldIndex, newIndex) {
@@ -287,8 +304,6 @@ if (location.hash === "#volume") {
   switchToTab("volume");
 }
 
-if (window.__TAURI__ && window.__TAURI__.event) {
-  window.__TAURI__.event.listen("switch-tab", (e) => {
-    switchToTab(e.payload);
-  });
-}
+onTauriEvent("switch-tab", (e) => {
+  switchToTab(e.payload);
+});

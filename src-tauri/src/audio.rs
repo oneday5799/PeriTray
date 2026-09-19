@@ -55,13 +55,44 @@ pub struct SessionDeviceNames {
     pub input: Option<String>,
 }
 
-/// 确保当前线程已初始化 COM（幂等调用）
+/// `RPC_E_CHANGED_MODE`（0x80010106）：本线程已被**另一种公寓模型**初始化过。
+///
+/// 项目约定「进程内统一 STA」（见 `ensure_com_initialized` 的契约），故该值意味着
+/// 约定被破坏——有代码抢先把线程初始化成了 MTA。抽成纯函数以便单测，并被三处
+/// COM 初始化点（`audio` / `audio_notify` / `main`）复用。
+pub(crate) fn is_apartment_mode_conflict(hr: i32) -> bool {
+    // 0x80010106 作为有符号 i32 即 -2147417850
+    hr == 0x80010106u32 as i32
+}
+
+/// 确保当前线程已初始化 COM（幂等调用）。
+///
+/// **显式契约（P2-5）**——原先这些是散落在调用点的隐性假设：
+/// - 本项目**进程内统一使用 STA**（`COINIT_APARTMENTTHREADED`），且**从不调用
+///   `CoUninitialize`**：COM 在整个进程生命周期内保持可用，故各处只做「确保」，
+///   不做配对释放。将来若要加反初始化，必须同时审视 `audio_notify` 的 STA 线程
+///   与 `IMMNotificationClient` 回调的存活期。
+/// - `CoInitializeEx` 的 `S_FALSE`（本线程已初始化过）在 `windows::core::Result`
+///   里是 `Ok` ⇒ 属幂等命中，不记日志。
+/// - `RPC_E_CHANGED_MODE` **不是「已初始化」**，而是「被别人初始化成了 MTA」：
+///   与上述约定冲突，STA-only 的组件（shell 通知、部分 COM 对象）在本线程上会失败。
+///   故单独识别并**告警级**记录，而不是混在一般错误里按 `verbose_log!` 记
+///   ——verbose 默认不输出，等于静默。
 pub(crate) unsafe fn ensure_com_initialized() {
-    if let Err(e) = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
-        verbose_log!(
-            "[audio] ensure_com_initialized: CoInitializeEx 返回错误: {}",
-            e
-        );
+    match CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
+        Ok(()) => {}
+        Err(e) if is_apartment_mode_conflict(e.code().0) => {
+            standard_log!(
+                "[audio] COM 公寓模型冲突（RPC_E_CHANGED_MODE）：本线程已被初始化为 MTA，\
+                 与「进程内统一 STA」的约定不符；STA-only 组件在本线程上可能失败"
+            );
+        }
+        Err(e) => {
+            verbose_log!(
+                "[audio] ensure_com_initialized: CoInitializeEx 返回错误: {}",
+                e
+            );
+        }
     }
 }
 
@@ -233,9 +264,17 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
             } else {
                 endpoint.SetMute(false, ptr::null())?;
                 if force_mute {
-                    // 恢复静音前的音量
-                    let mut guard = crate::state::lock_unpoisoned(force_mute_prev_volume());
-                    if let Some(prev) = guard.remove(&name) {
+                    // 恢复静音前的音量。
+                    //
+                    // ⚠️ `remove` 的结果必须先落到**独立语句**再进 `if let`：本仓是
+                    // edition 2021，`if let` 的临时量存活到整个 `if` 块结束，若写成
+                    // `if let Some(prev) = lock(..).remove(&name) { SetMasterVolumeLevelScalar(..) }`，
+                    // 则这个 COM 调用会在**持锁状态下**执行。拆成语句后 `MutexGuard`
+                    // 在分号处即释放，COM 调用全程无锁。
+                    // 与 `toast.rs` 的 `PREV_TOAST.take()` 是同一类坑（P3-10 锁序登记表 §四）。
+                    let prev =
+                        crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
+                    if let Some(prev) = prev {
                         let _ = endpoint
                             .SetMasterVolumeLevelScalar(prev.max(0.0).min(1.0), ptr::null());
                     }
@@ -514,4 +553,32 @@ pub fn adjust_default_volume_down() {
 
 pub fn toggle_default_mute() {
     simulate_media_key(VK_VOLUME_MUTE);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P2-5：公寓模型冲突的识别必须**只命中** `RPC_E_CHANGED_MODE`。
+    ///
+    /// 判别力在于两侧：既要求认出 0x80010106，也要求不把成功码（S_OK / S_FALSE）
+    /// 与邻近的错误码误判为冲突——误判会让正常的幂等命中被打成告警，
+    /// 漏判则会让「约定被破坏」这件事继续静默。
+    #[test]
+    fn apartment_mode_conflict_is_recognized_and_not_over_broad() {
+        assert!(is_apartment_mode_conflict(0x80010106u32 as i32));
+        assert!(!is_apartment_mode_conflict(0), "S_OK 不是冲突");
+        assert!(
+            !is_apartment_mode_conflict(1),
+            "S_FALSE（已初始化过）不是冲突"
+        );
+        assert!(
+            !is_apartment_mode_conflict(0x80010107u32 as i32),
+            "相邻 HRESULT 不应误报"
+        );
+        assert!(
+            !is_apartment_mode_conflict(0x80004005u32 as i32),
+            "E_FAIL 不是冲突"
+        );
+    }
 }

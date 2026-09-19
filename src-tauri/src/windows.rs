@@ -26,6 +26,20 @@ pub fn open_settings_tab(app: &tauri::AppHandle, tab: &str) {
     open_settings_inner(app, Some(tab));
 }
 
+/// 设置窗口创建后的「DPI 稳定等待」（P2-10）。
+///
+/// 必须是 **异步** sleep：调用点在 `tauri::async_runtime::spawn` 的 async 块里，
+/// 运行于 tokio 工作线程；`std::thread::sleep` 会占死一个执行器线程
+/// （worker 数 ≈ CPU 核数），`tokio::time::sleep` 则让出线程、只注册一个定时器。
+/// 语义上两者都是「等 200ms 再继续」，故对调用方无差别。
+///
+/// 抽成具名函数不只是为了可读：**「让出执行器」这条性质因此可被单测证伪**
+/// （见 `dpi_settle_wait_yields_the_executor`）——若改回阻塞式 sleep，
+/// 同一运行时上的多次等待会串行化，用例即转红。
+async fn wait_for_dpi_settle() {
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+}
+
 fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
     if let Some(win) = app.get_webview_window("settings") {
         // 已有窗口的重开路径整体移出调用线程（菜单事件在事件线程上分发，
@@ -82,7 +96,8 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             }
             // 窗口状态插件恢复后即钳制：跨分辨率/DPI 下恢复的物理尺寸可能越界
             clamp_window_to_work_area(&win);
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            // 等 DPI 稳定（异步 sleep，见 wait_for_dpi_settle 的说明）
+            wait_for_dpi_settle().await;
             // 静置后 DPI 已稳定，再次钳制以兜底首帧缩放未就绪
             clamp_window_to_work_area(&win);
             let _ = win.show();
@@ -368,16 +383,33 @@ pub fn set_rounded_corners(hwnd: isize) {
 /// 避免运行时文件系统路径歧义（Tauri 2 的 `frontendDist` 嵌入二进制，`resources` 部署到子目录）。
 static TOAST_ICON_PNG: &[u8] = include_bytes!("../dist/icon.png");
 
+/// 已写入临时目录的图标路径缓存（进程内只写一次）。
+///
+/// ⚠️ 必须保留 `#[cfg(target_os = "windows")]`：非 Windows 下只有下面那个返回 `None`
+/// 的桩函数，缓存本体不存在。
+#[cfg(target_os = "windows")]
+static TOAST_ICON_PATH: std::sync::OnceLock<Option<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
+
 /// 将嵌入的图标写入临时目录 `PeriTray_toast_icon.png`，返回路径供 WinRT toast 使用。
 ///
 /// WinRT `file:///` URI 要求绝对路径且无 `\\?\` 前缀，
 /// 因此每次写入固定文件名而非使用 `canonicalize`。
 /// 写入临时目录而非 exe 目录（MSIX 包目录只读）。
+///
+/// 结果用 `OnceLock` 缓存（P2-6）：图标内容编译期就已固定，重复写盘既无意义，又会让
+/// `%TEMP%\PeriTray_toast_icon.png` 的 mtime 每次弹通知都变（不利于排查「图标为何
+/// 不更新」这类问题）。**失败结果同样缓存**：临时目录不可写属于环境问题、不会自愈，
+/// 没必要每次弹通知都重试一遍磁盘 I/O。
 #[cfg(target_os = "windows")]
 pub fn resolve_toast_icon() -> Option<std::path::PathBuf> {
-    let target = std::env::temp_dir().join("PeriTray_toast_icon.png");
-    std::fs::write(&target, TOAST_ICON_PNG).ok()?;
-    Some(target)
+    TOAST_ICON_PATH
+        .get_or_init(|| {
+            let target = std::env::temp_dir().join("PeriTray_toast_icon.png");
+            std::fs::write(&target, TOAST_ICON_PNG).ok()?;
+            Some(target)
+        })
+        .clone()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -434,9 +466,42 @@ pub(crate) fn is_msix_context() -> bool {
     status == 0 || status == 122
 }
 
+/// 开始菜单 Programs 目录下的快捷方式路径
+/// （`%APPDATA%\Microsoft\Windows\Start Menu\Programs\PeriTray.lnk`，
+/// 与脚本里 `[Environment]::GetFolderPath('Programs')` 的结果一致）。
+#[cfg(target_os = "windows")]
+fn start_menu_shortcut_path() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(
+        std::path::Path::new(&appdata)
+            .join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("PeriTray.lnk"),
+    )
+}
+
+/// 判断已存在的快捷方式是否仍指向当前 exe 且带当前 AUMID。
+///
+/// 只判「文件存在」是不够的：用户换过安装目录后，旧 `.lnk` 会指向已删除的文件，
+/// 此时跳过会**永久**留下一个坏掉的开始菜单项，通知图标也一并丢失。
+/// 判据取「`.lnk` 字节中同时出现当前 exe 路径与 AUMID」——两者都是 ASCII 字面量，
+/// 由 `WScript.Shell` 写入时原样落盘。该判据只会**假阴性**（匹配不到 → 退化为重建，无害），
+/// 不会假阳性（不可能把坏快捷方式误判成最新）。
+#[cfg(target_os = "windows")]
+fn shortcut_is_current(lnk: &std::path::Path, exe_path: &std::path::Path) -> bool {
+    let Ok(bytes) = std::fs::read(lnk) else {
+        return false;
+    };
+    let has =
+        |needle: &[u8]| !needle.is_empty() && bytes.windows(needle.len()).any(|w| w == needle);
+    has(exe_path.to_string_lossy().as_bytes()) && has(AUMID.as_bytes())
+}
+
 /// 注册 AUMID 到开始菜单快捷方式，使 Windows 通知显示应用图标。
 /// MSIX 包自带 AUMID，无需创建快捷方式；仅 NSIS 安装需要。
-/// 已存在同名快捷方式时跳过。
+/// 已存在且仍指向当前 exe / 当前 AUMID 的快捷方式时跳过（幂等）。
 #[cfg(target_os = "windows")]
 pub fn register_aumid() {
     if is_msix_context() {
@@ -450,6 +515,17 @@ pub fn register_aumid() {
         process::append_verbose_log("[aumid] failed to get exe path");
         return;
     };
+
+    // 幂等快速路径：快捷方式已存在且仍指向当前 exe 时直接返回。
+    // 价值在于**避免每次启动都拉起一次 PowerShell**（冷启动 300ms~1.5s），
+    // 与下方「移出启动关键路径」互补：前者省掉进程创建，后者兜住首次启动的开销。
+    if let Some(lnk) = start_menu_shortcut_path() {
+        if lnk.exists() && shortcut_is_current(&lnk, &exe_path) {
+            process::append_verbose_log("[aumid] shortcut exists, skip");
+            return;
+        }
+    }
+
     let exe_dir = exe_path.parent().unwrap_or(exe_path.as_path());
     let exe_str = exe_path.to_string_lossy().replace('\'', "''");
     let dir_str = exe_dir.to_string_lossy().replace('\'', "''");
@@ -487,7 +563,23 @@ $shortcut.Save()
         ico = icon_str,
     );
 
-    match Command::new("powershell")
+    // 绝对路径调用系统 PowerShell：`Command::new("powershell")` 走 PATH 解析，
+    // 存在被同名可执行文件劫持（或 PATH 缺失时静默失败）的面。
+    // 优先由 %SystemRoot% 拼出（兼容系统盘非 C: 的机器），缺失时退回惯用路径。
+    let powershell = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .map(|root| {
+            root.join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+        });
+
+    match Command::new(powershell)
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()
@@ -506,3 +598,69 @@ $shortcut.Save()
 
 #[cfg(not(target_os = "windows"))]
 pub fn register_aumid() {}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    /// P2-6：`resolve_toast_icon` 必须**只写一次盘**，其后走 `OnceLock` 缓存。
+    ///
+    /// 判据用 mtime：若每次调用都重写，第二次的 mtime 必然前进。
+    /// 两次调用之间 sleep 一下以越过文件系统的 mtime 精度。
+    #[test]
+    fn toast_icon_is_written_once_then_cached() {
+        let first = resolve_toast_icon().expect("临时目录应可写");
+        let mtime_first = std::fs::metadata(&first)
+            .and_then(|m| m.modified())
+            .expect("应能读到 mtime");
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = resolve_toast_icon().expect("缓存命中后仍应返回路径");
+        let mtime_second = std::fs::metadata(&second)
+            .and_then(|m| m.modified())
+            .expect("应能读到 mtime");
+
+        assert_eq!(second, first, "两次调用应返回同一路径");
+        assert_eq!(mtime_first, mtime_second, "第二次调用不应重写文件");
+    }
+
+    /// P2-10：`wait_for_dpi_settle` 必须**让出执行器**，而不是阻塞它。
+    ///
+    /// 判据用「多次等待的总耗时」：在 **current_thread** 运行时上并发跑 3 次等待，
+    /// - 异步 sleep ⇒ 三个定时器重叠，总耗时 ≈ 1×（200ms）；
+    /// - 阻塞 sleep ⇒ 三次串行，总耗时 ≈ 3×（600ms）。
+    ///
+    /// 之所以选 current_thread 运行时：单线程下「阻塞」无处可躲，
+    /// 多线程运行时会被其他 worker 吸收掉，测不出差别。
+    #[test]
+    fn dpi_settle_wait_yields_the_executor() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("应能构建 current_thread 运行时");
+
+        let started = std::time::Instant::now();
+        rt.block_on(async {
+            // 不用 `tokio::join!`：它需要 `macros` feature（本项目只启用了 rt/time），
+            // 为一个单测引入新 feature 不值得。`spawn` 在 current_thread 运行时上
+            // 同样共用唯一线程，判据等价。
+            let a = tokio::spawn(wait_for_dpi_settle());
+            let b = tokio::spawn(wait_for_dpi_settle());
+            let c = tokio::spawn(wait_for_dpi_settle());
+            a.await.expect("等待任务不应 panic");
+            b.await.expect("等待任务不应 panic");
+            c.await.expect("等待任务不应 panic");
+        });
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(450),
+            "3 次等待必须重叠（预期 ≈200ms）；实测 {elapsed:?}。\
+             若接近 600ms，说明 wait_for_dpi_settle 退化成了阻塞 sleep（P2-10 回归）"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(150),
+            "等待不得被跳过（实测 {elapsed:?}）"
+        );
+    }
+}
