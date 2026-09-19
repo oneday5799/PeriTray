@@ -474,7 +474,9 @@ unsafe fn get_icon_bitmap(
     }
 
     // 原地转换BGRA到RGBA（避免第二次堆分配）
-    for chunk in pixels.chunks_exact_mut(4) {
+    // 用 as_chunks_mut 而非 chunks_exact_mut：块长 4 在编译期已知，且 clippy 1.98 新增的
+    // chunks_exact_to_as_chunks 正是建议此写法。语义等价——两者都跳过末尾不足 4 字节的余数。
+    for chunk in pixels.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2);
     }
 
