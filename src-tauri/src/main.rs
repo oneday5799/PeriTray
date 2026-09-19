@@ -299,7 +299,8 @@ fn watchdog_self_restart() {
 }
 
 /// 处理第二实例启动：聚焦既有弹窗，或经 toggle 重建。
-/// 回调在事件线程上分发，窗口/配置操作全部移出线程。
+/// 回调在 emit 的调用线程上同步执行（Tauri 无独立「事件线程」，见 AGENTS.md），
+/// 窗口/配置操作全部移出线程。
 fn forward_second_instance(app: &tauri::AppHandle) {
     process::append_log("[single-instance] second instance forwarded");
     let app = app.clone();
@@ -482,7 +483,7 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
 }
 
 /// 处理窗口事件：弹窗失焦关闭、设置窗延迟销毁、弹窗关闭改为隐藏。
-/// 事件线程只做轻量判断，阻塞操作移入子线程。
+/// 回调只做轻量判断，阻塞操作移入子线程（窗口事件由 tao 主循环派发 ⇒ 本回调即主线程）。
 fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     match event {
         tauri::WindowEvent::Focused(focused) => {

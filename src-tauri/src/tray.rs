@@ -460,7 +460,8 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
             standard_log!("[tray] menu: {}", event.id.as_ref());
-            // 菜单事件在事件线程上分发：重操作（窗口/材质/DWM）一律 spawn 移出，
+            // 菜单事件由 tao 主循环派发（tauri/src/app.rs 的 EventLoopMessage::MenuEvent
+            // 分支）⇒ 本回调就在主线程上：重操作（窗口/材质/DWM）一律 spawn 移出，
             // 比照 audio_dev_ 分支的既有模式
             match event.id.as_ref() {
                 "show" => {
@@ -554,7 +555,8 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if button == tauri::tray::MouseButton::Left {
                     crate::process::append_log("[tray] click → spawn");
-                    // 事件线程仅做分发：显示器枚举/配置读取/窗口操作全部移出，
+                    // 托盘图标事件同样由主循环派发 ⇒ 本回调在主线程上，仅做分发：
+                    // 显示器枚举/配置读取/窗口操作全部移出，
                     // 防止唤醒后子窗口消息队列卡死拖垮整个事件循环
                     let app = app.clone();
                     let rect = rect;
@@ -621,7 +623,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     app.listen("config-changed", move |_| {
-        // 事件线程只做轻量分发（见 AGENTS.md「事件回调不得在事件线程做阻塞工作」）：
+        // 回调只做轻量分发（见 AGENTS.md「`app.listen` 的回调没有专属线程」）：
         // 读配置 + 更新原子标志 + 刷新勾选文案，三者都需即时反映，故留在本线程；
         // 其余（图标重建、菜单重建、设备缓存刷新）含 COM 枚举与全量菜单构造，全部下放子线程。
         let new_auto = config::with_config(|c| c.auto_start);
@@ -640,7 +642,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     app.listen("audio-devices-changed", |_| {
-        // 同 config-changed：菜单重建内含 COM 枚举，不能在事件线程上同步跑
+        // 同 config-changed：菜单重建内含 COM 枚举，不能在回调里同步跑
         std::thread::spawn(|| update_audio_devices_menu());
     });
 

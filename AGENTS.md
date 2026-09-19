@@ -55,13 +55,20 @@
   **评审检查项**：`async fn` / `async move { }` 块内出现 `thread::sleep` 即为违规；
   反之在真线程里出现 `tokio::time::sleep` 也是违规。静态闸门覆盖不到这条
   （见「防护边界」），只能靠评审
-- **事件回调不得在事件线程做阻塞工作**：`app.listen` 的回调在 Tauri 事件线程上执行，
-  该线程同时负责派发窗口消息——在其中做 COM 枚举、设备/菜单重建、`Command::output()`
-  等待等耗时操作，会表现为**窗口点不动、托盘无响应**（最短触发路径往往是托盘菜单单击）。
-  回调内只保留必须即时反映的轻量动作（读配置、更新原子标志、改勾选文案），
-  其余一律 `std::thread::spawn` 下放。**评审检查项**：每新增一个 `app.listen`，
-  逐行确认回调体内没有跨进程等待、没有设备枚举、没有整棵菜单/图标的构造；
-  同理，`Mutex`/`OnceLock` 的持锁区内不得调用上述耗时函数（先取句柄 → 锁外构造 → 短暂持锁替换）
+- **`app.listen` 的回调没有专属线程，它跑在 `emit` 的调用线程上**：Tauri **不设**
+  「事件线程」——`emit` 在**调用它的那个线程**上同步逐个执行回调
+  （`tauri/src/event/listener.rs:204`，且此时还持着 `handlers` 锁）。因此「回调里阻塞
+  会不会卡 UI」**取决于谁 emit，不能一概而论**：本仓托盘菜单/托盘图标事件由 tao 主循环派发
+  （`tauri/src/app.rs` 的 `EventLoopMessage::MenuEvent` / `TrayIconEvent` 分支），
+  同步 `#[tauri::command]` 也在调用线程上执行 ⇒ **这两条路径的回调就在主线程上**，
+  在其中做 COM 枚举、设备/菜单重建、`Command::output()` 等待等耗时操作，
+  会直接表现为**窗口点不动、托盘无响应**（最短触发路径往往是托盘菜单单击）；
+  而 `audio_notify` 的音频 STA 线程 emit 时，阻塞只伤那条后台线程。
+  ⇒ 纪律不因「也许不在主线程」而放宽：回调内只保留必须即时反映的轻量动作
+  （读配置、更新原子标志、改勾选文案），其余一律 `std::thread::spawn` 下放。
+  **评审检查项**：每新增一个 `app.listen`，逐行确认回调体内没有跨进程等待、
+  没有设备枚举、没有整棵菜单/图标的构造；同理，`Mutex`/`OnceLock` 的持锁区内
+  不得调用上述耗时函数（先取句柄 → 锁外构造 → 短暂持锁替换）
 - **持锁区不得调用「同步等主线程」的 API（P0，会永久死锁）**：Tauri 的菜单/托盘 API
   （`MenuItem::with_id`、`Submenu::append`、`set_text`、`set_menu`、`set_icon`、`set_tooltip` …）
   与窗口 getter（`is_visible`、`hwnd`、`show` …）内部都经 `run_item_main_thread!` 展开为

@@ -42,7 +42,8 @@ async fn wait_for_dpi_settle() {
 
 fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
     if let Some(win) = app.get_webview_window("settings") {
-        // 已有窗口的重开路径整体移出调用线程（菜单事件在事件线程上分发，
+        // 已有窗口的重开路径整体移出调用线程（本函数也由同步命令 open_settings 调用，
+        // 同步命令在调用线程上执行；托盘菜单那条路径则由 tao 主循环在主线程派发 ⇒
         // DWM 材质调用与 show/focus 一旦阻塞会拖垮整个事件循环）
         let app = app.clone();
         let tab = tab.map(|t| t.to_string());
