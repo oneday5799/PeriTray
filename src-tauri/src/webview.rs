@@ -109,6 +109,16 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 ///
 /// 该约定与上游 `webview2-com` 一致：其 `TrySuspendCompletedHandler::create()` 返回持有
 /// 一份引用的智能指针，`TrySuspend(&handler)` 按借用传入，局部变量析构时释放。
+///
+/// **实测（2026-09-20，WebView2 运行时 137.0.3296.52，真实进程 + env 门控探针）**：
+/// - 成功路径：运行时**恰好** `1×AddRef → Invoke → 1×Release`（trace 序列 `A→I→R`）；
+/// - 错误路径（`IsVisible == TRUE` ⇒ 同步返回 `HRESULT_FROM_WIN32(ERROR_INVALID_STATE)`）：
+///   运行时**零次引用操作**（序列 `""`）。
+///
+/// ⇒ 上面的约定在两条路径上都恰好回收一次。⚠️ 旧实现（`add_ref` 恒返回 1 +
+/// `release` 无条件 `Box::from_raw`）只在「Release 恰好一次」时正确——它把安全性
+/// **押在运行时的配对行为上**；WebView2 是 Evergreen（运行时自动更新），这种依赖不构成保证。
+/// 完整判据、正控与保留边界见 `docs/code-review/后续修复计划_2026-09-17.md` §7.12。
 #[cfg(target_os = "windows")]
 mod try_suspend_cb {
     use crate::standard_log;
@@ -257,6 +267,35 @@ mod try_suspend_cb {
                 // 清理：先释放 QI 带来的额外引用，再释放调用方那份
                 assert_eq!(release(p), 1);
                 assert_eq!(release(p), 0);
+            }
+        }
+
+        /// 回归（2026-09-20 实测配对）：**调用点实际使用的** `release_owned` 在实测到的两条
+        /// 运行时路径上都只释放调用方那一份、且恰好回收一次。
+        ///
+        /// - 错误路径实测：运行时零次引用操作 ⇒ 调用方那一份是唯一引用；
+        /// - 成功路径实测：运行时 `AddRef(1→2) → Invoke → Release(2→1)` ⇒ 调用方释放后归零。
+        ///
+        /// 可证伪性：把 `add_ref` / `release` / `release_owned` 还原成旧语义（恒返回 1 +
+        /// 无条件 `Box::from_raw`）后本用例转红——先卡在「AddRef 必须真的递增」这条断言上；
+        /// 即使放宽该断言，成功路径的第二次回收也会造成堆损坏。
+        #[test]
+        fn release_owned_is_safe_under_measured_runtime_pairing() {
+            // 错误路径（实测：运行时零次引用操作）
+            let p = create();
+            unsafe { release_owned(p) };
+
+            // 成功路径（实测：AddRef → Invoke → Release → 调用方释放）
+            let p = create();
+            let obj = p as *mut Obj;
+            unsafe {
+                assert_eq!(add_ref(obj), 2, "运行时接管时 AddRef 必须真的递增");
+                assert_eq!(
+                    release(obj),
+                    1,
+                    "运行时在 Invoke 之后 Release，对象仍须存活"
+                );
+                release_owned(p); // 调用方那一份 → 归零回收
             }
         }
     }
