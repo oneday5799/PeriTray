@@ -168,8 +168,9 @@ jobs:
           fi
 
       # 手写 release notes（面向用户的可感知改动）优先；缺失时回退到自动生成的变更列表。
-      # action v3 对「空 body_path」与「文件不存在」都会静默回退，不会让发布失败；
-      # 两者同时存在时，手写正文会被拼在自动变更列表之前。
+      # action v3 对「空 body_path」与「文件不存在」都会静默回退，不会让发布失败。
+      # 二者只取其一：本仓不用 PR，自动生成的正文实际只有一行 compare 链接，而手写正文
+      # 末尾已自带该链接 ⇒ 同时开启只会把同一个链接打印两遍（v1.3.7-beta.1 实测如此）。
       - name: Resolve release notes
         id: notes
         shell: bash
@@ -177,9 +178,11 @@ jobs:
           candidate="tmp-release-notes.md"
           if [ -f "$candidate" ]; then
             echo "path=$candidate" >> "$GITHUB_OUTPUT"
-            echo "使用手写 release notes：$candidate"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+            echo "使用手写 release notes：$candidate（不再追加自动变更列表）"
           else
             echo "path=" >> "$GITHUB_OUTPUT"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
             echo "未找到 $candidate，回退到自动生成的变更列表"
           fi
 
@@ -192,4 +195,4 @@ jobs:
           files: |
             artifacts/*.exe
             artifacts/*.msix
-          generate_release_notes: true
+          generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
