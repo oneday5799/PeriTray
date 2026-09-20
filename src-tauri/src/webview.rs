@@ -118,7 +118,9 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 /// ⇒ 上面的约定在两条路径上都恰好回收一次。⚠️ 旧实现（`add_ref` 恒返回 1 +
 /// `release` 无条件 `Box::from_raw`）只在「Release 恰好一次」时正确——它把安全性
 /// **押在运行时的配对行为上**；WebView2 是 Evergreen（运行时自动更新），这种依赖不构成保证。
-/// 完整判据、正控与保留边界见 `docs/code-review/后续修复计划_2026-09-17.md` §7.12。
+/// 完整判据、正控与保留边界见 Wiki「12-代码审查与整改复盘」§10
+/// （正控：同一套 trace 在成功路径记录到 `A/I/R`，且探针自己调 `release_owned` 时被记录为 `R`
+/// ⇒ 错误路径的空序列是**真实阴性**，不是探针失灵）。
 #[cfg(target_os = "windows")]
 mod try_suspend_cb {
     use crate::standard_log;

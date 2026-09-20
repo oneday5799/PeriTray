@@ -11,8 +11,8 @@
  *     实例化）；`见 §…` 指针要能解析到存在的章节。
  *
  * 用法：
- *   node tools/doc-table-audit.mjs              # 默认扫 docs/code-review/*.md
- *   node tools/doc-table-audit.mjs <文件...>    # 指定文件
+ *   node tools/doc-table-audit.mjs              # 默认体检主仓交付稿：AGENTS.md + README.md
+ *   node tools/doc-table-audit.mjs <文件|目录...> # 指定目标（目录展开为其下的 *.md）
  *   node tools/doc-table-audit.mjs tools/doc-table-audit.selftest.md
  *                                               # 判据自测夹具：**期望退出码 1、问题恰好 4 个**
  *                                               # （少于 4 即某条判据已失效；由 verify-final.sh 调用）
@@ -34,10 +34,40 @@
  *         以防有人把真断指针塞进引号里绕过闸门。
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-const DOC_DIR = "docs/code-review";
+/**
+ * 默认体检目标：**主仓内的交付稿**。
+ *
+ * ⚠️ 原默认目标是 `docs/code-review/*.md`（6 份审查 / 整改期过程档案）。
+ *    2026-09-20 那批文档已**融合进 Wiki 与 AGENTS.md、目录整体移除**，故默认目标改为下面两项；
+ *    需要体检别的文档时显式传路径（目录会展开为其下的 `*.md`）。
+ *
+ * ⚠️ **不要把 `tools/doc-table-audit.selftest.md` 加进默认目标**——它是**故意损坏**的夹具，
+ *    只应由 `verify-final.sh` 显式传入并断言「退出码 1 且恰好 4 个问题」。
+ *
+ * ⚠️ **覆盖边界**：本工具只扫主仓内可达的文件。**Wiki（独立仓库）不在覆盖范围内**——
+ *    它没有 CI，且工作区是主仓的并列目录（`../PeriTray.wiki`），CI 上不存在。
+ *    因此 Wiki 侧的表格 / 指针体检只能**手工**执行：
+ *    `node tools/doc-table-audit.mjs ../PeriTray.wiki`
+ */
+const DEFAULT_TARGETS = ["AGENTS.md", "README.md"];
+
+/** 展开体检目标：目录 → 其下的 `*.md`（排序）；文件 → 原样。路径不存在时原样返回，交由读取环节报错。 */
+function expandTarget(t) {
+  try {
+    if (statSync(t).isDirectory()) {
+      return readdirSync(t)
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => join(t, f))
+        .sort();
+    }
+  } catch {
+    /* 落回文件名 */
+  }
+  return [t];
+}
 
 /** 去掉转义竖线后数「列数」（`| a | b |` → 2） */
 const cols = (line) => line.replace(/\\\|/g, "").split("|").length - 2;
@@ -154,13 +184,7 @@ function auditFile(path) {
 }
 
 const args = process.argv.slice(2);
-const files =
-  args.length > 0
-    ? args
-    : readdirSync(DOC_DIR)
-        .filter((f) => f.endsWith(".md"))
-        .map((f) => join(DOC_DIR, f))
-        .sort();
+const files = args.length > 0 ? args.flatMap(expandTarget) : DEFAULT_TARGETS;
 
 let totalProblems = 0;
 let totalBlocks = 0;
