@@ -688,7 +688,10 @@ pub fn check_device_connection(device_id: &str) -> Option<bool> {
 
 /// 从设备 ID 末尾 "-" 段提取蓝牙 MAC，规整为大写并去掉冒号；
 /// 无 "-" 段时返回 None。蓝牙原生连接与 WinRT 电量查询两条路径共用。
-fn normalize_mac(device_id: &str) -> Option<String> {
+///
+/// 亦供 `device_identity::bluetooth_container_map` 的调用方把 WinRT `device_id`
+/// 折算成 MAC，以查得该设备所属容器（`pub(crate)` 仅为此放宽）。
+pub(crate) fn normalize_mac(device_id: &str) -> Option<String> {
     let mac = device_id.rsplit('-').next()?;
     Some(mac.to_uppercase().replace(':', ""))
 }

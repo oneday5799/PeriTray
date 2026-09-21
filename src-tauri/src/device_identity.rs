@@ -11,9 +11,13 @@
 //
 // 本模块只做身份判定，不持有状态、不做缓存、不碰锁。
 
+use crate::dedup::core_name;
+use crate::device::DevType;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_DevNode_PropertyW, CM_Locate_DevNodeW, CM_LOCATE_DEVNODE_NORMAL,
+    CM_Get_DevNode_PropertyW, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
+    CM_Locate_DevNodeW, CM_GETIDLIST_FILTER_ENUMERATOR, CM_LOCATE_DEVNODE_NORMAL,
 };
 use windows_sys::Win32::Devices::Properties::DEVPKEY_Device_ContainerId;
 
@@ -182,6 +186,323 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
     container_of_instance(&format!("SWD\\MMDEVAPI\\{endpoint_id}"))
 }
 
+/// 枚举指定枚举器下的**设备实例路径**（CFGMGR32 `CM_Get_Device_ID_ListW`）。
+///
+/// 失败一律返回空表 —— 调用方应把它当成「没有可用映射」，而不是错误。
+fn enumerator_instance_ids(enumerator: &str) -> Vec<String> {
+    // 过滤器是 MULTI_SZ：单个枚举器名 + **双 NUL** 结尾。
+    let filter: Vec<u16> = enumerator.encode_utf16().chain([0u16, 0u16]).collect();
+
+    let mut size: u32 = 0;
+    // SAFETY: filter 以双 NUL 结尾且在本函数内存活；size 是栈上可写 u32。
+    let cr = unsafe {
+        CM_Get_Device_ID_List_SizeW(&mut size, filter.as_ptr(), CM_GETIDLIST_FILTER_ENUMERATOR)
+    };
+    if cr != 0 || size == 0 {
+        return Vec::new();
+    }
+
+    let mut buf = vec![0u16; size as usize];
+    // SAFETY: buf 长度恰为 size（上面刚查出来的），函数不会越界写。
+    let cr = unsafe {
+        CM_Get_Device_ID_ListW(
+            filter.as_ptr(),
+            buf.as_mut_ptr(),
+            size,
+            CM_GETIDLIST_FILTER_ENUMERATOR,
+        )
+    };
+    if cr != 0 {
+        return Vec::new();
+    }
+
+    // MULTI_SZ：条目以 NUL 分隔、以空条目（双 NUL）收尾，其后是补零。
+    let mut out = Vec::new();
+    for chunk in buf.split(|&c| c == 0) {
+        if chunk.is_empty() {
+            break;
+        }
+        out.push(String::from_utf16_lossy(chunk));
+    }
+    out
+}
+
+/// 从蓝牙 PnP 实例路径抠出大写 MAC（无分隔符）。
+///
+/// 本机实测存在两种形态，**两种都要试**：
+///   · 设备节点：`BTHENUM\Dev_5088112E80E8\8&1d39e19e&0&BluetoothDevice_5088112E80E8`
+///     —— 经典蓝牙与 BLE 都有此形态（`BTHLE\Dev_<mac>\…` 同构，仅大小写不同）
+///   · 服务节点：`BTHENUM\{0000110b-…}_VID&…\8&1d39e19e&0&5088112E80E8_C00000000`
+///
+/// ⚠️ **绝不能用「第一个 12 位十六进制串」**：服务节点形态下它会命中 A2DP 服务 GUID 里的
+/// `00805F9B34FB` —— 本机实测该错误取法在 3/3 服务节点上**全部**返回这个值。
+pub fn mac_from_bluetooth_instance(instance: &str) -> Option<String> {
+    // 实例路径恒为 ASCII；非 ASCII 直接放弃，避免下面的字节下标切片踩到字符边界。
+    if !instance.is_ascii() {
+        return None;
+    }
+    let upper = instance.to_ascii_uppercase();
+
+    // 形态一：`Dev_<MAC>`
+    if let Some(i) = upper.find("DEV_") {
+        if let Some(mac) = hex12_at(&upper, i + 4) {
+            return Some(mac);
+        }
+    }
+    // 形态二：`&0&<MAC>_`（取最后一次出现，紧邻 MAC）
+    if let Some(i) = upper.rfind("&0&") {
+        if let Some(mac) = hex12_at(&upper, i + 3) {
+            return Some(mac);
+        }
+    }
+    None
+}
+
+/// 取 `s[start..start+12]`，要求这 12 个字符**全是十六进制**，否则 `None`。
+fn hex12_at(s: &str, start: usize) -> Option<String> {
+    let end = start.checked_add(12)?;
+    let seg = s.get(start..end)?;
+    if seg.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(seg.to_ascii_uppercase())
+    } else {
+        None
+    }
+}
+
+/// 建立「大写 MAC → 容器 GUID」映射（覆盖经典蓝牙与 BLE）。
+///
+/// ⭐ 实测：同一 MAC 会命中 **3~4 个** BTHENUM 服务实例（A2DP / AVRCP / HFP…），
+/// 但它们的容器**完全一致** ⇒ 可以安全地建单值映射，不会因多实例产生歧义。
+/// 这使「蓝牙设备（WinRT 来源，只有 device_id）↔ 音频端点」得以落到同一容器。
+pub fn bluetooth_container_map() -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = HashMap::new();
+    for enumerator in ["BTHENUM", "BTHLE"] {
+        for instance in enumerator_instance_ids(enumerator) {
+            let Some(mac) = mac_from_bluetooth_instance(&instance) else {
+                continue;
+            };
+            if map.contains_key(&mac) {
+                continue;
+            }
+            if let Some(container) = container_of_instance(&instance) {
+                map.insert(mac, container);
+            }
+        }
+    }
+    map
+}
+
+/// 电量来源。**数值越大越可信** —— 同一容器内出现多个来源时取最大的那个。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum BatterySource {
+    /// 来源不明（例如 `Win32_Battery` 的估算值）
+    Unknown = 0,
+    /// 2.4G 接收器经 HID Feature Report 读得
+    Hid24g = 1,
+    /// 蓝牙属性 `DEVPKEY_Device_BatteryLevel`
+    Bluetooth = 2,
+}
+
+/// 一台**物理设备** —— 把同一容器下的各功能节点聚合后的结果。
+///
+/// 这是任务栏信息窗的数据单元：电量来自蓝牙属性 / HID，音量来自该设备的**输出**端点。
+#[derive(Debug, Clone, Serialize)]
+pub struct PhysicalDevice {
+    /// `DeviceKey::encode()` 的结果（`c:` / `i:` / `n:` 前缀）
+    pub key: String,
+    /// 展示名，由组内候选名按 `pick_display_name` 挑出
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery: Option<i32>,
+    /// 该物理设备当前的**输出**端点 id（供音量使用）；无音频端点时为 `None`（如键鼠）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_device_id: Option<String>,
+    /// 该容器出现过的设备类别（一个容器可跨多类，实测 USB + HID + SWD）
+    pub categories: Vec<DevType>,
+    /// 参与聚合的条目数（设备行 + 音频端点行）。
+    ///
+    /// ⚠️ 这**不是** devnode 数：PeriTray 的设备列表在 WMI 层已过滤掉大部分子节点
+    /// （`is_generic_hid` 滤 `&COL*`、`is_bt_service` 滤蓝牙服务节点），所以这里通常很小。
+    /// 「10 个 devnode 并成 1 台」是 ContainerId 在 devnode 层面的性质，不由此字段体现。
+    pub node_count: usize,
+    /// 是否被用户固定（由 config 决定，`Grouper` 本身不关心）
+    pub pinned: bool,
+}
+
+/// 物理设备分组器。
+///
+/// 以**容器为根**聚合，而不是以设备类别为根 —— 需求已含键鼠，音频端点不是必经之路。
+/// 输出按 key 排序（内部 `BTreeMap`）⇒ 顺序稳定，不会因枚举顺序抖动而让 UI 跳动。
+#[derive(Default)]
+pub struct Grouper {
+    acc: BTreeMap<String, Group>,
+}
+
+#[derive(Default)]
+struct Group {
+    names: Vec<String>,
+    battery: Option<(i32, BatterySource)>,
+    audio_device_id: Option<String>,
+    categories: Vec<DevType>,
+    node_count: usize,
+}
+
+impl Grouper {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 加入一个节点。`key` 为 `None` 的节点**直接丢弃** —— 没有身份的设备不该出现在任务栏。
+    pub fn add(
+        &mut self,
+        key: Option<&str>,
+        name: &str,
+        dt: DevType,
+        battery: Option<(i32, BatterySource)>,
+        audio_device_id: Option<&str>,
+    ) {
+        let Some(key) = key else { return };
+        let g = self.acc.entry(key.to_string()).or_default();
+
+        if !name.trim().is_empty() {
+            g.names.push(name.to_string());
+        }
+        if let Some((level, source)) = battery {
+            // 取来源更可信的那个；同源时保留先到的（枚举顺序内的稳定选择）
+            let take = match g.battery {
+                Some((_, current)) => source > current,
+                None => true,
+            };
+            if take {
+                g.battery = Some((level, source));
+            }
+        }
+        if let Some(id) = audio_device_id {
+            if g.audio_device_id.is_none() {
+                g.audio_device_id = Some(id.to_string());
+            }
+        }
+        if !g.categories.contains(&dt) {
+            g.categories.push(dt);
+        }
+        g.node_count += 1;
+    }
+
+    pub fn finish(self) -> Vec<PhysicalDevice> {
+        self.acc
+            .into_iter()
+            .map(|(key, g)| PhysicalDevice {
+                key,
+                name: pick_display_name(&g.names),
+                battery: g.battery.map(|(level, _)| level),
+                audio_device_id: g.audio_device_id,
+                categories: g.categories,
+                node_count: g.node_count,
+                pinned: false,
+            })
+            .collect()
+    }
+}
+
+/// 从组内候选名里挑展示名。
+///
+/// 规则（确定性、可测、与输入顺序无关）：
+///   1. 每个候选先过 `dedup::core_name`（取括号内 + 剥协议后缀）。实测音频端点的
+///      `FriendlyName` 形如 `耳机 (小爱音箱-9205)`，这一步能把「耳机」这种**毫无区分度**
+///      的名字换成真正的物理设备名；
+///   2. 去重后取**最长**者（更具体的名字通常更长）；
+///   3. 同长时取字典序最小者（`reduce` 保留首个最大值，而候选已排序）⇒ 结果稳定。
+fn pick_display_name(names: &[String]) -> String {
+    let mut cands: Vec<String> = names
+        .iter()
+        .map(|n| core_name(n))
+        .filter(|n| !n.trim().is_empty())
+        .collect();
+    cands.sort();
+    cands.dedup();
+    cands
+        .into_iter()
+        .reduce(|best, cur| {
+            if cur.chars().count() > best.chars().count() {
+                cur
+            } else {
+                best
+            }
+        })
+        .unwrap_or_else(|| "未知设备".to_string())
+}
+
+/// 音频端点 → 身份键。有容器用容器；**没有容器时退回端点自己的 devnode 实例路径**
+/// （`SWD\MMDEVAPI\{id}`），这样它仍能与 PnP 侧同一端点的 `Device.device_key` 对齐
+/// —— 虚拟音频设备正走这条路（它们落在占位容器上，没有真实容器）。
+fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
+    match &audio.container_id {
+        Some(c) => DeviceKey::Container(c.clone()),
+        None => DeviceKey::Instance(format!("SWD\\MMDEVAPI\\{}", audio.id)),
+    }
+}
+
+/// 把设备列表与音频端点列表按物理设备身份聚合，产出任务栏信息窗的数据源。
+///
+/// 只保留**至少能显示一项信息**的设备（有电量或有音量）；两者皆无的条目对用户毫无意义
+/// （典型是落在占位容器上的虚拟音频设备），直接丢弃。
+pub fn group_taskbar_devices(
+    devices: &[crate::device::Device],
+    audio: &[crate::audio::AudioDevice],
+    pinned: &[crate::config::PinnedDevice],
+) -> Vec<PhysicalDevice> {
+    let mut grouper = Grouper::new();
+
+    // 先入音频端点：音量所需的是端点 id，端点自己也提供一份展示名。
+    // ⚠️ 同一容器可能有**多个**输出端点（实测 `084fb1b9-…` 覆盖 3 个），
+    // 而 `Grouper` 取先到的那个 ⇒ 这里先把**系统默认**端点排到前面，
+    // 让「哪个端点的音量代表这台设备」有确定且符合直觉的答案。
+    // `sort_by_key` 是稳定排序 ⇒ 同为默认/非默认时保持原有枚举顺序，结果仍确定。
+    let mut ordered: Vec<&crate::audio::AudioDevice> = audio.iter().collect();
+    ordered.sort_by_key(|a| !a.is_default);
+    for a in ordered {
+        let key = audio_endpoint_key(a);
+        grouper.add(
+            Some(&key.encode()),
+            &a.name,
+            DevType::Audio,
+            None,
+            Some(a.id.as_str()),
+        );
+    }
+
+    // 再入设备列表：电量与类别由它提供。
+    // 电量来源按**传输方式**判定 —— 同一容器出现多来源时靠 `BatterySource` 取更可信的那个。
+    for d in devices {
+        let source = if d.is_bluetooth || d.is_ble {
+            BatterySource::Bluetooth
+        } else if d.is_wireless_24g {
+            BatterySource::Hid24g
+        } else {
+            BatterySource::Unknown
+        };
+        let fallback = DeviceKey::Name(core_name(&d.name)).encode();
+        grouper.add(
+            d.device_key.as_deref().or(Some(fallback.as_str())),
+            &d.name,
+            d.dt,
+            d.battery.map(|b| (b, source)),
+            None,
+        );
+    }
+
+    grouper
+        .finish()
+        .into_iter()
+        .filter(|p| p.battery.is_some() || p.audio_device_id.is_some())
+        .map(|mut p| {
+            let fallback = DeviceKey::Name(core_name(&p.name)).encode();
+            p.pinned = crate::config::matches_pinned_taskbar(pinned, &p.key, Some(&fallback));
+            p
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,5 +617,347 @@ mod tests {
             normalize_guid("{9039AEA7-9C07-52F2-A4EF-0F5296D6D7D2}"),
             format_guid_bytes(&bytes)
         );
+    }
+
+    /// 下面的实例路径全部是**本机实测原文**（`.workbuddy-ai/scratch/probe_bt_container_map.py`）。
+    #[test]
+    fn mac_extracted_from_both_bluetooth_instance_shapes() {
+        // 形态一：设备节点（经典蓝牙）
+        assert_eq!(
+            mac_from_bluetooth_instance(
+                r"BTHENUM\Dev_5088112E80E8\8&1d39e19e&0&BluetoothDevice_5088112E80E8"
+            ),
+            Some("5088112E80E8".to_string())
+        );
+        // 形态一：设备节点（BLE，全小写）
+        assert_eq!(
+            mac_from_bluetooth_instance(r"BTHLE\Dev_a4c13830b225\8&7ab9f01&0&a4c13830b225"),
+            Some("A4C13830B225".to_string())
+        );
+        // 形态二：服务节点
+        assert_eq!(
+            mac_from_bluetooth_instance(
+                r"BTHENUM\{0000110b-0000-1000-8000-00805f9b34fb}_VID&00021d6b_PID&0246\8&1d39e19e&0&5088112E80E8_C00000000"
+            ),
+            Some("5088112E80E8".to_string())
+        );
+    }
+
+    /// 回归判据：**「第一个 12 位十六进制串」这条错误取法必须被证伪**。
+    /// 服务节点形态下它会命中 A2DP 服务 GUID 里的 `00805F9B34FB`，本机 3/3 全错。
+    #[test]
+    fn naive_first_hex12_would_be_wrong() {
+        let svc = r"BTHENUM\{0000110b-0000-1000-8000-00805f9b34fb}_VID&00021d6b_PID&0246\8&1d39e19e&0&5088112E80E8_C00000000";
+        // 错误取法（模拟「找到第一个连续 12 位十六进制」）：命中服务 GUID 尾部
+        let upper = svc.to_ascii_uppercase();
+        let naive = upper
+            .as_bytes()
+            .windows(12)
+            .find(|w| w.iter().all(|b| b.is_ascii_hexdigit()))
+            .map(|w| String::from_utf8_lossy(w).to_string());
+        assert_eq!(naive.as_deref(), Some("00805F9B34FB"));
+        // 正确取法给出真正的 MAC，且**不等于**上面那个值
+        let correct = mac_from_bluetooth_instance(svc);
+        assert_eq!(correct.as_deref(), Some("5088112E80E8"));
+        assert_ne!(naive, correct);
+    }
+
+    #[test]
+    fn mac_extraction_rejects_non_bluetooth_instances() {
+        // 普通 USB / SWD 实例不得被误判为蓝牙 MAC
+        assert_eq!(
+            mac_from_bluetooth_instance(r"USB\VID_046D&PID_C092\5&1A2B3C4D&0&1"),
+            None
+        );
+        assert_eq!(
+            mac_from_bluetooth_instance(
+                r"SWD\MMDEVAPI\{0.0.0.00000000}.{7e42f2f4-6a35-4f5f-9de8-f8c57b82e68a}"
+            ),
+            None
+        );
+        // 含 `DEV_` 但后面不是 12 位十六进制 ⇒ 不误判
+        assert_eq!(mac_from_bluetooth_instance(r"ROOT\DEV_UNKNOWN\0000"), None);
+    }
+
+    // ── 分组（批 5）────────────────────────────────────────
+
+    fn dev(
+        name: &str,
+        key: Option<&str>,
+        battery: Option<i32>,
+        bt: bool,
+        g24: bool,
+    ) -> crate::device::Device {
+        crate::device::Device {
+            name: name.to_string(),
+            dt: DevType::Audio,
+            status: "已连接".to_string(),
+            battery,
+            device_id: None,
+            device_key: key.map(|k| k.to_string()),
+            is_bluetooth: bt,
+            is_wireless_24g: g24,
+            is_ble: false,
+        }
+    }
+
+    fn audio(name: &str, id: &str, container: Option<&str>) -> crate::audio::AudioDevice {
+        crate::audio::AudioDevice {
+            id: id.to_string(),
+            name: name.to_string(),
+            volume: 0.5,
+            is_muted: false,
+            is_default: false,
+            container_id: container.map(|c| c.to_string()),
+        }
+    }
+
+    /// 核心判据：**蓝牙设备行 + 音频端点行 + 端点本身，必须并成一台**，
+    /// 且电量和音量出现在同一条上 —— 这正是任务栏要的东西。
+    #[test]
+    fn same_container_merges_battery_and_volume_into_one_device() {
+        const CID: &str = "9039aea7-9c07-52f2-a4ef-0f5296d6d7d2";
+        let key = format!("c:{CID}");
+        let devices = vec![
+            // 蓝牙行：只有电量，名字是设备名
+            dev("小爱音箱-9205", Some(&key), Some(80), true, false),
+            // PnP 的音频端点行：名字带括号设备名，无电量
+            dev("耳机 (小爱音箱-9205)", Some(&key), None, false, false),
+        ];
+        let audios = vec![audio("耳机 (小爱音箱-9205)", "{0.0.0.0}.{abc}", Some(CID))];
+
+        let out = group_taskbar_devices(&devices, &audios, &[]);
+        assert_eq!(out.len(), 1, "同容器必须并成一台，实际 {out:?}");
+        let d = &out[0];
+        assert_eq!(d.key, key);
+        assert_eq!(d.battery, Some(80), "电量应保留");
+        assert_eq!(d.audio_device_id.as_deref(), Some("{0.0.0.0}.{abc}"));
+        assert_eq!(d.node_count, 3);
+        // 展示名应取「括号内设备名」，而不是毫无区分度的「耳机」
+        assert_eq!(d.name, "小爱音箱-9205");
+    }
+
+    /// 占位容器不进分组：两个虚拟音频设备各自独立，且因「无电量无音量」被丢弃。
+    #[test]
+    fn placeholder_container_devices_never_merge_and_are_dropped() {
+        let devices = vec![
+            dev("扬声器 (网易虚拟音频设备)", None, None, false, false),
+            dev(
+                "扬声器 (Steam Streaming Speakers)",
+                None,
+                None,
+                false,
+                false,
+            ),
+        ];
+        // 两个虚拟端点都拿不到容器 ⇒ 各自退回自己的实例路径，不会共用一个键
+        let audios = vec![
+            audio("扬声器 (网易虚拟音频设备)", "{0.0.0.0}.{c5c40f0a}", None),
+            audio("扬声器 (Steam Streaming)", "{0.0.0.0}.{c5fc3377}", None),
+        ];
+        let out = group_taskbar_devices(&devices, &audios, &[]);
+        assert_eq!(out.len(), 2, "两个虚拟端点不得被合并成一台：{out:?}");
+        // 键必须互不相同（合并就会相等）
+        assert_ne!(out[0].key, out[1].key);
+        // 两者都没有电量；音量则各自有 ⇒ 不应被丢弃
+        assert!(out.iter().all(|d| d.battery.is_none()));
+        assert!(out.iter().all(|d| d.audio_device_id.is_some()));
+    }
+
+    #[test]
+    fn entries_without_battery_and_without_volume_are_dropped() {
+        // 一个既无电量、又无音频端点的容器（例如被过滤剩下的空壳）
+        let devices = vec![dev("某个空壳设备", Some("c:deadbeef"), None, false, false)];
+        let out = group_taskbar_devices(&devices, &[], &[]);
+        assert!(out.is_empty(), "既无电量又无音量的条目不该投放：{out:?}");
+    }
+
+    #[test]
+    fn battery_source_priority_prefers_bluetooth_over_24g() {
+        const CID: &str = "aaaa1111-2222-3333-4444-555566667777";
+        let key = format!("c:{CID}");
+        let mut g = Grouper::new();
+        // 先加 2.4G 来源，再加蓝牙来源 ⇒ 应取蓝牙（数值更大）
+        g.add(
+            Some(&key),
+            "设备",
+            DevType::Usb,
+            Some((40, BatterySource::Hid24g)),
+            None,
+        );
+        g.add(
+            Some(&key),
+            "设备",
+            DevType::Usb,
+            Some((70, BatterySource::Bluetooth)),
+            None,
+        );
+        let out = g.finish();
+        assert_eq!(out[0].battery, Some(70), "应取来源更可信的那个");
+        // 反向顺序也应得到同一结果（不依赖枚举顺序）
+        let mut g2 = Grouper::new();
+        g2.add(
+            Some(&key),
+            "设备",
+            DevType::Usb,
+            Some((70, BatterySource::Bluetooth)),
+            None,
+        );
+        g2.add(
+            Some(&key),
+            "设备",
+            DevType::Usb,
+            Some((40, BatterySource::Hid24g)),
+            None,
+        );
+        assert_eq!(g2.finish()[0].battery, Some(70));
+    }
+
+    #[test]
+    fn nodes_without_key_are_dropped_and_output_is_order_independent() {
+        // 无身份键的节点直接丢弃
+        let mut g = Grouper::new();
+        g.add(
+            None,
+            "没有身份的节点",
+            DevType::Other,
+            Some((50, BatterySource::Unknown)),
+            None,
+        );
+        assert!(g.finish().is_empty());
+
+        // 输出顺序稳定：与加入顺序无关（BTreeMap 排序）
+        let mut a = Grouper::new();
+        a.add(
+            Some("c:bbb"),
+            "B",
+            DevType::Usb,
+            Some((1, BatterySource::Unknown)),
+            None,
+        );
+        a.add(
+            Some("c:aaa"),
+            "A",
+            DevType::Usb,
+            Some((2, BatterySource::Unknown)),
+            None,
+        );
+        let mut b = Grouper::new();
+        b.add(
+            Some("c:aaa"),
+            "A",
+            DevType::Usb,
+            Some((2, BatterySource::Unknown)),
+            None,
+        );
+        b.add(
+            Some("c:bbb"),
+            "B",
+            DevType::Usb,
+            Some((1, BatterySource::Unknown)),
+            None,
+        );
+        let ka: Vec<String> = a.finish().into_iter().map(|d| d.key).collect();
+        let kb: Vec<String> = b.finish().into_iter().map(|d| d.key).collect();
+        assert_eq!(ka, kb);
+        assert_eq!(ka, vec!["c:aaa".to_string(), "c:bbb".to_string()]);
+    }
+
+    #[test]
+    fn display_name_prefers_paren_device_name_over_bare_desc() {
+        assert_eq!(
+            pick_display_name(&["耳机".to_string(), "耳机 (小爱音箱-9205)".to_string()]),
+            "小爱音箱-9205"
+        );
+        // 输入顺序无关
+        assert_eq!(
+            pick_display_name(&["耳机 (小爱音箱-9205)".to_string(), "耳机".to_string()]),
+            "小爱音箱-9205"
+        );
+        // 全部为空 ⇒ 兜底
+        assert_eq!(pick_display_name(&[]), "未知设备");
+        assert_eq!(pick_display_name(&["   ".to_string()]), "未知设备");
+    }
+
+    #[test]
+    fn pinned_flag_matches_by_key_then_fallback() {
+        const CID: &str = "9039aea7-9c07-52f2-a4ef-0f5296d6d7d2";
+        let pinned = vec![
+            // 按容器键精确固定
+            crate::config::PinnedDevice {
+                key: format!("c:{CID}"),
+                fallback: None,
+                alias: None,
+            },
+            // 容器变了（换机 / 重装驱动）⇒ 靠**名称键**兜底认出是同一台
+            crate::config::PinnedDevice {
+                key: "c:已失效的旧容器".to_string(),
+                fallback: Some("n:罗技接收器".to_string()),
+                alias: Some("我的接收器".to_string()),
+            },
+        ];
+
+        let devices = vec![
+            dev(
+                "小爱音箱-9205",
+                Some(&format!("c:{CID}")),
+                Some(80),
+                true,
+                false,
+            ),
+            // 容器是「换过的新容器」，与 pinned 的 key 不符 ⇒ 只能靠名称兜底
+            dev("罗技接收器", Some("c:换过的新容器"), Some(90), false, true),
+            // 反控：key 与 fallback 都不命中 ⇒ 必须**不**被判定为已固定
+            dev("无关设备", Some("c:unrelated"), Some(50), false, false),
+        ];
+
+        let out = group_taskbar_devices(&devices, &[], &pinned);
+        assert_eq!(out.len(), 3, "三台互不同容器，不得合并：{out:?}");
+
+        let pinned_keys: Vec<&str> = out
+            .iter()
+            .filter(|d| d.pinned)
+            .map(|d| d.key.as_str())
+            .collect();
+        assert_eq!(
+            pinned_keys,
+            vec![format!("c:{CID}"), "c:换过的新容器".to_string()],
+            "第二台应靠名称键兜底被认出"
+        );
+        // 反控必须成立，否则说明「已固定」判据恒真
+        assert!(
+            out.iter().any(|d| d.key == "c:unrelated" && !d.pinned),
+            "无关设备不应被判定为已固定"
+        );
+    }
+
+    /// 同一容器有**多个**输出端点时，音量必须落在**系统默认**那个端点上。
+    ///
+    /// 否则「这台设备的音量」会取决于端点的枚举顺序 —— 用户拖动音量条时调的是另一个
+    /// 端点，表现为「调了没反应」。实机 `084fb1b9-…`（Mijia Glasses Lite）正是这种容器。
+    ///
+    /// 判据可证伪：删掉 `group_taskbar_devices` 里的
+    /// `ordered.sort_by_key(|a| !a.is_default)`，本用例必转红（会选中先枚举的非默认端点）。
+    #[test]
+    fn default_endpoint_wins_when_container_has_multiple_endpoints() {
+        const CID: &str = "084fb1b9-ff11-5ca5-ba77-242db9091204";
+        let key = format!("c:{CID}");
+        let non_default = audio("扬声器 (Mijia Glasses Lite)", "{0.0.0.0}.{aaa}", Some(CID));
+        let mut default = audio("耳机 (Mijia Glasses Lite)", "{0.0.0.0}.{bbb}", Some(CID));
+        default.is_default = true;
+        assert!(!non_default.is_default, "前置：第一个端点必须是非默认的");
+        // 故意把**非默认**端点排在前面：不排序就会选中它
+        let audios = vec![non_default, default];
+
+        let devices = vec![dev("Mijia Glasses Lite", Some(&key), Some(90), true, false)];
+        let out = group_taskbar_devices(&devices, &audios, &[]);
+        assert_eq!(out.len(), 1, "同容器必须并成一台：{out:?}");
+        assert_eq!(
+            out[0].audio_device_id.as_deref(),
+            Some("{0.0.0.0}.{bbb}"),
+            "音量端点应取系统默认的那个，而不是先枚举到的那个"
+        );
+        // 展示名不因排序而变：两份名字的 core_name 相同，取到的仍是设备名
+        assert_eq!(out[0].name, "Mijia Glasses Lite");
     }
 }

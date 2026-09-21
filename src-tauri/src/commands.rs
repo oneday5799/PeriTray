@@ -74,6 +74,26 @@ pub fn get_cached_devices() -> Vec<device::Device> {
     crate::state::lock_unpoisoned(cache).clone()
 }
 
+/// 任务栏信息窗的数据源：把「电量」与「音量」按**物理设备身份**聚合到同一台设备上。
+///
+/// 设备列表取自 tray watcher 维护的缓存（避免每轮重跑 WMI；缓存为空时调用方应回落
+/// `get_devices`）；音频端点必须现查 —— 音量是实时值。
+/// 身份键优先级见 `device_identity`：ContainerId → PnP 实例路径 → 名称。
+#[tauri::command(async)]
+pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::PhysicalDevice>, String> {
+    let devices = {
+        let cache = crate::state::get_devices_cache();
+        crate::state::lock_unpoisoned(cache).clone()
+    };
+    let audio = run_blocking(crate::audio::enumerate_output_devices)
+        .await?
+        .map_err(|e| e.to_string())?;
+    let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
+    Ok(crate::device_identity::group_taskbar_devices(
+        &devices, &audio, &pinned,
+    ))
+}
+
 #[tauri::command]
 pub fn open_settings(app: tauri::AppHandle) {
     crate::windows::open_settings(&app);

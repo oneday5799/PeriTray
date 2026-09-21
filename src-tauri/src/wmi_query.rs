@@ -292,6 +292,11 @@ fn query_bt_devices(
         Err(_) => return,
     };
 
+    // 「MAC → 容器」映射：一次枚举覆盖本批全部蓝牙设备。
+    // 实测同一 MAC 会命中 3~4 个 BTHENUM 服务实例但容器一致 ⇒ 单值映射无歧义。
+    // 失败时返回空表 ⇒ 本批设备降级到名称键，不影响枚举本身。
+    let container_map = device_identity::bluetooth_container_map();
+
     for (name, connected, battery, device_id, is_ble) in btc_devices {
         if name.is_empty() {
             continue;
@@ -311,6 +316,12 @@ fn query_bt_devices(
         } else {
             BT_STATUS_PAIRED
         };
+        // WinRT 只给 device_id，先折算成 MAC 才能查容器；
+        // 查不到就走「容器 → 实例 → 名称」里的名称兜底。
+        let container = crate::bluetooth::normalize_mac(&device_id)
+            .and_then(|mac| container_map.get(&mac).cloned());
+        let identity = device_identity::device_key(container.as_deref(), None, Some(name.as_str()))
+            .map(|k| k.encode());
         let cn = core_name(&name);
         bt_names.insert(cn.clone());
         if let Some(existing) = all
@@ -324,6 +335,9 @@ fn query_bt_devices(
             if existing.device_id.is_none() {
                 existing.device_id = Some(device_id);
             }
+            if existing.device_key.is_none() {
+                existing.device_key = identity;
+            }
             existing.is_ble = existing.is_ble || is_ble;
         } else {
             try_insert(
@@ -333,9 +347,7 @@ fn query_bt_devices(
                 s,
                 battery.map(|b| b as i32),
                 Some(device_id),
-                // 蓝牙设备来自 WinRT，此处拿不到 PnP 实例路径 ⇒ 暂无容器键。
-                // 待「BTHENUM 实例 → 容器」映射落地后在此补齐（届时可与音频端点同容器）。
-                None,
+                identity,
                 true,
                 false,
                 is_ble,

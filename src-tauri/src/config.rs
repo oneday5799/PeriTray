@@ -58,6 +58,48 @@ pub struct DeviceShortcut {
     pub shortcut: Option<String>,
 }
 
+/// 任务栏信息窗固定显示的一台**物理设备**。
+///
+/// 与 `tray_devices`（按名称、控制托盘图标内容）**语义不同**：这里按物理设备身份键
+/// 存储，才能区分同型号多实例（两个同款 2.4G 接收器、两只同款耳机）——
+/// 按名称存会把它们混成一个。
+///
+/// 三级字段是**降级匹配链**，不是冗余：
+///   · `key`      —— `device_identity::DeviceKey::encode()` 的结果（`c:` 容器 / `i:` 实例 / `n:` 名称）
+///   · `fallback` —— key 失效时的兜底（换机、重装驱动会改容器；重装系统会改实例路径）
+///   · `alias`    —— 用户自定义显示名，随 key 一起存，避免改名后失联
+///
+/// ⚠️ **不要存 MAC**：既是隐私，也因为 BTHENUM 实例路径里 MAC 的位置很脆。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PinnedDevice {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+}
+
+/// 判定某物理设备是否被固定。
+///
+/// 两级匹配，**语义不同**：
+///   · `p.key == key` —— 精确身份命中（同一个容器/实例）；
+///   · `p.fallback == fallback` —— **同一设备在另一种身份形态下的键**兜底。
+///     典型用法：`key` 存容器键（精确但不耐换机/重装驱动），`fallback` 存名称键
+///     （`n:<名字>`，模糊但稳定）。容器变了、名字没变时仍能认出是同一台设备。
+///
+/// 抽成自由函数而非 `Config` 方法，是为了让调用方先取一次快照
+/// （`config::with_config(|c| c.pinned_taskbar_devices.clone())`）再逐台设备比对，
+/// 避免每台设备各取一次配置锁。
+pub fn matches_pinned_taskbar(pinned: &[PinnedDevice], key: &str, fallback: Option<&str>) -> bool {
+    pinned.iter().any(|p| {
+        p.key == key
+            || match (p.fallback.as_deref(), fallback) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            }
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     // ── 字段级 serde 默认值（P1-7）─────────────────────────────
@@ -94,6 +136,10 @@ pub struct Config {
     pub wireless_only: bool,
     #[serde(default)]
     pub tray_devices: Vec<String>,
+    /// 任务栏信息窗**固定显示**的设备（与 `tray_devices` 的「托盘图标自选设备」是两件事，
+    /// 见 `PinnedDevice` 文档）。空表 = 未固定任何设备。
+    #[serde(default)]
+    pub pinned_taskbar_devices: Vec<PinnedDevice>,
     #[serde(default)]
     pub hidden_audio_devices: Vec<String>,
     /// 日志级别："off"/"standard"/"verbose"
@@ -294,6 +340,7 @@ impl Default for Config {
             use_system_bt: false,
             wireless_only: true,
             tray_devices: vec![],
+            pinned_taskbar_devices: vec![],
             hidden_audio_devices: vec![],
             log_level: default_log_level(),
             legacy_log_enabled: None,
@@ -736,6 +783,7 @@ macro_rules! for_each_config_field {
             use_system_bt,
             wireless_only,
             tray_devices,
+            pinned_taskbar_devices,
             hidden_audio_devices,
             log_level,
             legacy_log_enabled,
