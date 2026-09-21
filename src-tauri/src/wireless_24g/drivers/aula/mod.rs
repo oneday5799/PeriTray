@@ -25,11 +25,18 @@ impl BatteryDriver for AulaDriver {
         DEVICES.iter().any(|(_, v, p)| *v == vid && *p == pid)
     }
 
-    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
-        // 按 VID 分发至对应协议实现；None=非无线连接态，统一转 Err 走负缓存
+    fn read_battery(
+        &self,
+        link: &HidLink,
+        vid: u16,
+        pid: u16,
+        scope: Option<&str>,
+    ) -> Result<i32, String> {
+        // 按 VID 分发至对应协议实现；None=非无线连接态，统一转 Err 走负缓存。
+        // F99 Pro 不枚举 HID 集合（Windows 上直接返回不支持）⇒ 不需要 scope
         let percent = match (vid, pid) {
             (f99pro::VID, f99pro::PID) => f99pro::read_battery_percent(link)?,
-            (f75max::VID, f75max::PID) => f75max::read_battery_percent(link)?,
+            (f75max::VID, f75max::PID) => f75max::read_battery_percent(link, scope)?,
             _ => return Err(format!("未收录的 AULA 设备 {:04X}:{:04X}", vid, pid)),
         };
         percent.ok_or_else(|| "非无线连接态，电量不可用".to_string())

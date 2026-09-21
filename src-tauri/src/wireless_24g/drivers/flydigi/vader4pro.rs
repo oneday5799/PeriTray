@@ -39,9 +39,12 @@ const DEADLINE_MS: u64 = 1000;
 
 // ── 对外入口 ────────────────────────────────────────────
 
-/// 读取电量百分比。Ok(None)=充电中/无效值，Err=通信失败
-pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
-    let paths = link.enumerate_paths(VID, PID)?;
+/// 读取电量百分比。Ok(None)=充电中/无效值，Err=通信失败。
+///
+/// `scope` 是设备容器 GUID：同型号两台接收器的 HID 集合同 VID 同 PID，
+/// 不分域会读到另一台的电量。`None` = 调用方拿不到容器（不做分域）。
+pub fn read_battery_percent(link: &HidLink, scope: Option<&str>) -> Result<Option<i32>, String> {
+    let paths = link.enumerate_paths(VID, PID, scope)?;
     // 优先 usage page 0xFFA0（vendor 命令通道）；缺失时全候选逐一试探
     let preferred: Vec<_> = paths.iter().filter(|p| p.usage_page == 0xFFA0).collect();
     let candidates: Vec<_> = if preferred.is_empty() {

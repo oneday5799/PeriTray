@@ -30,9 +30,12 @@ const FORM_DEADLINE_MS: u64 = 1250;
 /// 请求前清空输入缓冲的单次读取窗口
 const FLUSH_READ_MS: i32 = 30;
 
-/// 读取电量百分比。Err 表示全部形态均未获得有效应答
-pub fn read_battery_percent(link: &HidLink) -> Result<Option<i32>, String> {
-    let paths = link.enumerate_paths(VID, PID)?;
+/// 读取电量百分比。Err 表示全部形态均未获得有效应答。
+///
+/// `scope` 是设备容器 GUID：同型号两台接收器的 HID 集合同 VID 同 PID，
+/// 不分域会读到另一台的电量。`None` = 调用方拿不到容器（不做分域）。
+pub fn read_battery_percent(link: &HidLink, scope: Option<&str>) -> Result<Option<i32>, String> {
+    let paths = link.enumerate_paths(VID, PID, scope)?;
     // F75 Max 电量走 usage page 0xFF60 raw 页；缺失时退回全部候选逐一试探
     let preferred: Vec<_> = paths.iter().filter(|p| p.usage_page == 0xFF60).collect();
     let candidates: Vec<_> = if preferred.is_empty() {

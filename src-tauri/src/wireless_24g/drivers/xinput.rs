@@ -21,9 +21,20 @@ impl BatteryDriver for XInputDriver {
         DEVICES.iter().any(|(_, v, p)| *v == vid && *p == pid)
     }
 
-    fn read_battery(&self, _link: &HidLink, _vid: u16, _pid: u16) -> Result<i32, String> {
+    fn read_battery(
+        &self,
+        _link: &HidLink,
+        _vid: u16,
+        _pid: u16,
+        _scope: Option<&str>,
+    ) -> Result<i32, String> {
         // XInput 电量由 wireless_24g::query_and_cache 中的 XInput 兜底读取，
-        // 不走 HID 通道；此处仅声明设备身份
+        // 不走 HID 通道；此处仅声明设备身份。
+        //
+        // ⚠️ 也**无法**接受容器分域：经典 XInput API 只按槽位（0..3）寻址，
+        // 不暴露设备路径或任何稳定身份 ⇒ 接两个同型号手柄时必然同值。
+        // 这是 API 的能力边界，不是漏传参数；改用 Windows.Gaming.Input
+        // （`RawGameController` 才有 `NonRoamableId`）是另一条路。
         Err("XInput 电量由上层兜底读取".into())
     }
 

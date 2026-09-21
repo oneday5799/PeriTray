@@ -60,12 +60,20 @@ impl BatteryDriver for LogitechDriver {
         vid == 0x046D && RECEIVERS.iter().any(|(_, p)| *p == pid)
     }
 
-    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
+    fn read_battery(
+        &self,
+        link: &HidLink,
+        vid: u16,
+        pid: u16,
+        scope: Option<&str>,
+    ) -> Result<i32, String> {
         if !self.matches(vid, pid) {
             return Err(format!("非罗技接收器设备 {:04X}:{:04X}", vid, pid));
         }
 
-        let paths = link.enumerate_paths(vid, pid)?;
+        // 按容器分域：同款接收器接两台时，HID 集合同 VID 同 PID，
+        // 不分域会把电量读到另一台上
+        let paths = link.enumerate_paths(vid, pid, scope)?;
         let mut last_err = String::from("无可用候选集合");
 
         // 逐候选集合尝试完整流程（槽位扫描 → 单下游判定 → 电量读取）

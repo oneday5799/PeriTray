@@ -120,12 +120,18 @@ impl BatteryDriver for RazerKeyboardDriver {
         DEVICES.iter().any(|d| d.vid_pid == (vid, pid))
     }
 
-    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
+    fn read_battery(
+        &self,
+        link: &HidLink,
+        vid: u16,
+        pid: u16,
+        scope: Option<&str>,
+    ) -> Result<i32, String> {
         let dev = DEVICES
             .iter()
             .find(|d| d.vid_pid == (vid, pid))
             .ok_or_else(|| format!("未收录的雷蛇设备 {:04X}:{:04X}", vid, pid))?;
-        read_battery_level(link, vid, pid, dev.txid, dev.wait_ms)
+        read_battery_level(link, vid, pid, dev.txid, dev.wait_ms, scope)
     }
 
     fn identities(&self) -> Vec<DeviceIdentity> {

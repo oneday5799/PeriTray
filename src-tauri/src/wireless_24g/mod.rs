@@ -65,6 +65,15 @@ impl BatteryTarget {
     pub fn key(&self) -> &str {
         &self.key
     }
+
+    /// HID 集合分域用的容器 GUID：身份键是 `c:<容器>` 时取容器，其余为 `None`。
+    ///
+    /// 仅容器可作分域依据 —— 实例路径与名称都不对应 HID 集合的归属：
+    /// 同一台设备的每个 HID 集合都有**自己的**实例路径，
+    /// 而它们**共享**同一个容器（实机 12/12，0 反例）。
+    pub(crate) fn container_scope(&self) -> Option<&str> {
+        self.key.strip_prefix("c:")
+    }
 }
 
 struct CacheEntry {
@@ -302,7 +311,7 @@ fn query_and_cache(link: Option<&HidLink>, target: &BatteryTarget) -> QueryOutco
             Some(name) => format!("{} ({:04X}:{:04X})", name, v, p),
             None => format!("{:04X}:{:04X}", v, p),
         };
-        let result = driver.read_battery(link, v, p);
+        let result = driver.read_battery(link, v, p, target.container_scope());
         match &result {
             Ok(lv) => standard_log!("[24g] {} 电量 {}%", label, lv),
             Err(e) => standard_log!("[24g] {} 查询失败: {}", label, e),

@@ -27,8 +27,19 @@ pub trait BatteryDriver: Sync {
     /// 是否支持该 VID/PID（实现应直接扫描自身设备表，保持热路径零分配）
     fn matches(&self, vid: u16, pid: u16) -> bool;
     /// 查询电量百分比（0-100）；设备休眠/离线/未收录时返回 Err，由上层走负缓存。
-    /// link 为批内复用的 HID 会话（由上层每批建一次，避免每台设备重复初始化）
-    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String>;
+    /// link 为批内复用的 HID 会话（由上层每批建一次，避免每台设备重复初始化）。
+    ///
+    /// ⚠️ `scope` 是**设备容器 GUID**（规范化小写无花括号），必须原样传给
+    /// `HidLink::enumerate_paths`：同型号两台接收器的 HID 集合**同 VID 同 PID**，
+    /// 只能靠容器区分，不分域就会读到另一台的电量。
+    /// `None` = 调用方拿不到容器 ⇒ 不做分域（退化为历史行为）。
+    fn read_battery(
+        &self,
+        link: &HidLink,
+        vid: u16,
+        pid: u16,
+        scope: Option<&str>,
+    ) -> Result<i32, String>;
     /// 声明收录设备的身份列表（识别注册表构建期调用一次，非热路径）
     fn identities(&self) -> Vec<DeviceIdentity>;
     /// 设备显示名（日志用，零分配；动态名经 display_override 通道）

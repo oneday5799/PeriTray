@@ -21,9 +21,15 @@ impl BatteryDriver for FlydigiDriver {
         DEVICES.iter().any(|(_, v, p)| *v == vid && *p == pid)
     }
 
-    fn read_battery(&self, link: &HidLink, vid: u16, pid: u16) -> Result<i32, String> {
+    fn read_battery(
+        &self,
+        link: &HidLink,
+        vid: u16,
+        pid: u16,
+        scope: Option<&str>,
+    ) -> Result<i32, String> {
         let percent = match (vid, pid) {
-            (vader4pro::VID, vader4pro::PID) => vader4pro::read_battery_percent(link)?,
+            (vader4pro::VID, vader4pro::PID) => vader4pro::read_battery_percent(link, scope)?,
             _ => return Err(format!("未收录的 Flydigi 设备 {:04X}:{:04X}", vid, pid)),
         };
         percent.ok_or_else(|| "充电中或无效电量值".to_string())

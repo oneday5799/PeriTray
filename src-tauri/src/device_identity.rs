@@ -186,6 +186,52 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
     container_of_instance(&format!("SWD\\MMDEVAPI\\{endpoint_id}"))
 }
 
+/// hidapi 设备**接口**路径 → devnode **实例**路径。
+///
+/// hidapi（Windows）给的是接口路径，CFGMGR32 要的是实例路径，两者形如：
+///
+/// ```text
+/// hidapi : \\?\HID#VID_1532&PID_0094&MI_01&Col07#8&b16f3a&0&0006#{4d1e55b2-…}\KBD
+/// devnode: HID\VID_1532&PID_0094&MI_01&COL07\8&b16f3a&0&0006
+/// ```
+///
+/// 变换规则（实机 27/27 可映射、27/27 命中 `CM_Get_Device_ID_ListW("HID")` 在场清单）：
+///   1. 剥掉开头的 `\\?\`（或 `\\.\`）；
+///   2. **从最后一个 `#{` 处截断** —— 那是接口类 GUID 后缀。
+///      ⚠️ **不能用第一个 `#{`**：蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头
+///      （形如 `HID#{00001812-…}_Dev_VID&021532_…`），按第一个切会把设备 ID 段整段丢掉；
+///      同时这一步也顺带丢掉了尾部偶发的 `\KBD` 后缀（实机见过）；
+///   3. `#` → `\`。
+///
+/// **不做任何大小写变换**：hidapi 侧本就把枚举器/VID/PID/MI 段输出为大写，
+/// 只有 `Col07` 这类集合名与 devnode 的 `COL07` 不同；而 Windows 设备实例 ID
+/// **大小写不敏感** ⇒ 交给 `CM_Locate_DevNodeW` 匹配即可。
+/// 刻意不转大写是为了不破坏蓝牙 HID 设备 ID 段里 `{00001812-…}_Dev_VID&…_c6947e50a677`
+/// 那种「大小写混合且必须逐字匹配（对注册表而言）」的形态。
+///
+/// ⚠️ **诚实边界**：`HID#{GUID}_Dev_…` 这一形态本机未接设备 ⇒ 其
+/// `CM_Locate_DevNodeW` 命中**未经实测**，属结构外推；已由单测钉住结构变换。
+pub fn devnode_from_hidapi_path(path: &str) -> Option<String> {
+    let s = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix(r"\\.\"))
+        .unwrap_or(path);
+    let s = match s.rfind("#{") {
+        Some(i) => &s[..i],
+        None => s,
+    };
+    let mut segs: Vec<&str> = s.split('#').collect();
+    if segs.len() < 3 {
+        return None;
+    }
+    segs.truncate(3);
+    let (head, dev, inst) = (segs[0], segs[1], segs[2]);
+    if head.is_empty() || dev.is_empty() || inst.is_empty() {
+        return None;
+    }
+    Some(format!("{head}\\{dev}\\{inst}"))
+}
+
 /// 枚举指定枚举器下的**设备实例路径**（CFGMGR32 `CM_Get_Device_ID_ListW`）。
 ///
 /// 失败一律返回空表 —— 调用方应把它当成「没有可用映射」，而不是错误。
@@ -1023,5 +1069,84 @@ mod tests {
         );
         // 展示名不因排序而变：两份名字的 core_name 相同，取到的仍是设备名
         assert_eq!(out[0].name, "Mijia Glasses Lite");
+    }
+
+    /// `devnode_from_hidapi_path`：三条**实机实测**样本（均取自本机 hidapi 输出，
+    /// 且映射结果全部命中 `CM_Get_Device_ID_ListW("HID")` 的在场清单）。
+    ///
+    /// 覆盖三个必须做对的点：`ColNN` 原样保留（不做大写）、
+    /// 尾部 `\KBD` 后缀必须丢掉、`GVInput` 这类无 VID/PID 的设备 ID 段也要能过。
+    #[test]
+    fn hidapi_path_maps_to_devnode_instance() {
+        // ① 复合接收器的集合接口：hidapi 给 `Col07`，devnode 是 `COL07`（大小写不敏感）
+        assert_eq!(
+            devnode_from_hidapi_path(
+                r"\\?\HID#VID_1532&PID_0094&MI_01&Col07#8&b16f3a&0&0006#{4d1e55b2-f16f-11cf-88cb-001111000030}"
+            )
+            .as_deref(),
+            Some(r"HID\VID_1532&PID_0094&MI_01&Col07\8&b16f3a&0&0006")
+        );
+        // ② 尾部 `\KBD` 后缀（接口类 GUID 之后还有内容）必须被截掉
+        assert_eq!(
+            devnode_from_hidapi_path(
+                r"\\?\HID#VID_1532&PID_0094&MI_02#8&2488acfc&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}\KBD"
+            )
+            .as_deref(),
+            Some(r"HID\VID_1532&PID_0094&MI_02\8&2488acfc&0&0000")
+        );
+        // ③ 无 VID/PID 的软件 HID（本机 GVInput 落在占位容器上）
+        assert_eq!(
+            devnode_from_hidapi_path(
+                r"\\?\HID#GVInput&Col03#1&2d595ca7&0&0002#{4d1e55b2-f16f-11cf-88cb-001111000030}\KBD"
+            )
+            .as_deref(),
+            Some(r"HID\GVInput&Col03\1&2d595ca7&0&0002")
+        );
+    }
+
+    /// ⛔ 关键判据：**必须从最后一个 `#{` 截断**。
+    ///
+    /// 蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头（`HID#{GUID}_Dev_…`）。
+    /// 若按**第一个** `#{` 切，设备 ID 段会被整段丢掉，映射结果变成 `HID\a&…`，
+    /// 定位必然失败 ⇒ 该设备的 HID 集合全部拿不到容器、分域失效。
+    ///
+    /// 可证伪：把 `rfind("#{")` 改成 `find("#{")`，本用例必转红。
+    ///
+    /// ⚠️ 本机当前**未接**这类设备 ⇒ 期望值取自只读注册表探针
+    /// （`BaseContainers` 的成员实例路径），属**结构外推**，未经 `CM_Locate_DevNodeW` 实测。
+    #[test]
+    fn hidapi_path_keeps_guid_prefixed_device_id_segment() {
+        let out = devnode_from_hidapi_path(
+            r"\\?\HID#{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&021532_PID&0095_REV&0001_c6947e50a677&Col01#a&1ed5719f&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}",
+        );
+        assert_eq!(
+            out.as_deref(),
+            Some(
+                r"HID\{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&021532_PID&0095_REV&0001_c6947e50a677&Col01\a&1ed5719f&0&0000"
+            ),
+            "设备 ID 段（含 {{GUID}} 前缀）必须逐字保留"
+        );
+    }
+
+    /// 反控：结构不成立时必须返回 `None`，不能凭猜测造一个路径出来
+    /// —— 否则会拿一个不存在的实例去 `CM_Locate_DevNodeW`，白跑还掩盖真因。
+    #[test]
+    fn hidapi_path_rejects_malformed_input() {
+        assert_eq!(devnode_from_hidapi_path(""), None);
+        assert_eq!(
+            devnode_from_hidapi_path(r"\\?\HID#VID_1532"),
+            None,
+            "段数不足"
+        );
+        assert_eq!(
+            devnode_from_hidapi_path(r"\\?\HID##8&b16f3a&0&0000"),
+            None,
+            "设备 ID 段为空"
+        );
+        // 无 `\\?\` 前缀也要能处理（hidapi 之外来源可能不带）
+        assert_eq!(
+            devnode_from_hidapi_path("HID#VID_046D&PID_C092#7&1a2b3c4d&0&0000").as_deref(),
+            Some(r"HID\VID_046D&PID_C092\7&1a2b3c4d&0&0000")
+        );
     }
 }
