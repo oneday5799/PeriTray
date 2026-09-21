@@ -195,7 +195,7 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
 /// devnode: HID\VID_1532&PID_0094&MI_01&COL07\8&b16f3a&0&0006
 /// ```
 ///
-/// 变换规则（实机 27/27 可映射、27/27 命中 `CM_Get_Device_ID_ListW("HID")` 在场清单）：
+/// 变换规则（实机验证见下）：
 ///   1. 剥掉开头的 `\\?\`（或 `\\.\`）；
 ///   2. **从最后一个 `#{` 处截断** —— 那是接口类 GUID 后缀。
 ///      ⚠️ **不能用第一个 `#{`**：蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头
@@ -208,6 +208,12 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
 /// **大小写不敏感** ⇒ 交给 `CM_Locate_DevNodeW` 匹配即可。
 /// 刻意不转大写是为了不破坏蓝牙 HID 设备 ID 段里 `{00001812-…}_Dev_VID&…_c6947e50a677`
 /// 那种「大小写混合且必须逐字匹配（对注册表而言）」的形态。
+///
+/// ⭐ **实机验证（2026-09-21，Razer Orochi V2 `1532:0094`）**：hidapi 枚举到的
+/// **12 个集合全部**解析出容器，且与设备自身容器
+/// `40e11c06-72bd-5b38-9bd2-0e15079b3b45` 一致（分域后仍是 12 个，一个不少）
+/// ⇒ 映射与容器解析在真机上 **12/12** 成立。
+/// （更早一次探针曾记录「27/27」，但该探针已删除、**未能复核**，故不引用。）
 ///
 /// ⚠️ **诚实边界**：`HID#{GUID}_Dev_…` 这一形态本机未接设备 ⇒ 其
 /// `CM_Locate_DevNodeW` 命中**未经实测**，属结构外推；已由单测钉住结构变换。
@@ -233,6 +239,19 @@ pub fn devnode_from_hidapi_path(path: &str) -> Option<String> {
 }
 
 /// 枚举指定枚举器下的**设备实例路径**（CFGMGR32 `CM_Get_Device_ID_ListW`）。
+///
+/// ⚠️ **本函数返回的列表包含「非在场（phantom）」设备** —— 只传了
+/// `CM_GETIDLIST_FILTER_ENUMERATOR`，**没有**叠加 `CM_GETIDLIST_FILTER_PRESENT`。
+/// 实测（2026-09-21）：HID `ENUMERATOR` = **87** 条，而 `ENUMERATOR|PRESENT` = **29** 条；
+/// 差集 58 条用 `CM_LOCATE_DEVNODE_NORMAL` **全部失败**、用 `..._PHANTOM` **全部成功**
+/// ⇒ 「非在场」这一解释成立（不是定位调用写错）。USB 51 vs 18、SWD 36 vs 30 同理。
+///
+/// ✅ **当前无影响**：唯一调用方 `bluetooth_container_map()` 只用 `BTHENUM` / `BTHLE`，
+/// 而这两个枚举器上两者结果**完全相同**（14 vs 14、3 vs 3，差集 0）。
+/// ⛔ **但这颗雷要记住**：若日后有人拿本函数去枚举 `HID` / `USB` / `SWD`，
+/// 会拿到**一批非在场设备**，且它们 `CM_Locate_DevNodeW(NORMAL)` 必然失败 ——
+/// 表现为「映射莫名缺失」，很难定位到根因。
+/// 是否加 `..._PRESENT` 属独立决策（加了会改变语义），本批**未动**。
 ///
 /// 失败一律返回空表 —— 调用方应把它当成「没有可用映射」，而不是错误。
 fn enumerator_instance_ids(enumerator: &str) -> Vec<String> {
@@ -595,9 +614,10 @@ mod tests {
     /// `device_key` 路径上的 `usable_container` 归一化）本用例即转红。
     ///
     /// ⚠️ **本用例证明不了什么**：它不证明 `CM_Get_DevNode_PropertyW` 真的返回这 16 字节
-    /// （那需要实机）。实机侧由只读探针覆盖：本机 `CM_Get_Device_ID_ListW("HID")` 在场
-    /// **245 条**，逐条 `CM_Locate_DevNodeW` + 读 `DEVPKEY_Device_ContainerId`
-    /// **49000/49000 次成功**（200 轮 × 245 条，100%）。
+    /// （那需要实机）。实机侧由只读探针覆盖：全部**在场**设备 245 条上 200 轮
+    /// = **49000/49000 次读到容器（100%）**；在**在场 HID** 29 条上 200 轮
+    /// = **5800/5800（100%）**。
+    /// （⚠️ 245 是「全部在场设备」，**不是** HID 数 —— HID 在场是 29。）
     #[test]
     fn both_container_producers_agree_byte_for_byte() {
         // 取本机真实容器 `0d85362f-9ba5-11f1-b7f2-105fadd8248b` 的**属性缓冲区字节**
@@ -1147,7 +1167,7 @@ mod tests {
     }
 
     /// `devnode_from_hidapi_path`：三条**实机实测**样本（均取自本机 hidapi 输出，
-    /// 且映射结果全部命中 `CM_Get_Device_ID_ListW("HID")` 的在场清单）。
+    /// 且映射结果都能在 `CM_Get_Device_ID_ListW` 的 HID 清单里找到）。
     ///
     /// 覆盖三个必须做对的点：`ColNN` 原样保留（不做大写）、
     /// 尾部 `\KBD` 后缀必须丢掉、`GVInput` 这类无 VID/PID 的设备 ID 段也要能过。
