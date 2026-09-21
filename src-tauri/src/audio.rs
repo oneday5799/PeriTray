@@ -26,6 +26,11 @@ pub struct AudioDevice {
     pub volume: f32,
     pub is_muted: bool,
     pub is_default: bool,
+    /// 该端点所属物理设备的容器 GUID（小写无花括号）。
+    /// 用于把「音量」与另一条采集路径上的「电量」关联到同一台设备；
+    /// 虚拟音频设备落在占位容器上 ⇒ 此处为 `None`（调用方须降级）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,6 +167,11 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
                             volume,
                             is_muted,
                             is_default: id_str == default_id,
+                            // 端点 devnode 实例名就是 `SWD\MMDEVAPI\{id}`，容器直接可读；
+                            // 解析失败/占位容器返回 None，不影响端点本身的枚举。
+                            container_id: crate::device_identity::container_of_audio_endpoint(
+                                &id_str,
+                            ),
                         });
                     }
                 }

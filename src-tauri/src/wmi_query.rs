@@ -12,6 +12,7 @@ use crate::config;
 use crate::dedup::{core_name, try_insert};
 use crate::device::{DevType, Device};
 use crate::device_data;
+use crate::device_identity;
 use crate::{standard_log, verbose_log};
 
 /// 蓝牙设备状态字符串：WMI 查询构造与托盘图标判断共用，避免字面量散落
@@ -247,6 +248,15 @@ fn query_pnp_devices(
         if wireless_only && !is_24g {
             continue;
         }
+        // 物理设备身份键：容器优先，失败降级到实例路径 / 名称。
+        // 容器解析是 2 次 cfgmgr32 调用（进程内、无 IPC），失败一律返回 None ⇒ 不阻断枚举。
+        let container = device_identity::container_of_instance(&devid);
+        let identity = device_identity::device_key(
+            container.as_deref(),
+            Some(devid.as_str()),
+            Some(n.as_str()),
+        )
+        .map(|k| k.encode());
         try_insert(
             &n,
             display_name.as_deref(),
@@ -254,6 +264,7 @@ fn query_pnp_devices(
             s,
             None,
             None,
+            identity,
             false,
             is_24g,
             false,
@@ -322,6 +333,9 @@ fn query_bt_devices(
                 s,
                 battery.map(|b| b as i32),
                 Some(device_id),
+                // 蓝牙设备来自 WinRT，此处拿不到 PnP 实例路径 ⇒ 暂无容器键。
+                // 待「BTHENUM 实例 → 容器」映射落地后在此补齐（届时可与音频端点同容器）。
+                None,
                 true,
                 false,
                 is_ble,
@@ -367,6 +381,8 @@ fn query_battery_devices(
                 status: s,
                 battery: d.estimated_charge_remaining,
                 device_id: None,
+                // 电池类设备来自 Win32_Battery，无 PnP 实例路径 ⇒ 无身份键
+                device_key: None,
                 is_bluetooth: false,
                 is_wireless_24g: false,
                 is_ble: false,

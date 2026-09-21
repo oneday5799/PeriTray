@@ -15,6 +15,7 @@ mod config;
 mod dedup;
 mod device;
 mod device_data;
+mod device_identity;
 mod popup;
 mod process;
 mod shortcut;

@@ -351,6 +351,7 @@ mod tests {
             status: "OK".to_string(),
             battery,
             device_id: None,
+            device_key: None,
             is_bluetooth: false,
             is_wireless_24g: false,
             is_ble: false,

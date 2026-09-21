@@ -57,6 +57,7 @@ pub fn try_insert(
     status: &str,
     battery: Option<i32>,
     device_id: Option<String>,
+    device_key: Option<String>,
     is_bluetooth: bool,
     is_wireless_24g: bool,
     is_ble: bool,
@@ -133,6 +134,11 @@ pub fn try_insert(
                 if existing.device_id.is_none() {
                     existing.device_id = device_id;
                 }
+                // 身份键按「先到先得」补齐：容器键比实例/名称键更可信，
+                // 但重算需要 PnP 实例路径，而合并路径未必持有 ⇒ 只补空缺。
+                if existing.device_key.is_none() {
+                    existing.device_key = device_key;
+                }
                 if battery.is_some() {
                     existing.battery = battery;
                 }
@@ -151,6 +157,7 @@ pub fn try_insert(
         status: status.to_string(),
         battery,
         device_id,
+        device_key,
         is_bluetooth,
         is_wireless_24g,
         is_ble,
