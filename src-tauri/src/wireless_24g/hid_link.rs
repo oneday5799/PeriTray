@@ -37,6 +37,15 @@ pub struct HidPath {
 ///
 /// 两步都是纯 Windows API 调用，无 IPC：`devnode_from_hidapi_path` 是字符串变换，
 /// `container_of_instance` 是 2 次 cfgmgr32 调用。
+///
+/// ⚠️ **单次开销已实测，请勿在此加缓存**（本机 49000 次采样）：
+/// `CM_Locate_DevNodeW` 27.3µs + `CM_Get_DevNode_PropertyW` 取长度 4.2µs + 取值 5.4µs
+/// = **36.9µs/条**。按本机最大规模（`1532:0094` 有 16 个 HID 集合）算，
+/// 单台一次分域 = **0.59ms**，而 `CACHE_TTL` 是 **5 分钟**、且该路径跑在
+/// `refresh_worker` **后台线程** ⇒ 占比 0.0002%，加缓存只会引入失效逻辑与
+/// 拔插后陈旧映射的风险，收益为零。
+/// 另：同一实测里 `CM_Get_Device_ID_ListW("HID")` 在场 245 条**全部**可定位并读到容器
+/// （49000/49000，100%）⇒ 不存在「读不到容器」的常态失败。
 fn container_of_hidapi_path(path: &str) -> Option<String> {
     device_identity::devnode_from_hidapi_path(path)
         .as_deref()

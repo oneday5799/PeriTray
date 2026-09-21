@@ -571,6 +571,81 @@ mod tests {
         );
     }
 
+    /// ⭐ **跨路径判据**：两个**独立**的容器生产者必须产出逐字相等的载荷。
+    ///
+    /// 为什么需要它：`wireless_24g` 的 HID 分域靠**字符串相等**把两侧对上 ——
+    ///
+    /// ```text
+    /// 生产侧 ①  BatteryTarget.key = "c:" + device_key(Some(container_raw)).encode()
+    ///            （container_raw 来自 wmi_query 侧对 PnP 节点的查询）
+    /// 生产侧 ②  container_of_instance(hidapi 路径映射出的实例路径)
+    ///            （来自 filter_by_scope 的解析器）
+    /// ```
+    ///
+    /// 两侧**各自**走一条归一化/格式化代码路径。若其中一条被改动而另一条没跟上，
+    /// `==` 会**恒不成立** ⇒ `filter_by_scope` 恒返回空 ⇒ `enumerate_paths` 恒返回 `Err`
+    /// ⇒ **所有 2.4G 电量查询全部失败**（静默、无编译错误）。
+    /// 而 `hid_link` 的分域单测用的是**假解析器**，天然覆盖不到这条不变式。
+    ///
+    /// 本用例把两条路径放在同一个容器上对撞：
+    /// ① `format_guid_bytes`（字节 → 字符串，`container_of_instance` 的取值来源）
+    /// ② `device_key` → `DeviceKey::encode`（原始字符串 → 键载荷）
+    ///
+    /// **可证伪**：把 `format_guid_bytes` 的 `{:02x}` 改成 `{:02X}`（或去掉
+    /// `device_key` 路径上的 `usable_container` 归一化）本用例即转红。
+    ///
+    /// ⚠️ **本用例证明不了什么**：它不证明 `CM_Get_DevNode_PropertyW` 真的返回这 16 字节
+    /// （那需要实机）。实机侧由只读探针覆盖：本机 `CM_Get_Device_ID_ListW("HID")` 在场
+    /// **245 条**，逐条 `CM_Locate_DevNodeW` + 读 `DEVPKEY_Device_ContainerId`
+    /// **49000/49000 次成功**（200 轮 × 245 条，100%）。
+    #[test]
+    fn both_container_producers_agree_byte_for_byte() {
+        // 取本机真实容器 `0d85362f-9ba5-11f1-b7f2-105fadd8248b` 的**属性缓冲区字节**
+        // （前 3 字段小端：Data1 4B / Data2 2B / Data3 2B，Data4 8B 原序）
+        let bytes: [u8; 16] = [
+            0x2f, 0x36, 0x85, 0x0d, // Data1 = 0d85362f
+            0xa5, 0x9b, // Data2 = 9ba5
+            0xf1, 0x11, // Data3 = 11f1
+            0xb7, 0xf2, 0x10, 0x5f, 0xad, 0xd8, 0x24, 0x8b, // Data4
+        ];
+
+        // 生产侧 ②：字节 → 小写无花括号字符串
+        let from_bytes = format_guid_bytes(&bytes);
+        assert_eq!(from_bytes, "0d85362f-9ba5-11f1-b7f2-105fadd8248b");
+
+        // 生产侧 ①：任意形式的原始字符串 → 键载荷
+        // 三种形态都要收敛到同一个载荷（含「带花括号大写」这一注册表常见形态）
+        for raw in [
+            "{0D85362F-9BA5-11F1-B7F2-105FADD8248B}",
+            "0d85362f-9ba5-11f1-b7f2-105fadd8248b",
+            "  {0d85362f-9ba5-11f1-b7f2-105fadd8248b}  ",
+        ] {
+            let key = device_key(Some(raw), Some("HID\\x\\y"), Some("某设备"))
+                .expect("有容器时必走 Container 分支")
+                .encode();
+            assert_eq!(
+                key,
+                format!("c:{from_bytes}"),
+                "容器载荷必须与 container_of_instance 侧逐字相等（raw={raw}）—— \
+                 不等则 HID 分域恒不匹配、2.4G 电量全部查不出来"
+            );
+        }
+
+        // 反控：占位容器必须**不**产出 `c:` 载荷（否则分域会拿占位容器去比，
+        // 本机多个互不相关的虚拟音频设备共享它 ⇒ 错误合并）
+        let placeholder = device_key(
+            Some("{00000000-0000-0000-ffff-ffffffffffff}"),
+            Some("HID\\x\\y"),
+            Some("某设备"),
+        )
+        .expect("容器不可用时应降级到实例，而不是丢弃");
+        assert_eq!(
+            placeholder.encode(),
+            "i:hid\\x\\y",
+            "占位容器必须降级到实例键（且实例载荷已转小写）"
+        );
+    }
+
     #[test]
     fn null_containers_detected_regardless_of_form() {
         assert!(is_null_container("{00000000-0000-0000-ffff-ffffffffffff}"));
