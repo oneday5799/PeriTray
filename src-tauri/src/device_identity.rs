@@ -582,6 +582,70 @@ mod tests {
         assert_eq!(device_key(Some(""), Some("  "), Some("")), None);
     }
 
+    /// 同一台物理设备的**多个 HID 集合**必须归为**同一个**身份键。
+    ///
+    /// 2.4G 接收器普遍是复合设备：一台设备暴露 N 个 HID 集合
+    /// （`…&MI_01&Col01` / `&Col02` …，实例段也各不相同），
+    /// 而 `device_data::is_wireless_24g` 只看 (VID, PID) ⇒ **每个集合**都会被判为
+    /// 2.4G、各推一个电量查询目标。若这些目标拿到不同身份键，
+    /// 「一台设备」就会被当成「多台设备」，各自查询、各占一条缓存。
+    ///
+    /// 实机依据（只读探针，本机 13 个多集合容器）：同一容器的 HID 集合数
+    /// 为 2~16 不等，其中 `25A7:FA70` 两台各 **9 个集合**、`1532:0094` 一台 **16 个**，
+    /// 且**无任何一个容器跨容器**（0 反例）⇒ 容器优先路径下键必然相同。
+    ///
+    /// 可证伪：把 `device_key` 改成容器不参与（只按实例路径）即转红。
+    #[test]
+    fn same_container_hid_collections_share_one_identity_key() {
+        const C: &str = "{40e11c06-72bd-5b38-9bd2-0e15079b3b45}";
+        let a = device_key(
+            Some(C),
+            Some("HID\\VID_1532&PID_0094&MI_01&COL01\\8&b16f3a&0&0000"),
+            None,
+        )
+        .unwrap()
+        .encode();
+        let b = device_key(
+            Some(C),
+            Some("HID\\VID_1532&PID_0094&MI_01&COL02\\8&b16f3a&0&0001"),
+            None,
+        )
+        .unwrap()
+        .encode();
+        assert_eq!(a, b, "同一容器的不同 HID 集合必须归为同一台设备");
+        assert_eq!(a, "c:40e11c06-72bd-5b38-9bd2-0e15079b3b45");
+
+        // 反控 1：容器缺失时降级到实例路径 ⇒ 必然逐集合拆开。
+        // 这是降级路径的**已知代价**（方向是「拆细」而非「串号」）：
+        // 不同物理设备的实例路径必然不同，故降级不会把两台设备混为一谈。
+        let ia = device_key(
+            None,
+            Some("HID\\VID_1532&PID_0094&MI_01&COL01\\8&b16f3a&0&0000"),
+            None,
+        )
+        .unwrap()
+        .encode();
+        let ib = device_key(
+            None,
+            Some("HID\\VID_1532&PID_0094&MI_01&COL02\\8&b16f3a&0&0001"),
+            None,
+        )
+        .unwrap()
+        .encode();
+        assert_ne!(ia, ib, "无容器时逐集合拆分 —— 降级路径的固有代价");
+        assert!(ia.starts_with("i:") && ib.starts_with("i:"));
+
+        // 反控 2：不同容器（= 不同物理设备）绝不可合并 —— 这正是要修掉的串号缺陷
+        let other = device_key(
+            Some("{929f52bc-3b4e-11f1-b794-105fadd8248e}"),
+            Some("HID\\VID_25A7&PID_FA70&MI_01&COL01\\9&f0862ec&0&0000"),
+            None,
+        )
+        .unwrap()
+        .encode();
+        assert_ne!(a, other, "不同容器的设备必须分开");
+    }
+
     #[test]
     fn encoded_key_prefixes_are_distinct() {
         let c = DeviceKey::Container("abc".to_string()).encode();

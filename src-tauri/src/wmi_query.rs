@@ -13,6 +13,7 @@ use crate::dedup::{core_name, try_insert};
 use crate::device::{DevType, Device};
 use crate::device_data;
 use crate::device_identity;
+use crate::wireless_24g;
 use crate::{standard_log, verbose_log};
 
 /// 蓝牙设备状态字符串：WMI 查询构造与托盘图标判断共用，避免字面量散落
@@ -97,7 +98,7 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
     let re_ref = re.as_deref();
 
     let mut bt_names = HashSet::new();
-    let mut pnp_24g_pairs = vec![];
+    let mut pnp_24g_targets: Vec<wireless_24g::BatteryTarget> = vec![];
 
     if let Err(e) = query_pnp_devices(
         con,
@@ -107,7 +108,7 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
         &mut seen,
         &mut all,
         &mut cn_index,
-        &mut pnp_24g_pairs,
+        &mut pnp_24g_targets,
     ) {
         standard_log!("[wmi] {}", e);
         return Err(e);
@@ -141,7 +142,7 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
     }
 
     // 2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
-    fill_24g_battery(&mut all, pnp_24g_pairs, fresh);
+    fill_24g_battery(&mut all, pnp_24g_targets, fresh);
 
     verbose_log!(
         "[wmi:dbg] query_devices: fresh={}, wireless_only={}",
@@ -160,7 +161,7 @@ fn query_pnp_devices(
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
-    p24g_pairs: &mut Vec<(String, String)>,
+    p24g_targets: &mut Vec<wireless_24g::BatteryTarget>,
 ) -> Result<(), String> {
     const PNPCLASS_WHITELIST: &[&str] = &[
         "AudioEndpoint",
@@ -235,19 +236,6 @@ fn query_pnp_devices(
         }
 
         let dt = classify_device(&n, &pnp, &u, &cap);
-        // #21 统一 VID/PID 查询：一次提取 + 一次 Hash 查表，替代原有的 3~4 次重复解析
-        let (is_24g, display_name, _device_type) =
-            device_data::lookup(&u).unwrap_or((false, None, "other".to_string()));
-        // 收集 2.4G 设备的 VID/PID，供电量缓存模块使用
-        if is_24g {
-            if let Some(pair) = device_data::extract_vid_pid(&u) {
-                p24g_pairs.push(pair);
-            }
-        }
-        // wireless_only 时只保留 2.4G 设备，跳过有线设备
-        if wireless_only && !is_24g {
-            continue;
-        }
         // 物理设备身份键：容器优先，失败降级到实例路径 / 名称。
         // 容器解析是 2 次 cfgmgr32 调用（进程内、无 IPC），失败一律返回 None ⇒ 不阻断枚举。
         let container = device_identity::container_of_instance(&devid);
@@ -257,6 +245,28 @@ fn query_pnp_devices(
             Some(n.as_str()),
         )
         .map(|k| k.encode());
+        // #21 统一 VID/PID 查询：一次提取 + 一次 Hash 查表，替代原有的 3~4 次重复解析
+        let (is_24g, display_name, _device_type) =
+            device_data::lookup(&u).unwrap_or((false, None, "other".to_string()));
+        // 收集 2.4G 设备的电量查询目标（身份键 + 驱动分派用的 VID/PID）。
+        // ⚠️ 键必须是**设备身份**，不是型号：同款两台接收器共用型号键会导致
+        // 只有一台显示得出电量、且显示的值可能来自另一台。
+        // 极少数情况下拿不到身份键（名称与实例路径都为空）时退回型号键 `m:`，
+        // 语义等同历史行为 —— 宁可退化为旧行为，也不要凭空丢掉电量。
+        if is_24g {
+            if let Some((v, p)) = device_data::extract_vid_pid(&u) {
+                let key = identity.clone().unwrap_or_else(|| format!("m:{}:{}", v, p));
+                p24g_targets.push(wireless_24g::BatteryTarget {
+                    key,
+                    vid: v,
+                    pid: p,
+                });
+            }
+        }
+        // wireless_only 时只保留 2.4G 设备，跳过有线设备
+        if wireless_only && !is_24g {
+            continue;
+        }
         try_insert(
             &n,
             display_name.as_deref(),
@@ -407,25 +417,39 @@ fn query_battery_devices(
 /// 将 2.4G 接收器缓存电量填入设备列表。
 /// 默认只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成；
 /// fresh=true 时同步现查（手动刷新按钮，耗时约 0.5~2 秒）。
-fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: bool) {
+///
+/// ⚠️ 电量按**设备身份键**对回条目，不按型号名 —— 同型号两台接收器
+/// 共用型号键时，会出现「只有一台显示电量、且值可能来自另一台」。
+fn fill_24g_battery(all: &mut [Device], targets: Vec<wireless_24g::BatteryTarget>, fresh: bool) {
     // 入口可见性：列出本次发现的全部 2.4G 实体与驱动支持判定——
     // 「设备为什么没电量」的第一层证据；
-    // 内容变化时才输出，避免托盘轮询反复刷屏
-    if !pairs.is_empty() {
-        let mut uniq = pairs.clone();
-        uniq.sort();
-        uniq.dedup();
-        let summary = uniq
+    // 内容变化时才输出，避免托盘轮询反复刷屏。
+    // `×N` 是该型号下**不同身份键**的个数（N>1 即同型号多台）：
+    // 旧实现在这里看不出「两台同款」，正是串号缺陷长期不可见的原因之一。
+    if !targets.is_empty() {
+        let mut models: Vec<(&str, &str)> = targets
+            .iter()
+            .map(|t| (t.vid.as_str(), t.pid.as_str()))
+            .collect();
+        models.sort_unstable();
+        models.dedup();
+        let summary = models
             .iter()
             .map(|(v, p)| {
-                format!(
-                    "{v}:{p}{}",
-                    if crate::wireless_24g::supported(v, p) {
-                        "✓"
-                    } else {
-                        "✗未收录"
-                    }
-                )
+                let keys: HashSet<&str> = targets
+                    .iter()
+                    .filter(|t| t.vid == *v && t.pid == *p)
+                    .map(|t| t.key())
+                    .collect();
+                let mark = if crate::wireless_24g::supported(v, p) {
+                    "✓"
+                } else {
+                    "✗未收录"
+                };
+                match keys.len() {
+                    0 | 1 => format!("{v}:{p}{mark}"),
+                    n => format!("{v}:{p}{mark}×{n}"),
+                }
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -439,31 +463,54 @@ fn fill_24g_battery(all: &mut [Device], pairs: Vec<(String, String)>, fresh: boo
         }
     }
 
-    let supported: Vec<_> = pairs
+    let supported: Vec<_> = targets
         .into_iter()
-        .filter(|(v, p)| crate::wireless_24g::supported(v, p))
+        .filter(|t| crate::wireless_24g::supported(&t.vid, &t.pid))
         .collect();
     if supported.is_empty() {
         return;
     }
 
-    let snap = crate::wireless_24g::snapshot(supported, fresh);
+    // 保留一份用于对回：snapshot 按值收走 targets，但它只返回键→电量，
+    // 对回时还需要 vid/pid（显示名覆盖、型号兜底）
+    let snap = crate::wireless_24g::snapshot(supported.clone(), fresh);
 
-    // 缓存键 → 数据库显示名，用于把电量对回列表条目（同名设备共享同一接收器型号）
-    for (v, p) in snap.keys() {
-        let Some(base_name) = device_data::get_device_name(v, p) else {
+    // ① 身份键精确对回（靶心）：键相同的条目必属同一台物理设备，
+    //    同型号两台各自认领各自的值，互不覆盖、互不抢位。
+    for t in &supported {
+        let Some(Some(lvl)) = snap.get(t.key()).copied() else {
             continue;
         };
-        let Some(lvl) = snap.get(&(v.clone(), p.clone())).cloned().flatten() else {
-            continue;
-        };
-        if let Some(d) = all
-            .iter_mut()
-            .find(|d| d.is_wireless_24g && d.name == base_name && d.battery.is_none())
-        {
+        if let Some(d) = all.iter_mut().find(|d| {
+            d.is_wireless_24g && d.battery.is_none() && d.device_key.as_deref() == Some(t.key())
+        }) {
             d.battery = Some(lvl);
             // 罗技单下游：卡片名替换为下游设备名（如 "MX Master 3S"）
-            if let Some(oname) = crate::wireless_24g::display_override_name(v, p) {
+            if let Some(oname) = crate::wireless_24g::display_override_name(&t.vid, &t.pid) {
+                d.name = oname;
+            }
+        }
+    }
+
+    // ② 型号兜底：极少数拿不到身份键的条目（键形如 `m:VID:PID`，
+    //    与 query_pnp_devices 构造目标时的兜底规则一致）只能按型号名对回。
+    //    这正是旧实现的全部逻辑 —— 保留它只为「不凭空丢电量」，
+    //    覆盖范围严格限于 device_key 为空的条目，不会与 ① 争抢。
+    for t in supported.iter().filter(|t| t.key().starts_with("m:")) {
+        let Some(Some(lvl)) = snap.get(t.key()).copied() else {
+            continue;
+        };
+        let Some(base_name) = device_data::get_device_name(&t.vid, &t.pid) else {
+            continue;
+        };
+        if let Some(d) = all.iter_mut().find(|d| {
+            d.is_wireless_24g
+                && d.device_key.is_none()
+                && d.name == base_name
+                && d.battery.is_none()
+        }) {
+            d.battery = Some(lvl);
+            if let Some(oname) = crate::wireless_24g::display_override_name(&t.vid, &t.pid) {
                 d.name = oname;
             }
         }

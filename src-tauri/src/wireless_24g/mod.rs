@@ -9,6 +9,11 @@
 // - 查询失败不抹除既有成功值，仅推进重试时钟；从未成功过的失败走负缓存。
 // - 成功值经 persist 落盘（data/24g_battery_cache.json），进程重启后以
 //   「已过期」种子载入——SWR 延伸至跨重启，首启即显上次电量。
+//
+// ⚠️ 缓存键是**设备身份键**（`device_key`），**不是 `VID:PID`**。
+// 历史版本按 `VID:PID`（型号级）缓存 ⇒ 两个同款 2.4G 接收器共用一条、
+// 只有一台能显示电量且值可能来自另一台。详见 `persist` 模块头与
+// `wmi_query::fill_24g_battery`。
 
 mod drivers;
 mod hid_link;
@@ -35,11 +40,32 @@ const NEG_TTL: Duration = Duration::from_secs(60);
 /// Microsoft VID：Xbox 360 / Xbox One 手柄（XInput 模式）
 const MS_VID: u16 = 0x045E;
 
-static CACHE: OnceLock<Mutex<HashMap<(String, String), CacheEntry>>> = OnceLock::new();
+static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
 /// 后台刷新线程单飞标记（防止多轮列表刷新并发查询）
 static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// 事件推送句柄（main setup 注入）
 static EVENT_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// 一次电量查询的目标：**设备身份键** + 驱动分派所需的 VID/PID。
+///
+/// `key` 同时用作缓存键与结果归属键 —— 同型号两台设备的 `key` 不同，
+/// 因而各自独立缓存、独立查询、独立回填。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatteryTarget {
+    /// 设备身份键（`device_identity::DeviceKey::encode()` 的产物）
+    pub key: String,
+    /// 4 位十六进制大写 VID
+    pub vid: String,
+    /// 4 位十六进制大写 PID
+    pub pid: String,
+}
+
+impl BatteryTarget {
+    /// 缓存/结果归属用的键。
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
 
 struct CacheEntry {
     /// Some=最后已知电量百分比；None=从未成功过（负缓存）
@@ -52,7 +78,7 @@ struct CacheEntry {
 
 // ── 对外入口 ────────────────────────────────────────────
 
-fn cache() -> &'static Mutex<HashMap<(String, String), CacheEntry>> {
+fn cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
     CACHE.get_or_init(|| {
         // 磁盘种子：成功值跨重启常驻，种子条目置为已过期——首次列表查询
         // 即返回旧值并自动排入后台现查。checked_sub 防开机不足 TTL 时
@@ -114,18 +140,15 @@ fn notify_battery_changed() {
     }
 }
 
-/// 设备列表入口：返回各 (vid,pid) 的缓存电量；过期/缺失项触发后台刷新。
+/// 设备列表入口：返回各**设备身份键**的缓存电量；过期/缺失项触发后台刷新。
 /// stale-while-revalidate：过期成功条目仍返回旧值（UI 常驻），新值经事件推送。
 /// force=true 时同步逐台现查（设备列表手动刷新按钮入口，绕过 TTL）。
-pub fn snapshot(
-    mut pairs: Vec<(String, String)>,
-    force: bool,
-) -> HashMap<(String, String), Option<i32>> {
-    pairs.sort();
-    pairs.dedup();
+pub fn snapshot(mut targets: Vec<BatteryTarget>, force: bool) -> HashMap<String, Option<i32>> {
+    targets.sort_by(|a, b| a.key.cmp(&b.key));
+    targets.dedup_by(|a, b| a.key == b.key);
 
     if force {
-        return snapshot_fresh(pairs);
+        return snapshot_fresh(targets);
     }
 
     let now = Instant::now();
@@ -134,32 +157,31 @@ pub fn snapshot(
 
     {
         let guard = crate::state::lock_unpoisoned(cache());
-        for key in &pairs {
-            let k = format!("{}:{}", key.0, key.1);
-            match guard.get(key) {
+        for target in &targets {
+            match guard.get(target.key()) {
                 Some(e) => {
                     let fresh = now.duration_since(e.at) < ttl_of(e);
                     // 过期（成功或失败）都排入后台刷新队列
-                    if !fresh && !stale.contains(key) {
-                        stale.push(key.clone());
+                    if !fresh && !stale.contains(target) {
+                        stale.push(target.clone());
                     }
                     // 成功过的条目常驻旧值；纯失败态仅在负缓存窗口内返回 None
                     if fresh || e.level.is_some() {
                         if !fresh {
-                            verbose_log!("[24g:dbg] {} 过期，SWR 服务旧值并排入刷新", k);
+                            verbose_log!("[24g:dbg] {} 过期，SWR 服务旧值并排入刷新", target.key());
                         }
-                        result.insert(key.clone(), e.level);
+                        result.insert(target.key().to_string(), e.level);
                     } else {
-                        verbose_log!("[24g:dbg] {} 负缓存窗口内，返回无数据", k);
-                        result.insert(key.clone(), None);
+                        verbose_log!("[24g:dbg] {} 负缓存窗口内，返回无数据", target.key());
+                        result.insert(target.key().to_string(), None);
                     }
                 }
                 None => {
-                    verbose_log!("[24g:dbg] {} 无缓存条目（冷启动），排入刷新", k);
-                    if !stale.contains(key) {
-                        stale.push(key.clone());
+                    verbose_log!("[24g:dbg] {} 无缓存条目（冷启动），排入刷新", target.key());
+                    if !stale.contains(target) {
+                        stale.push(target.clone());
                     }
-                    result.insert(key.clone(), None);
+                    result.insert(target.key().to_string(), None);
                 }
             }
         }
@@ -233,17 +255,24 @@ struct QueryOutcome {
 }
 
 /// 查询单台设备并写回缓存
-fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutcome {
+fn query_and_cache(link: Option<&HidLink>, target: &BatteryTarget) -> QueryOutcome {
     let invalid = QueryOutcome {
         level: None,
         changed: false,
         queried_ok: false,
     };
-    let Some((v, p)) = parse_hex(&key.0).zip(parse_hex(&key.1)) else {
+    let Some((v, p)) = parse_hex(&target.vid).zip(parse_hex(&target.pid)) else {
         return invalid;
     };
 
     // XInput 设备走独立路径（XInputDriver 的 read_battery 是空桩）
+    //
+    // ⚠️ **已知局限**：经典 XInput API 只按槽位（0..3）寻址，
+    // **不暴露设备路径或任何稳定身份** ⇒ 无法把某个槽位的电量归属到具体某个 PnP 设备。
+    // 故本分支按「型号」取电量（`scan_battery` 返回首个应答槽位），
+    // 接了两个 `045E:*` 手柄时它们会显示同一个值。
+    // 这不是可以靠传参解决的疏漏，而是 API 的能力边界；改用 Windows.Gaming.Input
+    // （`RawGameController` 才有 `NonRoamableId`）是另一条路，不在本次范围。
     if v == MS_VID {
         let result = match crate::xinput::scan_battery() {
             Some(pct) => Ok(pct),
@@ -254,13 +283,13 @@ fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutco
             Err(e) => verbose_log!("[24g:dbg] XInput {:04X}:{:04X} 查询失败: {}", v, p, e),
         }
         let mut guard = crate::state::lock_unpoisoned(cache());
-        let (entry, changed) = apply_result(guard.get(key), &result);
+        let (entry, changed) = apply_result(guard.get(target.key()), &result);
         let outcome = QueryOutcome {
             level: entry.level,
             changed,
             queried_ok: result.is_ok(),
         };
-        guard.insert(key.clone(), entry);
+        guard.insert(target.key().to_string(), entry);
         return outcome;
     }
 
@@ -279,13 +308,13 @@ fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutco
             Err(e) => standard_log!("[24g] {} 查询失败: {}", label, e),
         }
         let mut guard = crate::state::lock_unpoisoned(cache());
-        let (entry, changed) = apply_result(guard.get(key), &result);
+        let (entry, changed) = apply_result(guard.get(target.key()), &result);
         let outcome = QueryOutcome {
             level: entry.level,
             changed,
             queried_ok: result.is_ok(),
         };
-        guard.insert(key.clone(), entry);
+        guard.insert(target.key().to_string(), entry);
         return outcome;
     }
 
@@ -294,37 +323,37 @@ fn query_and_cache(link: Option<&HidLink>, key: &(String, String)) -> QueryOutco
 
 /// 强制刷新路径（手动刷新按钮）：在调用方阻塞线程中同步逐台现查并返回最新值。
 /// 后台刷新线程恰好在跑时退化为读缓存，避免并发访问同一 HID 设备。
-fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Option<i32>> {
+fn snapshot_fresh(targets: Vec<BatteryTarget>) -> HashMap<String, Option<i32>> {
     // 此处 `_guard` 是**正确写法**：本函数同步跑完工作才返回，不存在 move 闭包，
     // 守卫绑定至函数结束即承担 Drop 职责。请勿按 AGENTS.md 的「外层守卫不带下划线」
     // 规则改写它——那条规则只针对需要被闭包捕获的绑定。
     let Some(_guard) = SingleFlightGuard::new(&REFRESHING) else {
         let guard = crate::state::lock_unpoisoned(cache());
-        return pairs
+        return targets
             .into_iter()
-            .map(|k| {
-                let lvl = guard.get(&k).and_then(|e| e.level);
-                (k, lvl)
+            .map(|t| {
+                let lvl = guard.get(t.key()).and_then(|e| e.level);
+                (t.key, lvl)
             })
             .collect();
     };
 
-    standard_log!("[24g] 强制刷新开始: {} 台", pairs.len());
+    standard_log!("[24g] 强制刷新开始: {} 台", targets.len());
     let started = std::time::Instant::now();
     let link = HidLink::new().ok();
     let mut result = HashMap::new();
     let (mut ok, mut fail) = (0, 0);
     let mut any_changed = false;
     let mut any_queried_ok = false;
-    for key in &pairs {
-        let o = query_and_cache(link.as_ref(), key);
+    for target in &targets {
+        let o = query_and_cache(link.as_ref(), target);
         match o.level {
             Some(_) => ok += 1,
             None => fail += 1,
         }
         any_changed |= o.changed;
         any_queried_ok |= o.queried_ok;
-        result.insert(key.clone(), o.level);
+        result.insert(target.key().to_string(), o.level);
     }
     if any_changed {
         notify_battery_changed();
@@ -344,13 +373,13 @@ fn snapshot_fresh(pairs: Vec<(String, String)>) -> HashMap<(String, String), Opt
 
 /// 后台线程体：逐台查询并写回缓存（成功与失败均记录，便于诊断休眠/离线）；
 /// 本轮存在实质变化时推送前端，查到过成功值时收尾落盘一次
-fn refresh_worker(pairs: Vec<(String, String)>) {
+fn refresh_worker(targets: Vec<BatteryTarget>) {
     let link = HidLink::new().ok();
     let (mut ok, mut fail) = (0, 0);
     let mut any_changed = false;
     let mut any_queried_ok = false;
-    for key in &pairs {
-        let o = query_and_cache(link.as_ref(), key);
+    for target in &targets {
+        let o = query_and_cache(link.as_ref(), target);
         match o.level {
             Some(_) => ok += 1,
             None => fail += 1,
@@ -378,6 +407,24 @@ mod tests {
             at: Instant::now(),
             seen: persist::now_unix(),
         }
+    }
+
+    /// 造一个目标。**VID/PID 固定为同一型号** —— 本组用例全部围绕
+    /// 「同型号两台设备必须互不干扰」展开，故型号刻意保持不变。
+    fn target(key: &str) -> BatteryTarget {
+        BatteryTarget {
+            key: key.to_string(),
+            vid: "046D".to_string(),
+            pid: "C52B".to_string(),
+        }
+    }
+
+    /// 直接往缓存里放一条**新鲜**成功值。
+    /// 新鲜很重要：`snapshot` 只对过期/缺失项排后台刷新，
+    /// 新鲜条目不会派生线程 ⇒ 用例无副作用、不触真实 HID 设备。
+    fn seed(key: &str, level: i32) {
+        let mut g = crate::state::lock_unpoisoned(cache());
+        g.insert(key.to_string(), entry(Some(level)));
     }
 
     #[test]
@@ -416,5 +463,48 @@ mod tests {
         let old = entry(Some(9));
         let (e, _) = apply_result(Some(&old), &Err("离线".into()));
         assert_eq!(e.seen, old.seen, "失败查询不应刷新 last_seen");
+    }
+
+    /// 核心判据：**同型号两台设备必须各留各的电量**。
+    ///
+    /// 这是本次修复的靶心 —— 历史实现按 `VID:PID`（型号）缓存，
+    /// 两台同款接收器只可能有一条值，其中一台永远显示不出电量。
+    /// 可证伪：把缓存键改回型号（如 `format!("m:{}:{}", vid, pid)`）即转红。
+    ///
+    /// ⚠️ 键必须**每个用例各不相同**：`seed` 写的是进程级全局 `CACHE`，
+    /// 用例并行执行，共用键会互相覆盖（首版就因此转红）。
+    #[test]
+    fn same_model_devices_keep_independent_battery_values() {
+        seed("c:samemodel_first", 110);
+        seed("c:samemodel_second", 20);
+        let snap = snapshot(
+            vec![target("c:samemodel_first"), target("c:samemodel_second")],
+            false,
+        );
+        assert_eq!(snap.len(), 2, "同型号两台的键不同，必须各占一条：{snap:?}");
+        assert_eq!(snap["c:samemodel_first"], Some(110));
+        assert_eq!(
+            snap["c:samemodel_second"],
+            Some(20),
+            "第二台不得被第一台的值覆盖"
+        );
+    }
+
+    /// 去重按**身份键**而非型号：同型号两台都要保留，同一台的重复目标才合并。
+    #[test]
+    fn targets_dedupe_by_identity_key_not_by_model() {
+        seed("c:dedupe_first", 50);
+        seed("c:dedupe_second", 60);
+        let two = snapshot(
+            vec![target("c:dedupe_first"), target("c:dedupe_second")],
+            false,
+        );
+        assert_eq!(two.len(), 2, "同型号不同设备不得被型号去重合并：{two:?}");
+
+        let one = snapshot(
+            vec![target("c:dedupe_first"), target("c:dedupe_first")],
+            false,
+        );
+        assert_eq!(one.len(), 1, "同一设备的重复目标应合并");
     }
 }
