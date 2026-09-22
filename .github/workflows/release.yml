@@ -186,6 +186,11 @@ jobs:
             echo "未找到 $candidate，回退到自动生成的变更列表"
           fi
 
+      # ⚠️ Release 页**只挂 NSIS 安装包**，不带 MSIX。
+      # MSIX 是给 Microsoft Store / Partner Center 用的包，仍需照常构建并作为
+      # **workflow artifact** 留存（见上面的 `Upload MSIX artifact`，名字 `msix-*`），
+      # 供维护者手动上传 Partner Center；但**不挂到 Release**，避免用户从发布页
+      # 直接安装而绕过商店的分发与更新链路。
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
@@ -194,5 +199,4 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           files: |
             artifacts/*.exe
-            artifacts/*.msix
           generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
