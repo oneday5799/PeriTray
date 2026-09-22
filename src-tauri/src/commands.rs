@@ -74,17 +74,52 @@ pub fn get_cached_devices() -> Vec<device::Device> {
     crate::state::lock_unpoisoned(cache).clone()
 }
 
-/// 任务栏信息窗的数据源：把「电量」与「音量」按**物理设备身份**聚合到同一台设备上。
+/// 任务栏设备侧的取数决策：**优先用缓存，缓存为空则现查一次**。
 ///
-/// 设备列表取自 tray watcher 维护的缓存（避免每轮重跑 WMI；缓存为空时调用方应回落
-/// `get_devices`）；音频端点必须现查 —— 音量是实时值。
-/// 身份键优先级见 `device_identity`：ContainerId → PnP 实例路径 → 名称。
-#[tauri::command(async)]
-pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::PhysicalDevice>, String> {
-    let devices = {
+/// 为什么单独抽出来、并把 IO 做成参数：命令体是 `async` + `spawn_blocking`，单测里
+/// 不便驱动；而「空 ⇒ 必须回落 / 非空 ⇒ 不得重跑 WMI」正是本命令最要紧的一条判据
+/// （漏了会**静默**丢掉全部电量），必须能被单测直接钉住。
+fn devices_for_taskbar_with<F>(
+    cached: Vec<device::Device>,
+    query: F,
+) -> Result<Vec<device::Device>, String>
+where
+    F: FnOnce() -> Result<Vec<device::Device>, String>,
+{
+    if cached.is_empty() {
+        query()
+    } else {
+        Ok(cached)
+    }
+}
+
+/// 从全局缓存取任务栏设备侧数据，缓存为空时**自愈现查**。
+///
+/// 缓存为空有**确定**成因、不是偶发：`tray::start_device_watcher` 的后台循环里有
+/// `if !has_tray && !has_battery_notify { continue; }`，而 `Config::default()` 中
+/// `tray_devices` 为空、`low_battery_notify` 为 `false` ⇒ **默认配置下缓存恒空**。
+/// 故「缓存为空就回落」**不能留给调用方**：前端漏写这一句既不报错也不告警，
+/// 只会让任务栏的电量整片变空（且「有电量无音频端点」的鼠标/键盘/手柄整条不出现）。
+fn devices_for_taskbar() -> Result<Vec<device::Device>, String> {
+    let cached = {
         let cache = crate::state::get_devices_cache();
         crate::state::lock_unpoisoned(cache).clone()
     };
+    if cached.is_empty() {
+        standard_log!("[cmd] get_taskbar_devices: 设备缓存为空，回落现查一次");
+    }
+    devices_for_taskbar_with(cached, || query_devices(false))
+}
+
+/// 任务栏信息窗的数据源：把「电量」与「音量」按**物理设备身份**聚合到同一台设备上。
+///
+/// 设备列表优先取 tray watcher 维护的缓存（避免每轮重跑 WMI）；**缓存为空时本命令
+/// 自己回落现查一次**（见 `devices_for_taskbar`），不依赖调用方记得回落。
+/// 音频端点必须现查 —— 音量是实时值。
+/// 身份键优先级见 `device_identity`：ContainerId → PnP 实例路径 → 名称。
+#[tauri::command(async)]
+pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::PhysicalDevice>, String> {
+    let devices = run_blocking(devices_for_taskbar).await??;
     let audio = run_blocking(crate::audio::enumerate_output_devices)
         .await?
         .map_err(|e| e.to_string())?;
@@ -778,7 +813,8 @@ pub fn check_material_support(material: String) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_allowed_open_url, rollback_device_shortcut, try_toggle_tray_device, TRAY_DEVICE_LIMIT,
+        devices_for_taskbar_with, is_allowed_open_url, rollback_device_shortcut,
+        try_toggle_tray_device, TRAY_DEVICE_LIMIT,
     };
     use crate::config::{Config, DeviceShortcut};
 
@@ -944,5 +980,72 @@ mod tests {
             "移除后应少一个"
         );
         assert!(!c.tray_devices.iter().any(|v| v == "已满-0"));
+    }
+
+    // ── 任务栏设备侧取数：缓存为空必须自愈（默认配置下缓存恒空）──────
+
+    fn dev(name: &str) -> crate::device::Device {
+        crate::device::Device {
+            name: name.to_string(),
+            dt: crate::device::DevType::Other,
+            status: "OK".to_string(),
+            battery: Some(50),
+            device_id: None,
+            device_key: None,
+            is_bluetooth: false,
+            is_wireless_24g: false,
+            is_ble: false,
+        }
+    }
+
+    /// 判据：**缓存为空时必须现查一次**。
+    ///
+    /// 为什么这条最要紧：`Config::default()` 里 `tray_devices` 为空、
+    /// `low_battery_notify` 为 `false`，而 `tray::start_device_watcher` 在这两者皆假时
+    /// **整轮 `continue`** ⇒ 设备缓存**恒空**。此时若不现查，任务栏会**静默**丢掉全部
+    /// 电量（所有 `battery` 为 `None`，「有电量无音频端点」的鼠标/键盘/手柄整条不出现）。
+    ///
+    /// 可证伪：把 `devices_for_taskbar_with` 的判据改成 `false`（永不回落）⇒ 本用例转红。
+    #[test]
+    fn empty_device_cache_falls_back_to_live_query() {
+        let mut queried = false;
+        let out = devices_for_taskbar_with(Vec::new(), || {
+            queried = true;
+            Ok(vec![dev("现查到的设备")])
+        })
+        .expect("回落路径不得失败");
+        assert!(
+            queried,
+            "缓存为空时必须现查一次，否则任务栏会静默丢掉全部电量"
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "现查到的设备");
+    }
+
+    /// 反控：**缓存非空时不得重跑 WMI** —— 否则每轮都白付一次全量设备查询。
+    ///
+    /// 可证伪：把判据改成「永远回落」⇒ 本用例转红。
+    #[test]
+    fn non_empty_device_cache_does_not_requery() {
+        let mut queried = false;
+        let out = devices_for_taskbar_with(vec![dev("缓存里的设备")], || {
+            queried = true;
+            Ok(Vec::new())
+        })
+        .expect("缓存命中路径不得失败");
+        assert!(!queried, "缓存非空时不得重跑 WMI");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "缓存里的设备");
+    }
+
+    /// 反控：现查失败必须**原样上报 Err**，不得静默降级成空列表。
+    ///
+    /// 降级成空列表会把「WMI 不可信」伪装成「任务栏里什么都没有」，
+    /// 与本次要修的「静默丢数据」是同一类故障，只是换了个位置。
+    #[test]
+    fn live_query_failure_is_propagated_not_swallowed() {
+        let err = devices_for_taskbar_with(Vec::new(), || Err("WMI 不可信".to_string()))
+            .expect_err("现查失败必须返回 Err");
+        assert_eq!(err, "WMI 不可信");
     }
 }
