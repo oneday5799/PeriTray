@@ -384,6 +384,44 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     }
 }
 
+/// 从候选发布里挑出**最新**的那一个：`draft` 一律剔除，
+/// 预发布仅在 `include_prerelease` 为真时参与。
+///
+/// ── 为什么必须抽成纯函数 ────────────────────────────────────────────────
+/// 这段选择逻辑原先内联在 `check_for_update` 里，而后者要做网络 I/O ⇒ **无法单测**。
+/// 于是「选错版本」没有任何断言能拦住：不报错、不 panic，日志还照常打印
+/// `has_update=false`，只表现为**用户永远收不到更新提示**。
+///
+/// ── 比较方向（本函数唯一容易写反的地方）────────────────────────────────
+/// `compare_versions(current, latest)` 的语义是「latest > current」，
+/// 即**第一个参数是较小的那个**；而 `max_by` 要求「`a > b` 时返回 `Greater`」。
+/// 两者方向相反 ⇒ 参数顺序与分支必须**同时**反过来：
+///   · `a > b` ⟺ `compare_versions(b_ver, a_ver)` 为真 ⇒ `Greater`
+///   · `a < b` ⟺ `compare_versions(a_ver, b_ver)` 为真 ⇒ `Less`
+/// 若写成 `if compare_versions(a_ver, b_ver) { Greater }`（即 `b484039` 的原写法），
+/// 得到的是一个**完全反转**的比较器，`max_by` 于是取到窗口内**最小**的版本。
+/// 判据见 `latest_release_picks_the_newest_not_the_oldest`。
+///
+/// ⚠️ `releases` 接口默认 `per_page=30` ⇒ 列表只含最新 30 条。这对「取最大」无害
+/// （最新的一定在窗口内）；但**一旦方向写反，取的就不再是最大值**，而是窗口最旧的
+/// 那一端 —— 真实数据下实测取到 `v1.2.9`，于是所有用户都被告知「已是最新」。
+fn latest_release(releases: &[GitHubRelease], include_prerelease: bool) -> Option<&GitHubRelease> {
+    releases
+        .iter()
+        .filter(|r| !r.draft && (!r.prerelease || include_prerelease))
+        .max_by(|a, b| {
+            let a_ver = a.tag_name.trim_start_matches('v');
+            let b_ver = b.tag_name.trim_start_matches('v');
+            if compare_versions(b_ver, a_ver) {
+                std::cmp::Ordering::Greater
+            } else if compare_versions(a_ver, b_ver) {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+}
+
 /// 检测 GitHub 是否有新版本
 fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<UpdateInfo, String> {
     standard_log!(
@@ -397,30 +435,10 @@ fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<U
     let releases: Vec<GitHubRelease> =
         serde_json::from_str(&body).map_err(|_| "响应数据解析失败".to_string())?;
 
-    // 按版本号排序取最大（而非依赖 API 返回顺序）
-    let latest = releases
-        .iter()
-        .filter(|r| {
-            if r.draft {
-                return false;
-            }
-            if r.prerelease && !include_prerelease {
-                return false;
-            }
-            true
-        })
-        .max_by(|a, b| {
-            let a_ver = a.tag_name.trim_start_matches('v');
-            let b_ver = b.tag_name.trim_start_matches('v');
-            // compare_versions 返回 latest > current，这里反转用于排序
-            if compare_versions(a_ver, b_ver) {
-                std::cmp::Ordering::Greater
-            } else if compare_versions(b_ver, a_ver) {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        });
+    // 按版本号取最大（而非依赖 API 返回顺序）。
+    // 抽成纯函数见 `latest_release`：本函数要做网络 I/O，无法单测，
+    // 而「选错版本」不报错、不 panic，只表现为「永远提示没有更新」。
+    let latest = latest_release(&releases, include_prerelease);
 
     match latest {
         Some(release) => {
@@ -543,5 +561,177 @@ mod tests {
         assert!(!compare_versions("1.2.0-beta.2", "1.2.0-beta.1"));
         // 数字部分不同时，预发布后缀不参与（1.3.0-beta > 1.2.0）
         assert!(compare_versions("1.2.0", "1.3.0-beta"));
+    }
+
+    // ── 发布选择：必须取「最新」，而非窗口内最旧 ────────────────────
+
+    fn mk(tag: &str, prerelease: bool, draft: bool) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: tag.to_string(),
+            prerelease,
+            draft,
+            html_url: String::new(),
+        }
+    }
+
+    /// 2026-09-22 发布 v1.3.7 后 `GET /repos/oneday5799/PeriTray/releases`
+    /// 真实返回的 30 条窗口，顺序即 API 返回顺序（created_at 倒序）。
+    ///
+    /// 用**生产数据**当夹具是有意的：方向写反时它会取到窗口最旧的 `v1.2.9`
+    /// —— 这不是构造出来的场景，而是 2026-09-22 实测发生的失效。
+    /// 窗口条数（30）也是接口默认 `per_page` 的真实值。
+    const REAL_WINDOW: &[(&str, bool)] = &[
+        ("v1.3.7", false),
+        ("v1.3.7-beta.1", true),
+        ("v1.3.6", false),
+        ("v1.3.5", false),
+        ("v1.3.5-beta.2", true),
+        ("v1.3.5-beta.1", true),
+        ("v1.3.4", false),
+        ("v1.3.4-beta.2", true),
+        ("v1.3.4-beta.1", true),
+        ("v1.3.3", false),
+        ("v1.3.3-beta.1", true),
+        ("v1.3.2", false),
+        ("v1.3.1", false),
+        ("v1.3.1-beta.5", true),
+        ("v1.3.1-beta.4", true),
+        ("v1.3.1-beta.3", true),
+        ("v1.3.1-beta.2", true),
+        ("v1.3.1-beta.1", true),
+        ("v1.3.0", false),
+        ("v1.3.0-beta.3", true),
+        ("v1.3.0-beta.2", true),
+        ("v1.3.0-beta.1", true),
+        ("v1.2.11", false),
+        ("v1.2.11-beta.5", true),
+        ("v1.2.11-beta.4", true),
+        ("v1.2.11-beta.3", true),
+        ("v1.2.11-beta.2", true),
+        ("v1.2.11-beta.1", true),
+        ("v1.2.10", false),
+        ("v1.2.9", false),
+    ];
+
+    fn real_window() -> Vec<GitHubRelease> {
+        REAL_WINDOW.iter().map(|(t, p)| mk(t, *p, false)).collect()
+    }
+
+    /// ⭐ 靶心：必须取到最新的 `v1.3.7`，而不是窗口最旧的 `v1.2.9`。
+    ///
+    /// 修复前（`b484039` 写反的比较器）此处取到 `v1.2.9` ⇒ `has_update` 恒为 false
+    /// ⇒ **所有用户都被告知「已是最新」**，更新提示彻底失效。
+    #[test]
+    fn latest_release_picks_the_newest_not_the_oldest() {
+        let w = real_window();
+        let picked = latest_release(&w, false).map(|r| r.tag_name.as_str());
+        assert_eq!(picked, Some("v1.3.7"), "必须取最新；取到 v1.2.9 即方向写反");
+
+        // 反向判据：把「取到最小值」这一失效形态也写死，避免只断言正确值
+        // 而放过了「恰好不等于最旧」的第三种错法。
+        let oldest = w
+            .iter()
+            .rfind(|r| !r.prerelease && !r.draft)
+            .expect("窗口非空");
+        assert_ne!(picked, Some(oldest.tag_name.as_str()));
+    }
+
+    /// 结果不得依赖 API 返回顺序 —— 原实现用 `find` 取第一条，正是依赖了这个假设。
+    #[test]
+    fn latest_release_ignores_api_order() {
+        let mut reversed = real_window();
+        reversed.reverse();
+        assert_eq!(
+            latest_release(&reversed, false).map(|r| r.tag_name.as_str()),
+            Some("v1.3.7"),
+            "倒序输入仍应取到最新"
+        );
+
+        let mut swapped = real_window();
+        let last = swapped.len() - 1;
+        swapped.swap(0, last);
+        assert_eq!(
+            latest_release(&swapped, false).map(|r| r.tag_name.as_str()),
+            Some("v1.3.7"),
+            "首尾互换后仍应取到最新"
+        );
+    }
+
+    /// `draft` 一律剔除；预发布仅在开关打开时参与。
+    #[test]
+    fn latest_release_skips_draft_and_disallowed_prerelease() {
+        let w = vec![
+            mk("v1.4.0", false, true),        // draft ⇒ 永远剔除
+            mk("v1.4.0-beta.1", true, false), // 预发布
+            mk("v1.3.7", false, false),
+        ];
+        assert_eq!(
+            latest_release(&w, false).map(|r| r.tag_name.as_str()),
+            Some("v1.3.7"),
+            "未开启预发布时，draft 与预发布都不得入选"
+        );
+        assert_eq!(
+            latest_release(&w, true).map(|r| r.tag_name.as_str()),
+            Some("v1.4.0-beta.1"),
+            "开启后预发布应胜过 1.3.7，但 draft 仍须剔除"
+        );
+    }
+
+    /// 数字部分相同时，正式版胜过同号的预发布。
+    #[test]
+    fn latest_release_prefers_release_over_prerelease_with_same_numbers() {
+        let w = vec![mk("v1.3.7-beta.1", true, false), mk("v1.3.7", false, false)];
+        assert_eq!(
+            latest_release(&w, true).map(|r| r.tag_name.as_str()),
+            Some("v1.3.7")
+        );
+    }
+
+    /// 数值比较而非字符串比较：`1.10.0` > `1.9.0`（字典序会判反）。
+    #[test]
+    fn latest_release_compares_numerically_not_lexically() {
+        let w = vec![mk("v1.9.0", false, false), mk("v1.10.0", false, false)];
+        assert_eq!(
+            latest_release(&w, false).map(|r| r.tag_name.as_str()),
+            Some("v1.10.0")
+        );
+    }
+
+    /// 没有候选时返回 `None`（调用方据此回落到「无更新」而不是 panic）。
+    #[test]
+    fn latest_release_returns_none_when_no_candidate() {
+        assert!(latest_release(&[], false).is_none(), "空列表");
+        assert!(
+            latest_release(&[mk("v1.3.7-beta.1", true, false)], false).is_none(),
+            "只有预发布且未开启开关"
+        );
+        assert!(
+            latest_release(&[mk("v1.3.7", false, true)], false).is_none(),
+            "只有 draft"
+        );
+    }
+
+    /// 端到端（同一条判据链）：真实窗口 + 各当前版本 ⇒ 是否提示更新。
+    #[test]
+    fn github_update_verdict_matches_real_window() {
+        let w = real_window();
+        let latest = latest_release(&w, false).expect("真实窗口必有候选");
+        let latest_ver = latest.tag_name.trim_start_matches('v');
+        assert_eq!(latest_ver, "1.3.7");
+
+        assert!(
+            compare_versions("1.3.7-beta.1", latest_ver),
+            "上一测试版用户应看到正式版"
+        );
+        assert!(
+            compare_versions("1.3.6", latest_ver),
+            "更早的正式版用户应看到更新"
+        );
+        assert!(
+            !compare_versions("1.3.7", latest_ver),
+            "已是最新的用户不应再被提示"
+        );
+        // 反向：若选择逻辑取到窗口最旧的 1.2.9，上面第二、三条会同时失败
+        // （1.3.6 会被判成「无更新」）—— 这正是本用例要拦住的失效。
     }
 }
