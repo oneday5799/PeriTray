@@ -79,7 +79,7 @@ pub struct PinnedDevice {
     pub alias: Option<String>,
 }
 
-/// 判定某物理设备是否被固定。
+/// 单个固定项是否命中某物理设备。
 ///
 /// 两级匹配，**语义不同**：
 ///   · `p.key == key` —— 精确身份命中（同一个容器/实例）；
@@ -87,17 +87,27 @@ pub struct PinnedDevice {
 ///     典型用法：`key` 存容器键（精确但不耐换机/重装驱动），`fallback` 存名称键
 ///     （`n:<名字>`，模糊但稳定）。容器变了、名字没变时仍能认出是同一台设备。
 ///
+/// 单独拆出**单项**判据，是因为「固定 ⇒ 强制显示」需要**反向**逐项检查
+/// 「这一项有没有对应的实际设备」（见 `device_identity::group_taskbar_devices` 末尾的
+/// 补建循环）；列表级的 `any` 回答不了「哪一项没被满足」。
+/// 两处共用本函数，避免精确/兜底两条规则在两处实现分叉。
+pub fn pinned_device_matches(p: &PinnedDevice, key: &str, fallback: Option<&str>) -> bool {
+    p.key == key
+        || match (p.fallback.as_deref(), fallback) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+}
+
+/// 判定某物理设备是否被固定（列表级：**任一**固定项命中即算）。
+///
 /// 抽成自由函数而非 `Config` 方法，是为了让调用方先取一次快照
 /// （`config::with_config(|c| c.pinned_taskbar_devices.clone())`）再逐台设备比对，
 /// 避免每台设备各取一次配置锁。
 pub fn matches_pinned_taskbar(pinned: &[PinnedDevice], key: &str, fallback: Option<&str>) -> bool {
-    pinned.iter().any(|p| {
-        p.key == key
-            || match (p.fallback.as_deref(), fallback) {
-                (Some(a), Some(b)) => a == b,
-                _ => false,
-            }
-    })
+    pinned
+        .iter()
+        .any(|p| pinned_device_matches(p, key, fallback))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

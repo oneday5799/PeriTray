@@ -371,26 +371,36 @@ pub enum BatterySource {
 /// 一台**物理设备** —— 把同一容器下的各功能节点聚合后的结果。
 ///
 /// 这是任务栏信息窗的数据单元：电量来自蓝牙属性 / HID，音量来自该设备的**输出**端点。
+///
+/// ⚠️ **「置灰占位」条目的判据**：`battery` 与 `audio_device_id` **皆为 `None`** 时，
+/// 这条没有任何可显示的数据 —— 它只可能来自「被用户固定、但此刻枚举不到（未连接 /
+/// 未插）」的反向补建。前端应**置灰**呈现而非隐藏：用户 pin 了却看不见，会以为设置丢了。
+/// 判据请写 `battery == null && audio_device_id == null`（单字段用 `!= null`），
+/// **不要写 `!d.battery`** —— `0%` 是合法电量，`!0` 为真会把电量耗尽的设备误判成无数据。
 #[derive(Debug, Clone, Serialize)]
 pub struct PhysicalDevice {
     /// `DeviceKey::encode()` 的结果（`c:` / `i:` / `n:` 前缀）
     pub key: String,
-    /// 展示名，由组内候选名按 `pick_display_name` 挑出
+    /// 展示名，由组内候选名按 `pick_display_name` 挑出；占位条目由 `pinned_placeholder_name` 给
     pub name: String,
+    /// 电量百分比。⚠️ `Some(0)` 是**合法**的（电量耗尽），与 `None`（读不出）语义完全不同
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery: Option<i32>,
     /// 该物理设备当前的**输出**端点 id（供音量使用）；无音频端点时为 `None`（如键鼠）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_device_id: Option<String>,
-    /// 该容器出现过的设备类别（一个容器可跨多类，实测 USB + HID + SWD）
+    /// 该容器出现过的设备类别（一个容器可跨多类，实测 USB + HID + SWD）；占位条目为空数组
     pub categories: Vec<DevType>,
-    /// 参与聚合的条目数（设备行 + 音频端点行）。
+    /// 参与聚合的条目数（设备行 + 音频端点行）；占位条目为 0。
     ///
     /// ⚠️ 这**不是** devnode 数：PeriTray 的设备列表在 WMI 层已过滤掉大部分子节点
     /// （`is_generic_hid` 滤 `&COL*`、`is_bt_service` 滤蓝牙服务节点），所以这里通常很小。
     /// 「10 个 devnode 并成 1 台」是 ContainerId 在 devnode 层面的性质，不由此字段体现。
     pub node_count: usize,
-    /// 是否被用户固定（由 config 决定，`Grouper` 本身不关心）
+    /// 是否被用户固定（由 config 决定，`Grouper` 本身不关心）。
+    ///
+    /// ⚠️ 语义是「**强制显示**」：为真的条目即使此刻无数据也会保留
+    /// （见 `group_taskbar_devices` 的保留规则与补建循环），由前端置灰。
     pub pinned: bool,
 }
 
@@ -509,8 +519,20 @@ fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
 
 /// 把设备列表与音频端点列表按物理设备身份聚合，产出任务栏信息窗的数据源。
 ///
-/// 只保留**至少能显示一项信息**的设备（有电量或有音量）；两者皆无的条目对用户毫无意义
-/// （典型是落在占位容器上的虚拟音频设备），直接丢弃。
+/// 保留规则（**固定优先**）：
+///   · 有电量**或**有音量 ⇒ 保留；两者皆无且**未**被固定 ⇒ 丢弃（对用户毫无意义，
+///     典型是落在占位容器上的虚拟音频设备）；
+///   · **被固定（pin）⇒ 一律保留**，即使此刻读不出任何数据。固定是用户的显式意图，
+///     「pin 了却看不见」会让用户以为设置丢了；这类条目由前端**置灰**呈现。
+///
+/// ⚠️ 「强制显示」由**两条互补**的路径实现，**缺一不可**：
+///   ① 上面的保留条件 —— 设备**在**枚举结果里、只是读不出数据（HID 层不响应等）。
+///      走这条能保住**真实设备信息**（名字、类别、`node_count`）；
+///   ② 函数末尾的**反向补建** —— 设备**根本枚举不到**（未连接的耳机、没插的接收器在
+///      WMI 里不存在，`Grouper` 中没有它的组）。这条只能用配置里的 alias/fallback 当
+///      展示名，`categories` 为空、`node_count` 为 0。
+///   只有 ① 会让未连接的设备整条消失；只有 ② 会让「枚举到但读不出」的设备丢掉真实名字。
+///   单测里必须用 `node_count` 把两者区分开，否则补建会把 ① 的用例兜成**假绿**。
 pub fn group_taskbar_devices(
     devices: &[crate::device::Device],
     audio: &[crate::audio::AudioDevice],
@@ -556,16 +578,73 @@ pub fn group_taskbar_devices(
         );
     }
 
-    grouper
+    let mut kept: Vec<PhysicalDevice> = grouper
         .finish()
         .into_iter()
-        .filter(|p| p.battery.is_some() || p.audio_device_id.is_some())
-        .map(|mut p| {
+        .filter_map(|mut p| {
             let fallback = DeviceKey::Name(core_name(&p.name)).encode();
             p.pinned = crate::config::matches_pinned_taskbar(pinned, &p.key, Some(&fallback));
-            p
+            // 固定 ⇒ 强制显示（即使此刻无数据，前端置灰）
+            if p.pinned || p.battery.is_some() || p.audio_device_id.is_some() {
+                Some(p)
+            } else {
+                None
+            }
         })
-        .collect()
+        .collect();
+
+    // ── 反向补建：被固定、但本次枚举里**完全没有出现**的设备 ──────────────
+    // 未连接的耳机 / 没插的接收器在 WMI 里不存在，上面的保留规则救不到它们。
+    // 逐项查 `kept`（含刚补建的）而非查 `pinned` 的其它项 ⇒ 配置里重复的固定项
+    // 天然去重：第一条补进 `kept` 后，第二条就会精确命中它。
+    for p in pinned {
+        let already = kept.iter().any(|d| {
+            let fallback = DeviceKey::Name(core_name(&d.name)).encode();
+            crate::config::pinned_device_matches(p, &d.key, Some(&fallback))
+        });
+        if already {
+            continue;
+        }
+        kept.push(PhysicalDevice {
+            key: p.key.clone(),
+            name: pinned_placeholder_name(p),
+            battery: None,
+            audio_device_id: None,
+            // 占位条目没有参与聚合的节点 ⇒ 无类别、计数为 0
+            categories: Vec::new(),
+            node_count: 0,
+            pinned: true,
+        });
+    }
+
+    // `Grouper` 的「输出按 key 排序、顺序稳定」契约要在补建之后**重新成立**：
+    // 否则占位条目恒排在末尾，位置还随补建顺序变化，UI 会跳。
+    // （补建条目的 key 必然与 `kept` 中已有的 key 不同 —— 相同就会在上面的
+    //  `already` 判定里精确命中而被跳过，故排序后不会出现重复 key。）
+    kept.sort_by(|a, b| a.key.cmp(&b.key));
+    kept
+}
+
+/// 占位条目的展示名：优先用户自定义名，其次从身份键里剥出可读部分。
+///
+/// `n:`（名称键）的后半段本身就是可读名字；`c:`（容器 GUID）/ `i:`（实例路径）是机器串，
+/// 不含可读信息，只能原样展示 —— 此时 `alias` 是用户唯一能看懂的名字，UI 应引导用户设置。
+fn pinned_placeholder_name(p: &crate::config::PinnedDevice) -> String {
+    if let Some(a) = p.alias.as_deref() {
+        if !a.trim().is_empty() {
+            return a.to_string();
+        }
+    }
+    [p.fallback.as_deref(), Some(p.key.as_str())]
+        .into_iter()
+        .flatten()
+        .find_map(|s| {
+            s.strip_prefix("n:")
+                .map(|r| r.trim())
+                .filter(|r| !r.is_empty())
+        })
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| p.key.clone())
 }
 
 #[cfg(test)]
@@ -1133,6 +1212,133 @@ mod tests {
         assert!(
             out.iter().any(|d| d.key == "c:unrelated" && !d.pinned),
             "无关设备不应被判定为已固定"
+        );
+    }
+
+    /// 被固定但**此刻读不出数据**的设备必须保留（前端置灰），不得被「至少能显示一项信息」
+    /// 的丢弃规则吃掉 —— 否则 pin 形同虚设。
+    ///
+    /// 判据可证伪：把保留条件改回 `p.battery.is_some() || p.audio_device_id.is_some()`
+    /// （即去掉 `p.pinned ||`），本用例必转红。
+    #[test]
+    fn pinned_device_without_data_is_kept_for_gray_out() {
+        let devices = vec![
+            // 被固定，但电量读不出（如 HID 层不响应）、也没有音频端点
+            dev("罗技接收器", Some("c:pinned-nodata"), None, false, true),
+            // 反控：同样无数据、但**未**被固定 ⇒ 必须照旧丢弃
+            dev("无关设备", Some("c:unrelated"), None, false, false),
+        ];
+        let pinned = vec![crate::config::PinnedDevice {
+            key: "c:pinned-nodata".to_string(),
+            fallback: None,
+            alias: None,
+        }];
+
+        let out = group_taskbar_devices(&devices, &[], &pinned);
+        let keys: Vec<&str> = out.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(keys, vec!["c:pinned-nodata"], "只应保留被固定那台：{out:?}");
+        assert!(out[0].pinned, "固定标记必须为真");
+        assert!(
+            out[0].battery.is_none() && out[0].audio_device_id.is_none(),
+            "前置：这台设备确实读不出数据"
+        );
+        // ⭐ 这两条断言把「保留条件」与「反向补建」**区分开** —— 否则本用例是**假绿**：
+        //    设备被 filter 掉后，末尾的补建循环会照着 `pinned` 再造一条，键与 `pinned`
+        //    标记照样对得上，`battery` 也照样是 `None`，三条断言全满足。
+        //    但补建条目丢失了**真实设备信息**（名字退化成配置里的 alias/fallback、
+        //    类别为空、`node_count` 为 0）。设备**在**枚举结果里时，必须走保留分支。
+        //    判据可证伪：去掉保留条件里的 `p.pinned ||`，下面两条必转红。
+        assert_eq!(out[0].node_count, 1, "必须走保留分支而非补建：{out:?}");
+        assert_eq!(out[0].categories.len(), 1, "类别应来自真实设备行");
+    }
+
+    /// 被固定、但**本次枚举里根本没出现**的设备（未连接的耳机 / 没插的接收器）必须
+    /// **反向补建**占位条目 —— 只把固定判定提前救不了这一种：`Grouper` 里没有它的组，
+    /// `finish()` 自然不产出该条目。
+    ///
+    /// 判据可证伪：删掉 `group_taskbar_devices` 末尾的 `for p in pinned` 补建循环，
+    /// 本用例必转红。
+    #[test]
+    fn pinned_device_absent_from_enumeration_is_synthesized() {
+        let pinned = vec![crate::config::PinnedDevice {
+            // 容器键是机器串，不含可读信息 ⇒ 展示名只能从 fallback 的名称键里剥
+            key: "c:9039aea7-9c07-52f2-a4ef-0f5296d6d7d2".to_string(),
+            fallback: Some("n:我的耳机".to_string()),
+            alias: None,
+        }];
+        // 枚举结果与它毫无关系
+        let devices = vec![dev("别的东西", Some("c:other"), Some(50), false, false)];
+
+        let out = group_taskbar_devices(&devices, &[], &pinned);
+        let ph = out
+            .iter()
+            .find(|d| d.key == "c:9039aea7-9c07-52f2-a4ef-0f5296d6d7d2")
+            .expect("被固定但枚举不到的设备必须补建占位条目");
+        assert!(ph.pinned, "补建条目必须标记为已固定");
+        assert_eq!(ph.name, "我的耳机", "展示名应从 fallback 的名称键剥出");
+        assert!(ph.battery.is_none() && ph.audio_device_id.is_none());
+        assert_eq!(ph.node_count, 0, "占位条目没有节点参与聚合");
+    }
+
+    /// `alias`（用户自定义名）优先于从身份键里剥出的名字；都拿不到可读名时退回原 key。
+    ///
+    /// 判据可证伪：删掉 `pinned_placeholder_name` 里的 `alias` 分支，本用例必转红。
+    #[test]
+    fn pinned_placeholder_prefers_alias_over_key_derived_name() {
+        let pinned = vec![crate::config::PinnedDevice {
+            key: "c:some-guid".to_string(),
+            fallback: Some("n:设备原名".to_string()),
+            alias: Some("我的接收器".to_string()),
+        }];
+        let out = group_taskbar_devices(&[], &[], &pinned);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "我的接收器");
+
+        // 展示名退到键派生时，`c:` 机器串没有可读部分 ⇒ 原样返回 key（绝不能是空串）
+        let no_name = vec![crate::config::PinnedDevice {
+            key: "c:some-guid".to_string(),
+            fallback: None,
+            alias: None,
+        }];
+        let out = group_taskbar_devices(&[], &[], &no_name);
+        assert_eq!(out[0].name, "c:some-guid", "无可读名字时退回原 key");
+    }
+
+    /// 补建不得与「已有实际数据的同一台设备」重复；且补建之后**仍按 key 排序**
+    /// （`Grouper` 的「顺序稳定」契约不能因为补建而失效）。
+    ///
+    /// 判据可证伪：删掉末尾的 `kept.sort_by(..)`，本用例的排序断言必转红
+    /// （占位条目会恒排在末尾，即 `["c:aaa", "c:zzz", "c:bbb"]`）。
+    #[test]
+    fn pinned_placeholder_does_not_duplicate_present_device_and_keeps_order() {
+        let devices = vec![
+            dev("罗技接收器", Some("c:aaa"), Some(90), false, true),
+            dev("别的东西", Some("c:zzz"), Some(50), false, false),
+        ];
+        let pinned = vec![
+            crate::config::PinnedDevice {
+                key: "c:aaa".to_string(), // 已有实际数据 ⇒ 不得重复补建
+                fallback: None,
+                alias: None,
+            },
+            crate::config::PinnedDevice {
+                key: "c:bbb".to_string(), // 枚举不到 ⇒ 补建
+                fallback: None,
+                alias: None,
+            },
+        ];
+
+        let out = group_taskbar_devices(&devices, &[], &pinned);
+        let keys: Vec<&str> = out.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["c:aaa", "c:bbb", "c:zzz"],
+            "不得重复，且必须按 key 排序：{out:?}"
+        );
+        assert_eq!(
+            out.iter().filter(|d| d.pinned).count(),
+            2,
+            "两项固定都应命中（一项实际、一项占位）"
         );
     }
 
