@@ -422,6 +422,120 @@ pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(
     Ok(())
 }
 
+// ── 任务栏信息窗：固定显示（pin）的写入路径 ──────────────
+
+/// 任务栏信息窗最多固定几台设备。
+///
+/// 与 `TRAY_DEVICE_LIMIT` 分开、不复用：两者约束的是**两个不同的界面**
+/// （托盘菜单 vs 任务栏窄条），上限没有共同含义，共用一个常量会让改动其一
+/// 时意外改动另一个。
+///
+/// 为什么必须有上限：`device_identity::group_taskbar_devices` 末尾会对每条固定项
+/// **反向补建**一个占位条目（设备不在场也要占位显示），故固定项数量**直接**等于
+/// 界面行数；没有上限的话，一份被改坏的 `config.toml` 就能让窗口长出几十行。
+const PINNED_TASKBAR_LIMIT: usize = 8;
+
+/// 把前端传来的可空字符串归一化：去空白后为空 ⇒ `None`。
+///
+/// 不能直接把 `Some("")` 存进配置：`pinned_device_matches` 的兜底比较是**逐字相等**，
+/// 空串与任何真实键都不等 ⇒ 存下一个「看着有值、实则永不命中」的字段，
+/// 排查时极具误导性（配置里明明写着 fallback，却怎么也匹配不上）。
+fn normalized_opt(s: Option<&str>) -> Option<String> {
+    s.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// 切换「任务栏信息窗固定显示」的某台物理设备：已固定则取消，未固定则固定。
+///
+/// ── 为什么匹配必须复用 `config::pinned_device_matches` ────────────────────
+/// 显示侧（`device_identity::group_taskbar_devices`）判定「这台已固定」用的正是
+/// 同一个函数。若本命令改用「只比 `key`」之类的**另一套**规则，两者立刻分叉：
+/// 显示说「已固定」、本命令却认为「没固定过」⇒ 用户点「取消固定」实际走的是
+/// **新增**分支，界面纹丝不动，且每点一次多一条，很快撞上限。故两侧共用一份判据
+/// 不是巧合，判据见 `pinned_toggle_is_the_inverse_of_the_display_predicate`。
+///
+/// ── 取消时删除**全部**命中项，而不是第一条 ────────────────────────────────
+/// `fallback` 是**名称级**兜底键，同型号设备会撞键；且容器变化后新旧两条键可能
+/// 并存。一台设备被多条固定项同时命中时，只删第一条 ⇒ 删完仍被下一条命中 ⇒
+/// 界面**依旧显示已固定** ⇒ 用户再点一次，此时 `key` 已不在表里，于是走了
+/// 「新增」分支 ⇒ **卡在「怎么点都取消不掉」**。删全部才能保证
+/// 「点一次 = 状态翻转一次」。
+///
+/// ⚠️ 由此带来的已知语义（**兜底键的固有代价，不是缺陷**）：两台同名设备共享
+/// `fallback` 时，固定其中一台会让另一台**也显示为已固定**（显示侧本就是如此），
+/// 取消时也一并取消。本函数不做单方面特判——那只会让显示与切换再次分叉。
+/// 判据见 `pinned_toggle_flips_shared_fallback_entry`。
+///
+/// 与 `try_toggle_tray_device` 同款：**上限检查与写入在同一次 `with_config_mut` 内**
+/// （P2-8），并发连点不会击穿上限；抽成只接 `&mut Config` 的单函数以便直接单测。
+fn try_toggle_pinned_taskbar_device(
+    c: &mut Config,
+    key: &str,
+    fallback: Option<&str>,
+    alias: Option<&str>,
+) -> Result<(), String> {
+    // 空键会变成「永不命中的幽灵条目」：显示侧匹配不上任何设备，前端却会为它渲染
+    // 一行永久置灰的占位，用户既看不出它是什么、也只能原样再切一次才删得掉。
+    if key.trim().is_empty() {
+        return Err("固定的设备缺少身份键".to_string());
+    }
+
+    // 先按**显示侧同一判据**删净命中项；删到了就说明本次语义是「取消固定」。
+    let before = c.pinned_taskbar_devices.len();
+    c.pinned_taskbar_devices
+        .retain(|p| !config::pinned_device_matches(p, key, fallback));
+    if c.pinned_taskbar_devices.len() < before {
+        return Ok(());
+    }
+
+    // 走到这里 ⇒ 本次是「新增」。已达上限时**不得写入**（否则上限形同虚设）。
+    if c.pinned_taskbar_devices.len() >= PINNED_TASKBAR_LIMIT {
+        return Err(format!("任务栏最多固定 {} 个设备", PINNED_TASKBAR_LIMIT));
+    }
+    c.pinned_taskbar_devices.push(config::PinnedDevice {
+        key: key.to_string(),
+        fallback: normalized_opt(fallback),
+        alias: normalized_opt(alias),
+    });
+    Ok(())
+}
+
+/// 前端入口：切换任务栏信息窗的固定显示。
+///
+/// `fallback` / `alias` 由前端从 `PhysicalDevice` 取（见其文档），可省略。
+#[tauri::command(async)]
+pub async fn toggle_pinned_taskbar_device(
+    app: tauri::AppHandle,
+    key: String,
+    fallback: Option<String>,
+    alias: Option<String>,
+) -> Result<(), String> {
+    let log_key = key.clone();
+    let outcome = run_blocking(move || {
+        config::with_config_mut(|c| {
+            try_toggle_pinned_taskbar_device(c, &key, fallback.as_deref(), alias.as_deref())
+        })
+    })
+    .await?;
+
+    if let Err(msg) = outcome {
+        standard_log!(
+            "[cmd] toggle_pinned_taskbar_device: {} 拒绝: {}",
+            log_key,
+            msg
+        );
+        return Err(msg);
+    }
+
+    standard_log!("[cmd] toggle_pinned_taskbar_device: {}", log_key);
+    let config_snapshot = config::with_config(|c| c.clone());
+    // 忽略 emit 失败：属「无状态后果」的 UI 呈现类——没刷新到的界面会在下一次
+    // 事件或重新加载时自纠，配置本身已经写好了。
+    let _ = app.emit("config-changed", config_snapshot);
+    Ok(())
+}
+
 // ── 音频命令 ─────────────────────────────────────────────
 
 #[tauri::command(async)]
@@ -814,9 +928,10 @@ pub fn check_material_support(material: String) -> Result<bool, String> {
 mod tests {
     use super::{
         devices_for_taskbar_with, is_allowed_open_url, rollback_device_shortcut,
-        try_toggle_tray_device, TRAY_DEVICE_LIMIT,
+        try_toggle_pinned_taskbar_device, try_toggle_tray_device, PINNED_TASKBAR_LIMIT,
+        TRAY_DEVICE_LIMIT,
     };
-    use crate::config::{Config, DeviceShortcut};
+    use crate::config::{matches_pinned_taskbar, Config, DeviceShortcut, PinnedDevice};
 
     /// P1-4 的可证伪单测：`open_url` 只放行白名单协议。
     ///
@@ -980,6 +1095,249 @@ mod tests {
             "移除后应少一个"
         );
         assert!(!c.tray_devices.iter().any(|v| v == "已满-0"));
+    }
+
+    // ── pin（任务栏固定显示）的写入路径 ──────────────────────
+    //
+    // 这一组的重点不是「能加能删」，而是**切换侧与显示侧必须同源**：
+    // 两侧判据一旦分叉，「取消固定」会静默变成「又插一条」（界面纹丝不动），
+    // 这是本组用例存在的唯一理由。
+
+    fn pin(key: &str, fallback: Option<&str>) -> PinnedDevice {
+        PinnedDevice {
+            key: key.to_string(),
+            fallback: fallback.map(|s| s.to_string()),
+            alias: None,
+        }
+    }
+
+    /// 基本往返：未固定 ⇒ 加入一条（三个字段逐字落盘）；再切一次 ⇒ 移除。
+    ///
+    /// 断言整条 `PinnedDevice` 而不只是长度：只断言长度的话，
+    /// 「`fallback` / `alias` 被丢掉」这种实现照样通过 —— 而那正是**换机/重装驱动后
+    /// pin 静默失联**的成因。
+    #[test]
+    fn pinned_toggle_adds_then_removes() {
+        let mut c = Config::default();
+
+        try_toggle_pinned_taskbar_device(&mut c, "c:aaa", Some("n:我的耳机"), Some("耳机"))
+            .expect("首次切换应加入");
+
+        assert_eq!(
+            c.pinned_taskbar_devices,
+            vec![PinnedDevice {
+                key: "c:aaa".to_string(),
+                fallback: Some("n:我的耳机".to_string()),
+                alias: Some("耳机".to_string()),
+            }],
+            "三个字段都必须原样落盘，丢一个都会让兜底匹配或占位名失效"
+        );
+
+        try_toggle_pinned_taskbar_device(&mut c, "c:aaa", Some("n:我的耳机"), Some("耳机"))
+            .expect("再次切换应移除");
+
+        assert!(
+            c.pinned_taskbar_devices.is_empty(),
+            "第二次切换必须把条目删掉，实际: {:?}",
+            c.pinned_taskbar_devices
+        );
+    }
+
+    /// ⭐ 核心判据：**切换是显示的逆运算**。
+    ///
+    /// 对每种初始状态断言 `matches_pinned_taskbar` 在切换前后**必须翻转**。
+    /// 这条不成立时的表现极具欺骗性：界面显示「已固定」，用户点「取消固定」，
+    /// 由于判据分叉走成了新增分支 ⇒ 界面**毫无变化**（且每点一次多一条，很快撞上限）。
+    ///
+    /// 可证伪：把 `try_toggle_pinned_taskbar_device` 的匹配换成「只比 `key`」⇒
+    /// 第 3、5 条（仅靠 `fallback` 命中）立刻转红；把 `retain` 换成
+    /// 「只删第一条」⇒ 第 4 条转红。
+    #[test]
+    fn pinned_toggle_is_the_inverse_of_the_display_predicate() {
+        let cases: Vec<(Vec<PinnedDevice>, &str, Option<&str>)> = vec![
+            // ① 空表、完全不命中 ⇒ 加入
+            (vec![], "c:aaa", Some("n:耳机")),
+            // ② 精确身份命中（同容器）⇒ 取消
+            (vec![pin("c:aaa", Some("n:耳机"))], "c:aaa", Some("n:耳机")),
+            // ③ **仅靠 fallback 命中**（容器换过，表里是旧容器键）⇒ 取消
+            (vec![pin("c:old", Some("n:耳机"))], "c:new", Some("n:耳机")),
+            // ④ 两条都命中（新旧键并存）⇒ 必须一次删净
+            (
+                vec![pin("c:old", Some("n:耳机")), pin("c:new", Some("n:耳机"))],
+                "c:new",
+                Some("n:耳机"),
+            ),
+            // ⑤ 表里有别的设备的固定项 ⇒ 不命中，走新增
+            (vec![pin("c:aaa", None)], "c:bbb", Some("n:耳机")),
+        ];
+
+        for (list, key, fallback) in cases {
+            let mut c = Config {
+                pinned_taskbar_devices: list,
+                ..Default::default()
+            };
+            let before = matches_pinned_taskbar(&c.pinned_taskbar_devices, key, fallback);
+
+            try_toggle_pinned_taskbar_device(&mut c, key, fallback, None)
+                .unwrap_or_else(|e| panic!("切换不应失败: key={key} err={e}"));
+
+            let after = matches_pinned_taskbar(&c.pinned_taskbar_devices, key, fallback);
+            assert_ne!(
+                before, after,
+                "切换后「是否已固定」必须翻转: key={key} fallback={fallback:?} \
+                 before={before} after={after} list={:?}",
+                c.pinned_taskbar_devices
+            );
+        }
+    }
+
+    /// ⭐ 取消固定必须删掉**全部**命中项。
+    ///
+    /// 只删第一条的话，删完仍被下一条命中 ⇒ 界面**依旧显示已固定** ⇒ 用户再点一次，
+    /// 此时 `key` 已不在表里，于是走了「新增」分支 ⇒ 条目数不减反增，
+    /// **卡在「怎么点都取消不掉」**。这正是「检查与写入分离」在匹配层的翻版。
+    #[test]
+    fn pinned_toggle_removes_every_matching_entry() {
+        let mut c = Config {
+            pinned_taskbar_devices: vec![
+                pin("c:old", Some("n:我的耳机")), // 容器换过，旧键仍留在表里
+                pin("c:new", Some("n:我的耳机")),
+            ],
+            ..Default::default()
+        };
+
+        try_toggle_pinned_taskbar_device(&mut c, "c:new", Some("n:我的耳机"), None)
+            .expect("取消固定不应失败");
+
+        assert!(
+            c.pinned_taskbar_devices.is_empty(),
+            "必须一次删净，否则用户点一次状态不翻转、再点一次反而多一条。实际: {:?}",
+            c.pinned_taskbar_devices
+        );
+    }
+
+    /// ⚠️ **已知语义**（兜底键的固有代价，不是缺陷）：两台**同名**设备共享 `fallback`
+    /// 时，固定其中一台会让另一台**也显示为已固定**（显示侧本就是如此），取消时也一并
+    /// 取消。本用例把它钉死，避免以后有人以为这是 bug 而在**切换侧单方面**改判据 ——
+    /// 那样只会让显示与切换分叉（见上一个用例的失败模式）。
+    ///
+    /// 真要消掉这个语义，得从**存储层**动手（例如容器键稳定的设备不再存名称兜底），
+    /// 而不是在切换侧特判。
+    #[test]
+    fn pinned_toggle_flips_shared_fallback_entry() {
+        let mut c = Config::default();
+        try_toggle_pinned_taskbar_device(&mut c, "c:headset-a", Some("n:WH-1000XM4"), None)
+            .expect("固定 A 应成功");
+
+        // B 与 A 同名 ⇒ 显示侧认为 B 也已固定（本用例的前提）
+        assert!(
+            matches_pinned_taskbar(
+                &c.pinned_taskbar_devices,
+                "c:headset-b",
+                Some("n:WH-1000XM4")
+            ),
+            "前提：同名设备的兜底键应当命中"
+        );
+
+        try_toggle_pinned_taskbar_device(&mut c, "c:headset-b", Some("n:WH-1000XM4"), None)
+            .expect("对 B 切换应走取消分支");
+
+        assert!(
+            c.pinned_taskbar_devices.is_empty(),
+            "不得为 B 再插一条（那会让表里出现两条同名项），实际: {:?}",
+            c.pinned_taskbar_devices
+        );
+    }
+
+    /// 上限拒绝必须 ① 返回 `Err` 且 ② **不写入**。
+    ///
+    /// 断言长度而不只是返回值是关键：只断言 `Err` 的话，「先写进去再报错」
+    /// 这种半吊子实现也会通过（与 `tray_device_limit_rejects_without_writing` 同款理由）。
+    #[test]
+    fn pinned_limit_rejects_without_writing() {
+        let mut c = Config {
+            pinned_taskbar_devices: (0..PINNED_TASKBAR_LIMIT)
+                .map(|i| pin(&format!("c:full-{i}"), None))
+                .collect(),
+            ..Default::default()
+        };
+
+        let err = try_toggle_pinned_taskbar_device(&mut c, "c:第N+1个", None, None);
+
+        assert!(err.is_err(), "已达上限时必须拒绝");
+        assert_eq!(
+            c.pinned_taskbar_devices.len(),
+            PINNED_TASKBAR_LIMIT,
+            "被拒绝的请求不得写进列表，否则上限保护形同虚设"
+        );
+    }
+
+    /// 上限判据的另一侧：差一个到上限时仍应放行并写入。
+    ///
+    /// 与上一用例成对 —— 只测「拒绝」的话，一个「永远拒绝」的实现也能通过。
+    #[test]
+    fn pinned_limit_allows_when_one_below() {
+        let mut c = Config {
+            pinned_taskbar_devices: (0..PINNED_TASKBAR_LIMIT - 1)
+                .map(|i| pin(&format!("c:below-{i}"), None))
+                .collect(),
+            ..Default::default()
+        };
+
+        let res = try_toggle_pinned_taskbar_device(&mut c, "c:最后一个名额", None, None);
+
+        assert!(res.is_ok(), "未达上限时必须放行: {res:?}");
+        assert_eq!(c.pinned_taskbar_devices.len(), PINNED_TASKBAR_LIMIT);
+    }
+
+    /// 已达上限时**取消**已有项必须放行。
+    ///
+    /// 否则用户会卡在满员状态：想加新的加不进，想先删一个又因「已达上限」被拒。
+    #[test]
+    fn pinned_removal_is_not_blocked_by_limit() {
+        let mut c = Config {
+            pinned_taskbar_devices: (0..PINNED_TASKBAR_LIMIT)
+                .map(|i| pin(&format!("c:full-{i}"), None))
+                .collect(),
+            ..Default::default()
+        };
+
+        let res = try_toggle_pinned_taskbar_device(&mut c, "c:full-0", None, None);
+
+        assert!(res.is_ok(), "移除已有项不得被上限拦截: {res:?}");
+        assert_eq!(c.pinned_taskbar_devices.len(), PINNED_TASKBAR_LIMIT - 1);
+    }
+
+    /// 空白字段归一化 + 空键拒绝。
+    ///
+    /// 三件事：① `""` / 纯空格不得被存成 `Some("")`（那是「看着有值、实则永不命中」
+    /// 的字段，排查时极具误导性）；② `alias` 前后空白要剪掉；③ **空键直接拒绝** ——
+    /// 空键会变成一条永远匹配不上任何设备的幽灵固定项，前端却会为它渲染一行
+    /// 永久置灰的占位，用户既看不出它是什么、也只能原样再切一次才删得掉。
+    #[test]
+    fn pinned_toggle_normalizes_blank_fields_and_rejects_blank_key() {
+        let mut c = Config::default();
+
+        try_toggle_pinned_taskbar_device(&mut c, "c:aaa", Some("   "), Some("  耳机  "))
+            .expect("空兜底不算错误，应被归一化为 None");
+
+        assert_eq!(
+            c.pinned_taskbar_devices,
+            vec![PinnedDevice {
+                key: "c:aaa".to_string(),
+                fallback: None,
+                alias: Some("耳机".to_string()),
+            }],
+            "空兜底必须存成 None；别名必须剪掉前后空白"
+        );
+
+        let mut c = Config::default();
+        let err = try_toggle_pinned_taskbar_device(&mut c, "  ", Some("n:x"), None);
+        assert!(err.is_err(), "空键必须被拒绝");
+        assert!(
+            c.pinned_taskbar_devices.is_empty(),
+            "被拒绝的空键不得写进列表，否则会留下永不命中的幽灵条目"
+        );
     }
 
     // ── 任务栏设备侧取数：缓存为空必须自愈（默认配置下缓存恒空）──────
