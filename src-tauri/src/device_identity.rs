@@ -389,6 +389,20 @@ pub struct PhysicalDevice {
     /// 该物理设备当前的**输出**端点 id（供音量使用）；无音频端点时为 `None`（如键鼠）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_device_id: Option<String>,
+    /// 上面那个端点的音量（`0.0`–`1.0`）；无音频端点时为 `None`。
+    ///
+    /// ⭐ **随设备一起返回，而不是让前端自己去 `get_audio_devices` 里 join** ——
+    /// 否则「用 `audio_device_id` 匹配 `AudioDevice.id`」就成了**未文档化的隐式契约**：
+    /// 前端写错（例如改用 `name` 匹配）既不报错也不告警，只会静默显示错误的音量。
+    /// 聚合时 `AudioDevice` 本来就在手边，带上它零成本，还省掉一次 IPC。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<f32>,
+    /// 该输出端点是否静音；无音频端点时为 `None`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_muted: Option<bool>,
+    /// 该输出端点是否为**系统默认**设备；无音频端点时为 `None`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_default: Option<bool>,
     /// 该容器出现过的设备类别（一个容器可跨多类，实测 USB + HID + SWD）；占位条目为空数组
     pub categories: Vec<DevType>,
     /// 参与聚合的条目数（设备行 + 音频端点行）；占位条目为 0。
@@ -417,7 +431,12 @@ pub struct Grouper {
 struct Group {
     names: Vec<String>,
     battery: Option<(i32, BatterySource)>,
-    audio_device_id: Option<String>,
+    /// 该容器命中的输出端点（**整条**存下，含音量 / 静音 / 默认标记）。
+    ///
+    /// 不满足于只存 id：`finish()` 要从它一次派生 `audio_device_id` / `volume` /
+    /// `is_muted` / `is_default` 四个字段，而这四个必须**同生同灭** ——
+    /// 分开存就可能出现「有 id 却没有音量」的半截状态。
+    audio: Option<crate::audio::AudioDevice>,
     categories: Vec<DevType>,
     node_count: usize,
 }
@@ -428,13 +447,18 @@ impl Grouper {
     }
 
     /// 加入一个节点。`key` 为 `None` 的节点**直接丢弃** —— 没有身份的设备不该出现在任务栏。
+    ///
+    /// `audio` 是该节点命中的输出端点：**音频端点行传 `Some`，设备行传 `None`**。
+    /// 参数**个数保持不变**（用整条 `AudioDevice` 顶替原先的 `Option<&str>` id），
+    /// 避免把 `add` 推进 `too_many_arguments` —— 本仓 clippy 基线对它是收紧的，
+    /// 新增一处即转红。
     pub fn add(
         &mut self,
         key: Option<&str>,
         name: &str,
         dt: DevType,
         battery: Option<(i32, BatterySource)>,
-        audio_device_id: Option<&str>,
+        audio: Option<&crate::audio::AudioDevice>,
     ) {
         let Some(key) = key else { return };
         let g = self.acc.entry(key.to_string()).or_default();
@@ -452,9 +476,11 @@ impl Grouper {
                 g.battery = Some((level, source));
             }
         }
-        if let Some(id) = audio_device_id {
-            if g.audio_device_id.is_none() {
-                g.audio_device_id = Some(id.to_string());
+        // 同一容器可能命中**多个**端点（调用方已把默认端点排到前面）⇒ 取**先到**的那个，
+        // 与「哪个端点的音量代表这台设备」的排序约定一致。
+        if let Some(a) = audio {
+            if g.audio.is_none() {
+                g.audio = Some(a.clone());
             }
         }
         if !g.categories.contains(&dt) {
@@ -466,14 +492,21 @@ impl Grouper {
     pub fn finish(self) -> Vec<PhysicalDevice> {
         self.acc
             .into_iter()
-            .map(|(key, g)| PhysicalDevice {
-                key,
-                name: pick_display_name(&g.names),
-                battery: g.battery.map(|(level, _)| level),
-                audio_device_id: g.audio_device_id,
-                categories: g.categories,
-                node_count: g.node_count,
-                pinned: false,
+            .map(|(key, g)| {
+                // 四个音频字段从**同一条**端点派生 ⇒ 不可能出现「有 id 没音量」的半截状态
+                let audio = g.audio;
+                PhysicalDevice {
+                    key,
+                    name: pick_display_name(&g.names),
+                    battery: g.battery.map(|(level, _)| level),
+                    audio_device_id: audio.as_ref().map(|a| a.id.clone()),
+                    volume: audio.as_ref().map(|a| a.volume),
+                    is_muted: audio.as_ref().map(|a| a.is_muted),
+                    is_default: audio.as_ref().map(|a| a.is_default),
+                    categories: g.categories,
+                    node_count: g.node_count,
+                    pinned: false,
+                }
             })
             .collect()
     }
@@ -549,13 +582,7 @@ pub fn group_taskbar_devices(
     ordered.sort_by_key(|a| !a.is_default);
     for a in ordered {
         let key = audio_endpoint_key(a);
-        grouper.add(
-            Some(&key.encode()),
-            &a.name,
-            DevType::Audio,
-            None,
-            Some(a.id.as_str()),
-        );
+        grouper.add(Some(&key.encode()), &a.name, DevType::Audio, None, Some(a));
     }
 
     // 再入设备列表：电量与类别由它提供。
@@ -610,6 +637,9 @@ pub fn group_taskbar_devices(
             name: pinned_placeholder_name(p),
             battery: None,
             audio_device_id: None,
+            volume: None,
+            is_muted: None,
+            is_default: None,
             // 占位条目没有参与聚合的节点 ⇒ 无类别、计数为 0
             categories: Vec::new(),
             node_count: 0,
@@ -1370,6 +1400,61 @@ mod tests {
         );
         // 展示名不因排序而变：两份名字的 core_name 相同，取到的仍是设备名
         assert_eq!(out[0].name, "Mijia Glasses Lite");
+        // 音量侧的标记必须与**被选中的那条端点**同源：选中的是默认端点，`is_default`
+        // 就该为真、`volume` 就该是它的 0.5 —— 不得出现「id 取自 A、标记取自 B」的错配。
+        assert_eq!(
+            out[0].is_default,
+            Some(true),
+            "四个音频字段必须由同一条端点派生"
+        );
+        assert_eq!(out[0].volume, Some(0.5), "音量取自被选中的那个端点");
+    }
+
+    /// 音量侧的信息必须**随设备一起返回**，不能让前端自己去 `get_audio_devices` 里
+    /// 按 id join —— 那样「`audio_device_id` 匹配 `AudioDevice.id`」就成了未文档化的
+    /// **隐式契约**，前端写错（例如改用 `name` 匹配）既不报错也不告警，只会静默显示
+    /// 错误的音量。聚合时 `AudioDevice` 本来就在手边，带上它零成本。
+    ///
+    /// 判据可证伪：把 `finish()` 里的 `volume: audio.as_ref().map(|a| a.volume)`
+    /// 改成 `None`，本用例必转红。
+    #[test]
+    fn audio_volume_details_ride_along_with_the_device() {
+        let mut endpoint = audio(
+            "耳机 (小爱音箱-9205)",
+            "{0.0.0.0}.{abc}",
+            Some("9039aea7-9c07-52f2-a4ef-0f5296d6d7d2"),
+        );
+        endpoint.volume = 0.42;
+        endpoint.is_muted = true;
+
+        let out = group_taskbar_devices(&[], &[endpoint], &[]);
+        assert_eq!(out.len(), 1, "只有一条音频端点：{out:?}");
+        let d = &out[0];
+        assert_eq!(d.audio_device_id.as_deref(), Some("{0.0.0.0}.{abc}"));
+        assert!(
+            matches!(d.volume, Some(v) if (v - 0.42).abs() < 1e-6),
+            "音量必须随设备返回，实际 {:?}",
+            d.volume
+        );
+        assert_eq!(d.is_muted, Some(true), "静音状态必须随设备返回");
+        assert_eq!(d.is_default, Some(false), "非默认端点必须如实标记");
+    }
+
+    /// 反控：**没有音频端点**的设备（键鼠）三个音量字段必须都是 `None`
+    /// —— 否则前端会把「无音量」误当成「音量为 0 / 未静音」。
+    ///
+    /// 判据可证伪：把 `finish()` 里的 `volume` 改成 `Some(0.0)`，本用例必转红。
+    #[test]
+    fn device_without_audio_endpoint_has_no_volume_fields() {
+        let devices = vec![dev("罗技接收器", Some("c:kb-only"), Some(90), false, true)];
+        let out = group_taskbar_devices(&devices, &[], &[]);
+        assert_eq!(out.len(), 1);
+        let d = &out[0];
+        assert_eq!(d.battery, Some(90), "电量侧照常");
+        assert!(d.audio_device_id.is_none());
+        assert!(d.volume.is_none(), "无音频端点 ⇒ 音量必须是 None 而非 0");
+        assert!(d.is_muted.is_none());
+        assert!(d.is_default.is_none());
     }
 
     /// `devnode_from_hidapi_path`：三条**实机实测**样本（均取自本机 hidapi 输出，
