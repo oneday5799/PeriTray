@@ -21,6 +21,8 @@ mod process;
 mod shortcut;
 mod state;
 #[cfg(target_os = "windows")]
+mod taskbar_widget;
+#[cfg(target_os = "windows")]
 mod toast;
 mod tray;
 mod update;
@@ -327,6 +329,61 @@ fn spawn_dev_open_settings(app: &tauri::AppHandle) {
         });
     }
 }
+
+/// 开发调试：设置环境变量 `PM_DEV_TASKBAR_WIDGET` 时挂载任务栏 widget（B3-A 里程碑 1）。
+///
+/// ⛔⛔ **必须在主线程（tao 事件循环线程）上同步调用**，不能 spawn 到子线程：
+///   窗口**随创建线程退出而销毁** —— 子线程挂完就结束，窗口立刻消失。
+///   tao 主线程会一直泵消息，是唯一安全的宿主。
+///
+/// 为什么用环境变量门控：里程碑 1 只验证「能挂上去 + 透明背景正确」，
+/// 尚未接入真实内容与配置开关，**不该影响正常启动**。
+///
+/// 三个门控变量：
+///   · `PM_DEV_TASKBAR_WIDGET=1`        —— 挂载（同步，在主线程）
+///   · `PM_DEV_TASKBAR_WIDGET_DESTROY=1`—— 挂载后**立刻拆除**（验证拆除路径与 `probe` 归零）
+///   · `PM_DEV_TASKBAR_WIDGET_PROBE=1`  —— 挂载后 **3 秒**再 `probe()` 一次（验证「挂上后没掉」）
+#[cfg(target_os = "windows")]
+fn spawn_taskbar_widget_dev() {
+    if std::env::var("PM_DEV_TASKBAR_WIDGET").is_err() {
+        return;
+    }
+    let report = crate::taskbar_widget::spawn_widget();
+    let verdict = if report.ok() { "OK" } else { "FAILED" };
+    crate::process::append_log(&format!(
+        "[widget] 里程碑 1 挂载结果: {} (hwnd={:#x} reparent_err={} parent={:#x} taskbar={:#x})",
+        verdict, report.hwnd, report.reparent_err, report.parent, report.taskbar
+    ));
+
+    // ⭐ 延迟复核：验证「挂载后不会自己掉」（Explorer 重建 / 任务栏替换会让 GetParent 变）
+    if std::env::var("PM_DEV_TASKBAR_WIDGET_PROBE").is_ok() {
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let p = crate::taskbar_widget::probe();
+            crate::process::append_log(&format!(
+                "[widget] 3s 后复核: ok={} (hwnd={:#x} parent={:#x} taskbar={:#x})",
+                p.ok(),
+                p.hwnd,
+                p.parent,
+                p.taskbar
+            ));
+        });
+    }
+
+    // 拆除路径验证（① 收尾清理 ② 将来「设置页关掉」的拆除）
+    if std::env::var("PM_DEV_TASKBAR_WIDGET_DESTROY").is_ok() {
+        crate::taskbar_widget::destroy_widget();
+        let after = crate::taskbar_widget::probe();
+        crate::process::append_log(&format!(
+            "[widget] 拆除后 probe: ok={} hwnd={:#x}（应为 0）",
+            after.ok(),
+            after.hwnd
+        ));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn spawn_taskbar_widget_dev() {}
 
 /// 启动时检测更新：延迟 3s 后查询并广播状态，有更新时弹 Windows 原生通知。
 fn spawn_startup_update_check(app: &tauri::AppHandle) {
@@ -697,6 +754,10 @@ fn main() {
 
             // 开发调试：设置此环境变量时自动打开设置窗口（用于自动化检测）
             spawn_dev_open_settings(app.handle());
+
+            // 开发调试：挂载任务栏 widget（B3-A 里程碑 1）。
+            // ⛔ 必须在 setup 回调（tao 主线程、常驻泵消息）里**同步**调用，见函数注释。
+            spawn_taskbar_widget_dev();
 
             // 启动时检测更新（仅非 autostart 模式）
             if !is_autostart && config::with_config(|c| c.check_updates) {
