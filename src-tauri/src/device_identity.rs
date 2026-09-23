@@ -14,7 +14,7 @@
 use crate::dedup::core_name;
 use crate::device::DevType;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_DevNode_PropertyW, CM_Get_Device_ID_ListW, CM_Get_Device_ID_List_SizeW,
     CM_Locate_DevNodeW, CM_GETIDLIST_FILTER_ENUMERATOR, CM_LOCATE_DEVNODE_NORMAL,
@@ -540,12 +540,26 @@ fn pick_display_name(names: &[String]) -> String {
         .unwrap_or_else(|| "未知设备".to_string())
 }
 
-/// 音频端点 → 身份键。有容器用容器；**没有容器时退回端点自己的 devnode 实例路径**
-/// （`SWD\MMDEVAPI\{id}`），这样它仍能与 PnP 侧同一端点的 `Device.device_key` 对齐
-/// —— 虚拟音频设备正走这条路（它们落在占位容器上，没有真实容器）。
+/// 音频端点 → 身份键。有**可用**容器用容器；否则退回端点自己的 devnode 实例路径
+/// （`SWD\MMDEVAPI\{id}`），这样它仍能与 PnP 侧同一端点的 `Device.device_key` 对齐。
+///
+/// ⭐ **虚拟音频设备走的正是降级这条路** —— 它们落在**占位容器**上，
+/// 而 `container_of_audio_endpoint` 内部已过 `usable_container` ⇒ 传进来时
+/// `container_id` **就是 `None`**（不是「占位容器字符串」）。此处再兜一道底：
+/// 万一上游哪天把占位容器原样填进来，这里也必须降级，否则占位容器上的多条无关设备
+/// （实测网易×2 + Steam×1 共享 `{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`）
+/// 会被 `Grouper` **并成一条** —— 比现状更糟。
+///
+/// ⛔ **此处必须自己复核、不得只信任调用方**（与 `normalize_encoded_key` 同一条纪律）：
+/// 本函数把「容器串已归一化/已排除占位」的责任收回来自己承担，
+/// 代价是一次 `usable_container` 调用，换来的是**不依赖上游不出错**。
 fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
-    match &audio.container_id {
-        Some(c) => DeviceKey::Container(c.clone()),
+    match audio
+        .container_id
+        .as_deref()
+        .and_then(|c| usable_container(Some(c)))
+    {
+        Some(c) => DeviceKey::Container(c),
         None => DeviceKey::Instance(format!("SWD\\MMDEVAPI\\{}", audio.id)),
     }
 }
@@ -655,6 +669,177 @@ pub fn group_taskbar_devices(
     kept
 }
 
+/// 选择器条目：设备的**来源**标记（第 3 层 T3-3「每项标注来源」用）。
+///
+/// 刻意不做成 `bool` 二元组 —— 一台设备可以**同时**来自两侧（这正是合并的常见结果），
+/// 用位标记表达「两侧都出现」比两个布尔字段更难写错（不会出现「两个都 true 却没处理」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceSources {
+    /// 出现在设备信息页（`get_devices` 的结果里）
+    pub device_page: bool,
+    /// 出现在音量控制页（输出或输入端点）
+    pub volume_page: bool,
+}
+
+/// 选择器条目：两页的**并集**里的一台（物理）设备。
+///
+/// ⛔ 与 `PhysicalDevice` 的**关键区别**：本类型**不做数据可用性过滤** ——
+/// 凡出现在两页里就保留，即使读不出电量也读不出音量。理由：选择器的职责是
+/// 「让用户选择要固定/显示的设备」，**不是**「显示当前数据」；用数据可用性筛掉条目
+/// 会让用户根本无法为「此刻没读到数据的设备」做设置。
+#[derive(Debug, Clone, Serialize)]
+pub struct MergedDevice {
+    /// `DeviceKey::encode()` 的结果（`c:` / `i:` / `n:` 前缀）
+    pub key: String,
+    /// 组内候选名按 `pick_display_name` 挑出的名字（与 `PhysicalDevice` 同一规则）
+    pub name: String,
+    /// 电量；两侧都没有则为 `None`（⚠️ `Some(0)` 是合法值，判空必须用 `is_none()`）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery: Option<i32>,
+    /// 组内命中的端点 id（输出优先，详见 `merge_by_identity` 的排序约定）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_device_id: Option<String>,
+    /// 出现过的设备类别（空数组表示只有音频端点参与、或键来自降级）
+    pub categories: Vec<DevType>,
+    /// 参与聚合的条目数（设备行 + 端点行）
+    pub node_count: usize,
+    /// 该设备来自哪一页（用于 T3-3 的「仅设备页 / 仅音量页」标注）
+    pub sources: DeviceSources,
+}
+
+/// 校验一条**已编码**的身份键（`c:` / `i:` / `n:`）在结构上仍然合法；
+/// 不合法时返回 `None`，让调用方按降级链重算。
+///
+/// 存在的唯一理由：**`c:` 级键必须仍然指向一个「可用容器」**。
+/// `usable_container` 只在**构造**键时把关（`device_key` 内部），一旦键被编码成字符串、
+/// 存进 `Device.device_key` 并跨函数/跨层传递，那个把关就不再被复核 ——
+/// 若上游填入占位容器（`{…-ffffffffffff}`），占位容器上的多条无关设备就会
+/// **静默并成一条**（Spec §3.1：「比现状更糟」）。
+///
+/// ⚠️ 今天的上游是安全的（`wmi_query.rs:242/333` 走 `device_key`，内部已过 `usable_container`），
+/// 所以本函数在生产路径上**恒返回 `Some`** —— 它是**结构性防御**，不是补漏。
+/// 判据刻意做得极保守：**只拒绝 `c:` 级里不可用的容器**，其余一律原样放行
+/// （`i:` / `n:` 无可校验的语义，且它们的降级代价是「拆细」而非「串号」，方向安全）。
+fn normalize_encoded_key(encoded: &str, name: &str) -> Option<String> {
+    if let Some(raw) = encoded.strip_prefix("c:") {
+        // 复用 `usable_container` —— ⛔ 绝不自己判占位（Spec §3.1 纪律）
+        return usable_container(Some(raw)).map(|g| DeviceKey::Container(g).encode());
+    }
+    if encoded.starts_with("i:") || encoded.starts_with("n:") {
+        return Some(encoded.to_string());
+    }
+    // 前缀未知 ⇒ 不是本模块产出的键 ⇒ 当作不可信，交给降级链
+    let _ = name;
+    None
+}
+
+/// 选择器数据源：`设备页 ∪ 输出端点 ∪ 输入端点`，按**物理设备身份**合并。
+///
+/// ⛔⛔ **本函数刻意不复用 `group_taskbar_devices`** —— 后者末尾的**反向补建循环**
+/// （见该函数文档 ②）会为「被 pin 但本次枚举完全没出现」的设备**凭空造条目**，
+/// 而那些设备在设备页与音量页里**根本不存在** ⇒ 会让选择器**超出并集**。
+/// 见 Spec §0.4（三）与 §4 T3-1。
+///
+/// ⛔ 同样**不做**数据可用性过滤（那是任务栏窗口的语义，不是选择器的）。
+///
+/// 身份判据（**只用 `device_key`，绝不用 `name` 反推** —— 见 Spec §3.1）：
+///   · 设备行：`d.device_key` 优先；为 `None` 时降级 `DeviceKey::Name(core_name(&d.name))`
+///     （与 `group_taskbar_devices` 同一降级，保证两台设备不会因「一个有键一个没键」而错分）；
+///   · 端点行：`audio_endpoint_key(a)` —— 有容器用容器，无容器退 `SWD\MMDEVAPI\{id}`。
+///
+/// ⛔ **容器串只从上述既有字段取**，不得自行拼接 / 手工解析字符串形态的 ContainerId
+/// （`audio_endpoint_key` 不做归一化，责任在调用方 —— 见 Spec §6 末）。
+///
+/// 端点排序：同一容器可能有**多个**端点（实测一个容器覆盖过 3 个），
+/// 这里先把**系统默认**端点排到前面 —— 与 `group_taskbar_devices` 的约定一致，
+/// 让「哪个端点代表这台设备」有确定且符合直觉的答案。
+///
+/// **输入端点**（`inputs`）与输出端点同等对待：它们只在音量页的会话右键菜单可见
+/// （Spec §0.4 一），但选择器要覆盖它们（验收判据 2）。
+pub fn merge_by_identity(
+    devices: &[crate::device::Device],
+    outputs: &[crate::audio::AudioDevice],
+    inputs: &[crate::audio::AudioDevice],
+) -> Vec<MergedDevice> {
+    let mut grouper = Grouper::new();
+    let mut from_device_page: BTreeSet<String> = BTreeSet::new();
+    let mut from_volume_page: BTreeSet<String> = BTreeSet::new();
+
+    // ── 先入端点：**输出在前**，且各自内部把系统默认端点排到前面 ──────────
+    // 输出先于输入 ⇒ 同一容器同时有输出与输入端点时，音量代表的是**输出**
+    // （用户「调这台设备的音量」指的就是输出）。
+    let mut ordered: Vec<&crate::audio::AudioDevice> =
+        Vec::with_capacity(outputs.len() + inputs.len());
+    let mut out_sorted: Vec<&crate::audio::AudioDevice> = outputs.iter().collect();
+    out_sorted.sort_by_key(|a| !a.is_default);
+    ordered.extend(out_sorted);
+    let mut in_sorted: Vec<&crate::audio::AudioDevice> = inputs.iter().collect();
+    in_sorted.sort_by_key(|a| !a.is_default);
+    ordered.extend(in_sorted);
+
+    for a in ordered {
+        let key = audio_endpoint_key(a).encode();
+        from_volume_page.insert(key.clone());
+        // `audio = Some(a)` ⇒ 音量字段由端点提供；`battery = None` ⇒ 端点不提供电量
+        grouper.add(Some(&key), &a.name, DevType::Audio, None, Some(a));
+    }
+
+    // ── 再入设备行：电量与类别由它提供 ────────────────────────────────────
+    for d in devices {
+        let source = if d.is_bluetooth || d.is_ble {
+            BatterySource::Bluetooth
+        } else if d.is_wireless_24g {
+            BatterySource::Hid24g
+        } else {
+            BatterySource::Unknown
+        };
+        // ⛔ **键必须过 `usable_container` 重置**，不可直接信任 `d.device_key`。
+        //
+        // 今天的生产端是安全的：`Device.device_key` 来自
+        // `wmi_query.rs:242`（PnP）与 `:333`（蓝牙）的 `device_identity::device_key(..)`，
+        // 而它内部的 `usable_container` 已排除占位容器 ⇒ 占位时该字段本就是 `None`。
+        //
+        // ⚠️ 但那是**上游的巧合**，不是本函数的保证。若沿用 `d.device_key` 原文，
+        // 一旦上游哪天把未过滤的容器串填进来（或有人给 `Device` 加一条新生产者），
+        // 占位容器上的多条设备就会在这个函数里**静默并成一条** ——
+        // 正是 Spec §3.1 说的「比现状更糟」。
+        // ⇒ 这里对**已编码的键**做一次结构性校验：`c:` 级必须仍是可用容器，否则按降级链重算。
+        //    成本是一次字符串前缀判断，换来的是「本函数自身即可保证不误并」。
+        let fallback = DeviceKey::Name(core_name(&d.name)).encode();
+        let key = match d.device_key.as_deref() {
+            Some(k) => normalize_encoded_key(k, &d.name).unwrap_or_else(|| fallback.clone()),
+            None => fallback.clone(),
+        };
+        from_device_page.insert(key.clone());
+        grouper.add(
+            Some(&key),
+            &d.name,
+            d.dt,
+            d.battery.map(|b| (b, source)),
+            None,
+        );
+    }
+
+    // `Grouper::finish` 已按 key 排序（内部 `BTreeMap`）⇒ 顺序稳定，UI 不会跳动。
+    // ⚠️ 这里**不做任何 filter**（尤其不做 `battery.is_some() || audio_device_id.is_some()`）。
+    grouper
+        .finish()
+        .into_iter()
+        .map(|p| MergedDevice {
+            battery: p.battery,
+            audio_device_id: p.audio_device_id,
+            categories: p.categories,
+            node_count: p.node_count,
+            sources: DeviceSources {
+                device_page: from_device_page.contains(&p.key),
+                volume_page: from_volume_page.contains(&p.key),
+            },
+            key: p.key,
+            name: p.name,
+        })
+        .collect()
+}
+
 /// 占位条目的展示名：优先用户自定义名，其次从身份键里剥出可读部分。
 ///
 /// `n:`（名称键）的后半段本身就是可读名字；`c:`（容器 GUID）/ `i:`（实例路径）是机器串，
@@ -675,6 +860,75 @@ fn pinned_placeholder_name(p: &crate::config::PinnedDevice) -> String {
         })
         .map(|s| s.to_string())
         .unwrap_or_else(|| p.key.clone())
+}
+
+/// 选择器里的一台设备：并集口径 + 已套用显示名的**最终**形态（第 3 层 T3-1）。
+///
+/// 与 `MergedDevice` 的关系：本类型是它的**装配结果** —— 多出两个「只有命令层才知道
+/// 上下文」的字段（用户自定义名、是否已固定），少一个仅供 T3-3 内部使用的 `sources`
+/// 之外的中间态。刻意不复用 `PhysicalDevice`：后者带 `volume` / `is_muted` /
+/// `is_default`，而选择器**不需要**这些实时值（它只负责选设备，不显示音量），
+/// 多带出去反而让前端误以为可以显示。
+#[derive(Debug, Clone, Serialize)]
+pub struct SelectableDevice {
+    /// `DeviceKey::encode()` 的结果；前端原样回传给 `toggle_pinned_taskbar_device`
+    pub key: String,
+    /// **最终**显示名：已按 `pin.alias > resolve_device_name > 短名` 三级优先级解析
+    pub name: String,
+    /// 该设备来自哪一页（T3-3 的「仅设备页 / 仅音量页」标注）
+    pub sources: DeviceSources,
+    /// 是否已在任务栏信息窗里固定（复选框的**初始勾选态**）
+    pub pinned: bool,
+}
+
+/// 把并集结果装配成选择器条目：解析最终显示名 + 标注固定态。
+///
+/// ── 显示名三级优先级（Spec §7 第 8 条）────────────────────────────────────
+///   1. `pin.alias`          —— 用户在「固定」时设的别名，优先级最高（它就是为这个设备设的）；
+///   2. `resolve_device_name` —— 全局自定义名（覆盖两页的键口径差异）；
+///   3. 并集自带的 `name`     —— `pick_display_name` 挑出的短名兜底。
+///
+/// ⛔ **本函数不做 pin 补建**（决策 7）：只对**并集里真实存在**的设备判定固定态。
+/// `group_taskbar_devices` 那条「为 pinned 但本次枚举没出现的设备凭空造条目」的循环
+/// **绝不能**引入 —— 那会让选择器出现「两页都没有、用户也没法取消」的幽灵条目。
+///
+/// 判据复用 `config::matches_pinned_taskbar`（与显示侧同一份），避免「勾选态」与
+/// 「任务栏实际显示」两套规则分叉。
+pub fn build_selectable_devices(
+    merged: &[MergedDevice],
+    pinned: &[crate::config::PinnedDevice],
+    config: &crate::config::Config,
+) -> Vec<SelectableDevice> {
+    merged
+        .iter()
+        .map(|m| {
+            // 固定态与别名一起取：命中哪条 pin，就用它的 alias —— 两者必须来自**同一条**记录，
+            // 否则会出现「已固定但用着别的设备的别名」。
+            //
+            // ⛔ **`fallback` 必须与显示侧（本文件 `group_taskbar_devices` 的
+            // `p.pinned = …` 那一行）逐字一致**：那边传的是 `n:core_name(显示名)`。
+            // 若这里偷懒传 `None`，「`key` 存容器 + `fallback` 存名称键」这类 pin
+            // （`PinnedDevice` 文档推荐的形态，用于容忍换机/重装驱动）就会在这里失配：
+            // 显示侧说「已固定」、选择器却显示未勾选 ⇒ 用户点一下实际走的是**新增**分支，
+            // 任务栏条目反而消失。两处口径分叉正是这条判据要防的事。
+            let fallback = DeviceKey::Name(core_name(&m.name)).encode();
+            let hit = pinned
+                .iter()
+                .find(|p| crate::config::pinned_device_matches(p, &m.key, Some(&fallback)));
+            let name = hit
+                .and_then(|p| p.alias.as_deref())
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::config::resolve_device_name(&m.name, config));
+            SelectableDevice {
+                key: m.key.clone(),
+                name,
+                sources: m.sources,
+                pinned: hit.is_some(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -894,6 +1148,129 @@ mod tests {
         .unwrap()
         .encode();
         assert_ne!(a, other, "不同容器的设备必须分开");
+    }
+
+    /// ⭐⭐ **T1-0.5（前置门）：PnP 侧 `device_key` 与音频侧 `audio_endpoint_key`
+    /// 对**同一条音频端点**必须产出逐字相同的键。**
+    ///
+    /// 为什么这条单测必须先于 T1-1 存在：
+    /// 任务栏设备选择器的第 1 层（`merge_by_identity`）**整条合并判据**建立在这个等式上。
+    /// 此前只有 `probe-keyalign.py`（用 **Python 重实现**两个 key 函数）得出「相等」的结论
+    /// —— 那是**文档级验证，不是可执行验证**。若两键实际不逐字相等，
+    /// 合并会在真机上**静默不合并**（不报错、不告警、不 panic），
+    /// 而用手写 key 的单测**照样全绿**。**这是最危险的一类假验收。**
+    ///
+    /// 端点串取自真机日志（`debug_once_8932.log`）里的 PnPEntity `PNPDeviceID` 列：
+    /// `classify_device: 扬声器 (网易虚拟音频设备) -> Audio (pnp_class=AudioEndpoint, pnp_id=…)`
+    ///
+    /// 可证伪：把 `audio_endpoint_key` 的 `None` 分支改成
+    /// `DeviceKey::Name(...)`（或改动 `format!("SWD\\MMDEVAPI\\{}")` 的拼接形式）即转红。
+    #[test]
+    fn pnp_device_key_matches_audio_endpoint_key_for_same_endpoint() {
+        // 真机日志里的逐字串（大写，含花括号）—— PnP 侧 `PNPDeviceID` 的原样形态
+        const PNP_ID: &str =
+            "SWD\\MMDEVAPI\\{0.0.0.00000000}.{C5C40F0A-A935-48A4-BC19-06FF1D09E504}";
+        // 音频侧 `AudioDevice.id` 的原样形态（无 `SWD\MMDEVAPI\` 前缀）
+        const AUDIO_ID: &str = "{0.0.0.00000000}.{C5C40F0A-A935-48A4-BC19-06FF1D09E504}";
+
+        // ① 设备侧：PnP 行的实例路径就是上面那条串（无容器 ⇒ 降级到 Instance）
+        let from_pnp = device_key(None, Some(PNP_ID), None).unwrap();
+
+        // ② 音频侧：无真实容器（虚拟设备落占位容器 ⇒ container_id 为 None）⇒ 同样降级
+        let from_audio = audio_endpoint_key(&audio("扬声器 (网易虚拟音频设备)", AUDIO_ID, None));
+
+        assert_eq!(
+            from_pnp, from_audio,
+            "同一音频端点在 PnP 侧与音频侧必须得到同一个身份键，\
+             否则第 1 层合并在真机上会静默失效"
+        );
+
+        // ③ 钉住形态：必须是 `i:` 级、且已全小写（`DeviceKey::encode` 对 Instance 做 lowercase）
+        assert_eq!(
+            from_audio.encode(),
+            "i:swd\\mmdevapi\\{0.0.0.00000000}.{c5c40f0a-a935-48a4-bc19-06ff1d09e504}",
+            "实例路径必须全小写并带 i: 前缀"
+        );
+
+        // ④ 反控：容器存在时**两侧都**走 Container 级 —— 音频侧不得只看 id 而忽略容器。
+        //    （避免有人「简化」成永远用 Instance，那样真机上有容器的设备就合不上了）
+        //
+        //    ⚠️ 这里刻意喂**归一化形态**的容器串 —— 因为 `AudioDevice.container_id` 的唯一
+        //    生产者是 `container_of_instance` → `usable_container(format_guid_bytes(..))`，
+        //    它**必然**产出小写无花括号形态。见下面 ④b 的契约钉板。
+        const C: &str = "40e11c06-72bd-5b38-9bd2-0e15079b3b45";
+        let pnp_c = device_key(Some(C), Some(PNP_ID), None).unwrap();
+        let audio_c = audio_endpoint_key(&audio("扬声器 (DUNU DTC100pro)", AUDIO_ID, Some(C)));
+        assert_eq!(pnp_c, audio_c, "有真实容器时两侧都必须走容器级");
+        assert_eq!(pnp_c.encode(), "c:40e11c06-72bd-5b38-9bd2-0e15079b3b45");
+
+        // ④b ⛔ **契约钉板（本单测的真正价值所在）**：
+        //    两条路径对容器 GUID 的归一化责任**曾经不同** ——
+        //      · `device_key(Some(raw), ..)` 内部经 `usable_container` ⇒ **会** `normalize_guid`；
+        //      · `audio_endpoint_key(..)` 曾是 `DeviceKey::Container(c.clone())` ⇒ **裸克隆，不归一化**。
+        //    ⇒ 那时它把「容器串必须已归一化」的责任**推给了调用方**；新调用方（`merge_by_identity`）
+        //      若从别处取得容器串，就会**静默分叉** —— 键不等 ⇒ 不合并、不报错。
+        //
+        //    ⭐ **本钉板首次运行时抓到了更糟的一种：占位容器被原样接受**
+        //      （探针实测：两条落在占位容器上的端点被并成 1 条）。
+        //    ⇒ **已修**：`audio_endpoint_key` 现在自己过 `usable_container`（责任收回自己承担）。
+        //      这条断言随之更新为钉住**修复后**的契约：
+        //      未归一化输入应被**归一化**（而非原样保留），占位容器应被**降级**（而非当成容器）。
+        assert_eq!(
+            audio_endpoint_key(&audio(
+                "x",
+                AUDIO_ID,
+                Some("{40E11C06-72BD-5B38-9BD2-0E15079B3B45}")
+            ))
+            .encode(),
+            "c:40e11c06-72bd-5b38-9bd2-0e15079b3b45",
+            "契约：audio_endpoint_key 必须自己归一化容器串（不得依赖调用方）"
+        );
+        assert_eq!(
+            device_key(
+                Some("{40E11C06-72BD-5B38-9BD2-0E15079B3B45}"),
+                Some(PNP_ID),
+                None
+            )
+            .unwrap()
+            .encode(),
+            "c:40e11c06-72bd-5b38-9bd2-0e15079b3b45",
+            "对照：device_key 侧同样归一化 ⇒ 两侧责任现在**对称**"
+        );
+
+        // ⑤ 反控：**占位容器**不得把两侧粘在一起 —— 占位容器在设备侧被
+        //    `usable_container` 拒掉、在音频侧 `container_id` 恒为 None（见 audio.rs 文档），
+        //    两侧都降级到 Instance，仍然是同一条键（这正是虚拟设备能对齐的原因）。
+        let audio_placeholder = audio_endpoint_key(&audio(
+            "扬声器 (Steam Streaming Speakers)",
+            AUDIO_ID,
+            None, // container_of_audio_endpoint 已过 usable_container ⇒ 占位容器在这里就是 None
+        ));
+        assert_eq!(
+            audio_placeholder, from_pnp,
+            "占位容器在音频侧表现为 None ⇒ 仍能与 PnP 侧对齐"
+        );
+        assert!(
+            !audio_placeholder.encode().starts_with("c:"),
+            "占位容器绝不可被当成真实容器"
+        );
+    }
+
+    /// T1-0.5 的**反向自检**：等式不是恒真 —— 换成**另一条**端点必须得到**不同的**键。
+    ///
+    /// 上面那条单测若因为两个函数都「退化成常量」而通过，本用例会把它暴露出来。
+    /// 可证伪：把 `audio_endpoint_key` 改成返回固定值即转红。
+    #[test]
+    fn different_audio_endpoints_produce_different_keys() {
+        const A: &str = "{0.0.0.00000000}.{C5C40F0A-A935-48A4-BC19-06FF1D09E504}";
+        const B: &str = "{0.0.0.00000000}.{91AC81AF-0000-0000-0000-000000000000}";
+
+        let ka = audio_endpoint_key(&audio("扬声器 (网易虚拟音频设备)", A, None)).encode();
+        let kb = audio_endpoint_key(&audio("扬声器 (Mijia)", B, None)).encode();
+
+        assert_ne!(ka, kb, "不同端点必须得到不同键，否则等式是恒真的（假绿）");
+        assert!(ka.contains(&A.to_ascii_lowercase()));
+        assert!(kb.contains(&B.to_ascii_lowercase()));
     }
 
     #[test]
@@ -1533,6 +1910,553 @@ mod tests {
         assert_eq!(
             devnode_from_hidapi_path("HID#VID_046D&PID_C092#7&1a2b3c4d&0&0000").as_deref(),
             Some(r"HID\VID_046D&PID_C092\7&1a2b3c4d&0&0000")
+        );
+    }
+
+    // ── 第 1 层：选择器并集合并（T1-1）─────────────────────────────
+
+    /// 验收判据 3：**同一台设备在两侧名字不同时仍合并为一条**
+    /// —— `扬声器 (DUNU DTC100pro)`（音量页）与 `DUNU DTC100pro`（设备页）。
+    ///
+    /// 这是 DUNU 的核心回归：设备页行有 `device_key`（容器）、
+    /// 音量页端点走 `audio_endpoint_key`（同容器）⇒ 两者**必须**并成一条。
+    #[test]
+    fn merge_by_identity_joins_two_sides_with_different_names() {
+        const CID: &str = "40e11c06-72bd-5b38-9bd2-0e15079b3b45";
+        let key = format!("c:{CID}");
+        let devices = vec![dev("DUNU DTC100pro", Some(&key), Some(100), false, false)];
+        let outputs = vec![audio(
+            "扬声器 (DUNU DTC100pro)",
+            "{0.0.0.0}.{dunu}",
+            Some(CID),
+        )];
+
+        let out = merge_by_identity(&devices, &outputs, &[]);
+
+        assert_eq!(out.len(), 1, "两侧必须并成一条，实际 {out:?}");
+        assert_eq!(out[0].key, key);
+        assert_eq!(out[0].battery, Some(100), "电量来自设备行");
+        assert_eq!(out[0].audio_device_id.as_deref(), Some("{0.0.0.0}.{dunu}"));
+        assert_eq!(out[0].node_count, 2);
+        // 展示名取「括号内设备名」与设备页短名的最长者 —— 两者 core_name 相同 ⇒ 结果唯一
+        assert_eq!(out[0].name, "DUNU DTC100pro");
+        assert!(
+            out[0].sources.device_page && out[0].sources.volume_page,
+            "两侧都标到"
+        );
+    }
+
+    /// 验收判据 4：**占位容器上的多条设备不得互相合并**（网易×2 + Steam×1 必须仍是 3 条）。
+    ///
+    /// ⛔ 这是「比现状更糟」的防线：三条虚拟设备挤在
+    /// `{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`，若 `merge_by_identity` 自己判容器
+    /// （而不复用 `usable_container`）就会并成一条。
+    ///
+    /// ⚠️ 用例必须用**无容器**的真实形态喂入：`container_of_audio_endpoint` 已过
+    /// `usable_container` ⇒ 占位容器在 `AudioDevice.container_id` 上**表现为 `None`**，
+    /// 于是三条各走 `i:SWD\MMDEVAPI\{id}`、id 互不相同 ⇒ 天然不合并。
+    /// ⛔ 若改成「手动喂占位容器串」，测的就是**另一条代码路径**（`device_key` 的排除逻辑），
+    /// 见下一条单测。两条必须都在，否则会漏掉一半。
+    #[test]
+    fn merge_by_identity_keeps_placeholder_container_devices_separate() {
+        let outputs = vec![
+            audio("扬声器 (网易虚拟音频设备)", "{0.0.0.0}.{netease-out}", None),
+            audio(
+                "扬声器 (Steam Streaming Speakers)",
+                "{0.0.0.0}.{steam}",
+                None,
+            ),
+        ];
+        let inputs = vec![audio(
+            "麦克风阵列 (网易虚拟音频设备)",
+            "{0.0.1.0}.{netease-in}",
+            None,
+        )];
+
+        let out = merge_by_identity(&[], &outputs, &inputs);
+
+        assert_eq!(out.len(), 3, "三条虚拟设备必须各自独立，实际 {out:?}");
+        assert!(
+            out.iter().all(|d| d.key.starts_with("i:")),
+            "无容器 ⇒ 走 i: 级"
+        );
+        // 同一台「网易」的输出与输入端点 id 不同 ⇒ 仍是两条（这是已知且可接受的语义：
+        // 端点级身份，不是物理设备级 —— 本机这两条确实落在同一占位容器上）
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        assert!(
+            names.contains(&"Steam Streaming Speakers"),
+            "实际 {names:?}"
+        );
+    }
+
+    /// ⛔ **防御性契约**：即使有人把**占位容器**填进 `Device.device_key`
+    /// （今天 `wmi_query.rs:242/333` 不会 —— 它走 `device_key`，内部已过 `usable_container`），
+    /// `merge_by_identity` 也必须**自己复核**，不得把「键已过滤」的责任全押给上游。
+    ///
+    /// ⚠️ 本用例**首次运行时确实转红了** —— 暴露了初版实现直接信任 `d.device_key`
+    /// （三条占位容器设备被并成一条）。修复方式是在本函数内加 `normalize_encoded_key`
+    /// 复核 `c:` 级键，而非删掉用例。
+    ///
+    /// 理由：这是 T1-0.5 记下的**同一类**问题 —— 一个函数把不变量的把关责任推给调用方，
+    /// 今天安全、明天脆弱，且失配时**静默**（不报错）。上游一动，这里就悄悄坏。
+    /// ⛔ **防御性契约（音频侧）**：若 `AudioDevice.container_id` 被填入**占位容器**
+    /// （今天 `container_of_audio_endpoint` 已过 `usable_container` ⇒ 传进来就是 `None`），
+    /// `audio_endpoint_key` 也必须**自己降级**，不得原样接受。
+    ///
+    /// ⚠️ 本用例来自一次**探针实测**：修复前，两条落在占位容器上的端点被并成 **1 条**
+    /// （键 `c:{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`）——
+    /// 与设备侧是**同一个洞**，只是当时只堵了设备侧。**这就是「防御必须对称」的证据。**
+    #[test]
+    fn merge_by_identity_never_trusts_upstream_null_container_on_audio_side() {
+        const NULL_C: &str = "{00000000-0000-0000-FFFF-FFFFFFFFFFFF}";
+        let outputs = vec![
+            audio("扬声器 (网易虚拟音频设备)", "{0.0.0.0}.{a}", Some(NULL_C)),
+            audio(
+                "扬声器 (Steam Streaming Speakers)",
+                "{0.0.0.0}.{b}",
+                Some(NULL_C),
+            ),
+        ];
+
+        let out = merge_by_identity(&[], &outputs, &[]);
+
+        assert_eq!(
+            out.len(),
+            2,
+            "占位容器上的两条端点绝不可并成一条（修复前实测为 1 条），实际 {out:?}"
+        );
+        assert!(
+            out.iter().all(|d| d.key.starts_with("i:")),
+            "占位容器必须降级到 i: 级，实际 {:?}",
+            out.iter().map(|d| &d.key).collect::<Vec<_>>()
+        );
+        assert!(
+            !out.iter().any(|d| d.key.contains("ffffffffffff")),
+            "占位容器绝不可出现在输出键里"
+        );
+        // 单函数级：直接钉住 `audio_endpoint_key` 的行为
+        assert_eq!(
+            audio_endpoint_key(&outputs[0]).encode(),
+            format!("i:swd\\mmdevapi\\{}", outputs[0].id.to_ascii_lowercase()),
+            "占位容器 ⇒ 降级到端点自己的实例路径"
+        );
+    }
+
+    #[test]
+    fn merge_by_identity_never_trusts_upstream_null_container_key() {
+        // ⚠️ 必须是**已编码**形态（带 `c:` 前缀）—— 这才是 `Device.device_key` 的真实形态
+        //    （`wmi_query.rs` 里 `.map(|k| k.encode())`）。
+        //    若传裸 GUID，`normalize_encoded_key` 会走「前缀未知」分支而**与拆掉防御同路**，
+        //    用例便失去区分力（这一点在 T1-2 注入时被实测抓到，故在此显式标注）。
+        const NULL_C: &str = "c:00000000-0000-0000-ffff-ffffffffffff";
+        // 三条不同设备**错误地**共享同一个占位容器（真机实测形态）
+        let devices = vec![
+            dev(
+                "扬声器 (网易虚拟音频设备)",
+                Some(NULL_C),
+                None,
+                false,
+                false,
+            ),
+            dev(
+                "扬声器 (Steam Streaming Speakers)",
+                Some(NULL_C),
+                None,
+                false,
+                false,
+            ),
+            dev(
+                "麦克风阵列 (网易虚拟音频设备)",
+                Some(NULL_C),
+                None,
+                false,
+                false,
+            ),
+        ];
+
+        let out = merge_by_identity(&devices, &[], &[]);
+
+        // ⚠️ 降级到 `n:core_name(name)` 后，**两条「网易」会并成一条** ——
+        // 因为它们的 `core_name` 都是 `网易虚拟音频设备`。这是 `n:` 级的**固有代价**
+        // （按名字合并），方向是「可能少一条」，**不是**「把无关设备串成一台」。
+        // ⇒ 只有 2 条：`网易虚拟音频设备`（合并）+ `Steam Streaming Speakers`。
+        // ⛔ **关键**：若不复核而直接信任 `c:` 键，则会并成 **1 条**（全落在同一占位容器键下）
+        //    —— 这个 2 vs 1 的差值就是本用例的区分力所在（T1-2 注入已验证）。
+        assert_eq!(
+            out.len(),
+            2,
+            "占位容器必须被拒；降级后按 core_name 合并 ⇒ 2 条（不拒则为 1 条），实际 {out:?}"
+        );
+        assert!(
+            out.iter().all(|d| d.key.starts_with("n:")),
+            "占位容器被 `usable_container` 拒掉 ⇒ 降级到 n: 级；实际 {:?}",
+            out.iter().map(|d| &d.key).collect::<Vec<_>>()
+        );
+        // ⭐ 关键断言：**绝不存在 `c:` 级的占位容器键**
+        assert!(
+            !out.iter().any(|d| d.key.contains("ffffffffffff")
+                || d.key.contains("00000000-0000-0000-0000-000000000000")),
+            "占位容器绝不可出现在输出键里，实际 {:?}",
+            out.iter().map(|d| &d.key).collect::<Vec<_>>()
+        );
+    }
+
+    /// 降级链一致性：**设备行无键**（如来自 `Win32_Battery` 的 `device_key: None`）
+    /// 与**端点无容器**不得被**混为两台**，也不得被**错并成一台**。
+    ///
+    /// · 无键设备行 ⇒ 降级 `n:core_name(name)`，两台不同名的设备仍是两条；
+    /// · 端点无容器 ⇒ `i:SWD\MMDEVAPI\{id}`；
+    /// ⇒ 两者**不可能**相等（前缀都不同）⇒ 各自独立。这是**保守方向**（拆细而非串号）。
+    #[test]
+    fn merge_by_identity_keyless_device_and_containerless_endpoint_stay_separate() {
+        let devices = vec![
+            dev("DUNU DTC100pro", None, Some(90), false, false),
+            dev("Mijia", None, Some(70), false, false),
+        ];
+        let outputs = vec![audio("扬声器 (DUNU DTC100pro)", "{0.0.0.0}.{dunu}", None)];
+
+        let out = merge_by_identity(&devices, &outputs, &[]);
+
+        // 无键设备行降级到 n: 级、端点走 i: 级 ⇒ 三条互不相同
+        assert_eq!(out.len(), 3, "不同前缀的键不可合并，实际 {out:?}");
+        assert_eq!(out.iter().filter(|d| d.key.starts_with("n:")).count(), 2);
+        assert_eq!(out.iter().filter(|d| d.key.starts_with("i:")).count(), 1);
+    }
+
+    /// ⛔ **不做数据可用性过滤** —— 与 `group_taskbar_devices` 的关键语义差异。
+    ///
+    /// 一台设备若「无电量、无音量」，任务栏窗口会丢弃它（对用户无意义），
+    /// 但**选择器必须保留** —— 否则用户无法为它做任何设置（这正是 Spec §0.4 的纪律）。
+    #[test]
+    fn merge_by_identity_keeps_devices_without_any_data() {
+        let devices = vec![dev(
+            "某无从读数的鼠标",
+            Some("c:aaaa-bbbb"),
+            None,
+            false,
+            false,
+        )];
+
+        let out = merge_by_identity(&devices, &[], &[]);
+
+        assert_eq!(out.len(), 1, "选择器不做数据可用性过滤，实际 {out:?}");
+        assert_eq!(out[0].battery, None);
+        assert_eq!(out[0].audio_device_id, None);
+        assert_eq!(out[0].node_count, 1);
+        assert!(out[0].sources.device_page && !out[0].sources.volume_page);
+    }
+
+    /// 幂等 / 确定性：同样输入重复调用、以及**输入顺序打乱**，结果必须逐字相同。
+    ///
+    /// `Grouper` 内部是 `BTreeMap` ⇒ 输出按 key 排序，顺序稳定（UI 不会跳）。
+    /// 这是 `Grouper` 的既有契约，本函数必须继承 —— 用断言把它钉住。
+    #[test]
+    fn merge_by_identity_is_order_independent_and_deterministic() {
+        // ⚠️ `audio()` 的 container 参数吃**裸 GUID**（与 `AudioDevice.container_id` 一致），
+        // 而 `dev()` 的 key 参数吃**已编码键**（与 `Device.device_key` 一致）——
+        // 两者形态不同，正是生产里的真实形态。混用会得到 `c:c:...` 双前缀的假键。
+        const CID: &str = "11111111-2222-3333-4444-555555555555";
+        const KEY_B: &str = "c:11111111-2222-3333-4444-555555555555";
+        let d1 = dev("B 设备", Some(KEY_B), Some(50), false, false);
+        let d2 = dev(
+            "A 设备",
+            Some("c:00000000-0000-0000-0000-0000000000aa"),
+            None,
+            false,
+            false,
+        );
+        let a1 = audio("扬声器 (B 设备)", "{0.0.0.0}.{b}", Some(CID));
+
+        // 真正测「一次调用内输入顺序相反 ⇒ 输出相同」：把同一批输入反转后再跑一次
+        let devs = vec![d1.clone(), d2.clone()];
+        let auds = vec![a1.clone()];
+        let fwd = merge_by_identity(&devs, &auds, &[]);
+        let mut devs_rev = devs.clone();
+        devs_rev.reverse();
+        let mut auds_rev = auds.clone();
+        auds_rev.reverse();
+        let rev = merge_by_identity(&devs_rev, &auds_rev, &[]);
+
+        let keys = |v: &[MergedDevice]| v.iter().map(|d| d.key.clone()).collect::<Vec<_>>();
+        assert_eq!(keys(&fwd), keys(&rev), "顺序必须与输入顺序无关");
+        assert!(
+            keys(&fwd).windows(2).all(|w| w[0] <= w[1]),
+            "输出必须按 key 有序，实际 {:?}",
+            keys(&fwd)
+        );
+        // 幂等：同样的输入再跑一次，结果逐字相同
+        let again = merge_by_identity(
+            &[
+                dev("B 设备", Some(KEY_B), Some(50), false, false),
+                dev(
+                    "A 设备",
+                    Some("c:00000000-0000-0000-0000-0000000000aa"),
+                    None,
+                    false,
+                    false,
+                ),
+            ],
+            &[audio("扬声器 (B 设备)", "{0.0.0.0}.{b}", Some(CID))],
+            &[],
+        );
+        assert_eq!(keys(&fwd), keys(&again), "重复调用结果必须一致");
+        // 「B 设备」（设备行 + 端点，同容器 ⇒ 1 条）+「A 设备」（1 条）= 2 条
+        assert_eq!(fwd.len(), 2, "两条不同容器 ⇒ 两条，实际 {fwd:?}");
+        assert_eq!(keys(&fwd)[1], KEY_B, "并起来的那条键应是设备侧原始键");
+    }
+
+    /// 输出优先于输入：同一容器同时有输出与输入端点时，`audio_device_id`
+    /// 必须指向**输出**端点 —— 「调这台设备的音量」指的必然是输出。
+    #[test]
+    fn merge_by_identity_prefers_output_endpoint_over_input() {
+        const CID: &str = "084fb1b9-0000-0000-0000-000000000001";
+        let outputs = vec![audio("扬声器 (某声卡)", "{0.0.0.0}.{out}", Some(CID))];
+        let inputs = vec![audio("麦克风 (某声卡)", "{0.0.1.0}.{in}", Some(CID))];
+
+        let out = merge_by_identity(&[], &outputs, &inputs);
+
+        assert_eq!(out.len(), 1, "同容器并成一条");
+        assert_eq!(
+            out[0].audio_device_id.as_deref(),
+            Some("{0.0.0.0}.{out}"),
+            "音量代表端点必须是输出"
+        );
+        assert!(out[0].sources.volume_page);
+    }
+
+    /// 同容器**多个输出端点**时取**系统默认**那个（与 `group_taskbar_devices` 同一约定）。
+    #[test]
+    fn merge_by_identity_picks_default_output_when_container_has_many() {
+        const CID: &str = "084fb1b9-0000-0000-0000-000000000002";
+        let mut non_default = audio("扬声器 A", "{0.0.0.0}.{a}", Some(CID));
+        non_default.is_default = false;
+        let mut default = audio("扬声器 B", "{0.0.0.0}.{b}", Some(CID));
+        default.is_default = true;
+
+        // 刻意把非默认端点放在前面 —— 排序逻辑必须把它压到后面
+        let out = merge_by_identity(&[], &[non_default, default], &[]);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].audio_device_id.as_deref(),
+            Some("{0.0.0.0}.{b}"),
+            "应取系统默认端点"
+        );
+    }
+
+    /// ⛔⛔ **验收判据 8 的单元级版本**：`merge_by_identity` **绝不凭空造条目**。
+    ///
+    /// 这是它与 `group_taskbar_devices` 的**根本区别** ——
+    /// 后者会为「被 pin 但未枚举到」的设备补建条目，而那些设备两页里都不存在。
+    /// 本函数**没有 `pinned` 参数**，构造上不可能补建；
+    /// 本单测用一个「空输入」把它钉死（防止将来有人「顺手」把 pin 逻辑接进来）。
+    #[test]
+    fn merge_by_identity_never_synthesizes_entries_from_nothing() {
+        let out = merge_by_identity(&[], &[], &[]);
+        assert!(
+            out.is_empty(),
+            "空输入必须空输出（不得凭空补建），实际 {out:?}"
+        );
+
+        // 对照：`group_taskbar_devices` 在同样的空输入下、有 pin 配置时**会**补建。
+        // 这个对照本身就是「禁止复用」理由的可执行证据。
+        let pinned = vec![crate::config::PinnedDevice {
+            key: "c:deadbeef-0000-0000-0000-000000000000".to_string(),
+            fallback: None,
+            alias: Some("未连接的耳机".to_string()),
+        }];
+        let window = group_taskbar_devices(&[], &[], &pinned);
+        assert_eq!(window.len(), 1, "任务栏窗口会补建（这是它的语义）");
+        assert_eq!(window[0].name, "未连接的耳机");
+        assert_eq!(window[0].node_count, 0, "补建条目的标志");
+        // ⇒ 若选择器复用 `group_taskbar_devices`，这条假 pin 就会**超出并集**地出现
+        assert!(
+            merge_by_identity(&[], &[], &[]).is_empty(),
+            "选择器必须不含它"
+        );
+    }
+
+    // ── T3-1：`build_selectable_devices` 装配 ──────────────────────────────
+
+    /// ⛔⛔ **验收判据 8 的装配级版本**：选择器**不出现**「两页都没有的假 pin 条目」。
+    ///
+    /// 与单元级那条的区别：这里喂**非空**并集（两页都有东西），同时给一条指向
+    /// **不存在设备**的 pin。若装配时误把 `group_taskbar_devices` 的补建循环搬进来，
+    /// 就会多出一条「未连接的耳机」；本判据直接把它钉死。
+    #[test]
+    fn selectable_devices_never_include_pin_only_entries() {
+        const CID: &str = "084fb1b9-1111-2222-3333-444444444444";
+        let key = format!("c:{CID}");
+        let devices = vec![dev("小爱音箱-9205", Some(&key), Some(80), true, false)];
+        let outputs = vec![audio("扬声器 (小爱音箱-9205)", "out-a", Some(CID))];
+        let pinned = vec![crate::config::PinnedDevice {
+            key: "c:deadbeef-0000-0000-0000-000000000000".to_string(),
+            fallback: None,
+            alias: Some("未连接的耳机".to_string()),
+        }];
+
+        let merged = merge_by_identity(&devices, &outputs, &[]);
+        let sel = build_selectable_devices(&merged, &pinned, &crate::config::Config::default());
+
+        assert_eq!(sel.len(), 1, "只应有并集里的那一台，实际 {sel:?}");
+        assert!(
+            sel.iter().all(|s| s.name != "未连接的耳机"),
+            "伪造的 pin 别名绝不得出现"
+        );
+        // 对照：同样输入喂给显示侧，它会补建 ⇒ 证明这条判据确实有区分力
+        let window = group_taskbar_devices(&devices, &outputs, &pinned);
+        assert_eq!(window.len(), 2, "显示侧会补建第二行");
+        assert!(
+            window.iter().any(|d| d.name == "未连接的耳机"),
+            "显示侧补建的正是选择器必须排除的那条"
+        );
+    }
+
+    /// 显示名三级优先级：`pin.alias` > `resolve_device_name`（自定义名）> 短名。
+    #[test]
+    fn selectable_devices_prioritize_alias_over_custom_name_over_short_name() {
+        const CID_A: &str = "084fb1b9-0000-0000-0000-00000000000a";
+        const CID_B: &str = "084fb1b9-0000-0000-0000-00000000000b";
+        const CID_C: &str = "084fb1b9-0000-0000-0000-00000000000c";
+        let key_a = format!("c:{CID_A}");
+        let key_b = format!("c:{CID_B}");
+        let key_c = format!("c:{CID_C}");
+        let devices = vec![
+            dev("耳机A (设备甲)", Some(&key_a), None, false, false),
+            dev("耳机B (设备乙)", Some(&key_b), None, false, false),
+            dev("耳机C (设备丙)", Some(&key_c), None, false, false),
+        ];
+        let mut cfg = crate::config::Config::default();
+        // 甲、乙：只有全局自定义名
+        cfg.device_names
+            .insert("设备甲".to_string(), "自定义甲".to_string());
+        cfg.device_names
+            .insert("设备乙".to_string(), "自定义乙".to_string());
+        // 丙：没有任何自定义名 ⇒ 落到短名兜底
+
+        let pinned = vec![crate::config::PinnedDevice {
+            key: key_a.clone(),
+            fallback: None,
+            alias: Some("别名甲".to_string()),
+        }];
+
+        let merged = merge_by_identity(&devices, &[], &[]);
+        let sel = build_selectable_devices(&merged, &pinned, &cfg);
+        let by = |k: &str| sel.iter().find(|s| s.key == k).map(|s| s.name.as_str());
+
+        assert_eq!(by(&key_a), Some("别名甲"), "alias 优先于自定义名");
+        assert_eq!(by(&key_b), Some("自定义乙"), "无 alias 时用自定义名");
+        assert_eq!(by(&key_c), Some("设备丙"), "都无则用短名兜底");
+        // ⚠️ 丙若被错当成自定义名会显示「耳机C」—— 那说明 `pick_display_name` 没生效
+        assert_ne!(by(&key_c), Some("耳机C"));
+    }
+
+    /// 固定态判据：`fallback` 必须与显示侧一致（`n:core_name(显示名)`）。
+    ///
+    /// 场景就是 `PinnedDevice` 文档推荐的形态 —— `key` 存容器、`fallback` 存名称键；
+    /// 容器变化后只有 fallback 能认出来。若装配时给 `pinned_device_matches` 传 `None`，
+    /// 这里就会判成「未固定」，而显示侧仍显示它 ⇒ 用户点一下反而把条目弄没了。
+    #[test]
+    fn selectable_devices_match_pinned_with_fallback_like_its_display_side() {
+        // 本次枚举到的是**新容器**（换机 / 重装驱动后的常见结果）
+        const CID_NEW: &str = "084fb1b9-0000-0000-0000-0000000000ff";
+        let key_new = format!("c:{CID_NEW}");
+        let devices = vec![dev(
+            "耳机 (DUNU DTC100pro)",
+            Some(&key_new),
+            None,
+            false,
+            false,
+        )];
+        // pin 里存的还是**旧容器** + 名称兜底
+        let pinned = vec![crate::config::PinnedDevice {
+            key: "c:00000000-0000-0000-0000-0000000000aa".to_string(),
+            fallback: Some(DeviceKey::Name(core_name("DUNU DTC100pro")).encode()),
+            alias: None,
+        }];
+
+        let merged = merge_by_identity(&devices, &[], &[]);
+        let sel = build_selectable_devices(&merged, &pinned, &crate::config::Config::default());
+
+        assert_eq!(sel.len(), 1);
+        assert!(
+            sel[0].pinned,
+            "容器变了但名称兜底命中 ⇒ 必须判为已固定（否则与显示侧分叉）"
+        );
+        // 对照：显示侧用同一份判据，结论必须一致
+        let window = group_taskbar_devices(&devices, &[], &pinned);
+        assert_eq!(
+            window[0].pinned, sel[0].pinned,
+            "选择器与显示侧的固定态必须同真同假"
+        );
+    }
+
+    /// 来源标注：仅设备页 / 仅音量页 / 两侧都有，三种都要标对（T3-3 的数据来源）。
+    #[test]
+    fn selectable_devices_report_sources_for_each_case() {
+        const CID_BOTH: &str = "084fb1b9-0000-0000-0000-0000000000b1";
+        const CID_VOL: &str = "084fb1b9-0000-0000-0000-0000000000b2";
+        let key_both = format!("c:{CID_BOTH}");
+        // 设备页：一台与音量页共有、一台仅设备页有
+        let devices = vec![
+            dev("耳机 (两侧都有)", Some(&key_both), Some(50), true, false),
+            dev(
+                "鼠标 (仅设备页)",
+                Some("c:084fb1b9-0000-0000-0000-0000000000b3"),
+                Some(70),
+                true,
+                false,
+            ),
+        ];
+        // 音量页：一台共有、一台仅音量页有
+        let outputs = vec![
+            audio("扬声器 (两侧都有)", "out-1", Some(CID_BOTH)),
+            audio("扬声器 (仅音量页)", "out-2", Some(CID_VOL)),
+        ];
+
+        let merged = merge_by_identity(&devices, &outputs, &[]);
+        let sel = build_selectable_devices(&merged, &[], &crate::config::Config::default());
+        let src = |sub: &str| {
+            sel.iter()
+                .find(|s| s.name.contains(sub))
+                .map(|s| (s.sources.device_page, s.sources.volume_page))
+        };
+
+        assert_eq!(src("两侧都有"), Some((true, true)));
+        assert_eq!(src("仅设备页"), Some((true, false)));
+        assert_eq!(src("仅音量页"), Some((false, true)));
+    }
+
+    /// **输入端点必须进并集**（验收判据 2）：只在音量页右键菜单可见的麦克风也要可选。
+    #[test]
+    fn selectable_devices_include_input_endpoints() {
+        const CID: &str = "084fb1b9-0000-0000-0000-0000000000c1";
+        // 输入端点：设备页与输出都没有对应条目
+        let inputs = vec![audio("麦克风阵列 (USB Audio)", "in-1", Some(CID))];
+
+        let merged = merge_by_identity(&[], &[], &inputs);
+        let sel = build_selectable_devices(&merged, &[], &crate::config::Config::default());
+
+        assert_eq!(sel.len(), 1, "输入端点必须在选择器里，实际 {sel:?}");
+        assert!(sel[0].sources.volume_page, "来源应标为音量页");
+        assert!(!sel[0].sources.device_page, "设备页并没有它");
+    }
+
+    /// 无数据设备**必须保留**：选择器不做数据可用性过滤。
+    #[test]
+    fn selectable_devices_keep_entries_without_any_data() {
+        // 键来自降级（`n:`），既无电量也无端点
+        let devices = vec![dev("某无线手柄", None, None, false, false)];
+
+        let merged = merge_by_identity(&devices, &[], &[]);
+        let sel = build_selectable_devices(&merged, &[], &crate::config::Config::default());
+
+        assert_eq!(sel.len(), 1, "无数据也必须在选择器里出现");
+        // 对照：显示侧会因「无数据且未固定」把它滤掉 —— 这正是两者语义不同的证据
+        let window = group_taskbar_devices(&devices, &[], &[]);
+        assert!(
+            window.iter().all(|d| d.name != "某无线手柄"),
+            "显示侧过滤掉它（选择器保留）"
         );
     }
 }

@@ -129,6 +129,45 @@ pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::Physica
     ))
 }
 
+/// 任务栏信息窗「选择设备」列表的数据源：两页**可显示设备的并集**（T3-1）。
+///
+/// ── 与 `get_taskbar_devices` 的三点区别（**刻意不同，勿合并**）────────────────
+///   1. **不过滤数据**：凡两页出现即保留，即使既无电量也无音量。选择器的职责是
+///      「让用户选择固定哪台」，用数据可用性筛掉条目会让用户根本无法为「此刻读不到
+///      数据的设备」做设置；
+///   2. **不做 pin 补建**：`get_taskbar_devices` 会给「pinned 但本次没枚举到」的设备
+///      造占位条目（那是它的显示语义）；选择器若也这么做，就会出现「两页都没有、
+///      用户也无从取消」的幽灵条目，且**超出并集口径**（Spec §0.4 三）；
+///   3. **音频取两侧**：并集 = 设备页 ∪ **输出端点** ∪ **输入端点**。输入端点只在
+///      音量页的会话右键菜单里可见，但选择器要覆盖它们（验收判据 2）。
+///      ⛔ 音频侧**没有**设备侧那条过滤链（`audio.rs` 只按 `DEVICE_STATE_ACTIVE` +
+///      方向取数）⇒ 取两页并集天然绕过设备侧全部过滤，这是**设计如此**，别去改
+///      `query_devices_with` 试图「对齐」两页（会把设备页一起污染）。
+///
+/// 设备侧仍走 `devices_for_taskbar`（缓存优先 + 空则自愈现查），与显示侧同源，
+/// 避免两处对「缓存该不该回落」各持一套规则。
+#[tauri::command(async)]
+pub async fn get_selectable_devices(
+) -> Result<Vec<crate::device_identity::SelectableDevice>, String> {
+    let devices = run_blocking(devices_for_taskbar).await??;
+    // 输出与输入各自枚举：`enumerate_*` 内部直读 MMDevice，开销在 13–15ms 量级
+    // （实测，见 PLAYBOOK §E），远小于设备侧 WMI 的 600ms+，无需缓存。
+    let outputs = run_blocking(crate::audio::enumerate_output_devices)
+        .await?
+        .map_err(|e| e.to_string())?;
+    let inputs = run_blocking(crate::audio::enumerate_input_devices)
+        .await?
+        .map_err(|e| e.to_string())?;
+    let (pinned, config_snapshot) =
+        config::with_config(|c| (c.pinned_taskbar_devices.clone(), c.clone()));
+    let merged = crate::device_identity::merge_by_identity(&devices, &outputs, &inputs);
+    Ok(crate::device_identity::build_selectable_devices(
+        &merged,
+        &pinned,
+        &config_snapshot,
+    ))
+}
+
 #[tauri::command]
 pub fn open_settings(app: tauri::AppHandle) {
     crate::windows::open_settings(&app);
@@ -289,12 +328,10 @@ pub async fn open_url(url: String) -> Result<(), String> {
 #[tauri::command]
 pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) {
     standard_log!("[cmd] rename_device: '{}' -> '{}'", original, new_name);
+    // ⭐ 方案 D：**归并写入 / 归并删除**（逻辑在 `config::apply_device_rename`，
+    // 抽成纯函数是为了能被单测钉住 —— 它的失效方式是**静默**的）。
     config::with_config_mut(|c| {
-        if new_name.is_empty() || new_name == original {
-            c.device_names.remove(&original);
-        } else {
-            c.device_names.insert(original, new_name);
-        }
+        config::apply_device_rename(c, &original, &new_name);
     });
     let config_snapshot = config::with_config(|c| c.clone());
     let _ = app.emit("config-changed", config_snapshot);

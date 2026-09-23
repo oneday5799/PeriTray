@@ -1,3 +1,4 @@
+use crate::dedup::core_name;
 use crate::standard_log;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -293,6 +294,122 @@ fn battery_thresholds_valid(thresholds: &[i32]) -> bool {
             .all(|(i, v)| !thresholds[..i].contains(v))
 }
 
+/// 把 `device_names` 里「带括号原串」的条目**归并**一条 `core_name` 短名键（原地、纯内存）。
+///
+/// **为什么需要它**（方案 D 的读取侧前提）：
+/// `rename_device` 从今以后**同时**写「原名」与「`core_name` 短名」两条键（归并双写），
+/// 因此新产生的改名天然三处一致。但**历史上**只写过「原名」那一条 ——
+/// 那些条目在设备页 / 任务栏（按短名查）**查不到**，用户会看到「改了名的地方没变」。
+///
+/// **为什么放在这里**：`normalize_config` 是**纯函数**（不读全局状态、不持锁、不做 I/O），
+/// 且被**加载路径**（`parse_config_text`）与**写入路径**（`finalize_before_persist`）共用 ⇒
+/// 加载时生效、写入时不回潮。放在 `rename_device` 里只能覆盖「新建改名」，历史条目永远补不上；
+/// 放在 `load_config` 里会绕开写入路径（下一次 `update_config` 可能把它写没）。
+///
+/// **不覆盖已存在的短名键**（先到者为准）：避免归并顺序引入不确定性 ——
+/// 若原串与短名各自有值，说明用户对「两个不同名字」分别改过名，此时**不猜**，保留既有的。
+///
+/// 返回 `true` 表示至少插入了一条键。
+fn backfill_device_name_keys(config: &mut Config) -> bool {
+    // 先收集再插入：`core_name` 的产出可能与某个**已有键**相同（原串本身就是短名形态），
+    // 边遍历边插入会让 `HashMap` 的迭代顺序影响结果。
+    let mut additions: Vec<(String, String)> = Vec::new();
+    for (raw, custom) in &config.device_names {
+        let short = core_name(raw);
+        if short.trim().is_empty() || short == *raw {
+            continue; // 原串本身就是短名（或算不出短名）⇒ 无需归并
+        }
+        if config.device_names.contains_key(&short) {
+            continue; // 短名键已存在 ⇒ 不覆盖
+        }
+        additions.push((short, custom.clone()));
+    }
+    if additions.is_empty() {
+        return false;
+    }
+    for (k, v) in additions {
+        config.device_names.insert(k, v);
+    }
+    true
+}
+
+/// 应用一次设备改名：**归并写入 / 归并删除**（方案 D 的写入侧，纯函数，便于单测）。
+///
+/// `original` 是前端传来的**名字**（音量页 = 带括号原串 `扬声器 (DUNU DTC100pro)`；
+/// 设备页 = `core_name` 短名 `DUNU DTC100pro`），**不带身份键** ——
+/// 改名对话框只传名字（`common.js:421 showRenameDialog`），后端无从得知它属于哪台设备。
+///
+/// ⇒ 于是「同一台设备在两个页面名字形态不同」这件事，只能靠**把两种形态都写上**来抹平：
+/// 读取侧 `resolve_device_name` 三级回退，两处都能命中。
+///
+/// ⛔ **若只写 `device_names[original]`**（旧实现），从音量页改名后设备页/任务栏
+/// **仍显示原名** —— 既不报错也不告警的**静默失效**（已由单测钉住）。
+///
+/// 语义与旧实现完全兼容：
+/// · `new_name` 为空、或与原名相同 ⇒ 视为「恢复默认」，**两种形态都删净**；
+/// · 否则两种形态都写入同一个自定义名。
+///
+/// ⚠️ **为什么抽成独立纯函数**：`rename_device` 是 `#[tauri::command]`、需要 `AppHandle`
+/// 才能 `emit`，直接单测代价高；而这段归并逻辑恰恰**必须**被单测钉住（它是静默失效的来源）。
+/// 抽成纯函数后既可直接测，也与本仓 `normalize_config` 的既有风格一致。
+pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) -> bool {
+    let short = core_name(original);
+    if new_name.is_empty() || new_name == original {
+        // 恢复默认：**删净所有指向同一台设备的键**，不能只删入口传来的那一个形态。
+        //
+        // ⛔ 这里有个非对称陷阱：**写入**是「一对多」（原名 + 短名都写），
+        //   而**删除**若只知道入口形态，就会留下另一个形态的键 ⇒
+        //   用户从设备页（短名入口）点「恢复默认」后，音量页那条键还在 ⇒
+        //   **名字没变回去**（静默、且只在一半的页面里可见）。
+        //   ⇒ 判据必须与归并写入**同一套**：删掉 `original` 本身，
+        //     以及所有 `core_name(k) == core_name(original)` 的键（即同一台设备的各形态）。
+        let target = short.clone();
+        let before = config.device_names.len();
+        config
+            .device_names
+            .retain(|k, _| k != original && core_name(k) != target);
+        return config.device_names.len() != before;
+    }
+    let mut changed = false;
+    if config.device_names.get(original).map(String::as_str) != Some(new_name) {
+        config
+            .device_names
+            .insert(original.to_string(), new_name.to_string());
+        changed = true;
+    }
+    if config.device_names.get(&short).map(String::as_str) != Some(new_name) {
+        config.device_names.insert(short, new_name.to_string());
+        changed = true;
+    }
+    changed
+}
+
+/// 按「短名优先、原名回退」解析设备展示名（方案 D 的读取侧，三级回退）。
+///
+/// ```
+/// 1) device_names[core_name(raw_name)]   → 命中即用   ← 音量页与设备页靠这条统一
+/// 2) device_names[raw_name]              → 回退（历史条目 / 原串本身即短名）
+/// 3) raw_name                            → 原名
+/// ```
+///
+/// ⚠️ **为什么必须有第 1 级**：音量页用的 `AudioDevice.name` 是**未归一化原串**
+/// （`扬声器 (DUNU DTC100pro)`），而设备页用的 `Device.name` 是 `core_name` **短名**
+/// （`DUNU DTC100pro`）。改名入口**只传名字字符串、不传身份键**
+/// （`common.js:421 showRenameDialog`）⇒ 后端无法知道这个名字属于哪台设备。
+/// 归并双写 + 三级回退是**唯一能零改前端**把两侧统一起来的路径。
+///
+/// ⛔ **不要用 `Device.name` 反推身份**（见 `device_identity.rs` 同名纪律）——
+/// 本函数只做**显示名解析**，不参与身份判定。
+pub fn resolve_device_name(raw_name: &str, config: &Config) -> String {
+    if let Some(v) = config.device_names.get(&core_name(raw_name)) {
+        return v.clone();
+    }
+    if let Some(v) = config.device_names.get(raw_name) {
+        return v.clone();
+    }
+    raw_name.to_string()
+}
+
 /// 集中归一化：把「可从 `config.toml` / 前端直接写入」的字段收敛到应用支持的取值集合。
 ///
 /// **为什么需要它**：`log_level` / `popup_size` / `theme_mode` / `window_material` /
@@ -331,6 +448,10 @@ fn normalize_config(config: &mut Config) -> bool {
         config.low_battery_refresh_secs = default_battery_refresh_secs();
         changed = true;
     }
+
+    // ⭐ 历史改名回填（方案 D）：给「带括号原串」条目补一条 `core_name` 短名键。
+    // 纯内存归并 ⇒ 符合本函数的「不持锁、不做 I/O」契约。
+    changed |= backfill_device_name_keys(config);
 
     changed
 }
@@ -1011,10 +1132,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_revision, config_lock_held, config_path, default_battery_refresh_secs,
-        default_battery_thresholds, enqueue_persist, finalize_before_persist, flush_persist,
-        merge_config, normalize_config, parse_config_text, revision_is_latest, with_config,
-        write_config_atomically, Config, MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED,
+        apply_device_rename, claim_revision, config_lock_held, config_path,
+        default_battery_refresh_secs, default_battery_thresholds, enqueue_persist,
+        finalize_before_persist, flush_persist, merge_config, normalize_config, parse_config_text,
+        resolve_device_name, revision_is_latest, with_config, write_config_atomically, Config,
+        MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED,
     };
     use std::sync::atomic::Ordering;
 
@@ -1636,6 +1758,297 @@ mod tests {
         assert!(
             on_disk.contains(&marker),
             "盘上内容应来自本用例：{on_disk:?}"
+        );
+    }
+
+    // ── 第 2 层（方案 D）：回填 + 三级回退解析 ──────────────────────
+
+    /// ⭐ **T2-5 回填**：植入一条**历史形态**条目（只有带括号原串的键）⇒
+    /// 归一化后必须**同时**存在原串键与 `core_name` 短名键，且短名键指向同一个自定义名。
+    ///
+    /// ⚠️ **本机 `[device_names]` 为空 ⇒ 真机无法验证**（回填在本机是空操作）
+    /// ⇒ 只能靠本单测，**不得**声称「真机验证通过」。
+    #[test]
+    fn normalize_config_backfills_core_name_key_for_legacy_entry() {
+        let mut cfg = Config::default();
+        // 历史条目：只有「带括号原串」这一条（旧版 `rename_device` 只写这条）
+        cfg.device_names
+            .insert("扬声器 (DUNU DTC100pro)".to_string(), "我的DAC".to_string());
+
+        assert!(
+            normalize_config(&mut cfg),
+            "发生回填 ⇒ 必须报告 changed=true"
+        );
+
+        assert_eq!(
+            cfg.device_names
+                .get("扬声器 (DUNU DTC100pro)")
+                .map(String::as_str),
+            Some("我的DAC"),
+            "原串键必须保留（音量页仍按它查）"
+        );
+        assert_eq!(
+            cfg.device_names.get("DUNU DTC100pro").map(String::as_str),
+            Some("我的DAC"),
+            "短名键必须被回填（设备页/任务栏按它查）"
+        );
+        assert_eq!(cfg.device_names.len(), 2, "恰好补一条，实际 {cfg:?}");
+    }
+
+    /// ⭐ **回填幂等性**：连跑两次 ⇒ 第二次返回 `false`、内容**逐字不变**。
+    ///
+    /// 幂等是关键 —— `normalize_config` 在**每次写入**（`finalize_before_persist`）都会跑，
+    /// 若它每次都「报告 changed」，`merge_config` / 落盘层会误判为「配置有变化」而反复写盘。
+    #[test]
+    fn backfill_is_idempotent() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("耳机 (小爱音箱-9205)".to_string(), "客厅音箱".to_string());
+
+        assert!(normalize_config(&mut cfg), "首次必须回填");
+        let after_first = cfg.device_names.clone();
+
+        assert!(
+            !normalize_config(&mut cfg),
+            "第二次必须报告『无变化』（否则每次写入都误判为变更）"
+        );
+        assert_eq!(cfg.device_names, after_first, "内容必须逐字不变");
+        assert_eq!(cfg.device_names.len(), 2);
+    }
+
+    /// ⛔ **回填不覆盖已存在的短名键**（先到者为准）。
+    ///
+    /// 场景：用户先后对「带括号原串」与「短名」**分别**改过名（历史数据里可能出现，
+    /// 因为两个页面的入口喂的就是不同形态的名字）。此时**不猜哪个对**，保留既有的短名值。
+    #[test]
+    fn backfill_does_not_overwrite_existing_short_key() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("扬声器 (X)".to_string(), "A".to_string());
+        cfg.device_names
+            .insert("扬声器 X".to_string(), "B".to_string());
+
+        normalize_config(&mut cfg);
+
+        assert_eq!(
+            cfg.device_names.get("扬声器 X").map(String::as_str),
+            Some("B"),
+            "既有短名键不得被覆盖"
+        );
+        assert_eq!(
+            cfg.device_names.get("扬声器 (X)").map(String::as_str),
+            Some("A"),
+            "原串键保持原值"
+        );
+    }
+
+    /// 回填的**反控**：键本身就是短名形态（`core_name` 看不出括号）⇒ 不该多插一条。
+    /// 否则每次归一化都会把 `device_names` 撑大（在设备页改名的场景下会翻倍）。
+    #[test]
+    fn backfill_skips_keys_that_are_already_short() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("DUNU DTC100pro".to_string(), "我的DAC".to_string());
+        cfg.device_names
+            .insert("VID_1234".to_string(), "我的手柄".to_string());
+
+        let changed = normalize_config(&mut cfg);
+
+        assert!(!changed, "短名键无需回填 ⇒ 不得报告变化");
+        assert_eq!(cfg.device_names.len(), 2, "不得新增键，实际 {cfg:?}");
+    }
+
+    /// ⭐ **T2-2 三级回退**：`resolve_device_name` 的四种情形。
+    ///
+    /// 这是方案 D 的**读取侧核心** —— 音量页喂带括号原串、设备页喂短名，
+    /// 两种形态都必须解析到**同一个**自定义名（否则就是「改名后某处没变」的静默失效）。
+    #[test]
+    fn resolve_device_name_falls_back_in_three_levels() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("DUNU DTC100pro".to_string(), "我的DAC".to_string());
+        cfg.device_names
+            .insert("耳机 (小爱音箱-9205)".to_string(), "客厅音箱".to_string());
+
+        // 第 1 级：音量页的带括号原串 ⇒ 经 core_name 命中短名键（**DUNU 回归**）
+        assert_eq!(
+            resolve_device_name("扬声器 (DUNU DTC100pro)", &cfg),
+            "我的DAC",
+            "音量页的带括号原串必须解析到自定义名"
+        );
+        // 第 1 级：设备页的短名直接命中
+        assert_eq!(resolve_device_name("DUNU DTC100pro", &cfg), "我的DAC");
+
+        // 第 2 级：原串本身就是键（历史条目形态）—— 这里用一条无括号的键验证回退
+        assert_eq!(
+            resolve_device_name("耳机 (小爱音箱-9205)", &cfg),
+            "客厅音箱",
+            "原串键直接命中（core_name 得到的短名不同时回落第 2 级）"
+        );
+
+        // 第 3 级：都不命中 ⇒ 原样返回（**必须**，否则所有未改名设备的显示名全空）
+        assert_eq!(
+            resolve_device_name("扬声器 (Steam Streaming Speakers)", &cfg),
+            "扬声器 (Steam Streaming Speakers)",
+            "未改名的设备必须原样返回"
+        );
+        assert_eq!(resolve_device_name("", &cfg), "", "空名不得 panic");
+    }
+
+    /// ⛔ **反向注入靶子（T2-4）**：若回填被删掉，上面那条「音量页原串 ⇒ 自定义名」**必须转红**。
+    ///
+    /// 本用例把「方案 D 的收益」独立钉一遍：**只有原串键**（历史数据）时，
+    /// 设备页用的**短名**也必须能解析到自定义名 —— 这只有回填能做到
+    /// （`core_name("DUNU DTC100pro") == "DUNU DTC100pro"`，两个键不同 ⇒ 必须真的有那条键）。
+    #[test]
+    fn resolve_device_name_requires_backfilled_key_for_device_page() {
+        let mut cfg = Config::default();
+        // 模拟「历史数据」：只有带括号原串那一条（未经归一化的旧配置）
+        cfg.device_names
+            .insert("扬声器 (DUNU DTC100pro)".to_string(), "我的DAC".to_string());
+
+        // ⚠️ 此刻短名键**不存在** —— 这正是「未回填」的世界：
+        //    设备页（按短名查）会**回退到原名** ⇒ 用户看到「改了名的地方没变」
+        assert_eq!(
+            resolve_device_name("DUNU DTC100pro", &cfg),
+            "DUNU DTC100pro",
+            "未回填时，设备页拿不到自定义名（这就是要修的静默失效）"
+        );
+
+        // 归一化（= 加载路径会做的事）之后，同一个查询**必须**命中自定义名
+        normalize_config(&mut cfg);
+        assert_eq!(
+            resolve_device_name("DUNU DTC100pro", &cfg),
+            "我的DAC",
+            "回填后设备页/任务栏必须拿到自定义名"
+        );
+    }
+
+    // ── T2-3：`apply_device_rename` 归并写入 / 归并删除 ──────────────
+
+    /// ⭐ **从音量页改名（原名 = 带括号原串）⇒ 两种形态都落入配置**。
+    ///
+    /// ⛔ 这是**必须靠单测**钉住的核心：它的失效方式是「设备页仍显示原名」，
+    /// 既不报错也不告警 —— 手测很容易漏（用户只改一处、看起来"生效了"）。
+    #[test]
+    fn apply_device_rename_from_volume_page_writes_both_forms() {
+        let mut cfg = Config::default();
+
+        assert!(
+            apply_device_rename(&mut cfg, "扬声器 (DUNU DTC100pro)", "我的DAC"),
+            "写入必须报告 changed"
+        );
+
+        assert_eq!(
+            cfg.device_names
+                .get("扬声器 (DUNU DTC100pro)")
+                .map(String::as_str),
+            Some("我的DAC"),
+            "原名键（音量页按它查）"
+        );
+        assert_eq!(
+            cfg.device_names.get("DUNU DTC100pro").map(String::as_str),
+            Some("我的DAC"),
+            "短名键（设备页/任务栏按它查）—— 缺了它就是静默失效"
+        );
+        assert_eq!(cfg.device_names.len(), 2);
+
+        // 三处渲染点全部解析到自定义名
+        assert_eq!(
+            resolve_device_name("扬声器 (DUNU DTC100pro)", &cfg),
+            "我的DAC"
+        );
+        assert_eq!(resolve_device_name("DUNU DTC100pro", &cfg), "我的DAC");
+    }
+
+    /// ⭐ **从设备页改名（原名 = 短名）⇒ 同样两种形态都落入配置**（对称性）。
+    #[test]
+    fn apply_device_rename_from_device_page_writes_both_forms() {
+        let mut cfg = Config::default();
+
+        // `core_name("DUNU DTC100pro")` == 自身 ⇒ 两次 insert 落到同一个键上
+        assert!(apply_device_rename(&mut cfg, "DUNU DTC100pro", "我的DAC"));
+
+        assert_eq!(
+            cfg.device_names.get("DUNU DTC100pro").map(String::as_str),
+            Some("我的DAC")
+        );
+        assert_eq!(
+            cfg.device_names.len(),
+            1,
+            "短名形态只需一条键，实际 {cfg:?}"
+        );
+        assert_eq!(resolve_device_name("DUNU DTC100pro", &cfg), "我的DAC");
+        // 另一侧的带括号原串**也能**解析到（靠读取侧第 1 级 `core_name`）
+        assert_eq!(
+            resolve_device_name("扬声器 (DUNU DTC100pro)", &cfg),
+            "我的DAC",
+            "即使只写了短名键，音量页的带括号原串也必须能解析到"
+        );
+    }
+
+    /// **恢复默认（`new_name` 为空）⇒ 两种形态都删净**。
+    /// ⛔ 若只删 `original`，短名键会残留 ⇒ 用户点「恢复默认」后发现名字**没变回去**。
+    #[test]
+    fn apply_device_rename_clears_both_forms_on_reset() {
+        let mut cfg = Config::default();
+        apply_device_rename(&mut cfg, "扬声器 (DUNU DTC100pro)", "我的DAC");
+        assert_eq!(cfg.device_names.len(), 2);
+
+        assert!(
+            apply_device_rename(&mut cfg, "扬声器 (DUNU DTC100pro)", ""),
+            "删除必须报告 changed"
+        );
+
+        assert!(
+            cfg.device_names.is_empty(),
+            "两种形态必须都删净，实际 {cfg:?}"
+        );
+        assert_eq!(
+            resolve_device_name("DUNU DTC100pro", &cfg),
+            "DUNU DTC100pro",
+            "恢复默认后必须回落到原名"
+        );
+    }
+
+    /// **`new_name == original` 也视为恢复默认**（与旧实现的语义一致）。
+    #[test]
+    fn apply_device_rename_treats_same_name_as_reset() {
+        let mut cfg = Config::default();
+        apply_device_rename(&mut cfg, "扬声器 (DUNU DTC100pro)", "我的DAC");
+
+        assert!(apply_device_rename(
+            &mut cfg,
+            "扬声器 (DUNU DTC100pro)",
+            "扬声器 (DUNU DTC100pro)"
+        ));
+        assert!(cfg.device_names.is_empty(), "实际 {cfg:?}");
+    }
+
+    /// **重复写同一个名字 ⇒ 第二次报告「无变化」**（避免落盘层误判为配置变更）。
+    #[test]
+    fn apply_device_rename_is_idempotent() {
+        let mut cfg = Config::default();
+        assert!(apply_device_rename(&mut cfg, "扬声器 (X)", "新名"));
+        assert!(
+            !apply_device_rename(&mut cfg, "扬声器 (X)", "新名"),
+            "内容未变时不得报告 changed"
+        );
+        assert_eq!(cfg.device_names.len(), 2);
+    }
+
+    /// ⛔ **反向注入靶子**：把归并删除/写入任一半拆掉 ⇒ 上面几条必须转红。
+    /// 本用例额外钉住「两半都不能少」这一点（用一个非对称场景）。
+    #[test]
+    fn apply_device_rename_covers_both_directions_asymmetrically() {
+        let mut cfg = Config::default();
+        // 从音量页改名 → 再从设备页改回默认 ⇒ 必须全清空，不能只清一半
+        apply_device_rename(&mut cfg, "扬声器 (DUNU DTC100pro)", "我的DAC");
+        apply_device_rename(&mut cfg, "DUNU DTC100pro", "");
+
+        assert!(
+            cfg.device_names.is_empty(),
+            "从设备页恢复默认也必须清掉音量页那条键，实际 {cfg:?}"
         );
     }
 }

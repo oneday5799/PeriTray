@@ -617,6 +617,7 @@ fn main() {
             commands::get_devices_fresh,
             commands::get_cached_devices,
             commands::get_taskbar_devices,
+            commands::get_selectable_devices,
             commands::toggle_pinned_taskbar_device,
             commands::get_config,
             commands::get_config_load_error,
