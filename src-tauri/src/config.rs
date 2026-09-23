@@ -443,8 +443,13 @@ fn sync_log_cache(config: &Config) {
     );
 }
 
+/// 配置文件路径（`<可写根目录>/config.toml`）。
+///
+/// 根目录走 [`crate::process::writable_root`] 而非 `exe_dir()`：**MSIX 的包安装目录只读**，
+/// 原先写在这里的每一次保存都会失败（且失败提示本身也写不进日志，全静默）。
+/// 非 MSIX 环境下 `writable_root()` 与 `exe_dir()` 同值，故老用户路径不变。
 fn config_path() -> std::path::PathBuf {
-    crate::process::exe_dir().join("config.toml")
+    crate::process::writable_root().join("config.toml")
 }
 
 /// 启动时配置解析失败的原因（含备份路径）。只在 `init_config` 写入一次，供前端提示。

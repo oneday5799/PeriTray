@@ -673,7 +673,11 @@ pub async fn set_spatial_sound(
 pub async fn open_log_dir() -> Result<(), String> {
     run_blocking(|| {
         let dir = crate::process::logs_dir();
-        let _ = std::fs::create_dir_all(&dir);
+        // 目录建不出来时，随后的 `shell_open` 只会返回一个语焉不详的
+        // `ShellExecuteW` 错误码（`≤ 32` 即失败），无法归因。这里先把真正的原因报出去
+        // （P3-7：该失败会让「目录状态与用户点击不一致」，不得静默）。
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("无法创建日志目录 {}：{}", dir.display(), e))?;
         process::shell_open(&dir.to_string_lossy(), None)
     })
     .await?

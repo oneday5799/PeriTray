@@ -18,14 +18,64 @@ pub fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// 获取日志目录（`<exe目录>/logs`）
-pub fn logs_dir() -> PathBuf {
-    exe_dir().join("logs")
+/// 应用**可写**数据根目录：日志、配置、`data/` 三者的共同父目录。
+///
+/// - **MSIX**：包安装目录（`C:\Program Files\WindowsApps\<PFN>`）是**只读**的
+///   （本机实测 `CreateDirectory` 报 `Access to the path ... is denied`；官方文档原文：
+///   *"Write inside the package — Not allowed. The package is read-only."*），
+///   故改用包容器的 `LocalState`，即 `%LOCALAPPDATA%\Packages\<PFN>\LocalState`。
+/// - **其他（NSIS，Tauri 默认 per-user 装在 `%LOCALAPPDATA%`）**：沿用 [`exe_dir`]，
+///   路径**一字不变** ⇒ 老用户零迁移、零回归。
+///
+/// ⚠️ **为什么 MSIX 下不能用 `%LOCALAPPDATA%\<标识>`**（看起来更"常规"的那个选择）：
+/// MSIX 对 `AppData` 的写入是**虚拟化重定向**的。本机在包身份下实测（`Invoke-CommandInDesktopPackage`）：
+/// 写 `%LOCALAPPDATA%\PeriTray_probe` 之后，**该虚拟路径本身并不存在**，
+/// 内容落在 `…\Packages\<PFN>\LocalCache\Local\PeriTray_probe`。而 `explorer.exe`
+/// **不是打包进程**，它按字面路径去找 ⇒ 目录不存在 ⇒ 「查看日志」依旧打不开。
+/// 故必须落到**真实物理路径**（`LocalState` 实测为直写、不参与重定向）。
+///
+/// ⚠️ 本函数位于**日志落盘路径**上（`log_path()` → `logs_dir()`），因此
+/// **严禁在此记日志**——那会在写线程里自我喂食。
+pub fn writable_root() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    if let Some(root) = msix_container_local_state() {
+        return root;
+    }
+    exe_dir()
 }
 
-/// 获取数据目录（`<exe目录>/data`）
+/// MSIX 包容器的 `LocalState` 绝对路径；非包上下文（或取不到 PFN / `%LOCALAPPDATA%`）
+/// 返回 `None`。
+///
+/// 本机实测（Win11 26100，2026-09-23）：**包身份下 `LOCALAPPDATA` 环境变量未被重写**，
+/// 仍是 `C:\Users\<用户>\AppData\Local`，故 `%LOCALAPPDATA%\Packages\<PFN>\LocalState`
+/// 正是 `ApplicationData.Current.LocalFolder` 的真实路径（该目录实测存在且可写）。
+#[cfg(target_os = "windows")]
+fn msix_container_local_state() -> Option<PathBuf> {
+    let pfn = crate::windows::package_family_name()?;
+    let local_appdata = std::env::var_os("LOCALAPPDATA")?;
+    Some(msix_local_state_from(
+        std::path::Path::new(&local_appdata),
+        pfn,
+    ))
+}
+
+/// 由 `%LOCALAPPDATA%` 与包家族名拼出容器 `LocalState` 路径。
+///
+/// 抽成纯函数只为**可测**：路径策略（`Packages\<PFN>\LocalState`）是这次修复的
+/// 全部要害，但 `msix_container_local_state()` 本身依赖真实包上下文、单测无法覆盖。
+fn msix_local_state_from(local_appdata: &std::path::Path, pfn: &str) -> PathBuf {
+    local_appdata.join("Packages").join(pfn).join("LocalState")
+}
+
+/// 获取日志目录（`<可写根>/logs`）
+pub fn logs_dir() -> PathBuf {
+    writable_root().join("logs")
+}
+
+/// 获取数据目录（`<可写根>/data`）
 pub fn data_dir() -> PathBuf {
-    exe_dir().join("data")
+    writable_root().join("data")
 }
 
 /// 获取日志文件路径（写入 logs/ 子目录；once 为 debug_once_{pid}.log，其余按天 debug_YYYYMMDD.log）
@@ -359,7 +409,7 @@ struct CleanOutcome {
 /// 清理 `dir` 下按保留策略应删除的日志文件。
 ///
 /// 与 `clean_old_logs` 拆开是为了**可测**：后者固定作用于 `logs_dir()`
-/// （= exe 目录），单测无法在不污染真实日志目录的前提下验证
+/// （= 可写根目录下的 `logs/`），单测无法在不污染真实日志目录的前提下验证
 /// 「删除判据 + 活动性探测」这条接线是否真的接通。
 fn clean_log_dir(
     dir: &std::path::Path,
@@ -423,12 +473,12 @@ pub fn clean_old_logs() {
     clean_log_dir(&logs_dir(), retention, current_name.as_deref(), today_days);
 }
 
-/// 清除 exe 根目录下旧版本遗留的 debug*.log（迁移至 logs/ 前的历史文件）
+/// 清除可写根目录下旧版本遗留的 debug*.log（迁移至 logs/ 前的历史文件）
 ///
 /// 与 `clean_old_logs` 用同一套 `is_managed_log_name` 判定：根目录那种
 /// 「`debug` 开头 + `.log` 结尾」的宽匹配同样会误删用户的文件（P2-9）。
 fn remove_legacy_root_logs() {
-    if let Ok(entries) = std::fs::read_dir(exe_dir()) {
+    if let Ok(entries) = std::fs::read_dir(writable_root()) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
@@ -642,6 +692,67 @@ mod tests {
 
     fn lines(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| format!("{}\n", s)).collect()
+    }
+
+    /// MSIX 落点策略：`%LOCALAPPDATA%\Packages\<PFN>\LocalState`。
+    ///
+    /// 这条拼法是本次修复的**全部要害**。`LocalState` 是包容器里的**真实物理路径**，
+    /// 只有它同时满足「打包进程写得进」与「`explorer.exe`（**非**打包进程）打得开」。
+    /// 本机已在包身份下实测：写 `%LOCALAPPDATA%\<任意名>` 会被重定向到
+    /// `…\LocalCache\Local\<任意名>`，**那个虚拟路径本身并不存在** ⇒
+    /// 若改用 `%LOCALAPPDATA%\<标识>`，「查看日志」依旧打不开。
+    #[test]
+    fn msix_local_state_path_follows_container_layout() {
+        let got = msix_local_state_from(
+            std::path::Path::new(r"C:\Users\u\AppData\Local"),
+            "Vendor.App_abc123",
+        );
+        assert_eq!(
+            got,
+            std::path::PathBuf::from(
+                r"C:\Users\u\AppData\Local\Packages\Vendor.App_abc123\LocalState"
+            ),
+            "必须落在 Packages\\<PFN>\\LocalState（真实物理路径）"
+        );
+        assert!(
+            !got.to_string_lossy().contains("LocalCache"),
+            "不得落在 LocalCache 下：那是虚拟化重定向的落点，explorer 打不开"
+        );
+    }
+
+    /// 三个持久化目录必须**同源**——都挂在 `writable_root()` 之下。
+    ///
+    /// 本次缺陷的形态正是「三处各自以 `exe_dir()` 为根」：只改一处就会留下
+    /// 另外两处继续往只读的包目录里写（静默失败）。
+    #[test]
+    fn writable_root_is_the_parent_of_persisted_dirs() {
+        let root = writable_root();
+        assert_eq!(logs_dir(), root.join("logs"));
+        assert_eq!(data_dir(), root.join("data"));
+        // 诊断用途：MSIX 端到端验收时，用 `Invoke-CommandInDesktopPackage` 在**包身份下**
+        // 运行本测试二进制（`--nocapture`）即可读出包内的真实取值
+        // （应为 `…\Packages\<PFN>\LocalState`），无需为验收改任何代码。
+        eprintln!("[process] writable_root = {}", root.display());
+        eprintln!("[process] logs_dir     = {}", logs_dir().display());
+        eprintln!("[process] data_dir     = {}", data_dir().display());
+    }
+
+    /// 非 MSIX 环境下 `writable_root()` 必须与 `exe_dir()` 同值 ⇒ 老用户零迁移。
+    ///
+    /// `cargo test` 的进程不在 MSIX 包上下文中，故本用例覆盖的正是 NSIS 那一支；
+    /// 若有人在包身份下跑它，下面的断言会**立刻失败**并说明前提不成立，
+    /// 而不是给出一条看似通过、实则无意义的结论。
+    #[test]
+    fn writable_root_equals_exe_dir_outside_package() {
+        assert!(
+            !crate::windows::is_msix_context(),
+            "本用例只在非包上下文下有意义（在 MSIX 包身份下运行时请过滤掉它）"
+        );
+        assert_eq!(
+            writable_root(),
+            exe_dir(),
+            "非 MSIX 下可写根必须仍是 exe 目录"
+        );
     }
 
     /// 丢弃计数只在**首次**丢弃时返回 true ⇒ 告警只打一次，

@@ -443,13 +443,18 @@ pub fn build_toast(
 
 pub(crate) const AUMID: &str = "com.peri.tray";
 
-/// 检测当前是否运行在 MSIX 包上下文中。
-/// 通过 kernel32!GetCurrentPackageFamilyName 判断：返回
-/// ERROR_SUCCESS 或 ERROR_INSUFFICIENT_BUFFER 即为 MSIX 上下文。
+/// `kernel32!GetCurrentPackageFamilyName` 的签名。
 #[cfg(target_os = "windows")]
-pub(crate) fn is_msix_context() -> bool {
-    type GetCurPkgFn = unsafe extern "system" fn(*mut u32, *mut u16) -> i32;
-    let Some(fn_ptr) = (unsafe {
+type GetCurrentPackageFamilyNameFn = unsafe extern "system" fn(*mut u32, *mut u16) -> i32;
+
+/// 取 `kernel32!GetCurrentPackageFamilyName` 的函数指针；系统过旧时返回 `None`。
+///
+/// 走 `GetProcAddress` 动态取址而非静态绑定：该 API 自 Win8 才引入，且本仓的
+/// `windows` crate 未启用其所在 feature。抽成独立函数是为了让
+/// [`is_msix_context`] 与 [`package_family_name`] 共用同一份 `transmute` 样板。
+#[cfg(target_os = "windows")]
+fn get_current_package_family_name_fn() -> Option<GetCurrentPackageFamilyNameFn> {
+    let fn_ptr = unsafe {
         windows::Win32::System::LibraryLoader::GetProcAddress(
             windows::Win32::System::LibraryLoader::GetModuleHandleW(windows::core::w!(
                 "kernel32.dll"
@@ -457,14 +462,65 @@ pub(crate) fn is_msix_context() -> bool {
             .unwrap_or_default(),
             windows::core::s!("GetCurrentPackageFamilyName"),
         )
-    }) else {
+    }?;
+    // SAFETY：`fn_ptr` 来自 kernel32 中确知签名的导出符号。
+    // 类型标注必须写在**绑定**上（而非 `transmute::<_, T>`）：clippy 的
+    // `missing_transmute_annotations` 只认这种形态。
+    let get_cur_pkg: GetCurrentPackageFamilyNameFn = unsafe { std::mem::transmute(fn_ptr) };
+    Some(get_cur_pkg)
+}
+
+/// 检测当前是否运行在 MSIX 包上下文中。
+/// 通过 kernel32!GetCurrentPackageFamilyName 判断：返回
+/// ERROR_SUCCESS 或 ERROR_INSUFFICIENT_BUFFER 即为 MSIX 上下文。
+#[cfg(target_os = "windows")]
+pub(crate) fn is_msix_context() -> bool {
+    let Some(get_cur_pkg) = get_current_package_family_name_fn() else {
         return false;
     };
-    let get_cur_pkg: GetCurPkgFn = unsafe { std::mem::transmute(fn_ptr) };
     let mut buf_len: u32 = 0;
     let status = unsafe { get_cur_pkg(&mut buf_len, std::ptr::null_mut()) };
     // ERROR_SUCCESS(0) 或 ERROR_INSUFFICIENT_BUFFER(122) 均表示在包上下文中
     status == 0 || status == 122
+}
+
+/// 当前进程的 MSIX 包家族名（Package Family Name）；不在包上下文中则返回 `None`。
+///
+/// **结果必须缓存**：调用方 [`crate::process::writable_root`] 会被 `log_path()`
+/// 在**每一批日志落盘**时经过，不缓存就是每批一次
+/// `GetModuleHandleW` + `GetProcAddress` + `GetCurrentPackageFamilyName`。
+///
+/// 用纯 Win32 `GetCurrentPackageFamilyName` 而非 WinRT
+/// `ApplicationModel::Package::Current()`：前者对 COM/WinRT 初始化**零要求**，
+/// 可在 `run_blocking` 的任意线程上安全调用（WinRT 静态方法要求线程已 `RoInitialize`），
+/// 且本仓 `windows` crate 未启用 `Storage` feature。
+#[cfg(target_os = "windows")]
+pub(crate) fn package_family_name() -> Option<&'static str> {
+    static PFN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    PFN.get_or_init(|| {
+        let get_cur_pkg = get_current_package_family_name_fn()?;
+        // 第一次调用只为探长度：传空缓冲，成功时返回 ERROR_INSUFFICIENT_BUFFER(122)，
+        // 并把所需长度（**含结尾 NUL**）写进 buf_len。
+        let mut buf_len: u32 = 0;
+        let status = unsafe { get_cur_pkg(&mut buf_len, std::ptr::null_mut()) };
+        // 实测（Win11 26100，**真实 MSIX 包身份下**）：首次以空缓冲调用返回
+        // ERROR_INSUFFICIENT_BUFFER(122)，并把所需长度写进 buf_len。
+        // 这里**同时接受 ERROR_SUCCESS(0)**，与 [`is_msix_context`] 的判据保持同源——
+        // 两者对「是否在包上下文中」必须一致，否则会出现「判在包内、却拿不到 PFN」
+        // 从而静默退回只读目录的分裂。
+        if (status != 122 && status != 0) || buf_len == 0 {
+            return None;
+        }
+        let mut buf: Vec<u16> = vec![0; buf_len as usize];
+        let status = unsafe { get_cur_pkg(&mut buf_len, buf.as_mut_ptr()) };
+        if status != 0 {
+            return None;
+        }
+        // 取到第一个 NUL 为止，不依赖 `buf_len` 的返回值
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16(&buf[..len]).ok()
+    })
+    .as_deref()
 }
 
 /// 开始菜单 Programs 目录下的快捷方式路径
