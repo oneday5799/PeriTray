@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ⚠️ 下面 Identity 元素的 Version 属性是**占位值**：`src-tauri/msix/stage.ps1` 会按结构
+     匹配该元素的 Version 属性，整段替换成打包时传入的 `-Version`（CI 传 tag 版本）。
+     替换与该占位值**无关**，所以请勿「顺手把它对齐到当前版本」—— 改了只会误导后来人。
+     ⛔ 本注释**刻意不写出带 Version 属性的 Identity 标签样例**：stage.ps1 的结构正则若先
+     命中注释里的样例，就会改错目标（自校验会因此报错退出）。 -->
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
