@@ -9,18 +9,17 @@ if git diff --cached --name-only -- src-tauri/src src-tauri/Cargo.toml src-tauri
     echo "[pre-commit] 请执行: cd src-tauri && cargo fmt 后重新暂存"
     exit 1
   fi
-  echo "[pre-commit] 运行 cargo check..."
-  out=$(cd src-tauri && cargo check 2>&1) || {
-    printf '%s\n' "$out"
-    echo "[pre-commit] cargo check 失败，提交被拦截"
-    exit 1
-  }
-  if printf '%s\n' "$out" | grep -q "^warning"; then
-    printf '%s\n' "$out"
-    echo "[pre-commit] cargo check 存在 warning（要求零警告），提交被拦截"
-    exit 1
-  fi
-  printf '%s\n' "$out" | tail -1
+  echo "[pre-commit] 运行 cargo check（零源码警告）..."
+  # ⛔ 判据**收敛到 tools/check-rust-warnings.mjs 一处**，不要在这里写 `cargo check | grep "^warning"`。
+  #    2026-09-24 实测：朴素 grep 会命中 Cargo 自己的产物 I/O 诊断
+  #    （`error deleting lock file for incremental compilation session directory`，
+  #    本机增量目录锁被 Windows 拒绝删除，os error 5）以及随后的
+  #    `generated N warning` 汇总行 ⇒ 在**源码零警告**时仍然拦死提交（假红）。
+  #    ⚠️ 且该噪音在 `--message-format=json` 流里同样是一条 level=warning 的
+  #    compiler-message（Cargo 借 diagnostic 通道发的）⇒ 判据还必须要求
+  #    「有 lint code + 有指向源文件的 span」，细节与实测见该脚本头部。
+  #    ⚠️ 挪走/删除物理 .lock 无效：报的名字来自 Cargo 会话记录，与文件是否存在无关。
+  node tools/check-rust-warnings.mjs || exit 1
   echo "[pre-commit] 运行 cargo clippy（存量基线见 tools/check-clippy.mjs）..."
   # --optional：本机没装 clippy 组件时告警跳过，避免环境问题卡死提交；
   # CI 调用同一条命令但**不带** --optional（硬失败），故本地跳过不会漏网。

@@ -875,7 +875,22 @@ pub struct SelectableDevice {
     pub key: String,
     /// **最终**显示名：已按 `pin.alias > resolve_device_name > 短名` 三级优先级解析
     pub name: String,
+    /// 固定的**兜底键**（`n:<core_name(显示名)>`），前端原样回传给
+    /// `toggle_pinned_taskbar_device` 的 `fallback` 参数。
+    ///
+    /// ⛔⛔ **必须由后端算好返回，绝不可让前端用 `simplifyDeviceName` 现算** ——
+    /// 那个 JS 函数与 Rust 的 `core_name` **不等价**（JS 取**第一个** `(`，Rust 取 `" ("`；
+    /// 且 Rust 会**剥 17 种协议后缀**而 JS 不剥）。前端一旦自算，写入的 `fallback`
+    /// 就与显示侧的判据（`DeviceKey::Name(core_name(&p.name))`）**对不上** ⇒
+    /// `fallback` 形同虚设，用户换机/重装驱动后固定项**静默失效**。
+    /// 这与 Spec §9「复用同一判据必须参数逐字一致」是同一条纪律。
+    pub fallback: String,
     /// 该设备来自哪一页（T3-3 的「仅设备页 / 仅音量页」标注）
+    ///
+    /// ⚠️ **当前前端不使用**（用户 2026-09-24 决定「不用标注来源」，T3-3 已取消）。
+    /// 保留字段的理由：它是并集的**固有信息**，后端算好只花一次 `BTreeSet` 查找；
+    /// 删掉则将来想加回标注必须重跑一遍合并逻辑。若确定永不需要，可连同
+    /// `DeviceSources` 一起删除（届时 `merge_by_identity` 内的两个 `BTreeSet` 也可去掉）。
     pub sources: DeviceSources,
     /// 是否已在任务栏信息窗里固定（复选框的**初始勾选态**）
     pub pinned: bool,
@@ -924,6 +939,7 @@ pub fn build_selectable_devices(
             SelectableDevice {
                 key: m.key.clone(),
                 name,
+                fallback,
                 sources: m.sources,
                 pinned: hit.is_some(),
             }
@@ -2457,6 +2473,87 @@ mod tests {
         assert!(
             window.iter().all(|d| d.name != "某无线手柄"),
             "显示侧过滤掉它（选择器保留）"
+        );
+    }
+
+    /// **`fallback` 字段的对外契约**：由后端算好返回，前端**零字符串处理**、原样回传。
+    ///
+    /// ── 为什么让后端算（**不是**因为前端算会得到不同结果）────────────────────
+    /// 前端有一个 `simplifyDeviceName`（`common.js:139`），它与 `core_name` 在**两个维度**
+    /// 上不等价：① JS 取 `indexOf("(")` 而 Rust 取 `find(" (")`（要求前导空格）；
+    /// ② Rust 剥 17 种协议后缀而 JS 不剥。实测 `"耳机 (WH-1000XM5 Stereo)"`：
+    /// Rust 得 `WH-1000XM5`、JS 得 `WH-1000XM5 Stereo` ⇒ **两函数确实不等价**。
+    ///
+    /// ⚠️ **但这条不等价在「选择器 → fallback」路径上不可达**：`m.name` 经 `pick_display_name`
+    /// 时**已经过一次 `core_name`**（该函数 `:526`），故它**恒为短名、不含括号**
+    /// ⇒ 前端即便拿它去喂 `simplifyDeviceName` 也是**恒等返回**，与后端结果**必然相同**。
+    ///
+    /// ⇒ 真正的理由只有**判据单一来源**：让「写入配置的 fallback」与「显示侧的判据」
+    /// 由**同一个 Rust 函数**产出。将来 `core_name` 的后缀表增删时，两侧一起变；
+    /// 若让前端自算，就得在前端**复制一份后缀表**，那才会真正分叉。
+    ///
+    /// ── 判据的**可证伪性说明**（重要，避免后人误以为测得更严）────────────────
+    /// ⛔ 「fallback 必须精确等于 `core_name` 的算式」这条**无法被证伪** ——
+    /// 实测把它换成 `DeviceKey::Name(m.name)`（去掉 `core_name`）**单测仍全绿**，
+    /// 因为 `core_name` 对短名**幂等**。故**不写**那条假判据（写了只会制造虚假的安全感）。
+    /// 本单测只钉**能转红**的部分：往返一致性 + 与显示侧同真同假。
+    #[test]
+    fn selectable_devices_fallback_round_trips_and_agrees_with_display_side() {
+        const CID: &str = "084fb1b9-0000-0000-0000-0000000000f1";
+        let key = format!("c:{CID}");
+        let devices = vec![dev(
+            "耳机 (WH-1000XM5 Stereo)",
+            Some(&key),
+            None,
+            true,
+            false,
+        )];
+
+        let merged = merge_by_identity(&devices, &[], &[]);
+        let sel = build_selectable_devices(&merged, &[], &crate::config::Config::default());
+        assert_eq!(sel.len(), 1);
+
+        // ① 显示名已是短名（`pick_display_name` 归一过）+ `core_name` 幂等
+        //    —— 这两条是上面「不可达」论证的**可执行依据**，也是本字段设计的立足点。
+        assert_eq!(
+            sel[0].name, "WH-1000XM5",
+            "显示名应已被 core_name 归一（剥掉 ' Stereo'）"
+        );
+        assert_eq!(
+            crate::dedup::core_name(&sel[0].name),
+            sel[0].name,
+            "core_name 对短名必须幂等"
+        );
+
+        // ② 形态正确：必须是名称键（`n:`），因为容器键会随换机/重装驱动变化
+        assert!(
+            sel[0].fallback.starts_with("n:"),
+            "fallback 必须是名称键形态，实际 {}",
+            sel[0].fallback
+        );
+
+        // ③ ⭐ 往返（**可证伪**）：pin 里存**显示侧算式的产物**，且 `key` 用**另一个容器**
+        //    （模拟换机/重装驱动后容器变化）⇒ 精确比较必然失败，只能靠 fallback 命中。
+        //    ⛔ 两个坑都会让本判据**失效**，已实测确认：
+        //       · 用 `sel[0].fallback` 构造 pin ⇒ **循环论证**（拿输出喂输入再验输出）；
+        //       · `pinned.key` 用**同一个**容器键 ⇒ 被 `p.key == key` **短路**，根本走不到 fallback。
+        let display_side_fallback = DeviceKey::Name(core_name(&sel[0].name)).encode();
+        let pinned = vec![crate::config::PinnedDevice {
+            key: "c:084fb1b9-0000-0000-0000-0000000000ff".to_string(), // ← 故意与本次枚举的容器不同
+            fallback: Some(display_side_fallback),
+            alias: None,
+        }];
+        let sel2 = build_selectable_devices(&merged, &pinned, &crate::config::Config::default());
+        assert!(
+            sel2[0].pinned,
+            "容器已变、只能靠兜底键命中 ⇒ 必须仍判已固定（若本字段与显示侧分叉，这里会掉）"
+        );
+
+        // ④ ⭐ 两侧一致（**可证伪**）：显示侧对同一个 pin 的结论必须相同。
+        let window = group_taskbar_devices(&devices, &[], &pinned);
+        assert_eq!(
+            window[0].pinned, sel2[0].pinned,
+            "选择器与显示侧必须同真同假"
         );
     }
 }
