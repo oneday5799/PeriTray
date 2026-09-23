@@ -381,9 +381,18 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   dev 监听自动重建重启，改 dist 前端同样热生效
 - **调试开关**：环境变量 `PM_DEV_OPEN_SETTINGS=1` 启动时延迟 1.5s 自动打开
   设置窗口（main.rs），用于自动化验证设置页脚本加载与初始化
-- **日志**：写入 `<exe 目录>/logs/debug_YYYYMMDD.log`（保留策略设为「每次仅保留一次」时
+- **日志**：写入 `<可写根>/logs/debug_YYYYMMDD.log`（保留策略设为「每次仅保留一次」时
   为 `debug_once_<pid>.log`）；分「标准/详细」两级，级别关闭时 `append_log` 不落盘；
   设置页「通用 → 日志」可开关/调级；排查启动问题先看 `[main] startup complete`
+- **持久化路径一律经 `process::writable_root()`，不得直接用 `exe_dir()`**：日志、
+  `config.toml`、`data/` 三者都挂在可写根下。**NSIS**（Tauri 默认 per-user，装在
+  `%LOCALAPPDATA%`）= exe 同目录，**一字不变**；**MSIX**（Store 包）= 容器 `LocalState`
+  `%LOCALAPPDATA%\Packages\<包家族名>\LocalState` —— 包安装目录
+  `C:\Program Files\WindowsApps\<包家族名>` **只读、且不在重定向表内**，往里写是**静默失败**
+  （配置写不进 → 只记标准级日志 → 日志也写不进 → 只剩 stderr，GUI 全无感）。
+  ⚠️ **别改用 `%LOCALAPPDATA%\<标识>`**：包身份下它被虚拟化重定向，**虚拟路径本身不存在**，
+  而 `explorer.exe` 不是打包进程、按字面路径找 ⇒ 「查看日志」按钮照样失效。
+  **评审检查项**：新增任何落盘路径时，先问「MSIX 下这个目录可写吗？」
 - **远程校验**：push 到 main 与 PR 由 CI 工作流（.github/workflows/ci.yml）
   复跑本地闸门全套（check.mjs / rustfmt / cargo check -D warnings / cargo test），
   Rust 工具链按仓库根的 `rust-toolchain.toml` 安装并断言生效版本（见「提交自动闸门」）

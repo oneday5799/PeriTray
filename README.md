@@ -111,7 +111,6 @@ PeriTray/
 │   │   ├── popup.html / settings.html
 │   │   ├── styles/                  # base.css 共享基类 + popup.css + settings.css
 │   │   └── scripts/                 # common.js + 双页分区脚本（命名镜像）+ 各页入口
-│   ├── data/                        # 2.4G 设备数据库
 │   ├── icons/                       # 应用图标
 │   └── tauri.conf.json
 └── .github/workflows/               # CI/CD（x64 / ARM64 构建与发布）
