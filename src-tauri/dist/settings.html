@@ -53,6 +53,14 @@
           </svg>
           <span class="label">快捷键</span>
         </div>
+          <div class="win-nav-item" data-tab="taskbar" role="button" aria-selected="false" tabindex="-1">
+            <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2" ry="2"/>
+            <line x1="2" y1="16" x2="22" y2="16"/>
+            <rect x="9" y="9" width="6" height="5" rx="1"/>
+          </svg>
+          <span class="label">任务栏</span>
+        </div>
           <div class="win-nav-item" data-tab="about" role="button" aria-selected="false" tabindex="-1">
             <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11z"/>
@@ -669,6 +677,80 @@
       </div>
     </div>
 
+    <!-- Tab: Taskbar -->
+    <div class="tab-content" id="tab-taskbar">
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">在任务栏显示的设备
+            <span class="tooltip-trigger" data-tip="选择需要在任务栏信息窗口中显示的设备。最多可固定 8 个。">?</span>
+          </span>
+          <div class="card-desc">选择需要在任务栏信息窗口中显示的设备</div>
+        </div>
+        <div class="card-actions">
+          <button class="add-device-btn" id="btn-taskbar-devices">选择设备</button>
+        </div>
+      </div>
+
+      <div class="card expandable" id="taskbar-pin-card">
+        <div class="card-left">
+          <div class="card-title">固定任务栏窗口位置
+            <span class="tooltip-trigger">?
+              <span class="tooltip-content">开启后任务栏窗口固定在指定位置，不随任务栏图标变化而移动。关闭后可用鼠标自由拖拽任务栏窗口的位置。</span>
+            </span>
+          </div>
+          <div class="card-desc">关闭后可自由拖拽任务栏窗口的位置</div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-taskbar-pin" checked>
+            <span class="slider"></span>
+          </label>
+          <div class="card-arrow" id="arrow-taskbar-pin">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="taskbar-pin-items">
+          <div class="card-item">
+            <div class="card-item-name">任务栏窗口位置</div>
+            <div class="card-item-controls">
+              <div class="win-combo-box" id="combo-taskbar-position">
+                <button class="win-combo-btn" role="combobox" aria-expanded="false">
+                  <span class="win-combo-content">居中</span>
+                  <span class="win-combo-chevron">
+                    <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+                    </svg>
+                  </span>
+                </button>
+                <div class="win-combo-flyout">
+                  <div class="win-combo-items-presenter">
+                    <button class="win-combo-item" data-value="left">
+                      <span class="win-combo-item-layout">
+                        <span class="win-combo-item-pill"></span>
+                        <span class="win-combo-item-content">靠左</span>
+                      </span>
+                    </button>
+                    <button class="win-combo-item" data-value="center">
+                      <span class="win-combo-item-layout">
+                        <span class="win-combo-item-pill"></span>
+                        <span class="win-combo-item-content">居中</span>
+                      </span>
+                    </button>
+                    <button class="win-combo-item" data-value="right">
+                      <span class="win-combo-item-layout">
+                        <span class="win-combo-item-pill"></span>
+                        <span class="win-combo-item-content">靠右</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Tab: About -->
     <div class="tab-content" id="tab-about">
       <div class="win-infobar win-infobar-card" id="about-update-infobar" role="alert" hidden>
@@ -780,6 +862,7 @@
   <script src="scripts/settings-shortcut.js"></script>
   <script src="scripts/settings-devices.js"></script>
   <script src="scripts/settings-audio.js"></script>
+  <script src="scripts/settings-taskbar.js"></script>
   <script src="scripts/settings-about.js"></script>
   <script src="scripts/settings.js"></script>
 </body>

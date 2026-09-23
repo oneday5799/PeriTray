@@ -1,5 +1,5 @@
 /* settings-devices.js — 设置页·设备信息 tab：分组设备列表渲染/过滤正则卡/低电量通知卡
- * 加载序 4/7 · 提供：loadDevicesAsync() / renderGroups() / initDeviceFilterTab() /
+ * 加载序 4/8 · 提供：loadDevicesAsync() / renderGroups() / initDeviceFilterTab() /
  *                    initLowBatteryNotifyTab() / renderLowBatteryContent()
  * 依赖：common.js(invoke/CATEGORIES/createCheckIcon/clampMenuPosition/hideAllContextMenus) /
  *       settings.js(config/bindToggle/createExpandableCard/saveConfig/showToast) */

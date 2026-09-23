@@ -1,10 +1,10 @@
 /* settings.js — 设置页·入口框架：init 装配/导航与 tab 切换/ComboBox 工厂/更新检测横切流程/
  *            NumberBox 焦点装配/材质浮层背景/config-changed 与 settings-tab 监听
- * 加载序 7/7（最后执行，调用各分区脚本提供的 init 系列与刷新函数）
+ * 加载序 8/8（最后执行，调用各分区脚本提供的 init 系列与刷新函数）
  * 提供：saveConfig/createCheckableMenu/bindToggle/createToggle/createExpandableCard/
  *       initComboBox/runUpdateCheck/copyToClipboard/showUpdateErrorFlyout/renderUpdateInfobar/
  *       updateFlyoutBackdrop 等框架级共享函数
- * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/about) */
+ * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/taskbar/about) */
 let config = null;
 // 「基线副本」= 本页**上次从后端收到的整份快照**（P1-11）。
 // saveConfig() 会把它随请求一起发回，后端据此算出用户真正改了哪些字段，
@@ -822,6 +822,7 @@ async function init() {
     initSpatialSoundSettings();
     initSimplifyNamesSettings();
     initShutdownVolumeSettings();
+    initTaskbarTab();
     initShortcutSettings();
     initDeviceShortcutSettings();
     setupCardHoverSuppression();

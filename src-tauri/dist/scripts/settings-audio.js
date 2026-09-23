@@ -1,6 +1,6 @@
 /* settings-audio.js — 设置页·音量控制 tab：音量控制页设备列表卡/静音锁定/精细调节/
  *            简化设备名称/强制静音设备选择器/空间音效开关/关机重启自动调整音量(NumberBox 编辑器)
- * 加载序 5/7 · 提供：loadAudioDevicesAsync()/initAudioCardToggle()/initMuteLockSettings()/
+ * 加载序 5/8 · 提供：loadAudioDevicesAsync()/initAudioCardToggle()/initMuteLockSettings()/
  *            initFineAdjustSettings()/initSimplifyNamesSettings()/initForceMuteSettings()/
  *            initSpatialSoundSettings()/initShutdownVolumeSettings()/renderShutdownVolumeDevices()
  * 依赖：common.js(getInvoke/showToast) /
