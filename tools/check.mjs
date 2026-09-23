@@ -288,10 +288,21 @@ for (const dirName of ["scripts"]) {
     if (!f.endsWith(".js")) continue;
     try {
       execFileSync(process.execPath, ["--check", path.join(DIST, dirName, f)], {
-        stdio: "pipe",
+        // ⚠️ stdin 必须是 "ignore"：`node --check` 不读 stdin，而某些环境下 libuv
+        // 创建「子进程 stdin 管道」会失败（本机返回 EBUSY / errno -4082）。
+        // 用默认的 stdio:"pipe" 会让本检查对**全部**文件假红，进而拦死 pre-commit。
+        // 详见 .workbuddy-ai/memory/PLAYBOOK.md §J.5。
+        stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (e) {
-      errors.push(`语法错误 ${dirName}/${f}: ${e.stderr?.toString().split("\n")[0]}`);
+      // ⚠️ spawn 本身失败时（如 EBUSY）`e.stderr` 为空 —— 只打它会输出字面量 `undefined`，
+      // 把「环境问题」伪装成「语法错误」，排查时极易走错方向。故优先 stderr、退回 code/message。
+      const detail =
+        (e.stderr && e.stderr.toString().split("\n")[0]) ||
+        (e.code
+          ? e.code + " " + String(e.message).split("\n")[0]
+          : String(e.message).split("\n")[0]);
+      errors.push(`语法错误 ${dirName}/${f}: ${detail}`);
     }
   }
 }
