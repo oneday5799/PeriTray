@@ -31,10 +31,13 @@
 //! ── 本模块的里程碑 ──────────────────────────────────────────────────────
 //!   里程碑 1（已完成）：建窗 + 挂载 + 自绘一块可辨识的内容。
 //!   里程碑 2+3（已完成）：接入真实内容 + 由设置页驱动（挂载 / 拆除 / 重定位）。
-//!   里程碑 4（本次）：**布局重构** —— 图标放大到 32px，电量画图标**右上角**、
+//!   里程碑 4（已完成）：**布局重构** —— 图标放大到 32px，电量画图标**右上角**、
 //!     音量画**右下角**，缺失一律 `N/A`；widget 在任务栏内**垂直居中**。
-//!   刻意**不含**：多显示器（本机无 `Shell_SecondaryTrayWnd`，无法验证）、
-//!   Explorer 重建自愈、Explorer 后 Z 序恢复、拖拽窗口 —— 见函数级 TODO。
+//!   里程碑 5（已完成）：**手动拖拽** —— 关掉「固定位置」后可拖动，落点落盘（`taskbar_custom_x`）。
+//!   里程碑 6（已完成）：**Z 序维护** —— 挂载时显式 `HWND_TOP` 提顶，之后每 2s **幂等**
+//!     重申（`WM_APP_RAISE`）；并把「任务栏换了句柄」（= Explorer 重建）提升为
+//!     **立刻重建**的触发条件，不再等 30s 慢节拍。
+//!   刻意**不含**：多显示器（本机无 `Shell_SecondaryTrayWnd`，无法验证）。
 //!
 //! ── ⛔⛔ 线程模型（**本模块最容易做错的地方**）───────────────────────────
 //!   两条**硬约束**彼此冲突，必须用「后台取数 → 投递主线程 → 主线程重绘」化解：
@@ -184,6 +187,19 @@ static WIDGET_HWND: AtomicIsize = AtomicIsize::new(0);
 #[cfg(target_os = "windows")]
 static REPARENT_ERR: AtomicIsize = AtomicIsize::new(0);
 
+/// 最近一次**尝试挂载**时看到的任务栏句柄（0 = 还没试过）。
+///
+/// ⭐ 唯一用途：区分两种「窗口不在」——
+///   · **任务栏句柄变了** ⇒ Explorer 重建 ⇒ **立刻**重建窗口（否则用户要盯着空任务栏
+///     等满 30s 的慢节拍）；
+///   · **句柄没变** ⇒ 同一个任务栏上挂不上（环境拦截，PLAYBOOK §E3）⇒ 退回 30s 慢节拍，
+///     ⛔ **不能**每 2s 重试一次 —— 实测「反复操作任务栏 → 恶化；静置 → 自愈」。
+///
+/// ⛔ 必须在**每次尝试之后**（成功或失败）都写入：只在成功时写的话，失败后句柄一直是旧值
+///   ⇒ 每 tick 都判成「重建了」⇒ 退化成 2s 一次的挂载风暴，正好踩中上面那条。
+#[cfg(target_os = "windows")]
+static MOUNTED_TASKBAR: AtomicIsize = AtomicIsize::new(0);
+
 // ── 刷新编排 ────────────────────────────────────────────────────────────
 
 /// 投递给主线程的自定义消息：**「快照已更新，请重绘」**。
@@ -192,6 +208,17 @@ static REPARENT_ERR: AtomicIsize = AtomicIsize::new(0);
 ///   系统不会占用；且与 `WM_PAINT` 不同，分层窗口会正常投递到我们的 `wnd_proc`。
 #[cfg(target_os = "windows")]
 const WM_APP_REFRESH: u32 = 0x8000 + 1;
+
+/// 投递给主线程的自定义消息：**「请重申 Z 序」**。
+///
+/// ⭐ 为什么单独一条消息（而不是复用 `WM_APP_REFRESH`）：
+///   两者**成本与频率差两个数量级** —— 重绘要建 DIB + 提交（每 30s 或数据变化时），
+///   而重申 Z 序只是一次 `GetWindow` 查询（维护节拍，2s 一次，且**幂等**：
+///   已经最顶就什么都不做）。合成一条会让「重申」被迫跟着重绘走，白白多画一帧。
+///
+/// ⛔ 也**不能**由维护线程直接调 `SetWindowPos` —— 窗口属于创建它的线程（主线程）。
+#[cfg(target_os = "windows")]
+const WM_APP_RAISE: u32 = 0x8000 + 2;
 
 /// 防抖状态：`true` = 已有一次刷新在路上（**合并窗口**）。
 ///
@@ -282,7 +309,7 @@ mod ffi {
     #[cfg(target_os = "windows")]
     const DT_END_ELLIPSIS: u32 = 0x0000_8000;
 
-    use super::{WIDGET_H, WM_APP_REFRESH};
+    use super::{WIDGET_H, WM_APP_RAISE, WM_APP_REFRESH};
     use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW,
@@ -290,11 +317,12 @@ mod ffi {
         DIB_RGB_COLORS, HBITMAP, HDC, HFONT, HGDIOBJ, TRANSPARENT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, PostMessageW,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindow, GetWindowLongPtrW, PostMessageW,
         RegisterClassW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-        UpdateLayeredWindow, GWL_STYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, ULW_ALPHA, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-        WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+        UpdateLayeredWindow, GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_NOZORDER, ULW_ALPHA, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MOUSEMOVE, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_POPUP,
     };
 
     /// 注册 widget 窗口类（幂等）。返回类名（`to_wide` 后的指针由调用方持有）。
@@ -362,11 +390,16 @@ mod ffi {
         (old, err)
     }
 
-    /// 让分层窗口真正显示（可见四条件里的「调一次 SetWindowPos」）。
+    /// 让分层窗口真正显示（可见四条件里的「调一次 `SetWindowPos`」）。
+    ///
+    /// ⚠️ 这里**刻意不动 Z 序**（`SWP_NOZORDER` ⇒ 插入位置参数被忽略，故传 `NULL`）：
+    ///   本函数的职责只有「让分层窗显示」这一条。Z 序由 `raise_to_top` 单独负责 ——
+    ///   早先这里传的是 `HWND_TOPMOST`，**看起来**在设置顶，实际被 `SWP_NOZORDER`
+    ///   忽略 ⇒ 是个**死参数**（从未生效，却让人以为 Z 序已经被设置过）。
     pub unsafe fn show(hwnd: HWND) {
         SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            std::ptr::null_mut(),
             0,
             0,
             0,
@@ -374,6 +407,52 @@ mod ffi {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
         );
         ShowWindow(hwnd, 5 /* SW_SHOW */);
+    }
+
+    /// 把 widget 提到**兄弟 Z 序的最顶**。
+    ///
+    /// ⛔⛔ **为什么必须显式做**（真机实测，2026-09-25）：
+    ///   · `SetParent` 确实会把窗口放到兄弟 Z 序最顶 —— 但那是**建窗顺序的副产品**，
+    ///     不是可以依赖的契约：**任何后继的 `SetParent`**（另一个任务栏 widget 自愈、
+    ///     系统自己的 XAML 岛）都会插到我们之上。实测：用一个同款形态
+    ///     （popup → 改样式 → `SetParent`）的兄弟窗，它落第 0 位、**我们被挤到第 1 位**。
+    ///   · 另一条建窗路线（`CreateWindowExW` 直接以任务栏为父）落**最底** ——
+    ///     参考实现 StockBar 正是因此才要「约 2 秒维护重贴 Z 序」。
+    ///   · Explorer 重建后我们会重新挂载，此时**谁先谁后取决于系统时序**，更不该赌。
+    /// ⇒ 可见性不能依赖「挂载顺序」，必须**主动重申**（见 `WM_APP_RAISE` 维护路径）。
+    ///
+    /// ⚠️ 子窗必须用 `HWND_TOP`（= 兄弟 Z 序最顶）；`HWND_TOPMOST` 对**子窗**无意义
+    ///   （那是顶层窗的概念，在子窗上会被忽略或产生意外结果）。
+    pub unsafe fn raise_to_top(hwnd: HWND) {
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+
+    /// widget 是否**已经在兄弟 Z 序最顶**。
+    ///
+    /// ⭐ 用它把维护动作做成**幂等**：已经在上面的情况下一次 `SetWindowPos` 都不发
+    ///   ⇒ 维护成本降到一次 `GetWindow` 查询，也避免无谓的 Z 序写入引发重新合成。
+    ///
+    /// ⚠️ `GW_HWNDPREV` = 「Z 序上位于我**之上**的那个兄弟窗」；返回 `NULL` 即无人压顶。
+    ///   ⛔ 别与 `GW_HWNDNEXT` 混：后者是**之下**（`EnumWindows` 的遍历方向）。
+    pub unsafe fn is_top_sibling(hwnd: HWND) -> bool {
+        GetWindow(hwnd, GW_HWNDPREV).is_null()
+    }
+
+    /// 跨线程请求「重申 Z 序」（由主线程的 `wnd_proc` 执行）。
+    ///
+    /// ⛔ 维护线程**不能**直接调 `SetWindowPos`：窗口属于**创建它的线程**（主线程），
+    ///   跨线程操作 Z 序与跨线程 `ULW` 同属未定义行为。用 `PostMessageW` 把动作搬回主线程。
+    /// ⚠️ 投递失败（窗口已销毁）静默忽略 —— 属「无状态后果」类，下一次维护会补上。
+    pub unsafe fn post_raise(hwnd: HWND) {
+        PostMessageW(hwnd, WM_APP_RAISE, 0, 0);
     }
 
     /// 空白区装不下时隐藏 widget；下一次重绘重新找到空白区后再显示。
@@ -604,6 +683,10 @@ mod ffi {
     /// ⭐ 例外一：**应用私有的刷新消息**（`WM_APP_REFRESH`）必须自己处理 ——
     ///   它是「后台取数完成，请主线程重绘」的唯一通道（跨线程安全）。
     ///
+    /// ⭐ 例外一之二：**重申 Z 序**（`WM_APP_RAISE`）—— 维护线程每 2s 请求一次，
+    ///   本函数**幂等**处理：已经最顶就一次 `SetWindowPos` 都不发。
+    ///   ⛔ 为什么不让维护线程直接 `SetWindowPos`：窗口属于创建它的线程（这里）。
+    ///
     /// ⭐ 例外二：**手动拖拽**。三个鼠标消息 + 一个捕获变更消息都落在**主线程**
     ///   （本窗口由主线程创建、消息只投递到创建线程）⇒ 拖拽是天然的**单线程状态机**，
     ///   状态用原子量表达（见 `DRAG_*`）。
@@ -616,6 +699,15 @@ mod ffi {
         if msg == WM_APP_REFRESH {
             // 在**主线程**重绘：读快照 → 建 DIB → 提交。
             super::repaint_from_snapshot(hwnd);
+            return 0;
+        }
+        if msg == WM_APP_RAISE {
+            // ⭐ 幂等：已经是最顶兄弟 ⇒ 什么都不做（维护节拍是 2s，绝不能让每次
+            //    维护都写一次 Z 序 —— 那会引发无谓的重新合成）。
+            if !super::ffi::is_top_sibling(hwnd) {
+                super::ffi::raise_to_top(hwnd);
+                super::append_log("[widget] Z 序被后来者压住 ⇒ 已重申到兄弟最顶");
+            }
             return 0;
         }
         // ── 手动拖拽 ────────────────────────────────────────────────────
@@ -721,6 +813,10 @@ pub fn spawn_widget() -> MountReport {
         )
     };
     report.taskbar = taskbar as isize;
+    // ⭐ 无论成败都登记「这次是冲着哪个任务栏去的」——维护循环据此区分
+    //   「Explorer 重建」（句柄变了 ⇒ 立刻重建）与「同一个任务栏挂不上」
+    //   （句柄没变 ⇒ 退回 30s 慢节拍）。见 `MOUNTED_TASKBAR` 的文档。
+    MOUNTED_TASKBAR.store(taskbar as isize, Ordering::SeqCst);
     if taskbar.is_null() {
         append_log("[widget] Shell_TrayWnd 未找到（Explorer 重启间隙？）⇒ 放弃本次挂载");
         return report;
@@ -760,6 +856,11 @@ pub fn spawn_widget() -> MountReport {
 
     // 7) 显示（可见四条件之一：调一次 SetWindowPos）
     unsafe { ffi::show(hwnd) };
+
+    // 8) 显式重申 Z 序：`SetParent` 的「落顶」是建窗顺序的副产品，不是契约
+    //    （任何后继 `SetParent` 都会插到我们之上 —— 真机实测）。
+    //    ⚠️ 与第 7 步分开：`show` 刻意带 `SWP_NOZORDER`，只管「可见四条件」。
+    unsafe { ffi::raise_to_top(hwnd) };
 
     WIDGET_HWND.store(hwnd as isize, Ordering::SeqCst);
     REPARENT_ERR.store(err as isize, Ordering::SeqCst);
@@ -973,6 +1074,23 @@ mod icons {
     }
 }
 
+/// 当前 `Shell_TrayWnd` 的句柄（**0 = 此刻没有任务栏**，如 Explorer 重启间隙）。
+///
+/// ⭐ 抽成单一入口的理由与 `taskbar_rect` 相同：`FindWindowW` 在本模块被
+///   几何计算、挂载、维护循环多处使用，各写一遍必然漂移（类名写错就会静默失效）。
+///
+/// ⚠️ 返回值是 `isize` 而非 `HWND`：它要跨线程比对（维护线程 vs 主线程），
+///   裸指针不是 `Send`，而句柄本身只是整数 —— 与 `WIDGET_HWND` 同款处理。
+#[cfg(target_os = "windows")]
+fn taskbar_hwnd() -> isize {
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
+            to_wide("Shell_TrayWnd").as_ptr(),
+            std::ptr::null(),
+        ) as isize
+    }
+}
+
 /// 任务栏窗口矩形 `(left, top, width, height)`（**屏幕**坐标，物理像素）。
 ///
 /// ⭐ 抽成单一入口：`taskbar_left`（相对坐标换算）、`widget_y_offset`（垂直居中）、
@@ -983,12 +1101,7 @@ mod icons {
 ///   （取 0 / 不居中 / 拒绝拖动），不要在这里编造一个假矩形。
 #[cfg(target_os = "windows")]
 fn taskbar_rect() -> Option<(i32, i32, i32, i32)> {
-    let taskbar = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
-            to_wide("Shell_TrayWnd").as_ptr(),
-            std::ptr::null(),
-        )
-    };
+    let taskbar = taskbar_hwnd() as *mut core::ffi::c_void;
     if taskbar.is_null() {
         return None;
     }
@@ -2153,17 +2266,77 @@ pub fn refresh_async() {
     }
 }
 
-/// 启动 30s **低频兜底**刷新线程（幂等，重复调用只起一个）。
+/// 维护循环的 tick 间隔（秒）。
 ///
-/// ⭐ 为什么还需要它（已有事件驱动）：事件只覆盖**代码主动 emit 的时刻**。
-///   「没有事件但数据变了」的情况确实存在 —— 例如蓝牙设备电量自然衰减、
-///   系统在后台静默切换默认音频设备。兜底保证这些也会被看到，代价是 30s 一次 WMI。
+/// ⭐ 取 **2**：与参考实现 StockBar 的「约 2 秒维护重贴 Z 序」同量级。
+///   ⛔ 但这个 tick **只做廉价动作**（`IsWindow` + `FindWindowW` + 一次 `GetWindow`），
+///   **绝不做 WMI 取数** —— 那由 `REFRESH_EVERY_TICKS` 单独控制（30s 一次）。
+#[cfg(target_os = "windows")]
+const MAINTENANCE_TICK_SECS: u64 = 2;
+
+/// 每多少个 tick 做一次**取数刷新**（`2s × 15 = 30s`）。
 ///
-/// ⭐ 本循环**无条件启动**（不再要求「先挂载成功」），因为未挂载时它还兼一个职责：
-///   **自愈**。见循环内两条分支。
+/// ⛔ 两者必须分开：维护（重申 Z 序 / 探活）要快，取数（WMI 实测 600ms+）要慢。
+///   把它们绑在一个节拍上，要么 Z 序恢复慢 15 倍，要么 WMI 被拉爆。
+#[cfg(target_os = "windows")]
+const REFRESH_EVERY_TICKS: u64 = 15;
+
+/// 维护循环**单个 tick 该做什么**。纯数据，便于单测。
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TickPlan {
+    /// 请求主线程重申 Z 序（仅在窗口存活时有意义）。
+    raise: bool,
+    /// 跑一次取数刷新（重）。
+    refresh: bool,
+    /// 尝试重新挂载。
+    remount: bool,
+}
+
+/// 决策函数：**纯函数**，可单测（不读任何全局状态）。
 ///
-/// ⛔ 参数必须是 `AppHandle`：自愈要走 `apply_from_config`，而窗口只能在主线程建，
-///   需要 `run_on_main_thread` 这条通道。
+/// ⛔ 为什么值得抽出来单测：这里的失效方式**全是静默的** ——
+///   · `raise` 写漏 ⇒ Z 序被后来者压住后**永不恢复**（窗口还在、只是看不见）；
+///   · `remount` 判据写反 ⇒ 要么 Explorer 重建后空等 30s，要么**每 2s 挂一次**
+///     （反复操作任务栏会触发「越试越糟」的环境效应，PLAYBOOK §E3）。
+///   两者都不报错、不崩溃，只能靠用例钉住。
+#[cfg(target_os = "windows")]
+fn plan_tick(alive: bool, taskbar_changed: bool, tick: u64) -> TickPlan {
+    let due = tick % REFRESH_EVERY_TICKS == 0;
+    if !alive {
+        return TickPlan {
+            raise: false,
+            refresh: false,
+            // ⭐ 任务栏换了 = Explorer 重建 ⇒ 立刻重建（不等慢节拍）。
+            //    否则只有 30s 节拍才重试 —— 那正是「反复挂载」的源头，必须靠节拍隔开。
+            remount: taskbar_changed || due,
+        };
+    }
+    TickPlan {
+        raise: true,
+        refresh: due,
+        remount: false,
+    }
+}
+
+/// 启动维护线程（幂等，重复调用只起一个）。
+///
+/// 它一个循环干三件事，**节奏不同**（见 `plan_tick`）：
+///   1. **每 2s**：探活 + 请求重申 Z 序（廉价、幂等）；
+///   2. **每 30s**：取数刷新（重：WMI 600ms+）；
+///   3. **按需**：重新挂载（任务栏换句柄 ⇒ 立刻；同一任务栏挂不上 ⇒ 30s 节拍）。
+///
+/// ⭐ 为什么还需要 2（已有事件驱动）：事件只覆盖**代码主动 emit 的时刻**。
+///   「没有事件但数据变了」确实存在 —— 蓝牙电量自然衰减、系统后台静默切换默认音频设备。
+///
+/// ⭐ 为什么还需要 1：Z 序**不是**一次性设置。`SetParent` 把我们放上顶只是建窗顺序的
+///   副产品；任何后继 `SetParent`（另一个任务栏 widget 自愈、Explorer 重建后的系统子窗）
+///   都会插到我们之上 ⇒ **必须周期性重申**。真机实测：同款形态的兄弟窗 `SetParent`
+///   之后我们被挤到第 1 位。
+///
+/// ⭐ 本循环**无条件启动**（不要求「先挂载成功」）—— 未挂载时它兼「自愈」职责。
+///
+/// ⛔ 参数必须是 `AppHandle`：自愈要走 `apply_from_config`，而窗口只能在主线程建。
 pub fn start_refresh_loop(app: &tauri::AppHandle) {
     #[cfg(target_os = "windows")]
     {
@@ -2176,10 +2349,28 @@ pub fn start_refresh_loop(app: &tauri::AppHandle) {
         std::thread::spawn(move || {
             // 首次延迟 3s：让启动流程（托盘/窗口）先跑完，避免与启动期抢 CPU
             std::thread::sleep(std::time::Duration::from_secs(3));
+            let mut tick: u64 = 0;
             loop {
-                if widget_alive() {
+                tick += 1;
+                let alive = widget_alive();
+                let taskbar = taskbar_hwnd();
+                // ⭐ 「任务栏换了」= Explorer 重建。**这是唯一能立刻重建的触发条件**；
+                //    同一个任务栏上挂不上只能等 30s 节拍（见 `plan_tick` 与 §E3）。
+                let changed = taskbar != MOUNTED_TASKBAR.load(Ordering::SeqCst);
+                let plan = plan_tick(alive, changed, tick);
+
+                if plan.raise {
+                    let hwnd = WIDGET_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void;
+                    if !hwnd.is_null() {
+                        // ⭐ 只投递、不查询：`is_top_sibling` 属于「碰窗口」的操作，
+                        //    一律留在主线程做（`wnd_proc` 里幂等处理）。
+                        unsafe { ffi::post_raise(hwnd) };
+                    }
+                }
+                if plan.refresh {
                     refresh_async();
-                } else {
+                }
+                if plan.remount {
                     // ── 自愈分支：窗口不在（或句柄已失效）──────────────────────
                     // 走到这里的三种情况：
                     //   ① 启动期 `apply_from_config` 的投递丢了（事件循环尚未就绪）；
@@ -2191,12 +2382,23 @@ pub fn start_refresh_loop(app: &tauri::AppHandle) {
                         append_log("[widget] 兜底：句柄已失效 ⇒ 复位挂载状态");
                         forget_widget();
                     }
+                    // ⛔ 乐观登记：**先**记下这次是冲着哪个任务栏去的，再投递挂载。
+                    //    失败时也保持已登记 ⇒ `changed` 变假 ⇒ 退回 30s 慢节拍，
+                    //    不会每 2s 重试一次（那会触发「越试越糟」）。
+                    MOUNTED_TASKBAR.store(taskbar, Ordering::SeqCst);
                     if should_show() {
-                        append_log("[widget] 兜底：配置要求显示但未挂载 ⇒ 重新挂载");
+                        append_log(&format!(
+                            "[widget] 兜底：未挂载 ⇒ 重新挂载（任务栏={taskbar:#x}，{}）",
+                            if changed {
+                                "Explorer 重建"
+                            } else {
+                                "30s 节拍"
+                            }
+                        ));
                         apply_from_config(&app);
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_secs(30));
+                std::thread::sleep(std::time::Duration::from_secs(MAINTENANCE_TICK_SECS));
             }
         });
     }
@@ -2927,6 +3129,88 @@ mod tests {
             inside_rounded_rect(0, 0, w, h, 0),
             "半径 0 ⇒ 退化为实心矩形"
         );
+    }
+
+    // ── plan_tick：维护节拍的决策（Z 序维护 / 取数 / 自愈）────────
+
+    /// ⭐ 两个节拍常量必须真的凑出文档里承诺的 30s —— 改任一常量却忘了另一个，
+    ///   文档就变成假话（而这类「文档说 30s、实际 6s」不会有任何报错）。
+    #[test]
+    fn maintenance_tick_times_refresh_interval_is_thirty_seconds() {
+        assert_eq!(
+            MAINTENANCE_TICK_SECS * REFRESH_EVERY_TICKS,
+            30,
+            "维护 tick × 取数间隔 必须等于 30s（文档与日志都这么写）"
+        );
+    }
+
+    /// 窗口存活时，**每个 tick 都要请求重申 Z 序**（这是「被压住后能自愈」的唯一来源）。
+    ///
+    /// 可证伪：把 `raise` 改成 `false`，或只在 30s 边界置真 ⇒ 本条立刻转红。
+    #[test]
+    fn plan_tick_raises_on_every_tick_while_alive() {
+        for tick in 1..=40u64 {
+            let p = plan_tick(true, false, tick);
+            assert!(p.raise, "tick={tick}：存活时必须重申 Z 序");
+            assert!(!p.remount, "tick={tick}：已挂载就不该再挂");
+        }
+    }
+
+    /// 取数（WMI，600ms+）**只能**落在 30s 边界上，不能被 2s 的维护节拍带起来。
+    ///
+    /// 可证伪：把 `refresh: due` 改成 `true` ⇒ 每 2s 跑一次 WMI（CPU 打爆）。
+    #[test]
+    fn plan_tick_refreshes_only_on_the_thirty_second_boundary() {
+        let refreshed: Vec<u64> = (1..=45u64)
+            .filter(|&t| plan_tick(true, false, t).refresh)
+            .collect();
+        assert_eq!(
+            refreshed,
+            vec![
+                REFRESH_EVERY_TICKS,
+                2 * REFRESH_EVERY_TICKS,
+                3 * REFRESH_EVERY_TICKS
+            ],
+            "取数只应落在 30s 边界"
+        );
+    }
+
+    /// ⭐ **任务栏换句柄 = Explorer 重建 ⇒ 下一个 tick 就重建**（不等 30s 慢节拍）。
+    ///
+    /// 可证伪：把 `taskbar_changed || due` 改成 `due` ⇒ 本条转红
+    /// （用户会盯着空任务栏等满 30s）。
+    #[test]
+    fn plan_tick_remounts_immediately_when_taskbar_handle_changed() {
+        let p = plan_tick(false, true, 1);
+        assert!(p.remount, "任务栏换了 ⇒ 立刻重建，不受 30s 节拍限制");
+        assert!(!p.raise, "窗口都不在了，重申 Z 序没有意义");
+        assert!(!p.refresh, "重建走挂载路径，不需要先取数");
+    }
+
+    /// ⛔⛔ **同一个任务栏上挂不上时，绝不能每 tick 重试** —— 那会触发
+    ///   「反复操作任务栏 → 恶化；静置 → 自愈」的环境效应（PLAYBOOK §E3）。
+    ///
+    /// 可证伪：把 `taskbar_changed || due` 改成 `true` ⇒ 15 个 tick 里出现 15 次重建 ⇒ 转红。
+    #[test]
+    fn plan_tick_does_not_storm_remount_on_the_same_taskbar() {
+        let attempts = (1..=45u64)
+            .filter(|&t| plan_tick(false, false, t).remount)
+            .count();
+        assert_eq!(
+            attempts, 3,
+            "45 个 tick（90s）里只允许 3 次重试（30s 一次）；每 tick 重试 = 挂载风暴"
+        );
+    }
+
+    /// 窗口不在时**不得**请求重申 Z 序（句柄已失效，投递没有意义）。
+    #[test]
+    fn plan_tick_never_raises_while_not_alive() {
+        for tick in 1..=40u64 {
+            assert!(
+                !plan_tick(false, false, tick).raise && !plan_tick(false, true, tick).raise,
+                "tick={tick}：窗口不在时不该重申 Z 序"
+            );
+        }
     }
 
     // ── wants_widget：窗口「该不该存在」的判据 ─────────────────
