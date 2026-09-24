@@ -30,10 +30,11 @@
 //!
 //! ── 本模块的里程碑 ──────────────────────────────────────────────────────
 //!   里程碑 1（已完成）：建窗 + 挂载 + 自绘一块可辨识的内容。
-//!   里程碑 2（本次）：**接入真实内容** —— 每台设备一项（名 + 电量 + 音量），
-//!     宽度自适应，事件驱动刷新 + 低频兜底。
+//!   里程碑 2+3（已完成）：接入真实内容 + 由设置页驱动（挂载 / 拆除 / 重定位）。
+//!   里程碑 4（本次）：**布局重构** —— 图标放大到 32px，电量画图标**右上角**、
+//!     音量画**右下角**，缺失一律 `N/A`；widget 在任务栏内**垂直居中**。
 //!   刻意**不含**：多显示器（本机无 `Shell_SecondaryTrayWnd`，无法验证）、
-//!   Explorer 重建自愈、Explorer 后 Z 序恢复 —— 见函数级 TODO。
+//!   Explorer 重建自愈、Explorer 后 Z 序恢复、拖拽窗口 —— 见函数级 TODO。
 //!
 //! ── ⛔⛔ 线程模型（**本模块最容易做错的地方**）───────────────────────────
 //!   两条**硬约束**彼此冲突，必须用「后台取数 → 投递主线程 → 主线程重绘」化解：
@@ -64,12 +65,16 @@
 //    否则 `#[cfg(not(windows))]` 的桩函数签名对不上。故**不**在文件顶写
 //    `#![cfg(target_os = "windows")]`，而是逐项按需 cfg（模块内 Win32 代码统一走 `ffi`）。
 
-/// 自绘内容的高度（逻辑像素）。宽度按内容计算。
+/// 自绘内容的高度（物理像素）。宽度按内容计算。
+///
+/// ⭐ 取 40 的理由：真机实测任务栏高 **60px**（2560×1440 @125% 缩放）⇒ 上下各余
+///   10px；同时它刚好容纳「32px 图标 + 右侧两行文本」（`ICON_PX = 32`）。
+///   任务栏内**垂直居中**（见 `widget_y_offset`），使图标与任务栏自身图标同一水平线。
 ///
 /// ⚠️ 这是**唯一**的高度定义；`ffi` 模块通过 `use super::WIDGET_H` 引用它，
 /// 不另开一份常量（两份硬编码会随改动漂移）。
 #[cfg(target_os = "windows")]
-const WIDGET_H: i32 = 22;
+const WIDGET_H: i32 = 40;
 
 /// 诊断快照：`hwnd` / `SetParent` 错误码 / `GetParent` 复核结果的原始值。
 ///
@@ -703,7 +708,7 @@ pub fn spawn_widget() -> MountReport {
     // 6) 先**取一次任务栏视觉空白区**，决定 widget 的初始 x；
     //    draw_frame 后续每次刷新也会重新计算，故这里不是写死坐标，只是首帧锚点。
     // 首帧只画透明占位，不在 setup 主线程做像素扫描；真实数据到来后再由重绘路径避让。
-    let drawn = draw_frame(hwnd, 100, 0);
+    let drawn = draw_frame(hwnd);
 
     // 7) 显示（可见四条件之一：调一次 SetWindowPos）
     unsafe { ffi::show(hwnd) };
@@ -723,11 +728,14 @@ pub fn spawn_widget() -> MountReport {
     report
 }
 
-/// 单台设备在 widget 上占用的**最大**宽度（像素）。
+/// **单段**文本在 widget 上占用的最大宽度（像素）。
 ///
 /// ⭐ 为什么不无限平铺：`PINNED_TASKBAR_LIMIT = 8` ⇒ 8 台 × 每台十几字符会吃掉
-///    上千像素，在窄屏/多窗口时与任务栏图标区冲突。给每台一个上限、超出截断，
+///    上千像素，在窄屏/多窗口时与任务栏图标区冲突。给每段一个上限、超出截断，
 ///    保证「有多少台都画得下」，也让布局可预测（用户选定「全部平铺」+ 上限保护）。
+///
+/// ⚠️ 判据粒度是**单段**（电量段、音量段各算一次），不是单台设备 ——
+///   一台设备的宽度取两段的最大值（见 `draw_items` 的 `per_item`）。
 #[cfg(target_os = "windows")]
 const ITEM_MAX_W: i32 = 150;
 
@@ -740,59 +748,79 @@ const ITEM_GAP: i32 = 10;
 #[cfg(target_os = "windows")]
 const PAD_X: i32 = 6;
 
-/// 字体像素高度 —— 略小于 widget 高（22），留出上下呼吸空间。
+/// 字体像素高度 —— 电量/音量两行文本共用。取 11：在 16px 行高里既能看清
+/// 又不至于让两行贴在一起（`%`/数字在 11px Segoe UI 下清晰可辨）。
 #[cfg(target_os = "windows")]
-const FONT_PX: i32 = 14;
+const FONT_PX: i32 = 11;
 
-/// 图标绘制边长（方形）。取 16：在 22px 高的条里上下各余 3px，
-/// 且不至于让单个条目过宽（6 台 × 图标 + 数值要能塞进可用区）。
+/// 图标绘制边长（方形）。取 32：图标源 PNG 本身就是 32×32（`src-tauri/icons/`），
+/// 因此 `scale_to` 是**恒等拷贝**、零重采样损耗；且与任务栏自身图标（约 30px）尺度相当。
 #[cfg(target_os = "windows")]
-const ICON_PX: i32 = 16;
+const ICON_PX: i32 = 32;
 
-/// 图标与右侧数值文本之间的间隔。
+/// 图标与右侧两行文本之间的间隔。
 #[cfg(target_os = "windows")]
-const ICON_TEXT_GAP: i32 = 3;
+const ICON_TEXT_GAP: i32 = 4;
+
+/// 图标右侧每行文本的掩码高度 = 图标高度的一半。
+///
+/// ⭐ 电量占**上半行**（= 图标的右上角）、音量占**下半行**（= 图标的右下角）——
+///   这正是用户 2026-09-24 指定的布局。
+/// ⚠️ 与 `FONT_PX` 的关系：11px 字在 16px 行里上下各有余量，`DrawTextW`
+///   的 `DT_SINGLELINE` 把字形画在行**顶部** ⇒ 两行之间天然留出空隙。
+#[cfg(target_os = "windows")]
+const TEXT_ROW_H: i32 = ICON_PX / 2;
 
 /// widget 最多显示的设备台数（用户 2026-09-24 指定）。
 ///
 /// ⭐ 与 `PINNED_TASKBAR_LIMIT = 8` 的关系：那个是**固定上限**（最多能 pin 几台），
 ///   这个是**显示上限**（任务栏上最多画几台）。显示上限更小，因为有**物理宽度**约束
-///   —— 6 台 × (16 图标 + 约 45 文本 + 10 间隔) ≈ 430px，能在避让后的可用区里放下。
+///   —— 6 台 × (32 图标 + 4 间隙 + 约 30 文本 + 10 间隔) ≈ 460px，能在避让后的可用区里放下。
 #[cfg(target_os = "windows")]
 const WIDGET_MAX_ITEMS: usize = 6;
 
-/// 把 `WidgetItem` 渲染成**数值段**（不含设备名）。
+/// 电量文本（画在图标**右上角**）。
 ///
-/// 格式形如 `85% 40%`；无电量用 `--`；无音频端点则省略音量段。
+/// `Some(b)` → `"85%"`；读不出 → `"N/A"`。
 ///
 /// ⭐ **为什么不画设备名**：用户 2026-09-24 明确「设备名以后再说」⇒ 当前只画
-///   「图标 + 数值」。设备名仍保留在 `WidgetItem` 里（诊断日志用）。
+///   「图标 + 电量 + 音量」。设备名仍保留在 `WidgetItem` 里（诊断日志用）。
 ///
 /// ⭐ **为什么把「格式化」与「绘制」分开**：格式化是**纯函数**，可以单测
 ///   （不需要窗口、不需要 DIB）；绘制依赖 GDI 无法单测。分开后，
 ///   「0% 与读不出要显示得不一样」这类**语义**就有测试保护。
 #[cfg(target_os = "windows")]
-fn format_metrics(it: &WidgetItem) -> String {
-    // 电量：`Some(0)` 是合法值（耗尽），`None` 是读不出 ⇒ 必须区分
-    let mut s = match it.battery {
+fn format_battery(it: &WidgetItem) -> String {
+    // ⛔ `Some(0)` 是合法值（电量耗尽），`None` 是读不出 ⇒ 必须区分：
+    //    写反了界面只是少一个百分号，肉眼几乎看不出（典型的静默失效）。
+    match it.battery {
         Some(b) => format!("{}%", b),
-        None => "--".to_string(),
-    };
-    // 音量：只有「有音频端点」才画；暂时读不出时画 `--` 而不是省略
-    if it.has_audio {
-        match it.volume {
-            Some(v) => {
-                let pct = (v * 100.0).round() as i32;
-                if it.is_muted == Some(true) {
-                    s.push_str(" 静音");
-                } else {
-                    s.push_str(&format!(" {}%", pct));
-                }
-            }
-            None => s.push_str(" --"),
-        }
+        None => "N/A".to_string(),
     }
-    s
+}
+
+/// 音量文本（画在图标**右下角**）。
+///
+/// 静音 → `"静音"`；`Some(v)` → `"85%"`；**没有音量可显示 → `"N/A"`**。
+///
+/// ⚠️ 「无音频端点」与「有端点但暂时读不出」**都显示 `N/A`**（用户 2026-09-24 口径：
+///   没有音量就显示 N/A）。两者在数据层仍由 `has_audio` 区分 —— 将来若要改成
+///   「无端点整段不画」，不必回头动数据。
+#[cfg(target_os = "windows")]
+fn format_volume(it: &WidgetItem) -> String {
+    if !it.has_audio {
+        // 键鼠这类无音频端点的设备：用户明确要求显示 N/A（而不是留空）
+        return "N/A".to_string();
+    }
+    // ⭐ 静音**优先于**百分比：端点静音时其音量值仍是旧值（不是 0）
+    //    ⇒ 直接显示「静音」，否则会显示成「40%」这种与听觉不符的数字。
+    if it.is_muted == Some(true) {
+        return "静音".to_string();
+    }
+    match it.volume {
+        Some(v) => format!("{}%", (v * 100.0).round() as i32),
+        None => "N/A".to_string(),
+    }
 }
 
 /// 图标资源与解码（**编译期嵌入 + 进程内缓存**）。
@@ -880,7 +908,10 @@ mod icons {
     }
 }
 
-/// 任务栏顶部 y 坐标（物理像素）。
+/// 任务栏**左端 x 坐标**（物理像素）。
+///
+/// ⭐ 用途：`UpdateLayeredWindow` 的位置参数是**父窗客户区坐标**，而视觉扫描
+///   （`find_widget_slot`）拿到的是**屏幕坐标** ⇒ 两者相减才是相对坐标。
 #[cfg(target_os = "windows")]
 fn taskbar_left() -> i32 {
     let taskbar = unsafe {
@@ -902,6 +933,37 @@ fn taskbar_left() -> i32 {
         windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(taskbar, &mut rc);
     }
     rc.left
+}
+
+/// widget 在任务栏内的**垂直偏移**（父窗客户区坐标，物理像素）。
+///
+/// ⭐ 为什么要算而不是写死 0：真机实测任务栏高 **60px**、widget 高 **40px** ⇒
+///   贴顶会让 widget 里的图标比任务栏自身的图标**高出约 10px**，一眼能看出没对齐
+///   （这正是「22px 高 + 内容贴顶」时期遗留的观感缺陷）。居中后两者同一水平线。
+///
+/// ⚠️ 任务栏比 widget 还矮时（异常 DPI/多显示器缩放不一致）退回 0，
+///   不产生负偏移（负值会把内容顶到任务栏之外）。
+#[cfg(target_os = "windows")]
+fn widget_y_offset() -> i32 {
+    let taskbar = unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
+            to_wide("Shell_TrayWnd").as_ptr(),
+            std::ptr::null(),
+        )
+    };
+    if taskbar.is_null() {
+        return 0;
+    }
+    let mut rc = windows_sys::Win32::Foundation::RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(taskbar, &mut rc);
+    }
+    ((rc.bottom - rc.top - WIDGET_H) / 2).max(0)
 }
 
 /// 在避让槽内按贴靠策略算出窗口左端。
@@ -1077,13 +1139,31 @@ fn find_widget_slot(wanted: i32) -> Option<(i32, i32)> {
     None
 }
 
+/// 单段文本宽度的**保守**估算（像素）。
+///
+/// ⚠️ 为什么按码位分类、而不是统一乘一个系数：ASCII 数字/`%`/`N/A` 在 11px Segoe UI 下
+///   约 6–7px，而中文（全角）在 11px 下约 11px。若统一按 8px 估，**中文会被低估**
+///   ⇒ `find_widget_slot` 可能返回一个比实际内容更窄的槽 ⇒ 内容溢出到邻居上。
+///   避让扫描的**方向性要求**：宁可高估（少用一点空间），不可低估（重叠）。
+///
+/// ⭐ 可证伪：把非 ASCII 的 14 改回 8，`cjk_is_not_underestimated` 会立刻转红。
+#[cfg(target_os = "windows")]
+fn estimate_text_px(s: &str) -> i32 {
+    s.chars()
+        .map(|c| if (c as u32) < 0x80 { 8 } else { 14 })
+        .sum::<i32>()
+        .min(ITEM_MAX_W)
+}
+
 #[cfg(target_os = "windows")]
 fn estimate_widget_width(items: &[WidgetItem]) -> i32 {
+    // ⚠️ 每台设备占「两段文本里更宽的那一段」—— 与 `draw_items` 的 `per_item` 同口径。
     let text_px: i32 = items
         .iter()
         .map(|it| {
-            // 8px/UTF-16 code unit是保守值：14px Segoe UI 的数字通常更窄，中文会更宽。
-            (format_metrics(it).encode_utf16().count() as i32 * 8).min(ITEM_MAX_W)
+            let bat = estimate_text_px(&format_battery(it));
+            let vol = estimate_text_px(&format_volume(it));
+            bat.max(vol)
         })
         .sum();
     let gaps = ITEM_GAP * (items.len().saturating_sub(1) as i32);
@@ -1101,20 +1181,82 @@ fn color_diff(a: u32, b: u32) -> u32 {
     (ar.abs_diff(br) + ag.abs_diff(bg) + ab.abs_diff(bb)) / 3
 }
 
+/// 把一段**文本掩码**按覆盖度预乘合成进主缓冲（`(dst_x, dst_y)` = 目标左上角）。
+///
+/// ⛔ 为什么不能把 GDI 文本直接画进主缓冲：`DrawTextW` 在 32bpp DIB 上写的是
+///   `0x00RRGGBB`（**alpha 字节恒为 0**）⇒ 被 `ULW` 当全透明 ⇒ **文字完全不显示**
+///   （与「类没设背景刷」的表现一模一样，极易误判成同一个问题）。
+///   正确路径 = 白底黑字掩码 → `cov = 255 - gray` → 预乘（详见 `ffi::render_text_mask`）。
+///
+/// ⭐ 重叠像素取**最大 alpha**（不是相加）：电量段与音量段、或字形与图标重叠时
+///   不叠加亮度（叠加会在笔画交叉处出现亮斑）。
+///
+/// ⚠️ 抽成函数而不是在绘制循环里内联两份：电量与音量两行的合成逻辑**逐字相同**，
+///   复制两份必然在后续改动中漂移（一处改了预乘、另一处忘了）。
+#[cfg(target_os = "windows")]
+fn blit_text_mask(
+    px: &mut [u32],
+    total_w: i32,
+    mask: &(Vec<u8>, i32, i32),
+    dst_x: i32,
+    dst_y: i32,
+    color: (u8, u8, u8),
+    alpha_scale: f32,
+) {
+    let (buf, mw, mh) = mask;
+    let (cr, cg, cb) = color;
+    for yy in 0..*mh {
+        let dy = dst_y + yy;
+        if dy < 0 {
+            continue;
+        }
+        for xx in 0..*mw {
+            let dx = dst_x + xx;
+            // ⛔ 必须判 `dx >= total_w`：否则会**绕行到下一行**（行内偏移溢出），
+            //    表现为「右端文本的第一个字出现在左端下一行」。
+            if dx < 0 || dx >= total_w {
+                continue;
+            }
+            // 掩码里 GDI 写的是**黑字白底**（BGRA 顺序）⇒ 取绿通道算灰度
+            // 覆盖度 = 255 - gray（白=未覆盖=0；黑=完全覆盖=255）
+            let mi = ((yy * mw + xx) * 4) as usize;
+            let cov = 255u32 - buf[mi + 1] as u32;
+            if cov == 0 {
+                continue;
+            }
+            let a = ((cov as f32) * alpha_scale).round() as u32;
+            if a == 0 {
+                continue;
+            }
+            // ⛔ 预乘：`R·A/255`（straight alpha 会让抗锯齿边缘**过亮泛白**）
+            let pr = cr as u32 * a / 255;
+            let pg = cg as u32 * a / 255;
+            let pb = cb as u32 * a / 255;
+            let packed = (a << 24) | (pr << 16) | (pg << 8) | pb;
+            let di = (dy * total_w + dx) as usize;
+            if di < px.len() && a > px[di] >> 24 {
+                px[di] = packed;
+            }
+        }
+    }
+}
+
 /// 真实内容的自绘与提交（**主线程**调用）。
 ///
-/// 布局：单行水平排列，每台设备一段文本，宽度 = 各段实测宽度之和 + 间隔 + 内边距；
+/// 布局（用户 2026-09-24 指定）：每台设备一段，段内**左侧一个放大图标**，
+/// 图标**右上角**画电量、**右下角**画音量（各占图标高度的一半）；
+/// 横向按项依次排列，宽度 = 各段实测宽度之和 + 间隔 + 内边距。
 /// 窗口宽度随之改变（`ULW` 的 `SIZE` 参数**同时**设定窗口形状 ⇒ 无需 `MoveWindow`）。
 ///
 /// ⛔ 若快照为 `None`（首次刷新尚未完成）⇒ 画一帧**空内容**（全透明）并返回，
-///   让窗口先以正确尺寸出现，避免「挂上去但尺寸是建窗时的 1×22」。
+///   让窗口先以正确尺寸出现，避免「挂上去但尺寸是建窗时的 1×WIDGET_H」。
 #[cfg(target_os = "windows")]
-fn draw_items(hwnd: *mut core::ffi::c_void, x: i32, y: i32, items: &[WidgetItem]) -> bool {
+fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     let dark = crate::windows::system_dark_mode();
 
     // 空快照：不画任何东西，但仍提交一帧（保持窗口有效且全透明）
     if items.is_empty() {
-        return draw_blank(hwnd, x, y, PAD_X * 2);
+        return draw_blank(hwnd, PAD_X * 2);
     }
 
     // ── 先在**测量用 DC** 上量出每段文本宽度 ────────────────────────────
@@ -1124,7 +1266,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, x: i32, y: i32, items: &[WidgetItem]
         let f = ffi::create_font(FONT_PX);
         if f.is_null() {
             append_log("[widget] CreateFontW 失败，退回空白帧");
-            return draw_blank(hwnd, x, y, PAD_X * 2);
+            return draw_blank(hwnd, PAD_X * 2);
         }
         let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
         let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
@@ -1133,35 +1275,38 @@ fn draw_items(hwnd: *mut core::ffi::c_void, x: i32, y: i32, items: &[WidgetItem]
     };
     if memdc.is_null() {
         unsafe { ffi::destroy_font(font) };
-        return draw_blank(hwnd, x, y, PAD_X * 2);
+        return draw_blank(hwnd, PAD_X * 2);
     }
 
-    // ── 每项：图标 + 数值文本，各自测量宽度 ────────────────────────────
-    let texts: Vec<Vec<u16>> = items
+    // ── 每项：图标 + 两段文本（右上电量 / 右下音量），各自测量宽度 ──────
+    let bat_texts: Vec<Vec<u16>> = items
         .iter()
-        .map(|it| format_metrics(it).encode_utf16().collect())
+        .map(|it| format_battery(it).encode_utf16().collect())
         .collect();
-    // 每项记 `(文本实际宽, 是否需要省略号)`：实际宽 = `min(自然宽, ITEM_MAX_W)`；
+    let vol_texts: Vec<Vec<u16>> = items
+        .iter()
+        .map(|it| format_volume(it).encode_utf16().collect())
+        .collect();
+    // 每段记 `(文本实际宽, 是否需要省略号)`：实际宽 = `min(自然宽, ITEM_MAX_W)`；
     // 自然宽 > 上限 ⇒ 该段要画 `…`（否则会**硬切半个字形**）。
-    let widths: Vec<(i32, bool)> = texts
-        .iter()
-        .map(|t| {
-            let natural = unsafe { ffi::measure_text(memdc, font, t) };
-            // ⛔ 每项加上限：极端长文本时截断显示（避免挤压其它设备）
-            let clamped = natural.min(ITEM_MAX_W);
-            (clamped, natural > clamped)
-        })
-        .collect();
+    let measure = |t: &[u16]| -> (i32, bool) {
+        let natural = unsafe { ffi::measure_text(memdc, font, t) };
+        // ⛔ 每段加上限：极端长文本时截断显示（避免挤压其它设备）
+        let clamped = natural.min(ITEM_MAX_W);
+        (clamped, natural > clamped)
+    };
+    let bat_w: Vec<(i32, bool)> = bat_texts.iter().map(|t| measure(t)).collect();
+    let vol_w: Vec<(i32, bool)> = vol_texts.iter().map(|t| measure(t)).collect();
 
     unsafe {
         windows_sys::Win32::Graphics::Gdi::DeleteDC(memdc);
     }
 
     // ── 计算总宽并建主 DIB ────────────────────────────────────────────
-    // 每项宽 = 图标 + 间隙 + 文本；项与项之间再加 `ITEM_GAP`，两端加 `PAD_X`。
-    let per_item: Vec<i32> = widths
-        .iter()
-        .map(|(tw, _)| ICON_PX + ICON_TEXT_GAP + *tw)
+    // 每项宽 = 图标 + 间隙 + **两段文本里更宽的那段**（两段共用同一列起画点）；
+    // 项与项之间再加 `ITEM_GAP`，两端加 `PAD_X`。
+    let per_item: Vec<i32> = (0..items.len())
+        .map(|i| ICON_PX + ICON_TEXT_GAP + bat_w[i].0.max(vol_w[i].0))
         .collect();
     let content_w: i32 = per_item.iter().sum::<i32>() + ITEM_GAP * (items.len() as i32 - 1);
     let total_w = content_w + PAD_X * 2;
@@ -1260,40 +1405,39 @@ fn draw_items(hwnd: *mut core::ffi::c_void, x: i32, y: i32, items: &[WidgetItem]
             }
             let text_x = cursor + ICON_PX + ICON_TEXT_GAP;
 
-            // ② 数值文本：渲染掩码 → 按覆盖度合成（预乘）
-            let (tw, need_ellipsis) = widths[i];
-            if tw > 0 {
-                if let Some((mask, mw, mh)) =
-                    ffi::render_text_mask(tw, h, font, &texts[i], need_ellipsis)
+            // ② 电量：图标**右上角**（两行文本的**上半行**）
+            let (bw, b_ell) = bat_w[i];
+            if bw > 0 {
+                if let Some(mask) =
+                    ffi::render_text_mask(bw, TEXT_ROW_H, font, &bat_texts[i], b_ell)
                 {
-                    for yy in 0..h.min(mh) {
-                        for xx in 0..tw.min(mw) {
-                            // 掩码里 GDI 写的是**黑字白底**（BGRA 顺序）⇒ 取绿通道算灰度
-                            // 覆盖度 = 255 - gray（白=未覆盖=0；黑=完全覆盖=255）
-                            let mi = ((yy * mw + xx) * 4) as usize;
-                            let gray = mask[mi + 1];
-                            let cov = 255u32 - gray as u32;
-                            if cov == 0 {
-                                continue;
-                            }
-                            let a = ((cov as f32) * alpha_scale).round() as u32;
-                            if a == 0 {
-                                continue;
-                            }
-                            // ⛔ 预乘：`R·A/255`（straight alpha 会让抗锯齿边缘**过亮泛白**）
-                            let pr = cr as u32 * a / 255;
-                            let pg = cg as u32 * a / 255;
-                            let pb = cb as u32 * a / 255;
-                            let packed = (a << 24) | (pr << 16) | (pg << 8) | pb;
-                            let di = ((yy * total_w) + text_x + xx) as usize;
-                            if di < px.len() {
-                                // ⭐ 取**最大 alpha**（不是相加）：重叠像素不叠加亮度
-                                if a > px[di] >> 24 {
-                                    px[di] = packed;
-                                }
-                            }
-                        }
-                    }
+                    blit_text_mask(
+                        px,
+                        total_w,
+                        &mask,
+                        text_x,
+                        icon_y,
+                        (cr, cg, cb),
+                        alpha_scale,
+                    );
+                }
+            }
+
+            // ③ 音量：图标**右下角**（两行文本的**下半行**）
+            let (vw, v_ell) = vol_w[i];
+            if vw > 0 {
+                if let Some(mask) =
+                    ffi::render_text_mask(vw, TEXT_ROW_H, font, &vol_texts[i], v_ell)
+                {
+                    blit_text_mask(
+                        px,
+                        total_w,
+                        &mask,
+                        text_x,
+                        icon_y + TEXT_ROW_H,
+                        (cr, cg, cb),
+                        alpha_scale,
+                    );
                 }
             }
             cursor += per_item[i] + ITEM_GAP;
@@ -1301,8 +1445,8 @@ fn draw_items(hwnd: *mut core::ffi::c_void, x: i32, y: i32, items: &[WidgetItem]
     }
 
     // widget 已是 `Shell_TrayWnd` 的子窗：`UpdateLayeredWindow` 的位置必须是
-    // **父窗客户区坐标**（不是屏幕坐标），所以 y 固定 0、x 用上面算出的相对值。
-    let ok = unsafe { ffi::commit(hwnd as _, &dib, rel_x, 0) };
+    // **父窗客户区坐标**（不是屏幕坐标）⇒ x 用上面算出的相对值、y 用垂直居中偏移。
+    let ok = unsafe { ffi::commit(hwnd as _, &dib, rel_x, widget_y_offset()) };
     if !ok {
         let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         append_log(&format!("[widget] UpdateLayeredWindow 失败: err={}", err));
@@ -1318,8 +1462,9 @@ fn draw_items(hwnd: *mut core::ffi::c_void, x: i32, y: i32, items: &[WidgetItem]
 ///
 /// ⭐ 仍要提交：`ULW` 同时也设定窗口尺寸 ⇒ 空帧会把窗口缩到 `w`×`WIDGET_H`，
 ///   避免残留在上一次的尺寸上（否则内容清空但窗口还占着位置）。
+/// ⚠️ 全透明 ⇒ 位置不可见，x 固定 0；y 仍走垂直居中，避免窗口在空帧与实帧之间跳。
 #[cfg(target_os = "windows")]
-fn draw_blank(hwnd: *mut core::ffi::c_void, x: i32, y: i32, w: i32) -> bool {
+fn draw_blank(hwnd: *mut core::ffi::c_void, w: i32) -> bool {
     let w = w.max(1);
     let h = WIDGET_H;
     let Some(dib) = (unsafe { ffi::create_dib(w, h) }) else {
@@ -1329,7 +1474,7 @@ fn draw_blank(hwnd: *mut core::ffi::c_void, x: i32, y: i32, w: i32) -> bool {
         let px = std::slice::from_raw_parts_mut(dib.bits, (w * h) as usize);
         px.fill(0);
     }
-    let ok = unsafe { ffi::commit(hwnd as _, &dib, x, y) };
+    let ok = unsafe { ffi::commit(hwnd as _, &dib, 0, widget_y_offset()) };
     unsafe { ffi::free_dib(&dib) };
     ok
 }
@@ -1338,7 +1483,7 @@ fn draw_blank(hwnd: *mut core::ffi::c_void, x: i32, y: i32, w: i32) -> bool {
 #[cfg(target_os = "windows")]
 fn repaint_from_snapshot(hwnd: *mut core::ffi::c_void) {
     let items = snapshot::load().unwrap_or_default();
-    let ok = draw_items(hwnd, 0, 0, &items);
+    let ok = draw_items(hwnd, &items);
     if ok {
         REFRESH_COUNT.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -1351,8 +1496,8 @@ fn repaint_from_snapshot(hwnd: *mut core::ffi::c_void) {
 /// ⚠️ 不在这里同步取数：`spawn_widget` 在 Tauri `setup` 回调里、即**主线程**，
 ///   而取数要 600ms+ ⇒ 会拖慢启动。改为「先画空帧，再由后台 `refresh_async` 填充」。
 #[cfg(target_os = "windows")]
-fn draw_frame(hwnd: *mut core::ffi::c_void, x: i32, y: i32) -> bool {
-    draw_blank(hwnd, x, y, PAD_X * 2)
+fn draw_frame(hwnd: *mut core::ffi::c_void) -> bool {
+    draw_blank(hwnd, PAD_X * 2)
 }
 
 /// 诊断：读回当前 widget 的挂载状态（不新建窗口）。
@@ -1815,10 +1960,11 @@ pub fn destroy_widget() {}
 // 单测：只测**纯函数**（不建窗、不碰 GDI）
 // ══════════════════════════════════════════════════════════════════════════
 //
-// ⭐ 为什么只挑**纯函数**测（`format_metrics` / `build_items` / `align_in_slot` / 图标解码）：
-//   它们承载的正是**语义判据**（「0% ≠ 读不出」「无音频不画音量段」「有数据优先排前」
-//   「最多 6 台」「靠右是右端贴槽右端」）—— 这些判据一旦写反，界面上仍会「显示点什么」，
-//   肉眼难以察觉（正是本项目反复强调的**静默失效**）。
+// ⭐ 为什么只挑**纯函数**测（`format_battery` / `format_volume` / `estimate_*` /
+//   `build_items` / `align_in_slot` / 图标解码）：
+//   它们承载的正是**语义判据**（「0% ≠ 读不出」「没有音量就 N/A」「中文宽度不能低估」
+//   「有数据优先排前」「最多 6 台」「靠右是右端贴槽右端」）—— 这些判据一旦写反，
+//   界面上仍会「显示点什么」，肉眼难以察觉（正是本项目反复强调的**静默失效**）。
 //   绘制路径依赖真实窗口与 GDI，无法在这些单测里覆盖，改由真机截图验收。
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
@@ -1868,66 +2014,180 @@ mod tests {
         }
     }
 
-    // ── format_metrics：数值段语义 ──────────────────────────
+    // ── format_battery / format_volume：两行文本的语义 ────────
+    //
+    // ⭐ 布局口径（用户 2026-09-24）：电量画在图标**右上角**、音量画在图标**右下角**，
+    //   **没有可显示的值一律 `N/A`**。两个格式化函数是这两条口径的**唯一落地点**，
+    //   故必须各自有用例钉住（绘制路径依赖 GDI，无法单测）。
 
     /// ⭐ 核心判据：`Some(0)`（电量耗尽）与 `None`（读不出）**必须显示不同**。
     /// 写反了会看不出错 —— 界面只是少一个百分号。
     #[test]
-    fn zero_battery_shows_percent_but_unreadable_shows_dash() {
-        assert_eq!(format_metrics(&item(Some(0), None, false, None)), "0%");
+    fn zero_battery_shows_percent_but_unreadable_shows_na() {
+        assert_eq!(format_battery(&item(Some(0), None, false, None)), "0%");
         assert_eq!(
-            format_metrics(&item(None, None, false, None)),
-            "--",
-            "读不出电量必须是 `--`，不能是 `0%`（两者语义相反）"
+            format_battery(&item(None, None, false, None)),
+            "N/A",
+            "读不出电量必须是 `N/A`，不能是 `0%`（两者语义相反）"
         );
     }
 
-    /// 无音频端点的设备（键鼠）**不得**出现音量段 —— 否则会凭空多出 `--`。
+    /// ⭐ 用户口径：**没有音量就显示 `N/A`**。
+    /// 无音频端点的设备（键鼠）与「有端点但暂时读不出」**都**是 `N/A`。
+    ///
+    /// 可证伪：把 `format_volume` 的 `!has_audio` 分支改成返回空串，本条立刻转红。
     #[test]
-    fn device_without_audio_omits_volume_segment() {
-        let s = format_metrics(&item(Some(60), None, false, None));
-        assert_eq!(s, "60%");
-        assert!(!s.contains("--"), "无音频就不该有音量占位符: {s}");
+    fn missing_volume_always_shows_na() {
+        // 无音频端点（`has_audio = false`）
+        assert_eq!(
+            format_volume(&item(Some(60), None, false, None)),
+            "N/A",
+            "无音频端点的设备必须显示 N/A（用户明确要求），不能留空"
+        );
+        // 有音频端点但音量暂时读不出
+        assert_eq!(
+            format_volume(&item(None, None, true, None)),
+            "N/A",
+            "有端点但读不出音量，同样是 N/A"
+        );
     }
 
-    /// 有音频端点但音量**暂时**读不出 ⇒ 画 `--`（而不是整段省略）。
-    /// 与上一条互为对照：两者的 `volume` 都是 `None`，区别只在 `has_audio`。
+    /// 电量与音量是**两个独立字段**：任一侧缺失不影响另一侧的显示。
+    /// （这是「分列图标右上/右下」这个布局改动引入的新语义 —— 旧的单串格式化
+    ///  做不到「只缺一边」时的独立降级。）
     #[test]
-    fn audio_device_with_unknown_volume_shows_dash() {
-        assert_eq!(format_metrics(&item(None, None, true, None)), "-- --");
+    fn battery_and_volume_degrade_independently() {
+        // 有电量、无音量
+        assert_eq!(format_battery(&item(Some(77), None, false, None)), "77%");
+        assert_eq!(format_volume(&item(Some(77), None, false, None)), "N/A");
+        // 无电量、有音量
+        assert_eq!(
+            format_battery(&item(None, Some(0.5), true, Some(false))),
+            "N/A"
+        );
+        assert_eq!(
+            format_volume(&item(None, Some(0.5), true, Some(false))),
+            "50%"
+        );
     }
 
-    /// 静音优先于百分比：静音时显示「静音」而不是音量的 `0%`。
+    /// 静音优先于百分比：静音时显示「静音」而不是端点里那个与听觉不符的旧音量值。
     #[test]
     fn muted_device_shows_muted_instead_of_percent() {
-        let s = format_metrics(&item(Some(80), Some(0.0), true, Some(true)));
-        assert_eq!(s, "80% 静音");
-        // ⚠️ 不能只断言「不含 0%」—— 80% 里也含 "0%"（这是个会假红的判据）。
-        //    必须断言**末尾就是「静音」**（音量段被整体替换）。
-        assert!(s.ends_with("静音"), "静音应作为音量段的整体替换: {s}");
-        assert!(!s.contains(" 0%"), "静音不应退化成 ` 0%` 音量段: {s}");
+        assert_eq!(
+            format_volume(&item(Some(80), Some(0.4), true, Some(true))),
+            "静音"
+        );
+        // ⚠️ 不能只断言「不含 40%」这类弱判据 —— 必须断言**就是**「静音」，
+        //    否则「静音 + 百分比同时出现」这种回归照样能通过。
     }
 
     /// 音量取整：`0.4` ⇒ `40%`，`0.996` ⇒ `100%`（防止 99% 因截断显示成 99 而非 100）。
     #[test]
     fn volume_is_rounded_to_nearest_percent() {
-        assert!(format_metrics(&item(None, Some(0.4), true, Some(false))).contains("40%"));
-        assert!(format_metrics(&item(None, Some(0.996), true, Some(false))).contains("100%"));
-        // 0.0 且未静音 = 音量真为 0 ⇒ 显示 0%（合法）
-        assert!(format_metrics(&item(None, Some(0.0), true, Some(false))).contains("0%"));
+        assert_eq!(
+            format_volume(&item(None, Some(0.4), true, Some(false))),
+            "40%"
+        );
+        assert_eq!(
+            format_volume(&item(None, Some(0.996), true, Some(false))),
+            "100%"
+        );
+        // 0.0 且未静音 = 音量真为 0 ⇒ 显示 0%（合法，不是 N/A）
+        assert_eq!(
+            format_volume(&item(None, Some(0.0), true, Some(false))),
+            "0%"
+        );
     }
 
-    /// ⭐ 数值段**不含设备名**（用户口径：名字以后再说）。
+    /// ⭐ 两段文本**都不含设备名**（用户口径：名字以后再说）。
     /// 可证伪：若哪天有人把 `it.name` 加回格式化函数，这条会立刻转红。
     #[test]
-    fn metrics_do_not_contain_device_name() {
+    fn metric_texts_do_not_contain_device_name() {
         let mut it = item(Some(50), Some(0.5), true, Some(false));
         it.name = "罗技MX Master".to_string();
-        let s = format_metrics(&it);
+        for s in [format_battery(&it), format_volume(&it)] {
+            assert!(
+                !s.contains("罗技") && !s.contains("MX"),
+                "widget 上不应再出现设备名: {s}"
+            );
+        }
+    }
+
+    // ── 宽度估算：避让扫描的 wanted（方向性：宁可高估，不可低估） ──
+
+    /// ⛔ 中文**不得**被低估 —— 否则 `find_widget_slot` 可能返回比实际内容更窄的槽，
+    /// 内容溢出压到邻居上（正是避让机制要避免的那件事）。
+    ///
+    /// 可证伪：把 `estimate_text_px` 里非 ASCII 的 `14` 改回 `8`，本条立刻转红。
+    #[test]
+    fn cjk_is_not_underestimated() {
+        // 「静音」是 2 个全角字：11px 字体下实际约 22px ⇒ 估算必须 >= 22
         assert!(
-            !s.contains("罗技") && !s.contains("MX"),
-            "widget 上不应再出现设备名: {s}"
+            estimate_text_px("静音") >= 22,
+            "中文估算过小会低估槽宽: {}",
+            estimate_text_px("静音")
         );
+        // 与纯 ASCII 段对比：同样 2 个码位，中文必须更宽
+        assert!(
+            estimate_text_px("静音") > estimate_text_px("N/A"),
+            "中文段必须比等长的 ASCII 段估得更宽"
+        );
+        // ASCII 侧维持原口径（`100%` = 4 × 8 = 32）
+        assert_eq!(estimate_text_px("100%"), 32);
+    }
+
+    /// 宽度估算必须**单调**，且单台时至少装得下「图标 + 间隙」。
+    #[test]
+    fn estimate_width_is_monotonic_and_covers_icon() {
+        let one = vec![item(Some(50), Some(0.5), true, Some(false))];
+        let mut two = one.clone();
+        two.push(item(Some(60), Some(0.6), true, Some(false)));
+
+        let w1 = estimate_widget_width(&one);
+        let w2 = estimate_widget_width(&two);
+        assert!(
+            w1 >= PAD_X * 2 + ICON_PX + ICON_TEXT_GAP,
+            "单台至少要装下内边距 + 图标 + 间隙: {w1}"
+        );
+        assert!(w2 > w1, "多一台必须更宽: {w1} vs {w2}");
+    }
+
+    /// ⛔ 每台设备的宽度必须按**两段里更宽的那段**算。
+    ///
+    /// 按较窄的那段算 ⇒ 估算宽度小于实际绘制宽度 ⇒ `find_widget_slot` 选出的槽偏窄
+    /// ⇒ 内容溢出压到邻居上（且不报错，只能靠肉眼看出来）。
+    ///
+    /// ⚠️ **样本必须让两段宽度不等**：若样本里两段一样宽（如都用 `50%`），
+    ///   `min` 与 `max` 同解 ⇒ 本条用例**失去区分力**（注入 `min` 仍绿，实测过）。
+    /// 可证伪：把 `estimate_widget_width` 里的 `bat.max(vol)` 改成 `bat.min(vol)`，本条转红。
+    #[test]
+    fn per_item_width_uses_the_wider_of_the_two_texts() {
+        // 电量 `5%`（2 字符 → 16px）比音量 `50%`（3 字符 → 24px）窄
+        let it = item(Some(5), Some(0.5), true, Some(false));
+        let wider = estimate_text_px("50%");
+        let narrower = estimate_text_px("5%");
+        assert!(
+            wider > narrower,
+            "样本本身要能区分宽窄，否则本条无区分力（{wider} vs {narrower}）"
+        );
+        let w = estimate_widget_width(&[it]);
+        assert!(
+            w >= PAD_X * 2 + ICON_PX + ICON_TEXT_GAP + wider,
+            "宽度必须覆盖更宽的那段文本：{w} < 内边距 + 图标 + 间隙 + {wider}"
+        );
+    }
+
+    /// 6 台（显示上限）的估算必须仍能塞进避让后的可用区 ——
+    /// 否则「避让扫描永远找不到槽」⇒ widget 直接不显示（且不报错）。
+    #[test]
+    fn six_items_still_fit_in_a_plausible_slot() {
+        let six: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
+            .map(|i| item(Some(50 + i as i32), Some(0.5), true, Some(false)))
+            .collect();
+        let w = estimate_widget_width(&six);
+        // 真机可用区约 1300px（任务栏 2560px 减两端各 100px 再减任务栏自身内容）
+        assert!(w < 1300, "6 台估算过宽，会找不到避让槽: {w}");
     }
 
     // ── build_items：从后端设备构造条目 ─────────────────────
