@@ -1404,17 +1404,27 @@ pub fn destroy_widget() {
 
 /// 从后端聚合结果构造 widget 条目列表（**纯函数**，可单测）。
 ///
-/// ⭐ 输入直接用 `PhysicalDevice`（`group_taskbar_devices` 的输出），
-///   因为**「显示什么」的语义已由它定好**：pin 强制显示 + 有电量/音频才留。
-///   widget 不该另立一套过滤规则（否则两处会分叉，玩家看到不一致）。
+/// ⭐⭐ **只画「已勾选的设备」**（用户口径 2026-09-24 拍板）。判据 = `d.pinned`。
+///
+/// ⛔ 为什么必须显式过滤，而不是「照抄 `group_taskbar_devices` 的输出」：
+///   那个函数的保留规则是 `pinned || battery.is_some() || audio_device_id.is_some()`，
+///   即「**有数据的设备一律显示**」—— 那是**弹窗/托盘列表**要的语义（本机外设概览）。
+///   但任务栏窗口的选择入口是设置页的「选择需要在任务栏信息窗口中显示的设备」，
+///   用户勾 1 台却看到 6 台 ⇒ **设置页是死的**（真机实测）。
+///   ⇒ 两处口径**刻意不同**：`should_show()` 决定「窗口在不在」，本函数决定「画哪几台」。
 ///
 /// ⚠️ **排序**：把「有数据的」排在前面、「pin 但无数据的」沉底 ——
 ///   任务栏空间有限，把有效信息放在最显眼处；同时顺序**稳定**（同分时保持后端顺序），
 ///   避免每次刷新条目跳来跳去（对 30s 兜底刷新尤其重要）。
+///   ⚠️ pin 但读不出数据的条目**仍然保留**（置灰绘制）：这是 `3dcbdc7` 的
+///   「pin = 强制显示」——用户勾了就该看到，哪怕只有 `--`。
 #[cfg(target_os = "windows")]
 fn build_items(devices: &[crate::device_identity::PhysicalDevice]) -> Vec<WidgetItem> {
     let mut items: Vec<WidgetItem> = devices
+        // ⛔ 过滤必须在 map 之前：`pinned` 是「用户勾选」的唯一标记，
+        //    它在 `group_taskbar_devices` 里同时覆盖「命中已选」与「反向补建的空占位」。
         .iter()
+        .filter(|d| d.pinned)
         .map(|d| WidgetItem {
             name: d.name.clone(),
             icon: d.audio_kind,
@@ -1921,31 +1931,81 @@ mod tests {
     }
 
     // ── build_items：从后端设备构造条目 ─────────────────────
+    //
+    // ⭐ 下面所有用例的样本都用 `pinned_dev(...)` 造：`build_items` 现在**只画已勾选
+    //   的设备**（用户口径 2026-09-24），用 `dev(..., false)` 造样本会得到空列表
+    //   ⇒ 用例失去区分力（索引越界 panic 而不是断言失败，掩盖真实缺陷）。
+
+    /// 造一台**已勾选**的设备（= `dev(..., pinned = true)`）。
+    fn pinned_dev(
+        name: &str,
+        battery: Option<i32>,
+        volume: Option<f32>,
+        is_muted: Option<bool>,
+        audio_id: Option<&str>,
+    ) -> PhysicalDevice {
+        dev(name, battery, volume, is_muted, audio_id, true)
+    }
+
+    /// ⛔⛔ **核心口径**（用户 2026-09-24 拍板）：任务栏窗口**只画已勾选的设备**。
+    ///
+    /// ⭐ 为什么单列一条：`group_taskbar_devices` 的保留规则是「有数据的设备一律留」，
+    ///   若直接照抄它的输出，用户勾 1 台却看到 6 台 ⇒ **设置页形同虚设**（真机实测）。
+    /// 可证伪：去掉 `build_items` 里的 `.filter(|d| d.pinned)`，本条立刻转红。
+    #[test]
+    fn only_pinned_devices_are_rendered() {
+        let input = vec![
+            dev("未勾选-鼠标", Some(80), None, None, None, false),
+            dev(
+                "已勾选-音箱",
+                None,
+                Some(0.5),
+                Some(false),
+                Some("ep"),
+                true,
+            ),
+            dev("未勾选-耳机", Some(60), Some(0.4), None, Some("ep2"), false),
+        ];
+        let items = build_items(&input);
+        assert_eq!(items.len(), 1, "只有已勾选的设备才该进条目，实际 {items:?}");
+        assert_eq!(items[0].name, "已勾选-音箱");
+        assert!(items[0].pinned);
+    }
+
+    /// 一台都没勾 ⇒ 条目为空（`draw_items` 会画一帧全透明并隐藏窗口）。
+    #[test]
+    fn no_pinned_device_yields_empty_items() {
+        let input = vec![
+            dev("a", Some(80), None, None, None, false),
+            dev("b", None, Some(0.5), None, Some("ep"), false),
+        ];
+        assert!(build_items(&input).is_empty());
+    }
 
     /// `has_audio` 的判据必须覆盖三种来源之一（音量 / 静音 / 端点 id），
     /// 否则「音量暂时读不出但有端点」的设备会被误判成无音频。
     #[test]
     fn has_audio_true_when_any_audio_signal_present() {
         let cases = [
-            dev("a", None, Some(0.5), None, None, false),
-            dev("b", None, None, Some(false), None, false),
-            dev("c", None, None, None, Some("ep-1"), false),
+            pinned_dev("a", None, Some(0.5), None, None),
+            pinned_dev("b", None, None, Some(false), None),
+            pinned_dev("c", None, None, None, Some("ep-1")),
         ];
         for d in cases {
             let items = build_items(&[d.clone()]);
             assert!(items[0].has_audio, "{} 应判为有音频", d.name);
         }
         // 三者皆无 ⇒ 无音频
-        let items = build_items(&[dev("kbd", Some(50), None, None, None, false)]);
+        let items = build_items(&[pinned_dev("kbd", Some(50), None, None, None)]);
         assert!(!items[0].has_audio);
     }
 
     /// ⭐ `audio_kind` 必须从后端**原样透传**到 widget 条目（图标就靠它）。
     #[test]
     fn audio_kind_is_carried_through() {
-        let mut ear = dev("耳机", Some(70), Some(0.5), Some(false), Some("ep"), false);
+        let mut ear = pinned_dev("耳机", Some(70), Some(0.5), Some(false), Some("ep"));
         ear.audio_kind = AudioKind::Headphones;
-        let mut spk = dev("音箱", None, Some(0.3), Some(false), Some("ep2"), false);
+        let mut spk = pinned_dev("音箱", None, Some(0.3), Some(false), Some("ep2"));
         spk.audio_kind = AudioKind::Speaker;
         let items = build_items(&[ear, spk]);
         assert_eq!(items[0].icon, AudioKind::Headphones);
@@ -1957,10 +2017,10 @@ mod tests {
     #[test]
     fn items_with_data_sort_before_data_less_ones() {
         let input = vec![
-            dev("空1", None, None, None, None, true), // 无数据
-            dev("鼠标", Some(80), None, None, None, false),
-            dev("空2", None, None, None, None, false), // 无数据
-            dev("音箱", None, Some(0.5), Some(false), Some("ep"), false),
+            pinned_dev("空1", None, None, None, None), // 无数据
+            pinned_dev("鼠标", Some(80), None, None, None),
+            pinned_dev("空2", None, None, None, None), // 无数据
+            pinned_dev("音箱", None, Some(0.5), Some(false), Some("ep")),
         ];
         let items = build_items(&input);
         assert_eq!(items.len(), 4);
@@ -1976,8 +2036,8 @@ mod tests {
     #[test]
     fn zero_battery_still_counts_as_having_data() {
         let input = vec![
-            dev("空", None, None, None, None, true),
-            dev("耗尽", Some(0), None, None, None, false),
+            pinned_dev("空", None, None, None, None),
+            pinned_dev("耗尽", Some(0), None, None, None),
         ];
         let items = build_items(&input);
         assert_eq!(items[0].name, "耗尽", "电量 0% 也应排在前（它是有效数据）");
@@ -1988,15 +2048,14 @@ mod tests {
     #[test]
     fn at_most_six_items_and_keeps_the_data_rich_ones() {
         // 7 台，其中「空」排在最前面（输入序第一），但它无数据 ⇒ 应被排到末尾再截掉
-        let mut input = vec![dev("空", None, None, None, None, true)];
+        let mut input = vec![pinned_dev("空", None, None, None, None)];
         for i in 0..6 {
-            input.push(dev(
+            input.push(pinned_dev(
                 &format!("有数据{i}"),
                 Some(50 + i),
                 None,
                 None,
                 None,
-                false,
             ));
         }
         let items = build_items(&input);
@@ -2011,8 +2070,8 @@ mod tests {
     #[test]
     fn fewer_than_six_items_are_not_truncated() {
         let input = vec![
-            dev("a", Some(1), None, None, None, false),
-            dev("b", Some(2), None, None, None, false),
+            pinned_dev("a", Some(1), None, None, None),
+            pinned_dev("b", Some(2), None, None, None),
         ];
         assert_eq!(build_items(&input).len(), 2);
     }
@@ -2020,7 +2079,7 @@ mod tests {
     /// `pinned` / `is_default` 必须原样透传（widget 据此置灰 / 标记）。
     #[test]
     fn pinned_and_default_flags_are_carried_through() {
-        let mut d = dev("耳机", Some(70), None, None, None, true);
+        let mut d = pinned_dev("耳机", Some(70), None, None, None);
         d.is_default = Some(true);
         let items = build_items(&[d]);
         assert!(items[0].pinned);
