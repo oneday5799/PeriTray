@@ -334,6 +334,56 @@ pub fn system_dark_mode() -> bool {
     false
 }
 
+/// 读 `SystemUsesLightTheme`（**系统**主题，区别于**应用**主题）。
+///
+/// ⭐ 为什么单开一个函数而不复用 `system_dark_mode()`：那个读的是 `AppsUseLightTheme`
+///   （**应用**主题），用于决定 widget **内容**的明暗；而底衬配色的口径来自 FluentFlyout，
+///   它按 **systemTheme**（`SystemUsesLightTheme`）取值
+///   （`WindowsThemeDetector.GetWindowsTheme(out appTheme, out systemTheme)`）。
+///   两者在「应用深色 + 系统浅色」这类自定义主题下**会不一致**，故分开读。
+/// ⚠️ 读失败按 FluentFlyout 的约定**回落 light**（其源码注释：on error, default to light）。
+#[cfg(target_os = "windows")]
+pub fn system_uses_light_theme() -> bool {
+    use windows_sys::core::w;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+    };
+    unsafe {
+        let mut hkey = std::ptr::null_mut();
+        let status = RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            0,
+            KEY_READ,
+            &mut hkey,
+        );
+        if status != 0 {
+            return true;
+        }
+        let mut value: u32 = 1;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let mut data_type: u32 = REG_DWORD;
+        let status = RegQueryValueExW(
+            hkey,
+            w!("SystemUsesLightTheme"),
+            std::ptr::null_mut(),
+            &mut data_type,
+            &mut value as *mut u32 as *mut u8,
+            &mut size,
+        );
+        RegCloseKey(hkey);
+        if status != 0 {
+            return true;
+        }
+        value != 0
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn system_uses_light_theme() -> bool {
+    true
+}
+
 /// 将窗口插入 topmost 波段内任务栏正下方：仍高于一切普通窗口，但不遮挡任务栏。
 /// 用于弹窗动画期间与静止期的统一层级。找不到任务栏（如 Explorer 重启间隙）则保持原 Z 序。
 #[cfg(target_os = "windows")]

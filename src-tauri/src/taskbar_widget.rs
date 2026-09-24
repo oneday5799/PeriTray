@@ -68,16 +68,139 @@
 //    否则 `#[cfg(not(windows))]` 的桩函数签名对不上。故**不**在文件顶写
 //    `#![cfg(target_os = "windows")]`，而是逐项按需 cfg（模块内 Win32 代码统一走 `ffi`）。
 
-/// 自绘内容的高度（物理像素）。宽度按内容计算。
-///
-/// ⭐ 取 40 的理由：真机实测任务栏高 **60px**（2560×1440 @125% 缩放）⇒ 上下各余
-///   10px；同时它刚好容纳「32px 图标 + 右侧两行文本」（`ICON_PX = 32`）。
-///   任务栏内**垂直居中**（见 `widget_y_offset`），使图标与任务栏自身图标同一水平线。
-///
-/// ⚠️ 这是**唯一**的高度定义；`ffi` 模块通过 `use super::WIDGET_H` 引用它，
-/// 不另开一份常量（两份硬编码会随改动漂移）。
+// ══════════════════════════════════════════════════════════════════════
+// 布局度量：**标称值一律是 DIP**（96 DPI 基准），绘制前按实际 DPI 换算
+// ══════════════════════════════════════════════════════════════════════
+//
+// ⭐⭐ 为什么必须按 DPI 换算（用户 2026-09-25 报「底衬高度不对」的根因）：
+//   FluentFlyout 是 WPF 程序，`TaskbarWidgetControl.xaml` 里的 `Height="40"`
+//   是**设备无关单位**，由 `Windows/TaskbarWindow.xaml.cs` 换算成物理像素：
+//       double dpiScale = GetDpiForWindow(taskbarHandle) / 96.0;
+//       int physicalHeight = (int)(logicalHeight * dpiScale);   // 40 × 1.25 = 50
+//   我们原先把 40 直接当**物理像素**用 ⇒ 125% 缩放下底衬比它矮 **10px**。
+//   ⚠️ 只换算高度是不够的：内容（图标/字号/间距）不跟着换算就会显得空 ——
+//      FluentFlyout 的封面图同样是 `36 DIP × dpiScale`，故**整套**一起换算。
+//
+// ⛔ 标称值只在本段定义一次；**绘制与测宽必须取同一份 `Metrics`**，
+//   各写各的换算必然漂移（一处改了另一处忘了 ⇒ 相邻项重叠，且不报错）。
+
+/// widget 高度（DIP）。⭐ 逐字等于 FluentFlyout 控件的 `Height="40"`。
 #[cfg(target_os = "windows")]
-const WIDGET_H: i32 = 40;
+const WIDGET_H_DIP: i32 = 40;
+
+/// 内容区左右内边距（DIP）—— 与任务栏左右两端各留一段（避让口径见 §E）。
+#[cfg(target_os = "windows")]
+const PAD_X_DIP: i32 = 6;
+
+/// 字体像素高度（DIP）—— 电量/音量两行共用。
+#[cfg(target_os = "windows")]
+const FONT_PX_DIP: i32 = 11;
+
+/// 图标边长（DIP）。图标源 PNG 本身就是 32×32 ⇒ 100% 缩放下是**恒等拷贝**。
+#[cfg(target_os = "windows")]
+const ICON_PX_DIP: i32 = 32;
+
+/// 图标与右侧两行文本之间的间隔（DIP）。
+#[cfg(target_os = "windows")]
+const ICON_TEXT_GAP_DIP: i32 = 4;
+
+/// 设备之间的水平间隔（DIP）。
+#[cfg(target_os = "windows")]
+const ITEM_GAP_DIP: i32 = 10;
+
+/// 单段文本的宽度上限（DIP）—— 极端长文本截断显示，避免挤压其它设备。
+#[cfg(target_os = "windows")]
+const ITEM_MAX_W_DIP: i32 = 150;
+
+/// hover 底衬的圆角半径（DIP）。
+///
+/// ⭐ 逐字等于 FluentFlyout `Controls/TaskbarWidgetControl.xaml` 里 `MainBorder` 的
+///   `CornerRadius="6"`（**同一份口径**，别再各写各的）。
+///   圆角而不是直角：直角矩形贴在任务栏上像一个「色块 bug」，圆角读起来像有意画的「胶囊」。
+#[cfg(target_os = "windows")]
+const BACKDROP_RADIUS_DIP: i32 = 6;
+
+/// 把上表的 DIP 标称值换算成**当前 DPI 下的物理像素**。
+///
+/// ⚠️ 抽成结构体而不是散落的 `* scale` 乘法：散落写法在后续加常量时**必然漏一处**
+///   （宽度按一套算、绘制按另一套画 ⇒ 相邻项重叠，且不报错、不 panic）。
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Metrics {
+    /// 换算所用的 DPI（96 = 100%）。留给「按 DIP 现算」的调用点用（见 `dip`）。
+    pub dpi: u32,
+    pub h: i32,
+    pub radius: i32,
+    pub icon: i32,
+    pub font: i32,
+    pub pad_x: i32,
+    pub icon_text_gap: i32,
+    pub item_gap: i32,
+    pub item_max_w: i32,
+    /// 图标右侧每行文本的掩码高度 = 图标高度的一半。
+    /// ⭐ 电量占**上半行**（= 图标的右上角）、音量占**下半行**（= 图标的右下角）
+    ///   —— 用户 2026-09-24 指定的布局。
+    pub text_row_h: i32,
+}
+
+#[cfg(target_os = "windows")]
+impl Metrics {
+    /// 按给定 DPI 换算（**纯函数**，可单测）。`dpi == 0` 视为 96（防御）。
+    pub fn for_dpi(dpi: u32) -> Self {
+        let dpi = if dpi == 0 { 96 } else { dpi };
+        let s = |dip: i32| Self::dip_of(dpi, dip);
+        let icon = s(ICON_PX_DIP);
+        Self {
+            dpi,
+            h: s(WIDGET_H_DIP),
+            radius: s(BACKDROP_RADIUS_DIP),
+            icon,
+            font: s(FONT_PX_DIP),
+            pad_x: s(PAD_X_DIP),
+            icon_text_gap: s(ICON_TEXT_GAP_DIP),
+            item_gap: s(ITEM_GAP_DIP),
+            item_max_w: s(ITEM_MAX_W_DIP),
+            text_row_h: icon / 2,
+        }
+    }
+
+    /// DIP → 物理像素（四舍五入）。`dpi == 0` 视为 96。
+    ///
+    /// ⚠️ 单独抽出来是给**不在本表里**的 DIP 值用（如 `estimate_text_px` 的
+    ///   每字符宽度估算）—— 那些值按字号比例缩放，不适合塞进固定字段。
+    pub fn dip(&self, dip: i32) -> i32 {
+        Self::dip_of(self.dpi, dip)
+    }
+
+    fn dip_of(dpi: u32, dip: i32) -> i32 {
+        let dpi = if dpi == 0 { 96 } else { dpi };
+        ((dip as f32) * dpi as f32 / 96.0).round() as i32
+    }
+
+    /// 当前任务栏 DPI 下的度量。
+    ///
+    /// ⚠️ 取**任务栏**的 DPI 而不是进程/桌面的：widget 是任务栏的子窗，
+    ///   多显示器「各屏缩放不同」时只有任务栏所在屏的 DPI 是对的。
+    ///   取不到（Explorer 重建间隙）⇒ 回落 96（宁可小一号，也不要按错的缩放错位）。
+    pub fn current() -> Self {
+        Self::for_dpi(taskbar_dpi())
+    }
+}
+
+/// 任务栏所在显示器的 DPI（取不到回落 96）。
+#[cfg(target_os = "windows")]
+fn taskbar_dpi() -> u32 {
+    let taskbar = taskbar_hwnd() as *mut core::ffi::c_void;
+    if taskbar.is_null() {
+        return 96;
+    }
+    let dpi = unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForWindow(taskbar) };
+    if dpi == 0 {
+        96
+    } else {
+        dpi
+    }
+}
 
 /// 诊断快照：`hwnd` / `SetParent` 错误码 / `GetParent` 复核结果的原始值。
 ///
@@ -254,6 +377,22 @@ static SLOT_VALID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 #[cfg(target_os = "windows")]
 static LAST_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
+// ── hover 状态（**跨线程**：hover 线程写、主线程绘制时读）──────────────────
+
+/// 光标是否**悬停**在 widget 上（决定要不要铺 hover 底衬）。
+///
+/// ⛔⛔ **为什么必须轮询 `GetCursorPos`，不能等 `WM_MOUSEMOVE`**（2026-09-25 定）：
+///   `ULW` 分层窗按 alpha 做命中测试 —— 没有底衬时窗口像素**全透明**
+///   ⇒ 鼠标消息**根本不会投递到本窗口**（被放行给下层 `Shell_TrayWnd`）
+///   ⇒ 「靠鼠标消息让底衬出现」是**鸡生蛋**，永远等不到第一条消息。
+///   轮询光标位置**绕开命中测试**，从外部观测「鼠标在不在我身上」。
+/// ⭐ 自洽性：一旦 hover 成立 ⇒ 底衬铺上（alpha > 0）⇒ 命中测试**开始生效**
+///   ⇒ 此刻按下左键能收到 `WM_LBUTTONDOWN` ⇒ **拖拽仍然可用**（不需要另开机制）。
+/// ⚠️ 拖拽期间恒为 `true`（见 `want_hover`）：拖拽靠 `SetCapture` 维持，
+///   光标短暂离开窗口时不该让底衬闪烁。
+#[cfg(target_os = "windows")]
+static HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 // ── 拖拽状态（全部只在**主线程**读写，用原子量是为了免锁、免锁序登记）──────
 //
 // ⚠️ 为什么不用 `Mutex`：本模块所有鼠标消息都投递到**创建窗口的那个线程**
@@ -309,7 +448,7 @@ mod ffi {
     #[cfg(target_os = "windows")]
     const DT_END_ELLIPSIS: u32 = 0x0000_8000;
 
-    use super::{WIDGET_H, WM_APP_RAISE, WM_APP_REFRESH};
+    use super::{Metrics, WM_APP_RAISE, WM_APP_REFRESH};
     use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW,
@@ -357,6 +496,8 @@ mod ffi {
     }
 
     pub unsafe fn create_popup(class_name_wide: *const u16) -> HWND {
+        // ⚠️ 这里的高度只是**建窗占位**：真正的尺寸由首次 `UpdateLayeredWindow` 设定
+        //    （`commit` 的 SIZE 参数同时改窗口形状）。仍按 DPI 取，免得首帧明显不对。
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class_name_wide,
@@ -365,7 +506,7 @@ mod ffi {
             0,
             0,
             1,
-            WIDGET_H,
+            Metrics::current().h,
             std::ptr::null_mut(), // 父窗：先建顶层
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -653,14 +794,20 @@ mod ffi {
     ///   而我们要的是灰度覆盖度（子像素渲染依赖屏幕的 RGB 排列，在分层窗口上
     ///   还会被预乘过程破坏）。`quality = 5`（CLEARTYPE_QUALITY）→ 改用
     ///   `ANTIALIASED_QUALITY(4)`，得到灰度抗锯齿。
-    pub unsafe fn create_font(px_height: i32) -> HFONT {
+    /// 建字体。`bold` ⇒ `FW_BOLD`（700），否则 `FW_NORMAL`（400）。
+    ///
+    /// ⭐ 用户 2026-09-25 要求「电量、音量信息文字加粗」—— 11px 的细体在浅色任务栏上
+    ///   笔画偏虚，加粗后两行数字/`%` 的可读性明显更好。
+    /// ⚠️ 加粗会让文本**变宽**：`measure_text` 与绘制共用同一个 HFONT，
+    ///   故排版宽度自动跟着变（这正是「测量与绘制必须同字体」那条纪律的收益）。
+    pub unsafe fn create_font(px_height: i32, bold: bool) -> HFONT {
         let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
         CreateFontW(
             -px_height, // 负 = 字符高度（而非单元格高度）
             0,
             0,
             0,
-            400, // FW_NORMAL
+            if bold { 700 } else { 400 }, // FW_BOLD / FW_NORMAL
             0,
             0,
             0,
@@ -877,7 +1024,7 @@ pub fn spawn_widget() -> MountReport {
     report
 }
 
-/// **单段**文本在 widget 上占用的最大宽度（像素）。
+/// **单段**文本在 widget 上占用的最大宽度。
 ///
 /// ⭐ 为什么不无限平铺：`PINNED_TASKBAR_LIMIT = 8` ⇒ 8 台 × 每台十几字符会吃掉
 ///    上千像素，在窄屏/多窗口时与任务栏图标区冲突。给每段一个上限、超出截断，
@@ -885,57 +1032,32 @@ pub fn spawn_widget() -> MountReport {
 ///
 /// ⚠️ 判据粒度是**单段**（电量段、音量段各算一次），不是单台设备 ——
 ///   一台设备的宽度取两段的最大值（见 `draw_items` 的 `per_item`）。
-#[cfg(target_os = "windows")]
-const ITEM_MAX_W: i32 = 150;
+/// ⚠️ 标称值见文件头的 `ITEM_MAX_W_DIP`（DIP）—— 本段只讲「为什么有上限」。
 
-/// 设备之间的水平间隔（像素）。
-#[cfg(target_os = "windows")]
-const ITEM_GAP: i32 = 10;
-
-/// 内容区左右内边距 —— ⛔ 与任务栏左右两端**各留一段**，
-/// 使「邻居漂移」时仍有余量（PLAYBOOK §E 避让口径：两端留边距 + 被侵入时重定位）。
-#[cfg(target_os = "windows")]
-const PAD_X: i32 = 6;
-
-/// 字体像素高度 —— 电量/音量两行文本共用。取 11：在 16px 行高里既能看清
-/// 又不至于让两行贴在一起（`%`/数字在 11px Segoe UI 下清晰可辨）。
-#[cfg(target_os = "windows")]
-const FONT_PX: i32 = 11;
-
-/// 图标绘制边长（方形）。取 32：图标源 PNG 本身就是 32×32（`src-tauri/icons/`），
-/// 因此 `scale_to` 是**恒等拷贝**、零重采样损耗；且与任务栏自身图标（约 30px）尺度相当。
-#[cfg(target_os = "windows")]
-const ICON_PX: i32 = 32;
-
-/// 图标与右侧两行文本之间的间隔。
-#[cfg(target_os = "windows")]
-const ICON_TEXT_GAP: i32 = 4;
-
-/// 图标右侧每行文本的掩码高度 = 图标高度的一半。
+/// hover 底衬的不透明度（0–255）—— **浅色系统主题**。
 ///
-/// ⭐ 电量占**上半行**（= 图标的右上角）、音量占**下半行**（= 图标的右下角）——
-///   这正是用户 2026-09-24 指定的布局。
-/// ⚠️ 与 `FONT_PX` 的关系：11px 字在 16px 行里上下各有余量，`DrawTextW`
-///   的 `DT_SINGLELINE` 把字形画在行**顶部** ⇒ 两行之间天然留出空隙。
+/// ⭐ 取值出处：FluentFlyout `Controls/TaskbarWidgetControl.xaml.cs` 的 `Grid_MouseEnter`
+///   浅色分支用 `Color.FromArgb(255,255,255,255)` + `Opacity = 0.6`
+///   ⇒ 有效 alpha = 255 × 0.6 = **153**。
 #[cfg(target_os = "windows")]
-const TEXT_ROW_H: i32 = ICON_PX / 2;
+const HOVER_BACKDROP_ALPHA_LIGHT: u32 = 153;
 
-/// 「可拖拽」模式下底衬的圆角半径（像素）。
+/// hover 底衬的不透明度（0–255）—— **深色系统主题**。
 ///
-/// ⭐ 用圆角而不是直角：直角矩形贴在任务栏上像一个「色块 bug」，圆角读起来像
-///   有意画的「胶囊」。半径取 6 —— 在 40px 高的条上刚好可辨，又不会吃掉内容边距。
+/// ⭐ 同出处（深色分支）：`Color.FromArgb(197,255,255,255)` + `Opacity = 0.075`
+///   ⇒ 有效 alpha = 197 × 0.075 = 14.775 ⇒ 取 **15**。
+/// ⚠️ 两种主题下底衬**都是白色**，只有不透明度不同（FluentFlyout 即如此）。
 #[cfg(target_os = "windows")]
-const BACKDROP_RADIUS: i32 = 6;
+const HOVER_BACKDROP_ALPHA_DARK: u32 = 15;
 
-/// 「可拖拽」模式下底衬的不透明度（0–255）。
+/// hover 检测的轮询间隔（毫秒）。
 ///
-/// ⭐ 取 28（≈11%）：**足够被看见**（用户一眼知道「现在能拖了」）又**不抢内容**
-///   （图标与文本仍是最深的一层）。
-/// ⛔ 它的**功能作用**比观感更重要：`ULW` 分层窗按 alpha 做命中测试，alpha=0 的像素
-///   会把鼠标放行给下层 ⇒ 没有底衬时用户必须精确点中字形笔画才能拖动（见
-///   `fill_drag_backdrop` 的真机实测数据）。
+/// ⛔ 为什么必须**轮询**而不是等 `WM_MOUSEMOVE`：见 `HOVERED` 的文档 ——
+///   没有底衬时窗口全透明，鼠标消息**根本不会投递到本窗口**，靠消息驱动底衬是鸡生蛋。
+/// ⭐ 50ms（20Hz）：人眼感知延迟阈值约 100ms，50ms 足够跟手；
+///   单次开销只有 `GetCursorPos` + `GetWindowRect`（微秒级），且**仅在状态翻转时**才触发重绘。
 #[cfg(target_os = "windows")]
-const BACKDROP_ALPHA: u32 = 28;
+const HOVER_POLL_MS: u64 = 50;
 
 /// widget 最多显示的设备台数（用户 2026-09-24 指定）。
 ///
@@ -1050,24 +1172,75 @@ mod icons {
         cell.get_or_init(|| decode(bytes)).as_ref()
     }
 
-    /// 最近邻缩放一张 RGBA 到 `side × side`（图标是**线稿**，缩放必须保持锐利边缘，
-    /// 双线性会让 16px 的细线条糊掉）。
+    /// 缩放一张 RGBA 到 `side × side`。
+    ///
+    /// ⭐ **放大用双线性、缩小用最近邻** —— 两者要解决的问题相反：
+    ///   · **缩小**（如 32 → 16，任务栏尺寸图标）：线稿的细笔画只有 1–2px，
+    ///     双线性会把它们**糊成灰带** ⇒ 必须最近邻，保住锐利。
+    ///   · **放大**（如 32 → 40，125% 缩放下的 DPI 换算）：最近邻会让 1px 笔画
+    ///     变成「忽 1px 忽 2px」，曲线出现**台阶**（真机 8 倍放大图实测确认）
+    ///     ⇒ 必须双线性，让边缘平滑过渡。
+    ///   ⛔ 早期版本一律最近邻 —— 那时只有「缩到 16」一种用途，看不出问题；
+    ///     引入 DPI 换算（见 `Metrics`）后 125% 会走到放大分支，才暴露出来。
+    ///
+    /// ⛔ 双线性**必须先预乘再插值**：图标 PNG 是 straight alpha，透明像素的 RGB
+    ///   常为 0（或 255），直接插值会把那个颜色混进半透明边缘 ⇒ 图标外圈出现
+    ///   **黑晕/白边**。插完再反预乘回 straight（`A == 0` 时 RGB 无意义，置 0）。
     ///
     /// ⭐ 返回预乘前的 straight RGBA —— 合成到 DIB 时由调用方按需预乘。
     pub fn scale_to(src: &Rgba, side: u32) -> Option<Rgba> {
         let (px, sw, sh) = src;
-        if *sw == 0 || *sh == 0 || side == 0 {
+        let (sw, sh) = (*sw, *sh);
+        if sw == 0 || sh == 0 || side == 0 {
             return None;
         }
+        if sw == side && sh == side {
+            return Some((px.clone(), side, side)); // 恒等：零重采样
+        }
         let mut out = vec![0u8; (side * side * 4) as usize];
+        let upscale = side > sw || side > sh;
         for y in 0..side {
-            // 最近邻：源坐标 = 目标坐标 × 源边长 / 目标边长
-            let sy = (y as u64 * *sh as u64 / side as u64) as u32;
             for x in 0..side {
-                let sx = (x as u64 * *sw as u64 / side as u64) as u32;
-                let si = ((sy * *sw + sx) * 4) as usize;
                 let di = ((y * side + x) * 4) as usize;
-                out[di..di + 4].copy_from_slice(&px[si..si + 4]);
+                if !upscale {
+                    // 最近邻：源坐标 = 目标坐标 × 源边长 / 目标边长
+                    let sy = (y as u64 * sh as u64 / side as u64) as u32;
+                    let sx = (x as u64 * sw as u64 / side as u64) as u32;
+                    let si = ((sy * sw + sx) * 4) as usize;
+                    out[di..di + 4].copy_from_slice(&px[si..si + 4]);
+                    continue;
+                }
+                // 双线性：目标像素**中心**映射回源坐标，取四邻域加权。
+                // `max(0.0)` 把左/上边缘的外推夹回 0（否则 `floor` 会得到 -1）。
+                let fx = ((x as f32 + 0.5) * sw as f32 / side as f32 - 0.5).max(0.0);
+                let fy = ((y as f32 + 0.5) * sh as f32 / side as f32 - 0.5).max(0.0);
+                let (x0f, y0f) = (fx.floor(), fy.floor());
+                let (x0, y0) = (x0f as u32, y0f as u32);
+                let (tx, ty) = (fx - x0f, fy - y0f);
+                let x1 = (x0 + 1).min(sw - 1);
+                let y1 = (y0 + 1).min(sh - 1);
+                let mut acc = [0.0f32; 4];
+                for (xx, wx) in [(x0, 1.0 - tx), (x1, tx)] {
+                    for (yy, wy) in [(y0, 1.0 - ty), (y1, ty)] {
+                        let si = ((yy * sw + xx) * 4) as usize;
+                        let a = px[si + 3] as f32;
+                        let w = wx * wy;
+                        // 预乘：R·A/255（A 通道本身不预乘）
+                        acc[0] += px[si] as f32 * a / 255.0 * w;
+                        acc[1] += px[si + 1] as f32 * a / 255.0 * w;
+                        acc[2] += px[si + 2] as f32 * a / 255.0 * w;
+                        acc[3] += a * w;
+                    }
+                }
+                let a = acc[3].clamp(0.0, 255.0);
+                out[di + 3] = a.round() as u8;
+                for (c, v) in acc[..3].iter().enumerate() {
+                    out[di + c] = if a <= 0.0 {
+                        0 // 全透明 ⇒ RGB 无意义，置 0（避免留下假色）
+                    } else {
+                        (v * 255.0 / a).round().clamp(0.0, 255.0) as u8
+                    };
+                }
             }
         }
         Some((out, side, side))
@@ -1124,16 +1297,17 @@ fn taskbar_rect() -> Option<(i32, i32, i32, i32)> {
 
 /// widget 在任务栏内的**垂直偏移**（父窗客户区坐标，物理像素）。
 ///
-/// ⭐ 为什么要算而不是写死 0：真机实测任务栏高 **60px**、widget 高 **40px** ⇒
-///   贴顶会让 widget 里的图标比任务栏自身的图标**高出约 10px**，一眼能看出没对齐
-///   （这正是「22px 高 + 内容贴顶」时期遗留的观感缺陷）。居中后两者同一水平线。
+/// ⭐ 为什么要算而不是写死 0：真机实测任务栏高 **60px**、widget 高 **50px**（40 DIP @125%）
+///   ⇒ 贴顶会让 widget 里的图标比任务栏自身的图标**高出约 5px**，一眼能看出没对齐。
+///   居中后两者同一水平线。
 ///
 /// ⚠️ 任务栏比 widget 还矮时（异常 DPI/多显示器缩放不一致）退回 0，
 ///   不产生负偏移（负值会把内容顶到任务栏之外）。
 #[cfg(target_os = "windows")]
 fn widget_y_offset() -> i32 {
+    let h = Metrics::current().h;
     match taskbar_rect() {
-        Some((_, _, _, h)) => ((h - WIDGET_H) / 2).max(0),
+        Some((_, _, _, th)) => ((th - h) / 2).max(0),
         None => 0,
     }
 }
@@ -1357,35 +1531,36 @@ fn find_widget_slot(wanted: i32) -> Option<(i32, i32)> {
     None
 }
 
-/// 单段文本宽度的**保守**估算（像素）。
+/// 单段文本宽度的**保守**估算（物理像素）。
 ///
-/// ⚠️ 为什么按码位分类、而不是统一乘一个系数：ASCII 数字/`%`/`N/A` 在 11px Segoe UI 下
-///   约 6–7px，而中文（全角）在 11px 下约 11px。若统一按 8px 估，**中文会被低估**
+/// ⚠️ 为什么按码位分类、而不是统一乘一个系数：ASCII 数字/`%`/`N/A` 在 11 DIP Segoe UI
+///   下约 6–7px，而中文（全角）约 11px。若统一按 8px 估，**中文会被低估**
 ///   ⇒ `find_widget_slot` 可能返回一个比实际内容更窄的槽 ⇒ 内容溢出到邻居上。
 ///   避让扫描的**方向性要求**：宁可高估（少用一点空间），不可低估（重叠）。
 ///
+/// ⭐ 8/14 是 **DIP** 基准值 ⇒ 经 `m.dip()` 按 DPI 缩放（字号也跟着缩放，比例不变）。
 /// ⭐ 可证伪：把非 ASCII 的 14 改回 8，`cjk_is_not_underestimated` 会立刻转红。
 #[cfg(target_os = "windows")]
-fn estimate_text_px(s: &str) -> i32 {
+fn estimate_text_px(s: &str, m: &Metrics) -> i32 {
     s.chars()
-        .map(|c| if (c as u32) < 0x80 { 8 } else { 14 })
+        .map(|c| m.dip(if (c as u32) < 0x80 { 8 } else { 14 }))
         .sum::<i32>()
-        .min(ITEM_MAX_W)
+        .min(m.item_max_w)
 }
 
 #[cfg(target_os = "windows")]
-fn estimate_widget_width(items: &[WidgetItem]) -> i32 {
+fn estimate_widget_width(items: &[WidgetItem], m: &Metrics) -> i32 {
     // ⚠️ 每台设备占「两段文本里更宽的那一段」—— 与 `draw_items` 的 `per_item` 同口径。
     let text_px: i32 = items
         .iter()
         .map(|it| {
-            let bat = estimate_text_px(&format_battery(it));
-            let vol = estimate_text_px(&format_volume(it));
+            let bat = estimate_text_px(&format_battery(it), m);
+            let vol = estimate_text_px(&format_volume(it), m);
             bat.max(vol)
         })
         .sum();
-    let gaps = ITEM_GAP * (items.len().saturating_sub(1) as i32);
-    PAD_X * 2 + text_px + items.len() as i32 * (ICON_PX + ICON_TEXT_GAP) + gaps
+    let gaps = m.item_gap * (items.len().saturating_sub(1) as i32);
+    m.pad_x * 2 + text_px + items.len() as i32 * (m.icon + m.icon_text_gap) + gaps
 }
 
 #[cfg(target_os = "windows")]
@@ -1432,30 +1607,35 @@ fn inside_rounded_rect(x: i32, y: i32, w: i32, h: i32, r: i32) -> bool {
     dx * dx + dy * dy <= r * r
 }
 
-/// 在「可拖拽」模式下给整块 widget 铺一层**淡底衬**。
+/// 给整块 widget 铺一层 **hover 底衬**（白色半透明，**鼠标悬停时才有**）。
 ///
-/// ⛔⛔ **为什么必须有它**（2026-09-24 真机实测，不是推测）：
-///   `UpdateLayeredWindow` 分层窗的**命中测试按 alpha 走** —— alpha = 0 的像素把
-///   鼠标消息**放行给下层窗口**。沿 widget 垂直中线逐 2px 采样 **68 点**，只有
-///   **11 点**命中 widget，且全部落在**字形笔画**上（图标轮廓 x≈10-12/30-32、
-///   数字竖笔 78-100）；内边距、项间隙、**字形与图标的中空内部**统统穿透给
-///   `Shell_TrayWnd`。
-///   ⇒ 没有底衬的话，用户必须精确点中 2px 宽的笔画才能拖动 —— 交互不可用。
+/// ⭐ 口径来源 = FluentFlyout（用户 2026-09-25 指定「和 FluentFlyout 一致」）：
+///   白色 + 圆角 6 + **占满控件高度**（其 `MainBorder` 无 `Margin`、控件 `Height="40"`）；
+///   ⚠️ 6 与 40 都是 **DIP** ⇒ 由 `Metrics` 按 DPI 换算成物理像素（见 `Metrics` 的文档）。
+///   不透明度按**系统主题**取 153（浅色）/ 15（深色）—— 见 `HOVER_BACKDROP_ALPHA_*`。
+///   ⚠️ 与 FluentFlyout 的唯一差别：它用 WPF 的 200ms 淡入淡出动画，我们是逐像素合成、
+///     **没有过渡动画**（进出/切主题都是瞬时切换）。
 ///
-/// ⭐ 顺带它也是**可发现性**：开关一打开，窗口立刻出现底衬，用户就知道「现在能拖了」。
-/// ⚠️ 与 `blit_text_mask` 一样必须**预乘**；这里直接写整值（底衬先画，后续内容用
-///   「取最大 alpha」叠加，故底衬只可能被内容覆盖、不会被抹掉）。
+/// ⛔ **必须预乘**：`UpdateLayeredWindow(ULW_ALPHA)` 要求 32bpp 位图是预乘的
+///   （`0xAARRGGBB` 的 RGB = 原色 × alpha / 255）。白色预乘后 RGB 恰好等于 alpha。
+///
+/// ⛔⛔ **它同时承担「拖拽命中区」的职责**（2026-09-24 真机实测，不是推测）：
+///   `ULW` 分层窗的命中测试**按 alpha 走** —— alpha = 0 的像素把鼠标消息
+///   **放行给下层窗口**。沿 widget 垂直中线逐 2px 采样 **68 点**，只有 **11 点**
+///   命中 widget，且全部落在**字形笔画**上（图标轮廓 x≈10-12/30-32、数字竖笔 78-100）；
+///   内边距、项间隙、字形与图标的中空内部统统穿透给 `Shell_TrayWnd`。
+///   ⇒ 「hover 才铺底衬」与「拖拽可用」是**自洽**的：hover 由轮询判定（见 `HOVERED`），
+///     底衬铺上后命中测试才开始生效，此时按下左键即可拖。
+/// ⚠️ 底衬必须**先**画：后续内容按 `blend_over`（source-over）叠在它**之上** ⇒
+///   内容只会盖住它，不会被它抹掉。
 #[cfg(target_os = "windows")]
-fn fill_drag_backdrop(px: &mut [u32], w: i32, h: i32, color: (u8, u8, u8)) {
-    let (cr, cg, cb) = color;
-    let a = BACKDROP_ALPHA;
-    let packed = (a << 24)
-        | ((cr as u32 * a / 255) << 16)
-        | ((cg as u32 * a / 255) << 8)
-        | (cb as u32 * a / 255);
+fn fill_hover_backdrop(px: &mut [u32], w: i32, h: i32, alpha: u32, radius: i32) {
+    let a = alpha.min(255);
+    // 白色预乘：RGB 分量 == alpha（255 × a / 255）
+    let packed = (a << 24) | (a << 16) | (a << 8) | a;
     for y in 0..h {
         for x in 0..w {
-            if !inside_rounded_rect(x, y, w, h, BACKDROP_RADIUS) {
+            if !inside_rounded_rect(x, y, w, h, radius) {
                 continue;
             }
             let di = (y * w + x) as usize;
@@ -1466,6 +1646,67 @@ fn fill_drag_backdrop(px: &mut [u32], w: i32, h: i32, color: (u8, u8, u8)) {
     }
 }
 
+/// 按**系统主题**选 hover 底衬的不透明度（纯函数，可单测）。
+///
+/// ⭐ 用**系统**主题（`SystemUsesLightTheme`）而不是 widget 内容色用的**应用**主题
+///   （`AppsUseLightTheme`）—— 与 FluentFlyout 完全对齐：它的 `Grid_MouseEnter` 读的正是
+///   `GetWindowsTheme(out appTheme, out systemTheme)` 里的 `systemTheme`。
+///   两者在「应用深色 + 系统浅色」这类自定义主题下**会不一致**。
+#[cfg(target_os = "windows")]
+fn hover_backdrop_alpha_for(system_uses_light: bool) -> u32 {
+    if system_uses_light {
+        HOVER_BACKDROP_ALPHA_LIGHT
+    } else {
+        HOVER_BACKDROP_ALPHA_DARK
+    }
+}
+
+/// hover 判定的**纯函数**（可单测）：光标是否落在窗口矩形内，或正在拖拽。
+///
+/// ⚠️ 矩形口径 = `GetWindowRect` 的**屏幕**坐标，其 `right` / `bottom` 是**排他**边界
+///   （宽度 = `right - left`）⇒ 判据用 `x < left + w` 而**不是** `<=`。
+///   ⛔ 混用会让最右一列 / 最下一行像素的判定反掉 —— 1px 偏差，肉眼与手测都难查，
+///     只有单测能钉住，所以本函数必须保持**无副作用、可直接构造输入**。
+///
+/// ⭐ 拖拽期间恒为 `true`：拖拽靠 `SetCapture` 维持（光标可以短暂移出窗口），
+///   若仍按矩形判会让底衬随光标闪进闪出。
+/// ⚠️ 任一输入缺失（取光标失败 / 窗口矩形取不到）⇒ `false`（宁可不显示，也不误显示）。
+#[cfg(target_os = "windows")]
+fn want_hover(
+    cursor: Option<(i32, i32)>,
+    rect: Option<(i32, i32, i32, i32)>,
+    dragging: bool,
+) -> bool {
+    if dragging {
+        return true;
+    }
+    let (Some((cx, cy)), Some((left, top, w, h))) = (cursor, rect) else {
+        return false;
+    };
+    cx >= left && cx < left + w && cy >= top && cy < top + h
+}
+
+/// 把**预乘**的源像素按 **source-over** 合成到目标像素上（两者都是预乘 `0xAARRGGBB`）。
+///
+/// ⛔⛔ **为什么不能用「取最大 alpha」**（本函数引入前的写法）：底衬会先把整块区域写成
+///   `alpha = 153`，于是**抗锯齿边缘**（覆盖度 < 153）被 `a > dst_a` 判假而**丢弃** ⇒
+///   字形笔画被侵蚀、文字看起来**变细**（用户 2026-09-25 报的「hover 时内容会变细」）。
+///   alpha=28 的旧底衬下，边缘覆盖度几乎都 > 28，所以那时看不出来；换成 153 后立刻显形。
+/// ✅ 正确做法 = 标准 source-over：`out = src + dst × (1 − As/255)`。
+///   ⭐ **无底衬时 `dst_a == 0` ⇒ 退化为 `out == src`**，非 hover 路径**逐位零变化**
+///     （已由 `blend_over_with_no_backdrop_is_identity` 钉住）。
+/// ⚠️ 预乘保证 `pr ≤ a`、`dst_rgb ≤ dst_a` ⇒ `out_rgb ≤ out_a ≤ 255`，**不会溢出**。
+#[cfg(target_os = "windows")]
+fn blend_over(dst: u32, a: u32, pr: u32, pg: u32, pb: u32) -> u32 {
+    let inv = 255 - a;
+    let da = dst >> 24;
+    let ao = a + da * inv / 255;
+    let ro = pr + ((dst >> 16) & 0xFF) * inv / 255;
+    let go = pg + ((dst >> 8) & 0xFF) * inv / 255;
+    let bo = pb + (dst & 0xFF) * inv / 255;
+    (ao << 24) | (ro << 16) | (go << 8) | bo
+}
+
 /// 把一段**文本掩码**按覆盖度预乘合成进主缓冲（`(dst_x, dst_y)` = 目标左上角）。
 ///
 /// ⛔ 为什么不能把 GDI 文本直接画进主缓冲：`DrawTextW` 在 32bpp DIB 上写的是
@@ -1473,8 +1714,8 @@ fn fill_drag_backdrop(px: &mut [u32], w: i32, h: i32, color: (u8, u8, u8)) {
 ///   （与「类没设背景刷」的表现一模一样，极易误判成同一个问题）。
 ///   正确路径 = 白底黑字掩码 → `cov = 255 - gray` → 预乘（详见 `ffi::render_text_mask`）。
 ///
-/// ⭐ 重叠像素取**最大 alpha**（不是相加）：电量段与音量段、或字形与图标重叠时
-///   不叠加亮度（叠加会在笔画交叉处出现亮斑）。
+/// ⭐ 合成走 `blend_over`（source-over），**不是**「取最大 alpha」——
+///   后者会在底衬（alpha=153）之上把抗锯齿边缘吃掉，让文字变细。详见 `blend_over`。
 ///
 /// ⚠️ 抽成函数而不是在绘制循环里内联两份：电量与音量两行的合成逻辑**逐字相同**，
 ///   复制两份必然在后续改动中漂移（一处改了预乘、另一处忘了）。
@@ -1517,10 +1758,9 @@ fn blit_text_mask(
             let pr = cr as u32 * a / 255;
             let pg = cg as u32 * a / 255;
             let pb = cb as u32 * a / 255;
-            let packed = (a << 24) | (pr << 16) | (pg << 8) | pb;
             let di = (dy * total_w + dx) as usize;
-            if di < px.len() && a > px[di] >> 24 {
-                px[di] = packed;
+            if di < px.len() {
+                px[di] = blend_over(px[di], a, pr, pg, pb);
             }
         }
     }
@@ -1534,7 +1774,7 @@ fn blit_text_mask(
 //   鼠标拖着走；松开即记住位置，重启后仍在原处。
 //
 // ⛔ **为什么必须画底衬**：`ULW` 分层窗按 alpha 命中测试，透明像素把鼠标放行给下层
-//   ⇒ 只有可见笔画能接住按下（真机实测 68 采样点只中 11 点）。见 `fill_drag_backdrop`。
+//   ⇒ 只有可见笔画能接住按下（真机实测 68 采样点只中 11 点）。见 `fill_hover_backdrop`。
 
 /// 拖拽是否可用 —— 「固定位置」关掉时才允许。
 #[cfg(target_os = "windows")]
@@ -1698,20 +1938,22 @@ fn drag_finish(hwnd: *mut core::ffi::c_void) {
 #[cfg(target_os = "windows")]
 fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     let dark = crate::windows::system_dark_mode();
+    // ⭐ 本帧的布局度量（DIP → 物理像素）。**测量与绘制共用同一份** ⇒ 不会漂移。
+    let m = Metrics::current();
 
     // 空快照：不画任何东西，但仍提交一帧（保持窗口有效且全透明）
     if items.is_empty() {
-        return draw_blank(hwnd, PAD_X * 2);
+        return draw_blank(hwnd, m.pad_x * 2);
     }
 
     // ── 先在**测量用 DC** 上量出每段文本宽度 ────────────────────────────
     // ⚠️ 测量与绘制必须用**同一个字体 + 同样的 DrawTextW 标志**，
     //    否则会出现「按测量宽度排版、实际文本更长」⇒ 相邻项重叠（见 measure_text 注释）。
     let (font, memdc) = unsafe {
-        let f = ffi::create_font(FONT_PX);
+        let f = ffi::create_font(m.font, true); // 加粗（用户 2026-09-25）
         if f.is_null() {
             append_log("[widget] CreateFontW 失败，退回空白帧");
-            return draw_blank(hwnd, PAD_X * 2);
+            return draw_blank(hwnd, m.pad_x * 2);
         }
         let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
         let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
@@ -1720,7 +1962,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     };
     if memdc.is_null() {
         unsafe { ffi::destroy_font(font) };
-        return draw_blank(hwnd, PAD_X * 2);
+        return draw_blank(hwnd, m.pad_x * 2);
     }
 
     // ── 每项：图标 + 两段文本（右上电量 / 右下音量），各自测量宽度 ──────
@@ -1732,12 +1974,12 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
         .iter()
         .map(|it| format_volume(it).encode_utf16().collect())
         .collect();
-    // 每段记 `(文本实际宽, 是否需要省略号)`：实际宽 = `min(自然宽, ITEM_MAX_W)`；
+    // 每段记 `(文本实际宽, 是否需要省略号)`：实际宽 = `min(自然宽, item_max_w)`；
     // 自然宽 > 上限 ⇒ 该段要画 `…`（否则会**硬切半个字形**）。
     let measure = |t: &[u16]| -> (i32, bool) {
         let natural = unsafe { ffi::measure_text(memdc, font, t) };
         // ⛔ 每段加上限：极端长文本时截断显示（避免挤压其它设备）
-        let clamped = natural.min(ITEM_MAX_W);
+        let clamped = natural.min(m.item_max_w);
         (clamped, natural > clamped)
     };
     let bat_w: Vec<(i32, bool)> = bat_texts.iter().map(|t| measure(t)).collect();
@@ -1751,10 +1993,10 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     // 每项宽 = 图标 + 间隙 + **两段文本里更宽的那段**（两段共用同一列起画点）；
     // 项与项之间再加 `ITEM_GAP`，两端加 `PAD_X`。
     let per_item: Vec<i32> = (0..items.len())
-        .map(|i| ICON_PX + ICON_TEXT_GAP + bat_w[i].0.max(vol_w[i].0))
+        .map(|i| m.icon + m.icon_text_gap + bat_w[i].0.max(vol_w[i].0))
         .collect();
-    let content_w: i32 = per_item.iter().sum::<i32>() + ITEM_GAP * (items.len() as i32 - 1);
-    let total_w = content_w + PAD_X * 2;
+    let content_w: i32 = per_item.iter().sum::<i32>() + m.item_gap * (items.len() as i32 - 1);
+    let total_w = content_w + m.pad_x * 2;
     // ⛔ GetPixel 扫描必须在后台线程完成（WMI 之外也不能阻塞窗口线程）。
     // 后台快照任务已将估算宽度传给 `find_widget_slot`，这里仅读取原子坐标。
     if !SLOT_VALID.load(Ordering::Acquire) {
@@ -1799,7 +2041,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
          content_w={total_w} → rel_x={rel_x}"
     ));
     unsafe { ffi::show(hwnd as _) };
-    let h = WIDGET_H;
+    let h = m.h;
     let Some(dib) = (unsafe { ffi::create_dib(total_w, h) }) else {
         append_log("[widget] CreateDIBSection 失败");
         unsafe { ffi::destroy_font(font) };
@@ -1813,20 +2055,22 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
 
         // 内容色（预乘前的原色）：浅色主题黑、深色主题白
         let (cr, cg, cb): (u8, u8, u8) = if dark { (255, 255, 255) } else { (0, 0, 0) };
-        // ⛔ 不固定位置 ⇒ 用户可拖拽 ⇒ **必须铺底衬**：分层窗按 alpha 命中测试，
-        //    alpha = 0 的像素会把鼠标消息放行给下层（`Shell_TrayWnd`），
-        //    实测只有 11/68 个采样点能命中 widget（全落在字形笔画上）——
-        //    没有底衬就只能靠「精确点中 2px 宽的笔画」拖动，交互不可用。
-        //    详见 `fill_drag_backdrop` 文档。
-        // ⚠️ 固定位置时不铺：那时拖拽被禁用，底衬只是白占一片可见面积。
-        // ⚠️ 底衬必须**先**画（后续内容按「取最大 alpha」叠加 ⇒ 只会覆盖它、不会抹掉它）。
-        if !locked {
-            fill_drag_backdrop(px, total_w, h, (cr, cg, cb));
+        // ⭐ hover 底衬（白色半透明，**鼠标悬停时才有**）—— 口径与 FluentFlyout 一致。
+        //    ⛔ 判据是 `HOVERED`（由轮询光标得出），**不再看 `locked`**：
+        //       用户 2026-09-25 要求「和 FluentFlyout 一致 + hover 时才出现」，
+        //       而 FluentFlyout 没有「固定位置」概念 ⇒ hover 即显示。
+        //    ⚠️ 它同时是**拖拽命中区**（分层窗按 alpha 命中测试）：hover 成立 ⇒ 底衬铺上
+        //       ⇒ 命中测试开始生效 ⇒ 此刻按下左键能收到 `WM_LBUTTONDOWN`。自洽性论证见
+        //       `fill_hover_backdrop` 与 `HOVERED` 的文档。
+        //    ⚠️ 底衬必须**先**画（后续内容按 source-over 叠在它之上 ⇒ 只会盖住它、不会抹掉它）。
+        if HOVERED.load(Ordering::Acquire) {
+            let alpha = hover_backdrop_alpha_for(crate::windows::system_uses_light_theme());
+            fill_hover_backdrop(px, total_w, h, alpha, m.radius);
         }
-        // 图标在 widget 里垂直居中（`ICON_PX` ≤ `h`，余量上下各一半）
-        let icon_y = (h - ICON_PX) / 2;
+        // 图标在 widget 里垂直居中（`m.icon` ≤ `h`，余量上下各一半）
+        let icon_y = (h - m.icon) / 2;
 
-        let mut cursor = PAD_X;
+        let mut cursor = m.pad_x;
         for (i, it) in items.iter().enumerate() {
             // ⚠️ 用户固定的设备（此刻读不出数据）用**半透明**显示，
             //    与「有数据」区分；这是「pin = 强制显示 + 置灰」在 widget 上的落地。
@@ -1836,9 +2080,9 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
                 1.0
             };
 
-            // ① 图标：解码（带缓存）→ 最近邻缩放到 `ICON_PX` → 预乘合成
+            // ① 图标：解码（带缓存）→ 最近邻缩放到 `m.icon` → 预乘合成
             if let Some(scaled) =
-                icons::get(it.icon, dark).and_then(|rgba| icons::scale_to(rgba, ICON_PX as u32))
+                icons::get(it.icon, dark).and_then(|rgba| icons::scale_to(rgba, m.icon as u32))
             {
                 let (ipx, iw, ih) = scaled;
                 for yy in 0..(ih as i32).min(h - icon_y) {
@@ -1858,24 +2102,20 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
                         let pr = r * a / 255;
                         let pg = g * a / 255;
                         let pb = b * a / 255;
-                        let packed = (a << 24) | (pr << 16) | (pg << 8) | pb;
                         let di = ((icon_y + yy) * total_w + cursor + xx) as usize;
                         if di < px.len() {
-                            let old_a = px[di] >> 24;
-                            if a > old_a {
-                                px[di] = packed;
-                            }
+                            px[di] = blend_over(px[di], a, pr, pg, pb);
                         }
                     }
                 }
             }
-            let text_x = cursor + ICON_PX + ICON_TEXT_GAP;
+            let text_x = cursor + m.icon + m.icon_text_gap;
 
             // ② 电量：图标**右上角**（两行文本的**上半行**）
             let (bw, b_ell) = bat_w[i];
             if bw > 0 {
                 if let Some(mask) =
-                    ffi::render_text_mask(bw, TEXT_ROW_H, font, &bat_texts[i], b_ell)
+                    ffi::render_text_mask(bw, m.text_row_h, font, &bat_texts[i], b_ell)
                 {
                     blit_text_mask(
                         px,
@@ -1893,20 +2133,20 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
             let (vw, v_ell) = vol_w[i];
             if vw > 0 {
                 if let Some(mask) =
-                    ffi::render_text_mask(vw, TEXT_ROW_H, font, &vol_texts[i], v_ell)
+                    ffi::render_text_mask(vw, m.text_row_h, font, &vol_texts[i], v_ell)
                 {
                     blit_text_mask(
                         px,
                         total_w,
                         &mask,
                         text_x,
-                        icon_y + TEXT_ROW_H,
+                        icon_y + m.text_row_h,
                         (cr, cg, cb),
                         alpha_scale,
                     );
                 }
             }
-            cursor += per_item[i] + ITEM_GAP;
+            cursor += per_item[i] + m.item_gap;
         }
     }
 
@@ -1926,13 +2166,13 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
 
 /// 提交一帧**全透明**的位图（用于「无数据」与「失败回退」）。
 ///
-/// ⭐ 仍要提交：`ULW` 同时也设定窗口尺寸 ⇒ 空帧会把窗口缩到 `w`×`WIDGET_H`，
+/// ⭐ 仍要提交：`ULW` 同时也设定窗口尺寸 ⇒ 空帧会把窗口缩到 `w`×`h`，
 ///   避免残留在上一次的尺寸上（否则内容清空但窗口还占着位置）。
 /// ⚠️ 全透明 ⇒ 位置不可见，x 固定 0；y 仍走垂直居中，避免窗口在空帧与实帧之间跳。
 #[cfg(target_os = "windows")]
 fn draw_blank(hwnd: *mut core::ffi::c_void, w: i32) -> bool {
     let w = w.max(1);
-    let h = WIDGET_H;
+    let h = Metrics::current().h;
     let Some(dib) = (unsafe { ffi::create_dib(w, h) }) else {
         return false;
     };
@@ -1963,7 +2203,7 @@ fn repaint_from_snapshot(hwnd: *mut core::ffi::c_void) {
 ///   而取数要 600ms+ ⇒ 会拖慢启动。改为「先画空帧，再由后台 `refresh_async` 填充」。
 #[cfg(target_os = "windows")]
 fn draw_frame(hwnd: *mut core::ffi::c_void) -> bool {
-    draw_blank(hwnd, PAD_X * 2)
+    draw_blank(hwnd, Metrics::current().pad_x * 2)
 }
 
 /// 诊断：读回当前 widget 的挂载状态（不新建窗口）。
@@ -2171,7 +2411,7 @@ fn fetch_into_snapshot() -> bool {
     let items = build_items(&devices);
     // 视觉扫描必须留在后台：它要 BitBlt 整条任务栏，不能阻塞窗口线程。
     // 估算宽度略保守（中文/图标按最大字符宽），避免实际绘制超出空白槽。
-    let wanted = estimate_widget_width(&items);
+    let wanted = estimate_widget_width(&items, &Metrics::current());
     let slot_before = (
         SLOT_X.load(Ordering::Acquire),
         SLOT_W.load(Ordering::Acquire),
@@ -2319,6 +2559,66 @@ fn plan_tick(alive: bool, taskbar_changed: bool, tick: u64) -> TickPlan {
     }
 }
 
+/// hover 轮询线程：**唯一**维护 `HOVERED` 的地方（幂等，重复调用只启动一次）。
+///
+/// ⭐ 为什么单独一条线程，而不塞进 `start_refresh_loop`：两者**节奏差 40 倍**
+///   （维护 2s vs hover 50ms）。塞一起只有两种结果 —— 要么把维护节拍拖到 50ms
+///   （触发挂载风暴，见 `plan_tick`），要么让 hover 迟钝到 2s（底衬跟不上鼠标）。
+///   **节奏不同就分开。**
+///
+/// ⚠️ 本线程只做**只读查询**（`IsWindow` / `GetCursorPos` / `GetWindowRect`）——
+///   与维护线程里的 `FindWindowW` 同属只读，跨线程安全。
+///   ⛔ 真正「碰窗口」的动作（`SetWindowPos` / `ULW` 提交）一律留在主线程；
+///     本线程只 `PostMessageW` 请求重绘。
+/// ⛔ **必须无条件启动**（不依赖挂载成功）—— 与「监听与兜底循环必须无条件安装」同理：
+///   等挂载成功才装的话，勾选那一刻窗口还不存在，就永远等不到第一条 hover。
+#[cfg(target_os = "windows")]
+fn start_hover_watcher() {
+    use std::sync::OnceLock;
+    static STARTED: OnceLock<()> = OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return; // 已启动过
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(HOVER_POLL_MS));
+        // 未挂载 / 句柄已失效 ⇒ 没有窗口可悬停，复位状态后继续空转。
+        if !widget_alive() {
+            if HOVERED.swap(false, Ordering::AcqRel) {
+                append_log("[widget] hover: 窗口已失效 ⇒ 复位");
+            }
+            continue;
+        }
+        let hwnd = WIDGET_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void;
+        if hwnd.is_null() {
+            continue;
+        }
+        let cursor = unsafe {
+            let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+            if windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) == 0 {
+                None
+            } else {
+                Some((pt.x, pt.y))
+            }
+        };
+        let rect = window_screen_rect(hwnd);
+        let dragging = DRAG_ACTIVE.load(Ordering::Acquire);
+        let want = want_hover(cursor, rect, dragging);
+        // ⭐ 只在**翻转**时动手：既避免每 50ms 一次无谓重绘，也让日志只在真正进出时出现。
+        if want != HOVERED.load(Ordering::Acquire) {
+            HOVERED.store(want, Ordering::Release);
+            append_log(&format!(
+                "[widget] hover: {} ⇒ {}底衬",
+                if want { "进入" } else { "离开" },
+                if want { "显示" } else { "隐藏" }
+            ));
+            // ⛔ 只重绘、**不取数**：`WM_APP_REFRESH` ⇒ `repaint_from_snapshot` 读**现有**快照重画。
+            //    绝不能改用 `refresh_async()` —— 那会触发 600ms+ 的 WMI 取数，
+            //    鼠标每进出一次就重拉一遍设备列表。
+            unsafe { ffi::post_refresh(hwnd as _) };
+        }
+    });
+}
+
 /// 启动维护线程（幂等，重复调用只起一个）。
 ///
 /// 它一个循环干三件事，**节奏不同**（见 `plan_tick`）：
@@ -2345,6 +2645,9 @@ pub fn start_refresh_loop(app: &tauri::AppHandle) {
         if STARTED.set(()).is_err() {
             return; // 已启动过
         }
+        // ⭐ hover 轮询线程与维护循环**节奏不同**（50ms vs 2s），各起一条。
+        //    两个启动函数各自幂等，此处重复调用无副作用。
+        start_hover_watcher();
         let app = app.clone();
         std::thread::spawn(move || {
             // 首次延迟 3s：让启动流程（托盘/窗口）先跑完，避免与启动期抢 CPU
@@ -2671,38 +2974,79 @@ mod tests {
 
     // ── 宽度估算：避让扫描的 wanted（方向性：宁可高估，不可低估） ──
 
+    /// 100% 缩放的布局度量（测试固定用 96，避免依赖真机 DPI）。
+    fn m96() -> Metrics {
+        Metrics::for_dpi(96)
+    }
+
+    /// ⭐⭐ DPI 换算的核心断言：**125% 下底衬高必须是 50px**。
+    ///
+    /// 口径出处 = FluentFlyout `Windows/TaskbarWindow.xaml.cs`：
+    ///   `physicalHeight = (int)(logicalHeight * dpiScale)`，`logicalHeight = 40`（DIP）
+    /// ⇒ 125% 时 40 × 1.25 = **50**。我们原先把 40 当物理像素用，比它矮 10px。
+    ///
+    /// 可证伪：把 `Metrics::for_dpi` 里的 `dpi as f32 / 96.0` 换成 `1.0`（即不做换算）
+    /// ⇒ `m120.h == 40`，本条转红。
+    #[test]
+    fn metrics_scale_layout_by_dpi() {
+        let m = m96();
+        assert_eq!(
+            (m.h, m.icon, m.radius, m.font, m.text_row_h),
+            (40, 32, 6, 11, 16)
+        );
+
+        let m120 = Metrics::for_dpi(120); // 本机任务栏 DPI = 120（125%）
+        assert_eq!(
+            m120.h, 50,
+            "125% 下底衬高必须与 FluentFlyout 一致（40 DIP）"
+        );
+        assert_eq!(m120.icon, 40);
+        assert_eq!(m120.radius, 8, "6 DIP × 1.25 = 7.5 → 8");
+        assert_eq!(m120.font, 14, "11 DIP × 1.25 = 13.75 → 14");
+        assert_eq!(m120.text_row_h, 20, "行高 = 图标高的一半");
+
+        assert_eq!(Metrics::for_dpi(144).h, 60, "150%");
+        // 防御：dpi = 0 不得 panic、也不得产生 0 尺寸（那会让窗口彻底不可见）
+        assert_eq!(Metrics::for_dpi(0).h, 40);
+        assert_eq!(Metrics::for_dpi(0).dpi, 96);
+    }
+
     /// ⛔ 中文**不得**被低估 —— 否则 `find_widget_slot` 可能返回比实际内容更窄的槽，
     /// 内容溢出压到邻居上（正是避让机制要避免的那件事）。
     ///
     /// 可证伪：把 `estimate_text_px` 里非 ASCII 的 `14` 改回 `8`，本条立刻转红。
     #[test]
     fn cjk_is_not_underestimated() {
+        let m = m96();
         // 「静音」是 2 个全角字：11px 字体下实际约 22px ⇒ 估算必须 >= 22
         assert!(
-            estimate_text_px("静音") >= 22,
+            estimate_text_px("静音", &m) >= 22,
             "中文估算过小会低估槽宽: {}",
-            estimate_text_px("静音")
+            estimate_text_px("静音", &m)
         );
         // 与纯 ASCII 段对比：同样 2 个码位，中文必须更宽
         assert!(
-            estimate_text_px("静音") > estimate_text_px("N/A"),
+            estimate_text_px("静音", &m) > estimate_text_px("N/A", &m),
             "中文段必须比等长的 ASCII 段估得更宽"
         );
         // ASCII 侧维持原口径（`100%` = 4 × 8 = 32）
-        assert_eq!(estimate_text_px("100%"), 32);
+        assert_eq!(estimate_text_px("100%", &m), 32);
+        // ⭐ DPI 缩放后必须同比放大（字号也跟着缩放 ⇒ 比例不变）
+        assert_eq!(estimate_text_px("100%", &Metrics::for_dpi(120)), 40);
     }
 
     /// 宽度估算必须**单调**，且单台时至少装得下「图标 + 间隙」。
     #[test]
     fn estimate_width_is_monotonic_and_covers_icon() {
+        let m = m96();
         let one = vec![item(Some(50), Some(0.5), true, Some(false))];
         let mut two = one.clone();
         two.push(item(Some(60), Some(0.6), true, Some(false)));
 
-        let w1 = estimate_widget_width(&one);
-        let w2 = estimate_widget_width(&two);
+        let w1 = estimate_widget_width(&one, &m);
+        let w2 = estimate_widget_width(&two, &m);
         assert!(
-            w1 >= PAD_X * 2 + ICON_PX + ICON_TEXT_GAP,
+            w1 >= m.pad_x * 2 + m.icon + m.icon_text_gap,
             "单台至少要装下内边距 + 图标 + 间隙: {w1}"
         );
         assert!(w2 > w1, "多一台必须更宽: {w1} vs {w2}");
@@ -2718,31 +3062,37 @@ mod tests {
     /// 可证伪：把 `estimate_widget_width` 里的 `bat.max(vol)` 改成 `bat.min(vol)`，本条转红。
     #[test]
     fn per_item_width_uses_the_wider_of_the_two_texts() {
+        let m = m96();
         // 电量 `5%`（2 字符 → 16px）比音量 `50%`（3 字符 → 24px）窄
         let it = item(Some(5), Some(0.5), true, Some(false));
-        let wider = estimate_text_px("50%");
-        let narrower = estimate_text_px("5%");
+        let wider = estimate_text_px("50%", &m);
+        let narrower = estimate_text_px("5%", &m);
         assert!(
             wider > narrower,
             "样本本身要能区分宽窄，否则本条无区分力（{wider} vs {narrower}）"
         );
-        let w = estimate_widget_width(&[it]);
+        let w = estimate_widget_width(&[it], &m);
         assert!(
-            w >= PAD_X * 2 + ICON_PX + ICON_TEXT_GAP + wider,
+            w >= m.pad_x * 2 + m.icon + m.icon_text_gap + wider,
             "宽度必须覆盖更宽的那段文本：{w} < 内边距 + 图标 + 间隙 + {wider}"
         );
     }
 
     /// 6 台（显示上限）的估算必须仍能塞进避让后的可用区 ——
     /// 否则「避让扫描永远找不到槽」⇒ widget 直接不显示（且不报错）。
+    ///
+    /// ⭐ 同时覆盖 **125% 缩放**：布局整体放大 25% ⇒ 高 DPI 用户最容易踩到「找不到槽」。
     #[test]
     fn six_items_still_fit_in_a_plausible_slot() {
         let six: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
             .map(|i| item(Some(50 + i as i32), Some(0.5), true, Some(false)))
             .collect();
-        let w = estimate_widget_width(&six);
         // 真机可用区约 1300px（任务栏 2560px 减两端各 100px 再减任务栏自身内容）
+        let w = estimate_widget_width(&six, &m96());
         assert!(w < 1300, "6 台估算过宽，会找不到避让槽: {w}");
+        let w120 = estimate_widget_width(&six, &Metrics::for_dpi(120));
+        assert!(w120 < 1300, "125% 缩放下 6 台估算过宽: {w120}");
+        assert!(w120 > w, "125% 必须比 100% 宽: {w120} vs {w}");
     }
 
     // ── build_items：从后端设备构造条目 ─────────────────────
@@ -2947,6 +3297,61 @@ mod tests {
         );
     }
 
+    /// ⛔ **缩小**必须仍是最近邻：线稿的 1–2px 笔画被双线性糊掉会变成灰带。
+    ///
+    /// 可证伪：把 `scale_to` 里的 `upscale` 判据改成恒 `true` ⇒ 本条转红（出现中间值）。
+    #[test]
+    fn scale_down_stays_nearest_neighbor() {
+        // 1×2 源：上纯黑不透明、下纯白不透明。缩到 1×1 只能取其中一个 ——
+        // 出现 0/255 之外的**中间值**就是双线性的产物。
+        let src = (vec![0, 0, 0, 255, 255, 255, 255, 255], 1u32, 2u32);
+        let (px, w, h) = icons::scale_to(&src, 1).expect("缩放不应失败");
+        assert_eq!((w, h), (1, 1));
+        assert!(
+            px[0] == 0 || px[0] == 255,
+            "缩小时不得出现中间值: {}",
+            px[0]
+        );
+    }
+
+    /// ⭐ **放大**必须平滑：最近邻会让 1px 笔画忽宽忽窄、曲线出现台阶
+    ///   （真机 8 倍放大图确认过）。
+    ///
+    /// 可证伪：把 `upscale` 判据改成恒 `false` ⇒ 本条转红（相邻像素完全相同）。
+    #[test]
+    fn scale_up_interpolates() {
+        // 2×1 的黑白源放大到 4×1 ⇒ 中间两列必须是**渐变**而不是非黑即白
+        let src = (vec![0, 0, 0, 255, 255, 255, 255, 255], 2u32, 1u32);
+        let (px, w, _) = icons::scale_to(&src, 4).expect("缩放不应失败");
+        assert_eq!(w, 4);
+        let lum: Vec<u8> = (0..4).map(|i| px[i * 4]).collect(); // 灰度图 R=G=B
+        assert!(
+            lum[0] < lum[1] && lum[1] < lum[2] && lum[2] < lum[3],
+            "放大后必须单调过渡（最近邻会得到 [0,0,255,255]）: {lum:?}"
+        );
+    }
+
+    /// ⛔ 放大时的双线性**必须先预乘**：straight alpha 下透明像素的 RGB 常为 0（或 255），
+    ///   直接插值会把那个颜色混进半透明边缘 ⇒ 图标外圈出现**黑晕/白边**。
+    ///
+    /// 构造：左 = 不透明**黑**（RGB=0），右 = 完全透明**白**（RGB=255, A=0）。
+    ///   · 正确（先预乘）：透明像素的预乘 RGB = 0 ⇒ 任何插值结果的反预乘 RGB 都是 **0**。
+    ///   · 错误（直接插值）：中间像素会拿到 RGB ≈ 127 的**灰**（半透明灰边）。
+    ///
+    /// 可证伪：把 `acc[c] += px[si] as f32 * a / 255.0 * w` 里的 `* a / 255.0` 去掉 ⇒ 转红。
+    #[test]
+    fn scale_up_does_not_darken_transparent_edges() {
+        let src = (vec![0, 0, 0, 255, 255, 255, 255, 0], 2u32, 1u32);
+        let (px, _, _) = icons::scale_to(&src, 4).expect("缩放不应失败");
+        for i in 0..4 {
+            let (r, a) = (px[i * 4], px[i * 4 + 3]);
+            assert!(
+                a == 0 || r == 0,
+                "像素 {i}: alpha={a} 但 RGB={r} ⇒ 透明像素的颜色混进了边缘（缺预乘）"
+            );
+        }
+    }
+
     // ── align_in_slot：贴靠位置（纯函数）──────────────────────
     //
     // ⭐ 为什么必须测：三种策略**写反了不报错**，只是窗口跑到别处。
@@ -3117,7 +3522,7 @@ mod tests {
         }
     }
 
-    /// 越界坐标一律不算命中（`fill_drag_backdrop` 依赖它做边界判断）。
+    /// 越界坐标一律不算命中（`fill_hover_backdrop` 依赖它做边界判断）。
     /// `r == 0` 时退化为**实心矩形**（不 panic、不挖角）。
     #[test]
     fn inside_rounded_rect_handles_out_of_range_and_zero_radius() {
@@ -3129,6 +3534,115 @@ mod tests {
             inside_rounded_rect(0, 0, w, h, 0),
             "半径 0 ⇒ 退化为实心矩形"
         );
+    }
+
+    // ── 合成：blend_over（source-over）──────────────────────────────────
+
+    /// ⭐ 无底衬（`dst` 全 0）⇒ 合成结果必须**逐位等于**源像素。
+    ///
+    /// 意义：钉住「改合成**不会回归**未悬停时的外观」—— 那是本次改动最大的回归风险面。
+    /// 可证伪：把 `blend_over` 改成「恒返回 `dst`」⇒ 本条三条断言全红。
+    #[test]
+    fn blend_over_with_no_backdrop_is_identity() {
+        assert_eq!(blend_over(0, 128, 0, 0, 0), 128 << 24, "半透明黑字");
+        assert_eq!(blend_over(0, 255, 255, 255, 255), 0xFFFF_FFFF, "不透明白");
+        assert_eq!(
+            blend_over(0, 60, 12, 34, 56),
+            (60 << 24) | (12 << 16) | (34 << 8) | 56
+        );
+    }
+
+    /// 源完全不透明 ⇒ 结果 = 源（底衬被完全覆盖，不留一点白）。
+    #[test]
+    fn blend_over_opaque_source_replaces_destination() {
+        let dst = 0x9999_9999; // alpha = 153 的白色预乘底衬
+        assert_eq!(blend_over(dst, 255, 0, 0, 0), 255 << 24, "纯黑不透明");
+        assert_eq!(
+            blend_over(dst, 255, 255, 255, 255),
+            0xFFFF_FFFF,
+            "纯白不透明"
+        );
+    }
+
+    /// ⛔⛔ **本函数存在的理由**：底衬（alpha=153）之上，抗锯齿边缘（覆盖度 **< 153**）
+    ///   **必须仍被画出来**。旧实现「取最大 alpha」在这里会保留底衬 ⇒ 字形被侵蚀 ⇒ 变细。
+    ///
+    /// 可证伪：把 `blend_over` 换回 `if a > dst >> 24 { packed } else { dst }`
+    /// ⇒ alpha 断言（177 ≠ 153）立刻转红。
+    #[test]
+    fn blend_over_antialiased_edge_is_not_eroded() {
+        let dst = (153u32 << 24) | (153 << 16) | (153 << 8) | 153; // 白色预乘底衬
+        let out = blend_over(dst, 60, 0, 0, 0); // 覆盖度 60 的黑字边缘
+                                                // 60 + 153 × (255−60)/255 = 60 + 117 = 177（旧实现给 153）
+        assert_eq!(out >> 24, 177, "alpha 必须是叠加后的 177，不是 153");
+        // 0 + 153 × 195/255 = 117（底衬被黑字压暗）
+        assert_eq!((out >> 16) & 0xFF, 117, "红分量必须是 117");
+        assert!((out >> 16) & 0xFF < 153, "必须比纯底衬暗 ⇒ 字确实画上去了");
+    }
+
+    // ── hover 底衬：主题 → 不透明度 / 光标命中判定 ──────────────────
+
+    /// ⭐ 两个 alpha 必须**逐字**等于 FluentFlyout 换算出来的值 —— 这是「与 FluentFlyout
+    ///   一致」这句承诺的**唯一机械判据**（改了常量却忘了另一处，只有这里会转红）。
+    #[test]
+    fn hover_backdrop_alpha_matches_fluent_flyout() {
+        // 浅色分支：Color.FromArgb(255,255,255,255) × Opacity 0.6 ⇒ 153
+        assert_eq!(hover_backdrop_alpha_for(true), 153);
+        // 深色分支：Color.FromArgb(197,255,255,255) × Opacity 0.075 ⇒ 14.775 ⇒ 15
+        assert_eq!(hover_backdrop_alpha_for(false), 15);
+        assert_eq!(HOVER_BACKDROP_ALPHA_LIGHT, 153);
+        assert_eq!(HOVER_BACKDROP_ALPHA_DARK, 15);
+        // ⛔ 底衬必须**比内容淡**：alpha 到 255 就成了实心白块，会把图标与文字压住。
+        assert!(hover_backdrop_alpha_for(true) < 255);
+        assert!(hover_backdrop_alpha_for(false) < hover_backdrop_alpha_for(true));
+    }
+
+    /// 光标落在窗口矩形内 ⇒ hover 成立（含左上角，与「右/下排他」合起来覆盖全矩形）。
+    #[test]
+    fn want_hover_true_inside_rect() {
+        let rect = Some((100, 200, 80, 40)); // left, top, w, h
+        assert!(want_hover(Some((100, 200)), rect, false), "左上角（含）");
+        assert!(
+            want_hover(Some((179, 239)), rect, false),
+            "右下角内侧（含）"
+        );
+        assert!(want_hover(Some((140, 220)), rect, false), "正中");
+    }
+
+    /// ⛔ 边界口径：`right` / `bottom` 是**排他**边界（宽度 = right - left）。
+    ///   可证伪：把 `<` 改成 `<=` ⇒ 后两条立刻转红。
+    #[test]
+    fn want_hover_excludes_exclusive_edges() {
+        let rect = Some((100, 200, 80, 40));
+        assert!(
+            !want_hover(Some((180, 220)), rect, false),
+            "right 本身不算（排他边界）"
+        );
+        assert!(
+            !want_hover(Some((140, 240)), rect, false),
+            "bottom 本身不算（排他边界）"
+        );
+        assert!(!want_hover(Some((99, 220)), rect, false), "left 左侧不算");
+        assert!(!want_hover(Some((140, 199)), rect, false), "top 上方不算");
+    }
+
+    /// ⭐ 拖拽期间恒 `true`：`SetCapture` 下光标可短暂移出窗口，不该让底衬闪进闪出。
+    ///   可证伪：去掉 `if dragging { return true; }` ⇒ 第一条转红。
+    #[test]
+    fn want_hover_always_true_while_dragging() {
+        assert!(want_hover(Some((0, 0)), Some((100, 200, 80, 40)), true));
+        assert!(
+            want_hover(None, None, true),
+            "拖拽时即使取不到光标/矩形也要显示底衬"
+        );
+    }
+
+    /// ⚠️ 任一输入缺失 ⇒ `false`（宁可不显示，也不误显示）。
+    #[test]
+    fn want_hover_false_when_input_missing() {
+        assert!(!want_hover(None, Some((100, 200, 80, 40)), false));
+        assert!(!want_hover(Some((140, 220)), None, false));
+        assert!(!want_hover(None, None, false));
     }
 
     // ── plan_tick：维护节拍的决策（Z 序维护 / 取数 / 自愈）────────

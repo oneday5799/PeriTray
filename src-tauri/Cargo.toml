@@ -43,6 +43,9 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    # HiDpi：widget 的布局标称值按 DIP 定义，需 GetDpiForWindow(任务栏) 换算物理像素。
+    # ⛔ 别删：漏了它 = 布局按 100% 画，125% 缩放下底衬比 FluentFlyout 矮 10px。
+    "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
