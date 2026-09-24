@@ -42,7 +42,7 @@ impl BatteryDriver for FlydigiDriver {
                 vid: *vid,
                 pid: *pid,
                 name,
-                dev_type: "other",
+                dev_type: "gamepad",
             })
             .collect()
     }

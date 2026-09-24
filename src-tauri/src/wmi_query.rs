@@ -246,8 +246,11 @@ fn query_pnp_devices(
         )
         .map(|k| k.encode());
         // #21 统一 VID/PID 查询：一次提取 + 一次 Hash 查表，替代原有的 3~4 次重复解析
-        let (is_24g, display_name, _device_type) =
+        let (is_24g, display_name, device_type) =
             device_data::lookup(&u).unwrap_or((false, None, "other".to_string()));
+        let wireless_24g_kind = is_24g
+            .then(|| crate::device::Wireless24gKind::from_device_type(&device_type))
+            .flatten();
         // 收集 2.4G 设备的电量查询目标（身份键 + 驱动分派用的 VID/PID）。
         // ⚠️ 键必须是**设备身份**，不是型号：同款两台接收器共用型号键会导致
         // 只有一台显示得出电量、且显示的值可能来自另一台。
@@ -277,6 +280,7 @@ fn query_pnp_devices(
             identity,
             false,
             is_24g,
+            wireless_24g_kind,
             false,
             dedup,
             re,
@@ -339,6 +343,7 @@ fn query_bt_devices(
             .find(|d| core_name(&d.name) == cn && d.is_bluetooth)
         {
             existing.status = s.to_string();
+            existing.is_connected = crate::device::status_is_connected(s);
             if battery.is_some() {
                 existing.battery = battery.map(|b| b as i32);
             }
@@ -360,6 +365,7 @@ fn query_bt_devices(
                 identity,
                 true,
                 false,
+                None,
                 is_ble,
                 dedup,
                 re,
@@ -397,6 +403,7 @@ fn query_battery_devices(
             }
             seen.insert(format!("{}:usb", cn));
             let idx = all.len();
+            let is_connected = crate::device::status_is_connected(&s);
             all.push(Device {
                 name: cn.clone(),
                 dt: DevType::Battery,
@@ -407,6 +414,8 @@ fn query_battery_devices(
                 device_key: None,
                 is_bluetooth: false,
                 is_wireless_24g: false,
+                wireless_24g_kind: None,
+                is_connected,
                 is_ble: false,
             });
             cn_index.entry(cn).or_default().push(idx);

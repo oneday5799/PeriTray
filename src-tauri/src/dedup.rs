@@ -60,6 +60,7 @@ pub fn try_insert(
     device_key: Option<String>,
     is_bluetooth: bool,
     is_wireless_24g: bool,
+    wireless_24g_kind: Option<crate::device::Wireless24gKind>,
     is_ble: bool,
     dedup: bool,
     re: Option<&Regex>,
@@ -144,6 +145,11 @@ pub fn try_insert(
                 }
                 existing.is_bluetooth = existing.is_bluetooth || is_bluetooth;
                 existing.is_wireless_24g = existing.is_wireless_24g || is_wireless_24g;
+                if existing.wireless_24g_kind.is_none() {
+                    existing.wireless_24g_kind = wireless_24g_kind;
+                }
+                existing.is_connected =
+                    existing.is_connected || crate::device::status_is_connected(status);
                 existing.is_ble = existing.is_ble || is_ble;
                 verbose_log!("[dedup] 合并 {name} 到现有条目（cn={cn}, conn={conn_tag}）");
             }
@@ -160,6 +166,8 @@ pub fn try_insert(
         device_key,
         is_bluetooth,
         is_wireless_24g,
+        wireless_24g_kind,
+        is_connected: crate::device::status_is_connected(status),
         is_ble,
     });
     cn_index.entry(cn).or_default().push(idx);

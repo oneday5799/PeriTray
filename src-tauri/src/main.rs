@@ -424,7 +424,9 @@ fn spawn_taskbar_widget_dev(app: &tauri::AppHandle) {
 fn format_item_debug(it: &crate::taskbar_widget::WidgetItem) -> String {
     // 图标类别用短标签，便于和屏幕上的图标对照
     let icon = match it.icon {
-        crate::device_identity::AudioKind::Pointer => "鼠标",
+        crate::device_identity::AudioKind::Pointer => "默认/鼠标",
+        crate::device_identity::AudioKind::Keyboard => "键盘",
+        crate::device_identity::AudioKind::Gamepad => "手柄",
         crate::device_identity::AudioKind::Speaker => "音箱",
         crate::device_identity::AudioKind::Headphones => "耳机",
     };

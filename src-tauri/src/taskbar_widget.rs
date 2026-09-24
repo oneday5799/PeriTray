@@ -322,8 +322,10 @@ pub struct WidgetItem {
     pub is_muted: Option<bool>,
     /// 是否是系统默认音频设备（前缀标记，帮助用户一眼认出放声口）
     pub is_default: bool,
-    /// 用户固定的设备（读不出数据也保留，置灰显示）
+    /// 用户固定的设备（读不出数据也保留；仅离线占位条目置灰）
     pub pinned: bool,
+    /// 是否有设备页枚举到的在线节点；用于避免已连接但暂时无电量数据的设备被置灰。
+    pub connected: bool,
 }
 
 // ⚠️ 快照**只在 Windows 上有消费方**（非 Windows 的 `spawn_widget` 是空桩），
@@ -1122,9 +1124,9 @@ const HOVER_POLL_MS: u64 = 50;
 ///
 /// ⭐ 与 `PINNED_TASKBAR_LIMIT = 8` 的关系：那个是**固定上限**（最多能 pin 几台），
 ///   这个是**显示上限**（任务栏上最多画几台）。显示上限更小，因为有**物理宽度**约束
-///   —— 6 台 × (32 图标 + 4 间隙 + 约 30 文本 + 10 间隔) ≈ 460px，能在避让后的可用区里放下。
+///   —— 8 台 × (32 图标 + 4 间隙 + 约 30 文本 + 10 间隔) ≈ 620px，能在避让后的可用区里放下。
 #[cfg(target_os = "windows")]
-const WIDGET_MAX_ITEMS: usize = 6;
+const WIDGET_MAX_ITEMS: usize = 8;
 
 /// 电量文本（画在图标**右上角**）。
 ///
@@ -1172,10 +1174,12 @@ fn format_volume(it: &WidgetItem) -> String {
 
 /// 图标资源与解码（**编译期嵌入 + 进程内缓存**）。
 ///
-/// ⭐ 三个图标 × 深浅两套 = 6 张 PNG，全部 `include_bytes!` 进二进制：
-///   · `tray-icon{,-dark}.png`         —— 软件默认鼠标图标（无音频端点的设备）
-///   · `tray-speaker-icon{,-dark}.png` —— 扬声器（在音量页、前缀是「扬声器」）
-///   · `tray-headphone-icon{,-dark}.png`—— 耳机（在音量页、前缀是「耳机」）
+/// ⭐ 五类语义图标 × 深浅两套 = 10 张 PNG，全部 `include_bytes!` 进二进制：
+///   · `tray-icon{,-dark}.png`          —— 默认图标，同时作为 2.4G 鼠标图标
+///   · `tray-keyboard-icon{,-dark}.png` —— 2.4G 键盘
+///   · `tray-gamepad-icon{,-dark}.png`  —— 2.4G 手柄
+///   · `tray-speaker-icon{,-dark}.png`  —— 扬声器（音频端点前缀是「扬声器」）
+///   · `tray-headphone-icon{,-dark}.png`—— 耳机（音频端点前缀是「耳机」）
 ///
 /// ⛔ **为什么必须嵌二进制而不是运行时读文件**：MSIX 包安装目录只读、
 ///   且 Tauri 的 `resources` 部署路径与 exe 不同（见 PLAYBOOK §I）
@@ -1188,9 +1192,13 @@ mod icons {
     use crate::device_identity::AudioKind;
     use std::sync::OnceLock;
 
-    // 6 张图，编译期嵌入
-    static MOUSE_LIGHT: &[u8] = include_bytes!("../icons/tray-icon.png");
-    static MOUSE_DARK: &[u8] = include_bytes!("../icons/tray-icon-dark.png");
+    // 10 张图，编译期嵌入
+    static MOUSE_LIGHT: &[u8] = include_bytes!("../icons/tray-widget-mouse-icon.png");
+    static MOUSE_DARK: &[u8] = include_bytes!("../icons/tray-widget-mouse-icon-dark.png");
+    static KEYBOARD_LIGHT: &[u8] = include_bytes!("../icons/tray-keyboard-icon.png");
+    static KEYBOARD_DARK: &[u8] = include_bytes!("../icons/tray-keyboard-icon-dark.png");
+    static GAMEPAD_LIGHT: &[u8] = include_bytes!("../icons/tray-gamepad-icon.png");
+    static GAMEPAD_DARK: &[u8] = include_bytes!("../icons/tray-gamepad-icon-dark.png");
     static SPEAKER_LIGHT: &[u8] = include_bytes!("../icons/tray-speaker-icon.png");
     static SPEAKER_DARK: &[u8] = include_bytes!("../icons/tray-speaker-icon-dark.png");
     static HEADPHONE_LIGHT: &[u8] = include_bytes!("../icons/tray-headphone-icon.png");
@@ -1203,6 +1211,10 @@ mod icons {
     // 键空间在两维上都极小且固定，静态化可以避免加锁（截图路径常被调用）。
     static CACHE_MOUSE_LIGHT: OnceLock<Option<Rgba>> = OnceLock::new();
     static CACHE_MOUSE_DARK: OnceLock<Option<Rgba>> = OnceLock::new();
+    static CACHE_KEYBOARD_LIGHT: OnceLock<Option<Rgba>> = OnceLock::new();
+    static CACHE_KEYBOARD_DARK: OnceLock<Option<Rgba>> = OnceLock::new();
+    static CACHE_GAMEPAD_LIGHT: OnceLock<Option<Rgba>> = OnceLock::new();
+    static CACHE_GAMEPAD_DARK: OnceLock<Option<Rgba>> = OnceLock::new();
     static CACHE_SPEAKER_LIGHT: OnceLock<Option<Rgba>> = OnceLock::new();
     static CACHE_SPEAKER_DARK: OnceLock<Option<Rgba>> = OnceLock::new();
     static CACHE_HEADPHONE_LIGHT: OnceLock<Option<Rgba>> = OnceLock::new();
@@ -1223,6 +1235,10 @@ mod icons {
         let (cell, bytes) = match (kind, dark) {
             (AudioKind::Pointer, false) => (&CACHE_MOUSE_LIGHT, MOUSE_LIGHT),
             (AudioKind::Pointer, true) => (&CACHE_MOUSE_DARK, MOUSE_DARK),
+            (AudioKind::Keyboard, false) => (&CACHE_KEYBOARD_LIGHT, KEYBOARD_LIGHT),
+            (AudioKind::Keyboard, true) => (&CACHE_KEYBOARD_DARK, KEYBOARD_DARK),
+            (AudioKind::Gamepad, false) => (&CACHE_GAMEPAD_LIGHT, GAMEPAD_LIGHT),
+            (AudioKind::Gamepad, true) => (&CACHE_GAMEPAD_DARK, GAMEPAD_DARK),
             (AudioKind::Speaker, false) => (&CACHE_SPEAKER_LIGHT, SPEAKER_LIGHT),
             (AudioKind::Speaker, true) => (&CACHE_SPEAKER_DARK, SPEAKER_DARK),
             (AudioKind::Headphones, false) => (&CACHE_HEADPHONE_LIGHT, HEADPHONE_LIGHT),
@@ -2136,11 +2152,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
         for (i, it) in items.iter().enumerate() {
             // ⚠️ 用户固定的设备（此刻读不出数据）用**半透明**显示，
             //    与「有数据」区分；这是「pin = 强制显示 + 置灰」在 widget 上的落地。
-            let alpha_scale: f32 = if it.pinned && it.battery.is_none() && !it.has_audio {
-                0.45
-            } else {
-                1.0
-            };
+            let alpha_scale: f32 = if should_dim_item(it) { 0.45 } else { 1.0 };
 
             // ① 图标：解码（带缓存）→ 最近邻缩放到 `m.icon` → 预乘合成
             if let Some(scaled) =
@@ -2323,14 +2335,20 @@ pub fn destroy_widget() {
 ///   那个函数的保留规则是 `pinned || battery.is_some() || audio_device_id.is_some()`，
 ///   即「**有数据的设备一律显示**」—— 那是**弹窗/托盘列表**要的语义（本机外设概览）。
 ///   但任务栏窗口的选择入口是设置页的「选择需要在任务栏信息窗口中显示的设备」，
-///   用户勾 1 台却看到 6 台 ⇒ **设置页是死的**（真机实测）。
+///   用户勾 1 台却看到 8 台 ⇒ **设置页是死的**（真机实测）。
 ///   ⇒ 两处口径**刻意不同**：`should_show()` 决定「窗口在不在」，本函数决定「画哪几台」。
 ///
 /// ⚠️ **排序**：把「有数据的」排在前面、「pin 但无数据的」沉底 ——
 ///   任务栏空间有限，把有效信息放在最显眼处；同时顺序**稳定**（同分时保持后端顺序），
 ///   避免每次刷新条目跳来跳去（对 30s 兜底刷新尤其重要）。
-///   ⚠️ pin 但读不出数据的条目**仍然保留**（置灰绘制）：这是 `3dcbdc7` 的
-///   「pin = 强制显示」——用户勾了就该看到，哪怕只有 `--`。
+///   ⚠️ pin 但读不出数据的条目**仍然保留**：已连接设备保持正常亮度，只有离线占位
+///   条目置灰。这保留了 `3dcbdc7` 的「pin = 强制显示」语义，同时避免 Xbox 等
+///   已连接但暂时没有电量数据的设备被误判为离线。
+#[cfg(target_os = "windows")]
+fn should_dim_item(it: &WidgetItem) -> bool {
+    it.pinned && !it.connected
+}
+
 #[cfg(target_os = "windows")]
 fn build_items(devices: &[crate::device_identity::PhysicalDevice]) -> Vec<WidgetItem> {
     let mut items: Vec<WidgetItem> = devices
@@ -2348,13 +2366,14 @@ fn build_items(devices: &[crate::device_identity::PhysicalDevice]) -> Vec<Widget
             is_muted: d.is_muted,
             is_default: d.is_default == Some(true),
             pinned: d.pinned,
+            connected: d.connected,
         })
         .collect();
     // 稳定排序：有数据的（电量或音频）优先
     items.sort_by_key(|it| it.battery.is_none() && !it.has_audio);
-    // ⭐ 截断到显示上限（用户指定 6 台）——**必须在排序之后**，
+    // ⭐ 截断到显示上限（用户指定 8 台）——**必须在排序之后**，
     //   否则会把「有数据的」截掉、留下「无数据的占位条目」。
-    //   `truncate` 保序 ⇒ 与排序一起保证「最该看的 6 台」被留下。
+    //   `truncate` 保序 ⇒ 与排序一起保证「最该看的 8 台」被留下。
     if items.len() > WIDGET_MAX_ITEMS {
         items.truncate(WIDGET_MAX_ITEMS);
     }
@@ -2885,7 +2904,7 @@ pub fn destroy_widget() {}
 // ⭐ 为什么只挑**纯函数**测（`format_battery` / `format_volume` / `estimate_*` /
 //   `build_items` / `align_in_slot` / 图标解码）：
 //   它们承载的正是**语义判据**（「0% ≠ 读不出」「没有音量就 N/A」「中文宽度不能低估」
-//   「有数据优先排前」「最多 6 台」「靠右是右端贴槽右端」）—— 这些判据一旦写反，
+//   「有数据优先排前」「最多 8 台」「靠右是右端贴槽右端」）—— 这些判据一旦写反，
 //   界面上仍会「显示点什么」，肉眼难以察觉（正是本项目反复强调的**静默失效**）。
 //   绘制路径依赖真实窗口与 GDI，无法在这些单测里覆盖，改由真机截图验收。
 #[cfg(all(test, target_os = "windows"))]
@@ -2915,6 +2934,7 @@ mod tests {
             audio_kind: AudioKind::Pointer,
             categories: Vec::new(),
             node_count: 1,
+            connected: true,
             pinned,
         }
     }
@@ -2934,6 +2954,7 @@ mod tests {
             is_muted,
             is_default: false,
             pinned: false,
+            connected: false,
         }
     }
 
@@ -3136,15 +3157,15 @@ mod tests {
     /// 可证伪：把 `dip()` 改回按 `self.dpi` 缩放 ⇒ 本条转红。
     #[test]
     fn estimate_width_follows_content_scale() {
-        let six: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
+        let eight: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
             .map(|i| item(Some(50 + i as i32), Some(0.5), true, Some(false)))
             .collect();
         let follow = estimate_widget_width(
-            &six,
+            &eight,
             &Metrics::for_scales(120, TaskbarContentScale::FollowSystem),
         );
         let def = estimate_widget_width(
-            &six,
+            &eight,
             &Metrics::for_scales(120, TaskbarContentScale::Default),
         );
         assert!(
@@ -3155,7 +3176,7 @@ mod tests {
         //   内容不随系统缩放（底衬仍会变，但底衬不参与测宽）。
         assert_eq!(
             def,
-            estimate_widget_width(&six, &Metrics::for_dpi(96)),
+            estimate_widget_width(&eight, &Metrics::for_dpi(96)),
             "默认档的测宽必须与 100% 系统缩放下完全一致"
         );
     }
@@ -3227,20 +3248,20 @@ mod tests {
         );
     }
 
-    /// 6 台（显示上限）的估算必须仍能塞进避让后的可用区 ——
+    /// 8 台（显示上限）的估算必须仍能塞进避让后的可用区 ——
     /// 否则「避让扫描永远找不到槽」⇒ widget 直接不显示（且不报错）。
     ///
     /// ⭐ 同时覆盖 **125% 缩放**：布局整体放大 25% ⇒ 高 DPI 用户最容易踩到「找不到槽」。
     #[test]
-    fn six_items_still_fit_in_a_plausible_slot() {
-        let six: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
+    fn eight_items_still_fit_in_a_plausible_slot() {
+        let eight: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
             .map(|i| item(Some(50 + i as i32), Some(0.5), true, Some(false)))
             .collect();
         // 真机可用区约 1300px（任务栏 2560px 减两端各 100px 再减任务栏自身内容）
-        let w = estimate_widget_width(&six, &m96());
-        assert!(w < 1300, "6 台估算过宽，会找不到避让槽: {w}");
-        let w120 = estimate_widget_width(&six, &Metrics::for_dpi(120));
-        assert!(w120 < 1300, "125% 缩放下 6 台估算过宽: {w120}");
+        let w = estimate_widget_width(&eight, &m96());
+        assert!(w < 1300, "8 台估算过宽，会找不到避让槽: {w}");
+        let w120 = estimate_widget_width(&eight, &Metrics::for_dpi(120));
+        assert!(w120 < 1300, "125% 缩放下 8 台估算过宽: {w120}");
         assert!(w120 > w, "125% 必须比 100% 宽: {w120} vs {w}");
     }
 
@@ -3264,7 +3285,7 @@ mod tests {
     /// ⛔⛔ **核心口径**（用户 2026-09-24 拍板）：任务栏窗口**只画已勾选的设备**。
     ///
     /// ⭐ 为什么单列一条：`group_taskbar_devices` 的保留规则是「有数据的设备一律留」，
-    ///   若直接照抄它的输出，用户勾 1 台却看到 6 台 ⇒ **设置页形同虚设**（真机实测）。
+    ///   若直接照抄它的输出，用户勾 1 台却看到 8 台 ⇒ **设置页形同虚设**（真机实测）。
     /// 可证伪：去掉 `build_items` 里的 `.filter(|d| d.pinned)`，本条立刻转红。
     #[test]
     fn only_pinned_devices_are_rendered() {
@@ -3314,6 +3335,22 @@ mod tests {
         assert!(!items[0].has_audio);
     }
 
+    /// 已连接但暂时读不到电量/音量的设备不得置灰；只有反向补建的离线占位条目才置灰。
+    /// `connected` 必须从物理设备层原样传到 widget 条目，避免 Xbox 这类设备被误判。
+    #[test]
+    fn connected_state_is_carried_to_widget_item() {
+        let mut live = pinned_dev("Xbox 360 Controller", None, None, None, None);
+        assert!(live.connected);
+        let live_item = build_items(&[live.clone()])[0].clone();
+        assert!(live_item.connected);
+        assert!(!should_dim_item(&live_item));
+
+        live.connected = false;
+        let placeholder_item = build_items(&[live])[0].clone();
+        assert!(!placeholder_item.connected);
+        assert!(should_dim_item(&placeholder_item));
+    }
+
     /// ⭐ `audio_kind` 必须从后端**原样透传**到 widget 条目（图标就靠它）。
     #[test]
     fn audio_kind_is_carried_through() {
@@ -3357,13 +3394,13 @@ mod tests {
         assert_eq!(items[0].name, "耗尽", "电量 0% 也应排在前（它是有效数据）");
     }
 
-    /// ⭐ 最多显示 6 台（用户指定）：**截断发生在排序之后** ⇒ 留下的是「最该看的 6 台」，
-    /// 而不是输入顺序的前 6 台。可证伪：把 `truncate` 移到 `sort` 之前，本条会转红。
+    /// ⭐ 最多显示 8 台（与固定上限一致）：**截断发生在排序之后** ⇒ 留下的是「最该看的 8 台」，
+    /// 而不是输入顺序的前 8 台。可证伪：把 `truncate` 移到 `sort` 之前，本条会转红。
     #[test]
-    fn at_most_six_items_and_keeps_the_data_rich_ones() {
+    fn at_most_eight_items_and_keeps_the_data_rich_ones() {
         // 7 台，其中「空」排在最前面（输入序第一），但它无数据 ⇒ 应被排到末尾再截掉
         let mut input = vec![pinned_dev("空", None, None, None, None)];
-        for i in 0..6 {
+        for i in 0..8 {
             input.push(pinned_dev(
                 &format!("有数据{i}"),
                 Some(50 + i),
@@ -3373,16 +3410,16 @@ mod tests {
             ));
         }
         let items = build_items(&input);
-        assert_eq!(items.len(), 6, "必须截断到 6 台");
+        assert_eq!(items.len(), 8, "必须截断到 8 台");
         assert!(
             !items.iter().any(|it| it.name == "空"),
             "无数据的条目应在截断中被丢弃（说明截断发生在排序之后）"
         );
     }
 
-    /// 不足 6 台时不截断，且顺序不变。
+    /// 不足 8 台时不截断，且顺序不变。
     #[test]
-    fn fewer_than_six_items_are_not_truncated() {
+    fn fewer_than_eight_items_are_not_truncated() {
         let input = vec![
             pinned_dev("a", Some(1), None, None, None),
             pinned_dev("b", Some(2), None, None, None),
@@ -3414,12 +3451,14 @@ mod tests {
         assert!(snapshot::store(b), "内容变化应返回 true");
     }
 
-    /// ⭐ 图标解码 + 缩放：三种类别 × 两套主题都必须**解码成功**（否则真机上会「什么都不画」
+    /// ⭐ 图标解码 + 缩放：五种类别 × 两套主题都必须**解码成功**（否则真机上会「什么都不画」
     /// 且不报错 —— 正是最难发现的静默失效）。可证伪：删掉任一张 PNG，本条立刻转红。
     #[test]
     fn all_icon_assets_decode_and_scale() {
         for kind in [
             AudioKind::Pointer,
+            AudioKind::Keyboard,
+            AudioKind::Gamepad,
             AudioKind::Speaker,
             AudioKind::Headphones,
         ] {

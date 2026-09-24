@@ -14,7 +14,7 @@ pub(crate) mod xinput;
 use crate::wireless_24g::hid_link::HidLink;
 
 /// 驱动声明的设备身份：识别注册表的编译期内置数据源。
-/// dev_type 与历史 JSON 口径一致："mouse"/"keyboard"/"audio"/"other"
+/// dev_type 与设备身份注册表口径一致："mouse"/"keyboard"/"gamepad"/"audio"/"other"
 pub struct DeviceIdentity {
     pub vid: u16,
     pub pid: u16,

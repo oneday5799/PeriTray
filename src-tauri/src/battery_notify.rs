@@ -354,6 +354,8 @@ mod tests {
             device_key: None,
             is_bluetooth: false,
             is_wireless_24g: false,
+            wireless_24g_kind: None,
+            is_connected: true,
             is_ble: false,
         }
     }

@@ -370,25 +370,21 @@ pub enum BatterySource {
 
 /// 任务栏 widget 上给「这台设备」画哪一类图标。
 ///
-/// ⭐ 判据链（用户口径，2026-09-24 明确）：
-///   1. 设备**出现在音量页**（即该物理设备聚到了一个输出端点）：
-///      · 原始端点名是 `扬声器 (…)` ⇒ [`AudioKind::Speaker`]
-///      · 原始端点名是 `耳机 (…)`   ⇒ [`AudioKind::Headphones`]
-///      · 其它（端点名不含这两个前缀）⇒ [`AudioKind::Speaker`]（退化为「有声音」的默认喇叭）
-///   2. 设备**没有**出现在音量页（键鼠 / 无音频端点的外设）⇒ [`AudioKind::Pointer`]
-///      （软件默认托盘的键鼠图标）。
-///
-/// ⛔ **不能用 `name` 字段判**：`name` 已被 `pick_display_name` 换成括号内的物理设备名
-///   （`WH-1000XM5`），前缀信息已丢 ⇒ 必须用 `audio_endpoint_name`（原始串）。
+/// 判据优先级：有音频端点时按端点前缀；没有音频端点时，只有已识别的 2.4G
+/// 鼠标 / 键盘 / 手柄才使用对应图标，其余设备使用默认图标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioKind {
-    /// 无音频端点 ⇒ 画软件默认托盘图标（鼠标）
+    /// 无具体分类，或未识别的无音频设备；默认图标同时也是 2.4G 鼠标图标。
     #[default]
     Pointer,
-    /// 扬声器 / 其它有音频输出但非耳机 ⇒ 画喇叭图标
+    /// 2.4G 键盘。
+    Keyboard,
+    /// 2.4G 手柄。
+    Gamepad,
+    /// 扬声器 / 其它有音频输出但非耳机。
     Speaker,
-    /// 耳机 ⇒ 画耳机图标
+    /// 耳机。
     Headphones,
 }
 
@@ -403,7 +399,7 @@ pub enum AudioKind {
 ///   ⇒ 同时接受中英两种写法，避免英文系统上全部退化成 Speaker。
 pub fn audio_kind_from_endpoint_name(name: Option<&str>) -> AudioKind {
     let Some(n) = name else {
-        return AudioKind::Pointer; // 无端点 ⇒ 非音频设备
+        return AudioKind::Pointer; // 无端点 ⇒ 由上层按 2.4G 类型进一步选择
     };
     // 取 ` (` 之前的前缀（与 `dedup::core_name` 的切分口径一致）
     let prefix = match n.find(" (") {
@@ -423,15 +419,26 @@ pub fn audio_kind_from_endpoint_name(name: Option<&str>) -> AudioKind {
     }
 }
 
+/// 从无音频端点设备的 2.4G 类型选择任务栏图标。
+///
+/// 未识别、非 2.4G 或无类型信息一律回退到默认图标；默认图标与 2.4G 鼠标图标
+/// 使用同一份资源，这是需求刻意指定的语义。
+pub fn audio_kind_from_wireless_kind(kind: Option<crate::device::Wireless24gKind>) -> AudioKind {
+    match kind {
+        Some(crate::device::Wireless24gKind::Keyboard) => AudioKind::Keyboard,
+        Some(crate::device::Wireless24gKind::Gamepad) => AudioKind::Gamepad,
+        Some(crate::device::Wireless24gKind::Mouse) | None => AudioKind::Pointer,
+    }
+}
+
 /// 一台**物理设备** —— 把同一容器下的各功能节点聚合后的结果。
 ///
 /// 这是任务栏信息窗的数据单元：电量来自蓝牙属性 / HID，音量来自该设备的**输出**端点。
 ///
-/// ⚠️ **「置灰占位」条目的判据**：`battery` 与 `audio_device_id` **皆为 `None`** 时，
-/// 这条没有任何可显示的数据 —— 它只可能来自「被用户固定、但此刻枚举不到（未连接 /
-/// 未插）」的反向补建。前端应**置灰**呈现而非隐藏：用户 pin 了却看不见，会以为设置丢了。
-/// 判据请写 `battery == null && audio_device_id == null`（单字段用 `!= null`），
-/// **不要写 `!d.battery`** —— `0%` 是合法电量，`!0` 为真会把电量耗尽的设备误判成无数据。
+/// ⚠️ **「置灰占位」条目的判据**：`connected == false` 且 `node_count == 0` 时，
+/// 这条是「被用户固定、但此刻枚举不到（未连接/未插）」的反向补建。前端应置灰呈现
+/// 而非隐藏；已连接但暂时读不出电量的 Xbox 等设备不能因此被误判为离线。
+/// 电量仍须保留三态：`Some(0)` 是合法电量，不能用布尔真假判断。
 #[derive(Debug, Clone, Serialize)]
 pub struct PhysicalDevice {
     /// `DeviceKey::encode()` 的结果（`c:` / `i:` / `n:` 前缀）
@@ -469,7 +476,7 @@ pub struct PhysicalDevice {
     ///   丢失了前缀 ⇒ 必须单独保留原始串。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_endpoint_name: Option<String>,
-    /// 由 `audio_endpoint_name` 归一出的事件图标类别（任务栏 widget 用）。
+    /// 由音频端点或无音频设备的 2.4G 类型归一出的图标类别（任务栏 widget 用）。
     pub audio_kind: AudioKind,
     /// 该容器出现过的设备类别（一个容器可跨多类，实测 USB + HID + SWD）；占位条目为空数组
     pub categories: Vec<DevType>,
@@ -479,10 +486,13 @@ pub struct PhysicalDevice {
     /// （`is_generic_hid` 滤 `&COL*`、`is_bt_service` 滤蓝牙服务节点），所以这里通常很小。
     /// 「10 个 devnode 并成 1 台」是 ContainerId 在 devnode 层面的性质，不由此字段体现。
     pub node_count: usize,
+    /// 该物理设备是否在线/已连接；用于区分「已连接但暂时读不到电量」与占位条目。
+    pub connected: bool,
     /// 是否被用户固定（由 config 决定，`Grouper` 本身不关心）。
     ///
     /// ⚠️ 语义是「**强制显示**」：为真的条目即使此刻无数据也会保留
-    /// （见 `group_taskbar_devices` 的保留规则与补建循环），由前端置灰。
+    /// （见 `group_taskbar_devices` 的保留规则与补建循环）；只有 `connected == false`
+    /// 的占位条目由前端置灰。
     pub pinned: bool,
 }
 
@@ -505,6 +515,8 @@ struct Group {
     /// `is_muted` / `is_default` 四个字段，而这四个必须**同生同灭** ——
     /// 分开存就可能出现「有 id 却没有音量」的半截状态。
     audio: Option<crate::audio::AudioDevice>,
+    wireless_24g_kind: Option<crate::device::Wireless24gKind>,
+    connected: bool,
     categories: Vec<DevType>,
     node_count: usize,
 }
@@ -557,6 +569,27 @@ impl Grouper {
         g.node_count += 1;
     }
 
+    /// 给已加入的设备组补充 2.4G 具体类型，不改变 `add` 的参数契约。
+    pub fn set_wireless_24g_kind(
+        &mut self,
+        key: &str,
+        kind: Option<crate::device::Wireless24gKind>,
+    ) {
+        if let Some(kind) = kind {
+            let group = self.acc.entry(key.to_string()).or_default();
+            if group.wireless_24g_kind.is_none() {
+                group.wireless_24g_kind = Some(kind);
+            }
+        }
+    }
+
+    /// 记录物理设备是否在线；占位条目不会调用此方法，保持 `false`。
+    pub fn set_connected(&mut self, key: &str, connected: bool) {
+        if connected {
+            self.acc.entry(key.to_string()).or_default().connected = true;
+        }
+    }
+
     pub fn finish(self) -> Vec<PhysicalDevice> {
         self.acc
             .into_iter()
@@ -574,11 +607,13 @@ impl Grouper {
                     // ⭐ 原始端点名与由其派生的图标类别必须**同生同灭**
                     //    （都来自同一个 `audio`）—— 分开算就可能出现「有名字没类别」的半截状态
                     audio_endpoint_name: audio.as_ref().map(|a| a.name.clone()),
-                    audio_kind: audio_kind_from_endpoint_name(
-                        audio.as_ref().map(|a| a.name.as_str()),
-                    ),
+                    audio_kind: match audio.as_ref() {
+                        Some(a) => audio_kind_from_endpoint_name(Some(a.name.as_str())),
+                        None => audio_kind_from_wireless_kind(g.wireless_24g_kind),
+                    },
                     categories: g.categories,
                     node_count: g.node_count,
+                    connected: g.connected,
                     pinned: false,
                 }
             })
@@ -670,7 +705,11 @@ pub fn group_taskbar_devices(
     ordered.sort_by_key(|a| !a.is_default);
     for a in ordered {
         let key = audio_endpoint_key(a);
-        grouper.add(Some(&key.encode()), &a.name, DevType::Audio, None, Some(a));
+        let encoded = key.encode();
+        grouper.add(Some(&encoded), &a.name, DevType::Audio, None, Some(a));
+        // 音频端点本身已被当前音量页枚举到，说明物理设备在线；不能把
+        // 「无电量字段但有端点」误当成离线占位条目。
+        grouper.set_connected(&encoded, true);
     }
 
     // 再入设备列表：电量与类别由它提供。
@@ -684,13 +723,18 @@ pub fn group_taskbar_devices(
             BatterySource::Unknown
         };
         let fallback = DeviceKey::Name(core_name(&d.name)).encode();
+        let group_key = d.device_key.as_deref().or(Some(fallback.as_str()));
         grouper.add(
-            d.device_key.as_deref().or(Some(fallback.as_str())),
+            group_key,
             &d.name,
             d.dt,
             d.battery.map(|b| (b, source)),
             None,
         );
+        if let Some(key) = group_key {
+            grouper.set_wireless_24g_kind(key, d.wireless_24g_kind);
+            grouper.set_connected(key, d.is_connected);
+        }
     }
 
     let mut kept: Vec<PhysicalDevice> = grouper
@@ -731,9 +775,10 @@ pub fn group_taskbar_devices(
             // 占位条目此刻枚举不到端点 ⇒ 名字/类别皆无（画默认图标），由 widget 置灰
             audio_endpoint_name: None,
             audio_kind: AudioKind::Pointer,
-            // 占位条目没有参与聚合的节点 ⇒ 无类别、计数为 0
+            // 占位条目没有参与聚合的节点 ⇒ 无类别、计数为 0、未连接
             categories: Vec::new(),
             node_count: 0,
+            connected: false,
             pinned: true,
         });
     }
@@ -859,6 +904,7 @@ pub fn merge_by_identity(
         from_volume_page.insert(key.clone());
         // `audio = Some(a)` ⇒ 音量字段由端点提供；`battery = None` ⇒ 端点不提供电量
         grouper.add(Some(&key), &a.name, DevType::Audio, None, Some(a));
+        grouper.set_connected(&key, true);
     }
 
     // ── 再入设备行：电量与类别由它提供 ────────────────────────────────────
@@ -1481,6 +1527,8 @@ mod tests {
             device_key: key.map(|k| k.to_string()),
             is_bluetooth: bt,
             is_wireless_24g: g24,
+            wireless_24g_kind: None,
+            is_connected: true,
             is_ble: false,
         }
     }
@@ -2635,6 +2683,25 @@ mod tests {
     }
 
     // ── 图标类别（任务栏 widget）────────────────────────────
+
+    #[test]
+    fn wireless_24g_kind_maps_to_icon_and_unknown_falls_back() {
+        use crate::device::Wireless24gKind;
+
+        assert_eq!(
+            audio_kind_from_wireless_kind(Some(Wireless24gKind::Mouse)),
+            AudioKind::Pointer
+        );
+        assert_eq!(
+            audio_kind_from_wireless_kind(Some(Wireless24gKind::Keyboard)),
+            AudioKind::Keyboard
+        );
+        assert_eq!(
+            audio_kind_from_wireless_kind(Some(Wireless24gKind::Gamepad)),
+            AudioKind::Gamepad
+        );
+        assert_eq!(audio_kind_from_wireless_kind(None), AudioKind::Pointer);
+    }
 
     /// 判据链：无端点 ⇒ Pointer；`扬声器 (…)` ⇒ Speaker；`耳机 (…)` ⇒ Headphones。
     #[test]
