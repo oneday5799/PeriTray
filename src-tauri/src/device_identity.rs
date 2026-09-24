@@ -368,6 +368,61 @@ pub enum BatterySource {
     Bluetooth = 2,
 }
 
+/// 任务栏 widget 上给「这台设备」画哪一类图标。
+///
+/// ⭐ 判据链（用户口径，2026-09-24 明确）：
+///   1. 设备**出现在音量页**（即该物理设备聚到了一个输出端点）：
+///      · 原始端点名是 `扬声器 (…)` ⇒ [`AudioKind::Speaker`]
+///      · 原始端点名是 `耳机 (…)`   ⇒ [`AudioKind::Headphones`]
+///      · 其它（端点名不含这两个前缀）⇒ [`AudioKind::Speaker`]（退化为「有声音」的默认喇叭）
+///   2. 设备**没有**出现在音量页（键鼠 / 无音频端点的外设）⇒ [`AudioKind::Pointer`]
+///      （软件默认托盘的键鼠图标）。
+///
+/// ⛔ **不能用 `name` 字段判**：`name` 已被 `pick_display_name` 换成括号内的物理设备名
+///   （`WH-1000XM5`），前缀信息已丢 ⇒ 必须用 `audio_endpoint_name`（原始串）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioKind {
+    /// 无音频端点 ⇒ 画软件默认托盘图标（鼠标）
+    #[default]
+    Pointer,
+    /// 扬声器 / 其它有音频输出但非耳机 ⇒ 画喇叭图标
+    Speaker,
+    /// 耳机 ⇒ 画耳机图标
+    Headphones,
+}
+
+/// 从**音频端点原始名**归一化出图标类别。
+///
+/// ⚠️ 判据是「**前缀**匹配」而不是「包含」：Windows 的端点名形如
+///   `扬声器 (Realtek(R) Audio)`、`耳机 (WH-1000XM5)`，
+///   语义在**开头那两个字**里。用 `contains` 会让「某设备叫『耳机支架』的扬声器」
+///   被误判成耳机 ⇒ 只取 ` (` 之前的**前缀**再判等。
+///
+/// ⚠️ 兼容**本地化**：不同系统语言下前缀可能是英文（`Speakers` / `Headphones`）
+///   ⇒ 同时接受中英两种写法，避免英文系统上全部退化成 Speaker。
+pub fn audio_kind_from_endpoint_name(name: Option<&str>) -> AudioKind {
+    let Some(n) = name else {
+        return AudioKind::Pointer; // 无端点 ⇒ 非音频设备
+    };
+    // 取 ` (` 之前的前缀（与 `dedup::core_name` 的切分口径一致）
+    let prefix = match n.find(" (") {
+        Some(i) => &n[..i],
+        None => n,
+    };
+    let p = prefix.trim();
+    // 耳机：中英两种本地化写法
+    if p.starts_with("耳机")
+        || p.eq_ignore_ascii_case("headphones")
+        || p.eq_ignore_ascii_case("headset")
+    {
+        AudioKind::Headphones
+    } else {
+        // 其余一切有端点的情形（含 `扬声器` / `Speakers` / 显示器音频等）都算「喇叭」
+        AudioKind::Speaker
+    }
+}
+
 /// 一台**物理设备** —— 把同一容器下的各功能节点聚合后的结果。
 ///
 /// 这是任务栏信息窗的数据单元：电量来自蓝牙属性 / HID，音量来自该设备的**输出**端点。
@@ -403,6 +458,19 @@ pub struct PhysicalDevice {
     /// 该输出端点是否为**系统默认**设备；无音频端点时为 `None`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_default: Option<bool>,
+    /// 音频端点的**原始名**（如 `扬声器 (Realtek Audio)`、`耳机 (WH-1000XM5)`）；
+    /// 无音频端点时为 `None`。
+    ///
+    /// ⭐ 为什么必须**原样**带上，而不是只带 `audio_device_id`：
+    ///   任务栏图标要按「**出现在音量页**（即本字段存在）且原始名是**扬声器**还是**耳机**」
+    ///   来决定画哪个图标（见 `AudioKind`）。端点名是 Windows 给的本地化字符串，
+    ///   形如 `扬声器 (设备名)` / `耳机 (设备名)` —— **括号前缀**才承载「扬声器/耳机」语义，
+    ///   而 `name` 字段已被 `pick_display_name` 换成括号内的物理设备名（`WH-1000XM5`），
+    ///   丢失了前缀 ⇒ 必须单独保留原始串。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_endpoint_name: Option<String>,
+    /// 由 `audio_endpoint_name` 归一出的事件图标类别（任务栏 widget 用）。
+    pub audio_kind: AudioKind,
     /// 该容器出现过的设备类别（一个容器可跨多类，实测 USB + HID + SWD）；占位条目为空数组
     pub categories: Vec<DevType>,
     /// 参与聚合的条目数（设备行 + 音频端点行）；占位条目为 0。
@@ -503,6 +571,12 @@ impl Grouper {
                     volume: audio.as_ref().map(|a| a.volume),
                     is_muted: audio.as_ref().map(|a| a.is_muted),
                     is_default: audio.as_ref().map(|a| a.is_default),
+                    // ⭐ 原始端点名与由其派生的图标类别必须**同生同灭**
+                    //    （都来自同一个 `audio`）—— 分开算就可能出现「有名字没类别」的半截状态
+                    audio_endpoint_name: audio.as_ref().map(|a| a.name.clone()),
+                    audio_kind: audio_kind_from_endpoint_name(
+                        audio.as_ref().map(|a| a.name.as_str()),
+                    ),
                     categories: g.categories,
                     node_count: g.node_count,
                     pinned: false,
@@ -654,6 +728,9 @@ pub fn group_taskbar_devices(
             volume: None,
             is_muted: None,
             is_default: None,
+            // 占位条目此刻枚举不到端点 ⇒ 名字/类别皆无（画默认图标），由 widget 置灰
+            audio_endpoint_name: None,
+            audio_kind: AudioKind::Pointer,
             // 占位条目没有参与聚合的节点 ⇒ 无类别、计数为 0
             categories: Vec::new(),
             node_count: 0,
@@ -2554,6 +2631,51 @@ mod tests {
         assert_eq!(
             window[0].pinned, sel2[0].pinned,
             "选择器与显示侧必须同真同假"
+        );
+    }
+
+    // ── 图标类别（任务栏 widget）────────────────────────────
+
+    /// 判据链：无端点 ⇒ Pointer；`扬声器 (…)` ⇒ Speaker；`耳机 (…)` ⇒ Headphones。
+    #[test]
+    fn audio_kind_maps_prefix_to_icon() {
+        assert_eq!(audio_kind_from_endpoint_name(None), AudioKind::Pointer);
+        assert_eq!(
+            audio_kind_from_endpoint_name(Some("扬声器 (Realtek(R) Audio)")),
+            AudioKind::Speaker
+        );
+        assert_eq!(
+            audio_kind_from_endpoint_name(Some("耳机 (WH-1000XM5)")),
+            AudioKind::Headphones
+        );
+    }
+
+    /// ⛔ 判据必须是**前缀**匹配，不是 `contains`：
+    /// 「某扬声器叫『耳机支架』」不能被误判成耳机。
+    #[test]
+    fn audio_kind_uses_prefix_not_contains() {
+        assert_eq!(
+            audio_kind_from_endpoint_name(Some("扬声器 (耳机支架音频)")),
+            AudioKind::Speaker,
+            "括号里出现「耳机」不应改变类别（前缀才是判据）"
+        );
+    }
+
+    /// 英文系统本地化兼容：`Speakers` / `Headphones` 也要正确归类。
+    #[test]
+    fn audio_kind_handles_english_localization() {
+        assert_eq!(
+            audio_kind_from_endpoint_name(Some("Headphones (WH-1000XM5)")),
+            AudioKind::Headphones
+        );
+        assert_eq!(
+            audio_kind_from_endpoint_name(Some("Speakers (Realtek Audio)")),
+            AudioKind::Speaker
+        );
+        // 无括号的裸名（少见）也要能归类
+        assert_eq!(
+            audio_kind_from_endpoint_name(Some("Headphones")),
+            AudioKind::Headphones
         );
     }
 }

@@ -1,11 +1,16 @@
 /* settings-taskbar.js — 设置页·任务栏 tab：任务栏信息窗口的显示设备选择与窗口位置固定
  * 加载序 6/8 · 提供：initTaskbarTab()
- * 依赖：common.js / settings.js(createExpandableCard/initComboBox/createCheckableMenu)
+ * 依赖：common.js / settings.js(config/bindToggle/initComboBox/createExpandableCard/saveConfig)
  *
- * ⚠️ 设备选择（`initTaskbarDevicePicker`）已**接线真实数据**（T3-2）：
- *    数据源 = `get_selectable_devices`（设备页 ∪ 输出端点 ∪ 输入端点的**并集**），
- *    勾选 = `toggle_pinned_taskbar_device`。两者都是后端命令，本文件**不读 config**。
- *    「固定任务栏窗口位置」下拉仍是「仅 UI」阶段（`initComboBox(..., null)` 不落盘）。 */
+ * ⭐ 本页三个控件**全部接线真实数据**：
+ *    · 设备选择（`initTaskbarDevicePicker`）→ `get_selectable_devices` / `toggle_pinned_taskbar_device`
+ *      （设备页 ∪ 输出端点 ∪ 输入端点的**并集**；本文件不读 config，勾选态由后端 `pinned` 给出）
+ *    · 「固定任务栏窗口位置」开关 → `config.taskbar_position_locked`
+ *    · 「任务栏窗口位置」下拉     → `config.taskbar_position`（left/center/right）
+ *
+ * ⛔ 后两者的落盘**不是可选的**：后端 `taskbar_widget::should_show()` 的判据是
+ *    「`pinned_taskbar_devices` 非空」（用户口径 2026-09-24：默认关闭，选了设备才显示），
+ *    窗口的挂载/拆除/重定位由 `config-changed` 驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
 function initTaskbarTab() {
   initTaskbarDevicePicker();
   initTaskbarPinCard();
@@ -93,13 +98,24 @@ function initTaskbarPinCard() {
 
   const expandable = createExpandableCard(items, arrow);
 
+  // ⭐ 开关落盘（`bindToggle` 内部 `saveConfig()`）——**必须放在读 `toggle.checked`
+  //    做初始展开之前**：`bindToggle` 会先把 `checked` 同步成 config 值（覆盖 HTML 里
+  //    写死的 `checked`）。若顺序反了，用户上次关掉开关后，卡片每次打开仍是展开的
+  //    （HTML 默认值 ≠ 配置值）——正是「UI 看着正常、实际没生效」的静默形态。
+  // ⚠️ 判据写 `!== false` 而不是直接取值：本字段语义是「默认 true」，
+  //    老配置文件里可能缺键 ⇒ `!!undefined` 会得到 `false`，把默认值反转。
+  bindToggle("toggle-taskbar-pin", {
+    get: () => config.taskbar_position_locked !== false,
+    set: (v) => { config.taskbar_position_locked = v; },
+  });
+
   // 开关联动展开。此处 tab 可能不可见，用 "content" 会读到 scrollHeight=0
   // （.tab-content 基础态 display:none）⇒ 交互路径一律显式给固定上限。
   toggle.addEventListener("change", () => {
     expandable.set(toggle.checked, "999px");
   });
 
-  // 初始化落位：开关默认开启（HTML 带 checked）⇒ 卡片展开。
+  // 初始化落位：按**配置值**（已由上面的 bindToggle 同步进 `toggle.checked`）决定展开。
   // ⭐ 必须用固定值而非 "content"：初始化时本 tab 尚未 active，scrollHeight 恒为 0，
   //    用 "content" 会算出 max-height:0 ⇒ 首次切到本页时卡片看起来没展开。
   expandable.setInstant(toggle.checked, "999px");
@@ -109,6 +125,11 @@ function initTaskbarPinCard() {
     expandHeight: "999px",
   });
 
-  // 「任务栏窗口位置」下拉：默认居中。onChange 传 null ⇒ 只切显示，不落盘。
-  initComboBox("combo-taskbar-position", "center", null);
+  // 「任务栏窗口位置」下拉：初始值取 config（覆盖 HTML 里写死的「居中」文案），
+  // 变更即落盘。范式与 `settings-general.js` 的 `combo-theme-mode` 等一致。
+  // ⭐ 语义：贴靠发生在**避让后的视觉空白槽内**，不是整条任务栏 —— 见 config.rs 字段注释。
+  initComboBox("combo-taskbar-position", config.taskbar_position || "center", async (val) => {
+    config.taskbar_position = val;
+    await saveConfig();
+  });
 }

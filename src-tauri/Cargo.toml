@@ -35,6 +35,9 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_Properties",
     "Win32_Graphics_Dwm",
+    # GDI：任务栏 widget 的 DIB 自绘（CreateDIBSection/UpdateLayeredWindow）
+    # 与文本渲染（CreateFontW/DrawTextW/SET_TEXT_COLOR）都需要。
+    "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_System_Com",
     "Win32_System_Registry",

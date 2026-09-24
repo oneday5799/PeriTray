@@ -129,6 +129,29 @@ pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::Physica
     ))
 }
 
+/// **同步**版的任务栏设备取数，供任务栏 widget 的后台线程调用。
+///
+/// ⛔ 与 `get_taskbar_devices` 的**唯一区别**是「同步 + 不用 tokio」：
+///   widget 的取数发生在 `spawn_blocking` 线程里，本就**不在 async 上下文**，
+///   无法 `.await`;而 `run_blocking` 是为「在 async 命令里跑阻塞活」设计的
+///   （内部用 `tokio::task::spawn_blocking` + 再入运行时）。绕过它直接调同步版本
+///   既避免多一层线程切换，也避免「在阻塞线程里再进 tokio」的隐患。
+///
+/// ⭐ **语义必须与 `get_taskbar_devices` 完全一致**（同一套过滤 + pin 补建 + 聚合），
+///   否则 widget 与弹窗会显示不同的设备集合 —— 这正是「判据分叉」类缺陷。
+///   因此这里**逐句照抄**其数据路径，只把 `run_blocking` 去掉。
+///
+/// ⚠️ 返回 `Option`：任一环节失败（WMI / 音频枚举）都返回 `None`，让调用方
+///   **保留旧快照** —— 一次取数失败不该把任务栏内容清空（那比显示旧数据更糟）。
+pub(crate) fn taskbar_devices_snapshot() -> Option<Vec<crate::device_identity::PhysicalDevice>> {
+    let devices = devices_for_taskbar().ok()?;
+    let audio = crate::audio::enumerate_output_devices().ok()?;
+    let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
+    Some(crate::device_identity::group_taskbar_devices(
+        &devices, &audio, &pinned,
+    ))
+}
+
 /// 任务栏信息窗「选择设备」列表的数据源：两页**可显示设备的并集**（T3-1）。
 ///
 /// ── 与 `get_taskbar_devices` 的三点区别（**刻意不同，勿合并**）────────────────

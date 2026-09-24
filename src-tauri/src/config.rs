@@ -151,6 +151,23 @@ pub struct Config {
     /// 见 `PinnedDevice` 文档）。空表 = 未固定任何设备。
     #[serde(default)]
     pub pinned_taskbar_devices: Vec<PinnedDevice>,
+    /// 任务栏信息窗的**横向贴靠位置**：`"left"` / `"center"` / `"right"`。
+    ///
+    /// ⚠️ 贴靠发生在**避让后的视觉空白槽内**，不是整个任务栏（见 `taskbar_widget`）：
+    ///   `center` = 槽内居中，不是屏幕居中。
+    ///
+    /// ⚠️ 具名 helper：真实默认是 `center`，裸 `#[serde(default)]` 会得到空串
+    ///   （空串不在 `VALID_TASKBAR_POSITIONS` 里 ⇒ 加载时被归一化回 `center`，
+    ///   但中间那一瞬的非法值是多余的，故仍用具名默认）。
+    #[serde(default = "default_taskbar_position")]
+    pub taskbar_position: String,
+    /// 任务栏信息窗是否**固定位置**。
+    ///
+    /// - `true`：位置由 `taskbar_position` 决定，每次刷新按避让规则重算（不会被压住）；
+    /// - `false`：沿用上次位置、不再重算（语义 = 「不固定」）。
+    ///   ⛔ 用户可自由拖拽窗口的那条路**尚未实现**，故关闭时目前只表现为「不再自动移动」。
+    #[serde(default = "default_true")]
+    pub taskbar_position_locked: bool,
     #[serde(default)]
     pub hidden_audio_devices: Vec<String>,
     /// 日志级别："off"/"standard"/"verbose"
@@ -245,6 +262,10 @@ fn default_theme_mode() -> String {
 fn default_window_material() -> String {
     "default".to_string()
 }
+/// `taskbar_position` 的 serde 默认值（复用 `Config::default()` 的口径，单一来源）
+fn default_taskbar_position() -> String {
+    "center".to_string()
+}
 fn default_battery_thresholds() -> Vec<i32> {
     vec![15, 10, 5]
 }
@@ -260,6 +281,7 @@ const VALID_POPUP_TABS: &[&str] = &["devices", "volume"];
 const VALID_POPUP_SIZES: &[&str] = &["small", "default", "large"];
 const VALID_THEME_MODES: &[&str] = &["follow_system", "light", "dark"];
 const VALID_WINDOW_MATERIALS: &[&str] = &["default", "acrylic", "mica"];
+const VALID_TASKBAR_POSITIONS: &[&str] = &["left", "center", "right"];
 
 /// 低电量阈值个数上限（与前端 `settings-devices.js` 的「最多5个阈值」一致）
 const MAX_BATTERY_THRESHOLDS: usize = 5;
@@ -436,6 +458,11 @@ fn normalize_config(config: &mut Config) -> bool {
         VALID_WINDOW_MATERIALS,
         "default",
     );
+    changed |= normalize_choice(
+        &mut config.taskbar_position,
+        VALID_TASKBAR_POSITIONS,
+        "center",
+    );
 
     if !battery_thresholds_valid(&config.low_battery_thresholds) {
         config.low_battery_thresholds = default_battery_thresholds();
@@ -472,6 +499,8 @@ impl Default for Config {
             wireless_only: true,
             tray_devices: vec![],
             pinned_taskbar_devices: vec![],
+            taskbar_position: default_taskbar_position(),
+            taskbar_position_locked: true,
             hidden_audio_devices: vec![],
             log_level: default_log_level(),
             legacy_log_enabled: None,
@@ -920,6 +949,8 @@ macro_rules! for_each_config_field {
             wireless_only,
             tray_devices,
             pinned_taskbar_devices,
+            taskbar_position,
+            taskbar_position_locked,
             hidden_audio_devices,
             log_level,
             legacy_log_enabled,
@@ -1136,7 +1167,7 @@ mod tests {
         default_battery_refresh_secs, default_battery_thresholds, enqueue_persist,
         finalize_before_persist, flush_persist, merge_config, normalize_config, parse_config_text,
         resolve_device_name, revision_is_latest, with_config, write_config_atomically, Config,
-        MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED,
+        MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED, VALID_TASKBAR_POSITIONS,
     };
     use std::sync::atomic::Ordering;
 
@@ -1451,6 +1482,10 @@ mod tests {
             popup_size: "huge".to_string(),
             theme_mode: "sepia".to_string(),
             window_material: "blur".to_string(),
+            // ⭐ 任务栏贴靠位置：只认 left/center/right 三值（前端下拉也仅这三项）。
+            //    非法值若不归一化，后端会把它当作 `_` 分支（退化成居中）而**前端下拉
+            //    找不到对应项 ⇒ 按钮文案停在旧值**，界面上看着「选好了」实际是错的。
+            taskbar_position: "middle".to_string(),
             low_battery_thresholds: vec![10, 10, 101],
             low_battery_refresh_secs: 9,
             ..Default::default()
@@ -1465,6 +1500,7 @@ mod tests {
         assert_eq!(cfg.popup_size, "default");
         assert_eq!(cfg.theme_mode, "follow_system");
         assert_eq!(cfg.window_material, "default");
+        assert_eq!(cfg.taskbar_position, "center");
         assert_eq!(cfg.low_battery_thresholds, default_battery_thresholds());
         assert_eq!(cfg.low_battery_refresh_secs, default_battery_refresh_secs());
 
@@ -1488,6 +1524,7 @@ mod tests {
             popup_size: "large".to_string(),
             theme_mode: "dark".to_string(),
             window_material: "mica".to_string(),
+            taskbar_position: "right".to_string(),
             low_battery_thresholds: vec![100, 0, 50],
             low_battery_refresh_secs: 3600,
             ..Default::default()
@@ -1510,6 +1547,35 @@ mod tests {
         assert!(
             !normalize_config(&mut d),
             "Config::default() 必须是归一化的不动点，否则默认值与前端口径不一致"
+        );
+    }
+
+    /// `taskbar_position` 的三个合法值**逐个**钉住。
+    ///
+    /// ⭐ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是 `"center"`，
+    ///   所以 `VALID_TASKBAR_POSITIONS` 里把 `"center"` 拼错**测不出来**（错值也会
+    ///   被改回 center）；但把 `"left"` / `"right"` 拼错就会**静默退化**成居中 ——
+    ///   界面照常显示、不报错，只是「靠左/靠右」永远无效。本条用 `assert!(!changed)`
+    ///   把「合法值不被改写」钉住，拼错即转红。
+    #[test]
+    fn taskbar_position_accepts_all_three_values_verbatim() {
+        for value in ["left", "center", "right"] {
+            let mut cfg = Config {
+                taskbar_position: value.to_string(),
+                ..Default::default()
+            };
+            assert!(
+                !normalize_config(&mut cfg),
+                "`{value}` 是合法贴靠位置，不应被归一化改写"
+            );
+            assert_eq!(cfg.taskbar_position, value, "合法值必须逐字保留");
+        }
+        // 与前端下拉 `data-value` 一一对应（`settings.html` 的 win-combo-item）——
+        // 少一个值会让某一档永远选不出来，且没有任何报错。
+        assert_eq!(
+            VALID_TASKBAR_POSITIONS,
+            &["left", "center", "right"],
+            "合法值集合必须与设置页下拉的三项逐字一致"
         );
     }
 

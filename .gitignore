@@ -7,6 +7,7 @@
 
 *.pdb
 generate_icons.mjs
+generate_widget_icons.mjs
 
 # Logs
 *.log

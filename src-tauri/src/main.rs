@@ -330,43 +330,77 @@ fn spawn_dev_open_settings(app: &tauri::AppHandle) {
     }
 }
 
-/// 开发调试：设置环境变量 `PM_DEV_TASKBAR_WIDGET` 时挂载任务栏 widget（B3-A 里程碑 1）。
+/// 启动任务栏 widget（B3-A）：**按配置**决定挂载/拆除，并装上事件监听与兜底循环。
 ///
 /// ⛔⛔ **必须在主线程（tao 事件循环线程）上同步调用**，不能 spawn 到子线程：
 ///   窗口**随创建线程退出而销毁** —— 子线程挂完就结束，窗口立刻消失。
 ///   tao 主线程会一直泵消息，是唯一安全的宿主。
 ///
-/// 为什么用环境变量门控：里程碑 1 只验证「能挂上去 + 透明背景正确」，
-/// 尚未接入真实内容与配置开关，**不该影响正常启动**。
+/// ⭐ **本函数不再由环境变量决定是否运行**（自里程碑 3 起）：监听与兜底循环是
+///   「设置页能实时控制窗口」的前提，必须无条件装上；是否显示窗口由 `config` 决定
+///   （用户口径 2026-09-24：已选设备非空才显示，见 `taskbar_widget::should_show`）。
 ///
-/// 三个门控变量：
-///   · `PM_DEV_TASKBAR_WIDGET=1`        —— 挂载（同步，在主线程）
+/// 三个**开发门控**变量（自动化验收用，不影响正常启动）：
+///   · `PM_DEV_TASKBAR_WIDGET=1`        —— **强制挂载**（覆盖配置判据），同步、在主线程
 ///   · `PM_DEV_TASKBAR_WIDGET_DESTROY=1`—— 挂载后**立刻拆除**（验证拆除路径与 `probe` 归零）
 ///   · `PM_DEV_TASKBAR_WIDGET_PROBE=1`  —— 挂载后 **3 秒**再 `probe()` 一次（验证「挂上后没掉」）
 #[cfg(target_os = "windows")]
-fn spawn_taskbar_widget_dev() {
-    if std::env::var("PM_DEV_TASKBAR_WIDGET").is_err() {
-        return;
-    }
-    let report = crate::taskbar_widget::spawn_widget();
-    let verdict = if report.ok() { "OK" } else { "FAILED" };
-    crate::process::append_log(&format!(
-        "[widget] 里程碑 1 挂载结果: {} (hwnd={:#x} reparent_err={} parent={:#x} taskbar={:#x})",
-        verdict, report.hwnd, report.reparent_err, report.parent, report.taskbar
-    ));
+fn spawn_taskbar_widget_dev(app: &tauri::AppHandle) {
+    // ⭐ 无条件安装（**不再要求「先挂载成功」**）—— 这是「设置页改了没用」的关键修复：
+    //    用户勾选设备的那一刻窗口**还不存在**，若等挂载成功才装监听，就永远收不到
+    //    那次 `config-changed`（先有鸡还是先有蛋）。未挂载时这些监听的成本仅为
+    //    「事件到来后一次立即返回的早退」，可以忽略。
+    crate::taskbar_widget::install_event_listeners(app);
+    crate::taskbar_widget::start_refresh_loop(app);
 
-    // ⭐ 延迟复核：验证「挂载后不会自己掉」（Explorer 重建 / 任务栏替换会让 GetParent 变）
+    // ⭐ 启动期按**配置**决定是否显示。⛔ 走统一入口 `apply_from_config` 而不是直接
+    //    `spawn_widget`：与「配置变更期」共用同一判据，避免两处分叉
+    //    （典型症状是「改了设置要重启才生效」）。
+    crate::taskbar_widget::apply_from_config(app);
+
+    // ── 开发门控：强制挂载（覆盖上面的配置判据）──────────────────────────────
+    // ⚠️ 这里**同步**调用是安全的：本函数就在主线程上跑。
+    //    与 `apply_from_config` 投递的异步挂载是**同一个幂等操作**
+    //    （`spawn_widget` 内已加「已挂且存活 ⇒ 跳过」），不会挂出两个窗口。
+    // ⛔ 刻意**不用**「不满足就提前 return」的写法：下面的 PROBE / DESTROY 两个门控
+    //    要能**单独**使用 —— 尤其 PROBE，正是用来观测「未强制挂载时配置驱动的真实状态」。
+    if std::env::var("PM_DEV_TASKBAR_WIDGET").is_ok() {
+        let report = crate::taskbar_widget::spawn_widget();
+        let verdict = if report.ok() { "OK" } else { "FAILED" };
+        crate::process::append_log(&format!(
+            "[widget] 里程碑 2 挂载结果: {} (hwnd={:#x} reparent_err={} parent={:#x} taskbar={:#x})",
+            verdict, report.hwnd, report.reparent_err, report.parent, report.taskbar
+        ));
+
+        // ⭐ 挂载成功才首刷：未挂上时刷新没有消费方（`refresh_async` 会立即早退）。
+        // ⚠️ 监听与兜底循环已在函数开头无条件装好，这里**不要**重复安装（虽幂等，但会误导读者）。
+        if report.ok() {
+            // 立即首刷：不等 3s 延迟，让内容尽快出现
+            crate::taskbar_widget::refresh_async();
+        }
+    }
+
+    // ⭐ 延迟复核：验证「配置驱动的挂载状态是否符合预期」+「挂载后不会自己掉」
+    //    （Explorer 重建 / 任务栏替换会让 GetParent 变）。
+    //    ⭐ 本门控**可单独使用**（不设 `PM_DEV_TASKBAR_WIDGET`）—— 那正是观测
+    //    「配置说该显示 / 不该显示」时真实状态的方式（want/mounted 两个值一眼可判）。
     if std::env::var("PM_DEV_TASKBAR_WIDGET_PROBE").is_ok() {
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             let p = crate::taskbar_widget::probe();
+            let items = crate::taskbar_widget::snapshot_items();
             crate::process::append_log(&format!(
-                "[widget] 3s 后复核: ok={} (hwnd={:#x} parent={:#x} taskbar={:#x})",
+                "[widget] 3s 后复核: want={} mounted(ok)={} (hwnd={:#x} parent={:#x}) 快照={} 台 重绘={} 次",
+                crate::taskbar_widget::should_show(),
                 p.ok(),
                 p.hwnd,
                 p.parent,
-                p.taskbar
+                items.len(),
+                crate::taskbar_widget::refresh_count()
             ));
+            for it in &items {
+                crate::process::append_log(&format!("[widget]   · {}", format_item_debug(it)));
+            }
         });
     }
 
@@ -382,8 +416,38 @@ fn spawn_taskbar_widget_dev() {
     }
 }
 
+/// 诊断用：把 `WidgetItem` 打成一行可读文本。
+///
+/// ⚠️ 屏幕上的格式已**不含设备名**（用户口径：名字以后再说），但**日志里保留名字**
+///   —— 排查「哪台设备读不出数据」时，知道是**哪一台**才有意义。
+#[cfg(target_os = "windows")]
+fn format_item_debug(it: &crate::taskbar_widget::WidgetItem) -> String {
+    // 图标类别用短标签，便于和屏幕上的图标对照
+    let icon = match it.icon {
+        crate::device_identity::AudioKind::Pointer => "鼠标",
+        crate::device_identity::AudioKind::Speaker => "音箱",
+        crate::device_identity::AudioKind::Headphones => "耳机",
+    };
+    let mut s = format!("[{}] {}", icon, it.name);
+    s.push_str(&match it.battery {
+        Some(b) => format!(" {}%", b),
+        None => " --".to_string(),
+    });
+    if it.has_audio {
+        s.push_str(&match (it.is_muted, it.volume) {
+            (Some(true), _) => " 静音".to_string(),
+            (_, Some(v)) => format!(" {}%", (v * 100.0).round() as i32),
+            _ => " --".to_string(),
+        });
+    }
+    if it.pinned {
+        s.push_str(" [固定]");
+    }
+    s
+}
+
 #[cfg(not(target_os = "windows"))]
-fn spawn_taskbar_widget_dev() {}
+fn spawn_taskbar_widget_dev(_app: &tauri::AppHandle) {}
 
 /// 启动时检测更新：延迟 3s 后查询并广播状态，有更新时弹 Windows 原生通知。
 fn spawn_startup_update_check(app: &tauri::AppHandle) {
@@ -757,7 +821,7 @@ fn main() {
 
             // 开发调试：挂载任务栏 widget（B3-A 里程碑 1）。
             // ⛔ 必须在 setup 回调（tao 主线程、常驻泵消息）里**同步**调用，见函数注释。
-            spawn_taskbar_widget_dev();
+            spawn_taskbar_widget_dev(app.handle());
 
             // 启动时检测更新（仅非 autostart 模式）
             if !is_autostart && config::with_config(|c| c.check_updates) {
