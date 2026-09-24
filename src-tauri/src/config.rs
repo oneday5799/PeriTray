@@ -53,6 +53,49 @@ impl<'de> Deserialize<'de> for LogRetention {
     }
 }
 
+/// 任务栏信息窗的**内容缩放档位**（用户 2026-09-25 新增设置）。
+///
+/// ⛔ **作用域边界（用户明确要求，实现时不得越界）**：本档位**只改内容**——
+///   图标边长 / 信息文字字号 / 随内容一起缩放的间距与项宽上限；
+///   **底衬（窗口高度、圆角）仍按系统 DPI 缩放，不随本项改变**。
+///   ⇒ 125% 系统缩放下选 `Default`：图标 32px、字号 11px，而底衬仍是 50px 高 / 圆角 8。
+///
+/// ⚠️ 落点在 `taskbar_widget::Metrics` 的 `content_dpi`（见该结构文档）；
+///   底衬量（`h` / `radius`）恒走 `Metrics::dpi`，两者**分开**换算。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskbarContentScale {
+    /// **默认档**（用户指定为默认值）：内容按 **96 DPI（100%）** 布局，
+    /// 不随系统缩放放大 —— 即「不跟随系统缩放的大小」。
+    #[default]
+    Default,
+    /// 跟随系统缩放：内容与底衬**同用**系统 DPI（= 本设置引入前的既有行为）。
+    FollowSystem,
+}
+
+impl Serialize for TaskbarContentScale {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Default => serializer.serialize_str("default"),
+            Self::FollowSystem => serializer.serialize_str("follow_system"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskbarContentScale {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.to_lowercase().as_str() {
+            "default" => Ok(Self::Default),
+            "follow_system" | "followsystem" => Ok(Self::FollowSystem),
+            // 未知取值降级为默认，而不是让整份 Config 反序列化失败 —— 理由与
+            // `LogRetention` 完全同源（见上）：`#[serde(default)]` 只在**字段缺失**时生效，
+            // 返回 `Err` 会让 `init_config` 回退 `Config::default()`，
+            // 用户全部个性化配置被一次性抹掉（P1-7 那条不可逆路径）。
+            _ => Ok(Self::default()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceShortcut {
     pub name: String,
@@ -179,6 +222,15 @@ pub struct Config {
     ///   宽度**钳制**，不会跑出任务栏）。
     #[serde(default)]
     pub taskbar_custom_x: Option<i32>,
+    /// 任务栏信息窗的**内容缩放档位**（`"default"` / `"follow_system"`）。
+    ///
+    /// ⛔ 作用域（用户 2026-09-25 明确要求）：**只改内容**（图标 / 文字 / 随内容缩放的
+    ///   间距与项宽上限），**底衬仍按系统 DPI 缩放**（窗口高度、圆角不受本项影响）。
+    ///   落地见 `taskbar_widget::Metrics` 的 `content_dpi`。
+    /// ⚠️ 是 enum 而非 `String`：取值集合固定且只有两档，用 `String + VALID_*` 归一化
+    ///   反而多一处可能漂移的清单（`taskbar_position` 那套是历史写法）。
+    #[serde(default)]
+    pub taskbar_content_scale: TaskbarContentScale,
     #[serde(default)]
     pub hidden_audio_devices: Vec<String>,
     /// 日志级别："off"/"standard"/"verbose"
@@ -513,6 +565,7 @@ impl Default for Config {
             taskbar_position: default_taskbar_position(),
             taskbar_position_locked: true,
             taskbar_custom_x: None,
+            taskbar_content_scale: TaskbarContentScale::default(),
             hidden_audio_devices: vec![],
             log_level: default_log_level(),
             legacy_log_enabled: None,
@@ -964,6 +1017,7 @@ macro_rules! for_each_config_field {
             taskbar_position,
             taskbar_position_locked,
             taskbar_custom_x,
+            taskbar_content_scale,
             hidden_audio_devices,
             log_level,
             legacy_log_enabled,
@@ -1589,6 +1643,59 @@ mod tests {
             VALID_TASKBAR_POSITIONS,
             &["left", "center", "right"],
             "合法值集合必须与设置页下拉的三项逐字一致"
+        );
+    }
+
+    /// `taskbar_content_scale` 的两个合法值**逐个**钉住（逐字保留）。
+    ///
+    /// ⭐ 为什么单列一条：这两个字面量必须与设置页下拉的 `data-value`
+    ///   （`settings.html` 的 `win-combo-item`）**逐字一致** —— 任一侧拼错都会让
+    ///   该档永远选不出来（后端降级回 `default`、前端找不到对应项而停在旧文案），
+    ///   且不报错、不 panic。
+    #[test]
+    fn taskbar_content_scale_accepts_both_values_verbatim() {
+        for (raw, want) in [
+            ("default", super::TaskbarContentScale::Default),
+            ("follow_system", super::TaskbarContentScale::FollowSystem),
+        ] {
+            let cfg: super::Config = toml::from_str(&format!("taskbar_content_scale = \"{raw}\""))
+                .expect("合法档位必须能解析");
+            assert_eq!(cfg.taskbar_content_scale, want, "合法值必须逐字保留");
+        }
+    }
+
+    /// ⛔ 未知取值必须**降级为默认**，且不得牵连同一份文件里的其它字段
+    /// （返回 `Err` ⇒ 整份配置回退 `Config::default()` ⇒ 用户全部配置被抹掉，P1-7）。
+    #[test]
+    fn taskbar_content_scale_unknown_falls_back_to_default() {
+        let text = "auto_start = true\n\
+                    taskbar_content_scale = \"not_a_real_value\"\n";
+        let cfg: super::Config = toml::from_str(text).expect("未知档位不得让整份 Config 解析失败");
+        assert_eq!(
+            cfg.taskbar_content_scale,
+            super::TaskbarContentScale::Default,
+            "未知档位应降级为默认档"
+        );
+        assert!(cfg.auto_start, "非法档位不得牵连其它字段");
+    }
+
+    /// 默认档必须是「不跟随系统缩放」（用户指定），且**缺键时也取它**。
+    ///
+    /// ⭐ 两条断言缺一不可：`Default` 的 derive 实现与 `Deserialize` 的缺键路径是
+    ///   **两处独立代码**，只测一处的话另一处反转（`#[default]` 标错变体、
+    ///   或把 `#[serde(default)]` 换成具名 helper）测不出来。
+    #[test]
+    fn taskbar_content_scale_defaults_to_not_following_system() {
+        assert_eq!(
+            super::TaskbarContentScale::default(),
+            super::TaskbarContentScale::Default,
+            "默认档必须是「默认缩放大小」（不跟随系统缩放）"
+        );
+        let cfg: super::Config = toml::from_str("").expect("空配置必须能解析");
+        assert_eq!(
+            cfg.taskbar_content_scale,
+            super::TaskbarContentScale::Default,
+            "缺键时必须取默认档"
         );
     }
 

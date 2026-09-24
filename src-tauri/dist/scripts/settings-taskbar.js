@@ -2,18 +2,20 @@
  * 加载序 6/8 · 提供：initTaskbarTab()
  * 依赖：common.js / settings.js(config/bindToggle/initComboBox/createExpandableCard/saveConfig)
  *
- * ⭐ 本页三个控件**全部接线真实数据**：
+ * ⭐ 本页四个控件**全部接线真实数据**：
  *    · 设备选择（`initTaskbarDevicePicker`）→ `get_selectable_devices` / `toggle_pinned_taskbar_device`
  *      （设备页 ∪ 输出端点 ∪ 输入端点的**并集**；本文件不读 config，勾选态由后端 `pinned` 给出）
  *    · 「固定任务栏窗口位置」开关 → `config.taskbar_position_locked`
  *    · 「任务栏窗口位置」下拉     → `config.taskbar_position`（left/center/right）
+ *    · 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default/follow_system）
  *
- * ⛔ 后两者的落盘**不是可选的**：后端 `taskbar_widget::should_show()` 的判据是
+ * ⛔ 后三者的落盘**不是可选的**：后端 `taskbar_widget::should_show()` 的判据是
  *    「`pinned_taskbar_devices` 非空」（用户口径 2026-09-24：默认关闭，选了设备才显示），
- *    窗口的挂载/拆除/重定位由 `config-changed` 驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
+ *    窗口的挂载/拆除/重定位/重绘全部由 `config-changed` 驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
 function initTaskbarTab() {
   initTaskbarDevicePicker();
   initTaskbarPinCard();
+  initTaskbarContentScale();
 }
 
 // 「在任务栏显示的设备」——交互范式对齐「强制静音」：点击弹出复选菜单。
@@ -132,4 +134,27 @@ function initTaskbarPinCard() {
     config.taskbar_position = val;
     await saveConfig();
   });
+}
+
+// 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default / follow_system）。
+//
+// ⛔ **作用域**（用户 2026-09-25 指定）：只改**内容**（图标边长 / 信息文字字号 /
+//    随内容缩放的间距与项宽上限），**底衬恒按系统 DPI**（窗口高度、圆角不受本项影响）。
+//    落地在 `taskbar_widget::Metrics`：内容走 `content_dpi`，底衬走 `dpi`，两者分开换算。
+//
+// ⭐ 为什么单列一张卡而不是塞进上面的折叠卡：本项与「固定位置」开关**无关**，
+//    放进折叠卡会在开关关闭时被一起收起 —— 用户会以为这个设置消失了。
+function initTaskbarContentScale() {
+  // ⭐ 初始值取 config（覆盖 HTML 里写死的「默认大小」文案）；变更即落盘。
+  //    ⚠️ 落盘后由后端 `config-changed` → `apply_from_config` → `FORCE_REPAINT` +
+  //       `refresh_async` 重算宽度并重绘 ⇒ **本项不需要重启即生效**（不是「下次启动才变」）。
+  //    ⚠️ 缺键时回落 "default"：后端默认档也是它，两侧口径一致（旧配置文件无此键）。
+  initComboBox(
+    "combo-taskbar-content-scale",
+    config.taskbar_content_scale || "default",
+    async (val) => {
+      config.taskbar_content_scale = val;
+      await saveConfig();
+    },
+  );
 }

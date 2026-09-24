@@ -127,8 +127,17 @@ const BACKDROP_RADIUS_DIP: i32 = 6;
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Metrics {
-    /// 换算所用的 DPI（96 = 100%）。留给「按 DIP 现算」的调用点用（见 `dip`）。
+    /// **底衬**口径的 DPI（96 = 100%），恒为**系统/任务栏 DPI**。
+    ///
+    /// ⛔ 用户 2026-09-25 明确要求「底衬仍跟随系统缩放，不跟随『任务栏内容缩放大小』
+    ///   设置改变」⇒ `h` / `radius` **只**由它换算，`taskbar_content_scale` 不得影响。
     pub dpi: u32,
+    /// **内容**口径的 DPI。`icon` / `font` / `pad_x` / `icon_text_gap` / `item_gap` /
+    /// `item_max_w` / `text_row_h` 由它换算，也由 `dip()` 消费。
+    ///
+    /// ⚠️ 由 `taskbar_content_scale` 决定：`FollowSystem` ⇒ 等于 `dpi`；
+    ///   `Default` ⇒ 恒 **96**（不随系统放大）。解析见 `for_scales`。
+    pub content_dpi: u32,
     pub h: i32,
     pub radius: i32,
     pub icon: i32,
@@ -145,31 +154,67 @@ pub struct Metrics {
 
 #[cfg(target_os = "windows")]
 impl Metrics {
-    /// 按给定 DPI 换算（**纯函数**，可单测）。`dpi == 0` 视为 96（防御）。
+    /// 按给定 DPI 换算，**底衬与内容同口径**（= `FollowSystem` 档，也是本设置引入前的行为）。
+    ///
+    /// ⚠️ 保留这个签名是给**只消费底衬量**的调用点用的（`create_popup` /
+    ///   `widget_y_offset` / `draw_blank` / `draw_frame`）：它们只用 `h` / `radius`，
+    ///   与内容档位无关 ⇒ 不必为它们引入配置读取。需要内容口径的入口见 `current_content`。
     pub fn for_dpi(dpi: u32) -> Self {
-        let dpi = if dpi == 0 { 96 } else { dpi };
-        let s = |dip: i32| Self::dip_of(dpi, dip);
-        let icon = s(ICON_PX_DIP);
+        Self::for_dpis(dpi, dpi)
+    }
+
+    /// 按「底衬 DPI + 内容缩放档位」换算（**纯函数**，可单测）。
+    ///
+    /// ⛔ 底衬量（`h` / `radius`）**恒**走 `backdrop_dpi`；内容量走按档位解析出的内容 DPI。
+    ///   `Default` 档下内容恒按 96 ⇒ 系统 125% 时图标 32 / 字号 11，而底衬仍是 50 / 圆角 8。
+    pub fn for_scales(
+        backdrop_dpi: u32,
+        content_scale: crate::config::TaskbarContentScale,
+    ) -> Self {
+        let bd = if backdrop_dpi == 0 { 96 } else { backdrop_dpi };
+        let cd = match content_scale {
+            crate::config::TaskbarContentScale::Default => 96,
+            crate::config::TaskbarContentScale::FollowSystem => bd,
+        };
+        Self::for_dpis(bd, cd)
+    }
+
+    /// 真正的换算实现：**两条 DPI 各自成组**，字段归属见结构体文档。
+    ///
+    /// ⛔ 拆成两个闭包（`b` 底衬 / `c` 内容）而不是一个 —— 单一 `s` 闭包会让
+    ///   「某个字段该走哪条」只能靠读代码判断，改错一处就是「底衬跟着内容缩放」
+    ///   或反之，两者都不报错。分成两组后，字段归组在**同一行**可见。
+    fn for_dpis(backdrop_dpi: u32, content_dpi: u32) -> Self {
+        let backdrop_dpi = if backdrop_dpi == 0 { 96 } else { backdrop_dpi };
+        let content_dpi = if content_dpi == 0 { 96 } else { content_dpi };
+        let b = |dip: i32| Self::dip_of(backdrop_dpi, dip);
+        let c = |dip: i32| Self::dip_of(content_dpi, dip);
+        let icon = c(ICON_PX_DIP);
         Self {
-            dpi,
-            h: s(WIDGET_H_DIP),
-            radius: s(BACKDROP_RADIUS_DIP),
+            dpi: backdrop_dpi,
+            content_dpi,
+            // ── 底衬：恒按系统 DPI（用户口径，不受内容档位影响）──
+            h: b(WIDGET_H_DIP),
+            radius: b(BACKDROP_RADIUS_DIP),
+            // ── 内容：按内容 DPI（受 `taskbar_content_scale` 影响）──
             icon,
-            font: s(FONT_PX_DIP),
-            pad_x: s(PAD_X_DIP),
-            icon_text_gap: s(ICON_TEXT_GAP_DIP),
-            item_gap: s(ITEM_GAP_DIP),
-            item_max_w: s(ITEM_MAX_W_DIP),
+            font: c(FONT_PX_DIP),
+            pad_x: c(PAD_X_DIP),
+            icon_text_gap: c(ICON_TEXT_GAP_DIP),
+            item_gap: c(ITEM_GAP_DIP),
+            item_max_w: c(ITEM_MAX_W_DIP),
             text_row_h: icon / 2,
         }
     }
 
-    /// DIP → 物理像素（四舍五入）。`dpi == 0` 视为 96。
+    /// DIP → 物理像素（四舍五入），按**内容** DPI。`dpi == 0` 视为 96。
     ///
     /// ⚠️ 单独抽出来是给**不在本表里**的 DIP 值用（如 `estimate_text_px` 的
     ///   每字符宽度估算）—— 那些值按字号比例缩放，不适合塞进固定字段。
+    /// ⚠️ 走**内容**口径：文本宽度属于内容，必须与 `font` 同步缩放，
+    ///   否则「字号小、估宽按大字号」⇒ 窗口比内容宽（留白）或反之（重叠）。
     pub fn dip(&self, dip: i32) -> i32 {
-        Self::dip_of(self.dpi, dip)
+        Self::dip_of(self.content_dpi, dip)
     }
 
     fn dip_of(dpi: u32, dip: i32) -> i32 {
@@ -177,13 +222,27 @@ impl Metrics {
         ((dip as f32) * dpi as f32 / 96.0).round() as i32
     }
 
-    /// 当前任务栏 DPI 下的度量。
+    /// 当前任务栏 DPI 下的**底衬**度量（内容口径 = 系统口径，即 `FollowSystem`）。
     ///
     /// ⚠️ 取**任务栏**的 DPI 而不是进程/桌面的：widget 是任务栏的子窗，
     ///   多显示器「各屏缩放不同」时只有任务栏所在屏的 DPI 是对的。
     ///   取不到（Explorer 重建间隙）⇒ 回落 96（宁可小一号，也不要按错的缩放错位）。
+    ///
+    /// ⚠️ 保持**纯函数**（不读配置）：只消费 `h` / `radius` 的调用点用它，无锁风险。
     pub fn current() -> Self {
         Self::for_dpi(taskbar_dpi())
+    }
+
+    /// 当前**内容**口径的度量：底衬取任务栏 DPI，内容按 `taskbar_content_scale` 解析。
+    ///
+    /// ⛔⛔ 这是「绘制」（`draw_items`）与「测宽」（`fetch_into_snapshot`）的**共同入口**
+    ///   —— 两处各写各的换算必然漂移：窗口按旧口径找避让槽、内容按新口径画
+    ///   ⇒ 文字压到邻居上，且不报错、不 panic（见 PLAYBOOK §E10.3）。
+    pub fn current_content() -> Self {
+        // ⚠️ `with_config` 的闭包只返回一个 `Copy` 枚举值 ⇒ guard 不泄漏到锁外，
+        //    与 AGENTS.md 的「持锁区不得做窗口操作」纪律不冲突。
+        let scale = crate::config::with_config(|c| c.taskbar_content_scale);
+        Self::for_scales(taskbar_dpi(), scale)
     }
 }
 
@@ -1939,7 +1998,10 @@ fn drag_finish(hwnd: *mut core::ffi::c_void) {
 fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     let dark = crate::windows::system_dark_mode();
     // ⭐ 本帧的布局度量（DIP → 物理像素）。**测量与绘制共用同一份** ⇒ 不会漂移。
-    let m = Metrics::current();
+    // ⛔ 必须走 `current_content`：底衬（`h`/`radius`）按系统 DPI、内容按
+    //    `taskbar_content_scale` 解析 —— 与 `fetch_into_snapshot` 的测宽**同一入口**，
+    //    否则窗口宽度按旧口径算、内容按新口径画（文字压到邻居上，且不报错）。
+    let m = Metrics::current_content();
 
     // 空快照：不画任何东西，但仍提交一帧（保持窗口有效且全透明）
     if items.is_empty() {
@@ -2411,7 +2473,9 @@ fn fetch_into_snapshot() -> bool {
     let items = build_items(&devices);
     // 视觉扫描必须留在后台：它要 BitBlt 整条任务栏，不能阻塞窗口线程。
     // 估算宽度略保守（中文/图标按最大字符宽），避免实际绘制超出空白槽。
-    let wanted = estimate_widget_width(&items, &Metrics::current());
+    // ⛔ 测宽必须与 `draw_items` 用**同一份内容口径**（`current_content`）：
+    //    内容档位改了宽度就变，按旧口径找到的槽会与实际内容对不上（重叠或留白，且不报错）。
+    let wanted = estimate_widget_width(&items, &Metrics::current_content());
     let slot_before = (
         SLOT_X.load(Ordering::Acquire),
         SLOT_W.load(Ordering::Acquire),
@@ -2827,6 +2891,7 @@ pub fn destroy_widget() {}
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+    use crate::config::TaskbarContentScale;
     use crate::device_identity::{AudioKind, PhysicalDevice};
 
     /// 造一个 `PhysicalDevice`（只填被测字段，其余给无害默认值）。
@@ -3009,6 +3074,90 @@ mod tests {
         // 防御：dpi = 0 不得 panic、也不得产生 0 尺寸（那会让窗口彻底不可见）
         assert_eq!(Metrics::for_dpi(0).h, 40);
         assert_eq!(Metrics::for_dpi(0).dpi, 96);
+    }
+
+    /// ⛔⛔ 本设置的**作用域边界**（用户 2026-09-25 明确要求）：
+    ///   内容随档位变，**底衬必须恒定**。
+    ///
+    /// 可证伪：把 `for_dpis` 里的 `h: b(WIDGET_H_DIP)` 改成 `c(WIDGET_H_DIP)`
+    ///   （即让底衬跟着内容缩放）⇒ 本条立刻转红。
+    #[test]
+    fn content_scale_changes_content_but_never_backdrop() {
+        let follow = Metrics::for_scales(120, TaskbarContentScale::FollowSystem);
+        let def = Metrics::for_scales(120, TaskbarContentScale::Default);
+
+        // ── 底衬：两档必须逐字相同（恒按系统 DPI = 120）──
+        assert_eq!(def.h, follow.h, "底衬高度不得随内容档位改变");
+        assert_eq!(def.radius, follow.radius, "底衬圆角不得随内容档位改变");
+        assert_eq!(def.dpi, follow.dpi, "底衬 DPI 恒为系统 DPI");
+        assert_eq!(def.h, 50, "125% 下底衬高 50（40 DIP × 1.25）");
+        assert_eq!(def.radius, 8, "125% 下圆角 8（6 DIP × 1.25）");
+
+        // ── 内容：默认档恒按 96（不随系统放大）──
+        assert_eq!(def.content_dpi, 96, "默认档内容 DPI 恒 96");
+        assert_eq!((def.icon, def.font, def.text_row_h), (32, 11, 16));
+
+        // ── 内容：跟随系统档按 120 ──
+        assert_eq!(follow.content_dpi, 120);
+        assert_eq!((follow.icon, follow.font, follow.text_row_h), (40, 14, 20));
+
+        // ── 区分力：两档必须在**内容**上真的不同，否则本条证明不了任何事 ──
+        for (name, a, b) in [
+            ("icon", def.icon, follow.icon),
+            ("font", def.font, follow.font),
+            ("pad_x", def.pad_x, follow.pad_x),
+            ("icon_text_gap", def.icon_text_gap, follow.icon_text_gap),
+            ("item_gap", def.item_gap, follow.item_gap),
+            ("item_max_w", def.item_max_w, follow.item_max_w),
+            ("text_row_h", def.text_row_h, follow.text_row_h),
+        ] {
+            assert_ne!(a, b, "内容量 `{name}` 两档必须不同，否则用例无区分力");
+        }
+    }
+
+    /// `for_dpi` 保留「底衬与内容同口径」的旧语义（= `FollowSystem` 档）——
+    /// 只消费底衬量的调用点（建窗 / 垂直居中 / 空帧）依赖它。
+    ///
+    /// 可证伪：把 `for_dpi` 改成 `Self::for_dpis(dpi, 96)` ⇒ 本条转红。
+    #[test]
+    fn for_dpi_equals_follow_system_scale() {
+        for dpi in [0u32, 96, 120, 144] {
+            assert_eq!(
+                Metrics::for_dpi(dpi),
+                Metrics::for_scales(dpi, TaskbarContentScale::FollowSystem),
+                "for_dpi 必须等价于 FollowSystem 档（dpi={dpi}）"
+            );
+        }
+    }
+
+    /// 内容档位必须**同时**影响「测宽」——否则窗口宽度按旧口径算、内容按新口径画
+    /// ⇒ 相邻项重叠（不报错、不 panic，只是画面错）。
+    ///
+    /// 可证伪：把 `dip()` 改回按 `self.dpi` 缩放 ⇒ 本条转红。
+    #[test]
+    fn estimate_width_follows_content_scale() {
+        let six: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
+            .map(|i| item(Some(50 + i as i32), Some(0.5), true, Some(false)))
+            .collect();
+        let follow = estimate_widget_width(
+            &six,
+            &Metrics::for_scales(120, TaskbarContentScale::FollowSystem),
+        );
+        let def = estimate_widget_width(
+            &six,
+            &Metrics::for_scales(120, TaskbarContentScale::Default),
+        );
+        assert!(
+            def < follow,
+            "默认档内容更小 ⇒ 估算宽度必须更窄（{def} vs {follow}）"
+        );
+        // ⭐ 默认档在**任意**系统缩放下都必须与 100% 同宽 —— 这正是本档位的语义：
+        //   内容不随系统缩放（底衬仍会变，但底衬不参与测宽）。
+        assert_eq!(
+            def,
+            estimate_widget_width(&six, &Metrics::for_dpi(96)),
+            "默认档的测宽必须与 100% 系统缩放下完全一致"
+        );
     }
 
     /// ⛔ 中文**不得**被低估 —— 否则 `find_widget_slot` 可能返回比实际内容更窄的槽，

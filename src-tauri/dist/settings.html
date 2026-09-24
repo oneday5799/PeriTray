@@ -749,6 +749,46 @@
           </div>
         </div>
       </div>
+
+      <div class="card">
+        <div class="card-left">
+          <div class="card-title">任务栏内容缩放大小
+            <span class="tooltip-trigger">?
+              <span class="tooltip-content">控制任务栏信息窗口中图标和信息文字的大小。选「默认大小」时内容不随系统缩放放大，窗口底衬仍按系统缩放显示。</span>
+            </span>
+          </div>
+          <div class="card-desc">设置任务栏信息窗口中图标和信息文字的大小</div>
+        </div>
+        <!-- ⛔ `data-value` 必须与后端 `TaskbarContentScale` 的序列化字面逐字一致
+             （`config.rs`：`"default"` / `"follow_system"`）——
+             拼错任一侧都会让该档永远选不出来，且不报错。 -->
+        <div class="win-combo-box" id="combo-taskbar-content-scale">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">默认大小</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="default">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">默认大小</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="follow_system">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">跟随系统</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Tab: About -->
