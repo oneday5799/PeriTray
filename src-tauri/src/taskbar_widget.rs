@@ -227,6 +227,28 @@ static SLOT_VALID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 #[cfg(target_os = "windows")]
 static LAST_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
+// ── 拖拽状态（全部只在**主线程**读写，用原子量是为了免锁、免锁序登记）──────
+//
+// ⚠️ 为什么不用 `Mutex`：本模块所有鼠标消息都投递到**创建窗口的那个线程**
+//   （= 主线程），不存在跨线程竞争；而 `Mutex` 会引入锁序登记与中毒处理的负担
+//   （见 `state.rs` 模块文档）。用原子量表达「单线程状态机」最省事也最不易错。
+
+/// 是否正在拖拽（`WM_LBUTTONDOWN` 起、`WM_LBUTTONUP` / `WM_CAPTURECHANGED` 止）。
+#[cfg(target_os = "windows")]
+static DRAG_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 按下那一刻的光标屏幕 x（物理像素）—— 拖拽位移的**参考原点**。
+#[cfg(target_os = "windows")]
+static DRAG_ORIGIN_CURSOR_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// 按下那一刻的窗口左端（**父窗客户区**坐标，物理像素）—— 即 `SetWindowPos` 用的那个坐标系。
+///
+/// ⚠️ 与 `DRAG_ORIGIN_CURSOR_X`（**屏幕**坐标）不是同一坐标系，但拖拽只用到**增量**：
+///   光标 Δ 与窗口 Δ 在纯平移下相等（同一 DPI、无缩放）⇒ 直接相加成立。
+///   ⛔ 绝不能把它当屏幕坐标去和任务栏屏幕左端做减法 —— 口径换算一律走 `window_parent_x`。
+#[cfg(target_os = "windows")]
+static DRAG_ORIGIN_WIN_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
 /// 「下一次刷新**必须**重绘」的一次性标志。
 ///
 /// ⛔ 为什么需要它（真机实测缺陷）：`fetch_into_snapshot` 的判据是
@@ -271,8 +293,8 @@ mod ffi {
         CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, PostMessageW,
         RegisterClassW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
         UpdateLayeredWindow, GWL_STYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, ULW_ALPHA, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_POPUP,
+        SWP_NOZORDER, ULW_ALPHA, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
     };
 
     /// 注册 widget 窗口类（幂等）。返回类名（`to_wide` 后的指针由调用方持有）。
@@ -576,16 +598,42 @@ mod ffi {
         DeleteObject(f as HGDIOBJ);
     }
 
-    /// 空 WndProc：分层窗口不靠 `WM_PAINT` 绘制（那是 `ULW` 的活），
-    /// 但也**不能**把 `WM_ERASEBKGND` 返回 0（会破坏「可见四条件」），故一律交 `DefWindowProcW`。
+    /// 几乎为空的 WndProc：分层窗口不靠 `WM_PAINT` 绘制（那是 `ULW` 的活），
+    /// 但也**不能**把 `WM_ERASEBKGND` 返回 0（会破坏「可见四条件」），故默认一律交 `DefWindowProcW`。
     ///
-    /// ⭐ 例外：**应用私有的刷新消息**（`WM_APP_REFRESH`）必须自己处理 ——
+    /// ⭐ 例外一：**应用私有的刷新消息**（`WM_APP_REFRESH`）必须自己处理 ——
     ///   它是「后台取数完成，请主线程重绘」的唯一通道（跨线程安全）。
+    ///
+    /// ⭐ 例外二：**手动拖拽**。三个鼠标消息 + 一个捕获变更消息都落在**主线程**
+    ///   （本窗口由主线程创建、消息只投递到创建线程）⇒ 拖拽是天然的**单线程状态机**，
+    ///   状态用原子量表达（见 `DRAG_*`）。
+    ///
+    /// ⛔⛔ **拖拽期间不得在此 emit 任何事件**：`emit` 在**调用它的线程**上同步跑回调
+    ///   （`tauri/src/event/listener.rs`），而这里就是主线程 ⇒ 回调里任何
+    ///   `run_on_main_thread(..)`（`apply_from_config` 就有）都会**主线程等主线程**，
+    ///   永久死锁（退出码 `0xCFFFFFFF`）。落位只走 `with_config_mut`（它自己会落盘）。
     unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wp: usize, lp: isize) -> isize {
         if msg == WM_APP_REFRESH {
             // 在**主线程**重绘：读快照 → 建 DIB → 提交。
             super::repaint_from_snapshot(hwnd);
             return 0;
+        }
+        // ── 手动拖拽 ────────────────────────────────────────────────────
+        // ⚠️ 只在「固定位置」关掉时接管（`drag_begin` 内部判 `drag_enabled()`）；
+        //   固定位置时**不拦截**，交回 `DefWindowProcW` 保持原行为。
+        if msg == WM_LBUTTONDOWN {
+            if super::drag_begin(hwnd) {
+                return 0;
+            }
+        } else if msg == WM_MOUSEMOVE {
+            // 非拖拽期间到达的移动消息由 `drag_move` 自行忽略（判 `DRAG_ACTIVE`）。
+            super::drag_move(hwnd);
+        } else if msg == WM_LBUTTONUP {
+            super::drag_finish(hwnd);
+        } else if msg == WM_CAPTURECHANGED {
+            // 捕获被别处抢走（任务栏抢焦点、其它窗口 `SetCapture`…）：
+            // 窗口停在哪就记哪 —— 总比丢掉位置强。非拖拽期间到达则直接返回。
+            super::drag_finish(hwnd);
         }
         DefWindowProcW(hwnd, msg, wp, lp)
     }
@@ -771,6 +819,23 @@ const ICON_TEXT_GAP: i32 = 4;
 #[cfg(target_os = "windows")]
 const TEXT_ROW_H: i32 = ICON_PX / 2;
 
+/// 「可拖拽」模式下底衬的圆角半径（像素）。
+///
+/// ⭐ 用圆角而不是直角：直角矩形贴在任务栏上像一个「色块 bug」，圆角读起来像
+///   有意画的「胶囊」。半径取 6 —— 在 40px 高的条上刚好可辨，又不会吃掉内容边距。
+#[cfg(target_os = "windows")]
+const BACKDROP_RADIUS: i32 = 6;
+
+/// 「可拖拽」模式下底衬的不透明度（0–255）。
+///
+/// ⭐ 取 28（≈11%）：**足够被看见**（用户一眼知道「现在能拖了」）又**不抢内容**
+///   （图标与文本仍是最深的一层）。
+/// ⛔ 它的**功能作用**比观感更重要：`ULW` 分层窗按 alpha 做命中测试，alpha=0 的像素
+///   会把鼠标放行给下层 ⇒ 没有底衬时用户必须精确点中字形笔画才能拖动（见
+///   `fill_drag_backdrop` 的真机实测数据）。
+#[cfg(target_os = "windows")]
+const BACKDROP_ALPHA: u32 = 28;
+
 /// widget 最多显示的设备台数（用户 2026-09-24 指定）。
 ///
 /// ⭐ 与 `PINNED_TASKBAR_LIMIT = 8` 的关系：那个是**固定上限**（最多能 pin 几台），
@@ -908,12 +973,16 @@ mod icons {
     }
 }
 
-/// 任务栏**左端 x 坐标**（物理像素）。
+/// 任务栏窗口矩形 `(left, top, width, height)`（**屏幕**坐标，物理像素）。
 ///
-/// ⭐ 用途：`UpdateLayeredWindow` 的位置参数是**父窗客户区坐标**，而视觉扫描
-///   （`find_widget_slot`）拿到的是**屏幕坐标** ⇒ 两者相减才是相对坐标。
+/// ⭐ 抽成单一入口：`taskbar_left`（相对坐标换算）、`widget_y_offset`（垂直居中）、
+///   拖拽的**钳制边界**（左右不能拖出任务栏）三处都要它。
+///   ⛔ 三处各写一遍 `FindWindowW + GetWindowRect` 必然在后续改动中漂移。
+///
+/// ⚠️ 返回 `None` 表示「此刻找不到任务栏」或尺寸非正 —— 调用方必须各自决定降级方式
+///   （取 0 / 不居中 / 拒绝拖动），不要在这里编造一个假矩形。
 #[cfg(target_os = "windows")]
-fn taskbar_left() -> i32 {
+fn taskbar_rect() -> Option<(i32, i32, i32, i32)> {
     let taskbar = unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
             to_wide("Shell_TrayWnd").as_ptr(),
@@ -921,7 +990,7 @@ fn taskbar_left() -> i32 {
         )
     };
     if taskbar.is_null() {
-        return 0;
+        return None;
     }
     let mut rc = windows_sys::Win32::Foundation::RECT {
         left: 0,
@@ -932,7 +1001,12 @@ fn taskbar_left() -> i32 {
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(taskbar, &mut rc);
     }
-    rc.left
+    let w = rc.right - rc.left;
+    let h = rc.bottom - rc.top;
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    Some((rc.left, rc.top, w, h))
 }
 
 /// widget 在任务栏内的**垂直偏移**（父窗客户区坐标，物理像素）。
@@ -945,25 +1019,56 @@ fn taskbar_left() -> i32 {
 ///   不产生负偏移（负值会把内容顶到任务栏之外）。
 #[cfg(target_os = "windows")]
 fn widget_y_offset() -> i32 {
-    let taskbar = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
-            to_wide("Shell_TrayWnd").as_ptr(),
-            std::ptr::null(),
-        )
-    };
-    if taskbar.is_null() {
-        return 0;
+    match taskbar_rect() {
+        Some((_, _, _, h)) => ((h - WIDGET_H) / 2).max(0),
+        None => 0,
     }
-    let mut rc = windows_sys::Win32::Foundation::RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+}
+
+/// 把窗口左端**钳制**在任务栏可见范围内（父窗客户区坐标）。
+///
+/// ⭐ 抽成纯函数是为了能单测：钳制写错**不会报错**，只会让窗口在拖到边缘时
+///   部分跑出任务栏、甚至整块消失（内容还在、位置在屏幕外）—— 用户只能靠重启恢复。
+///
+/// ⚠️ 上界是 `taskbar_w - widget_w`（而不是 `taskbar_w`）：右端对齐时窗口右缘
+///   恰好贴着任务栏右缘。窗口比任务栏还宽时上界归零 ⇒ 钉在左端（防御分支）。
+#[cfg(target_os = "windows")]
+fn clamp_rel_x(x: i32, widget_w: i32, taskbar_w: i32) -> i32 {
+    let max = (taskbar_w - widget_w).max(0);
+    x.clamp(0, max)
+}
+
+/// 决定这一帧窗口画在哪个 x（父窗客户区坐标）。**纯函数**，可单测。
+///
+/// 优先级（用户意图 > 历史 > 自动）：
+///   1. `locked == true` ⇒ **永远**用贴靠结果（用户在设置页选了左/中/右）；
+///   2. `locked == false` 且用户拖过（`custom_x = Some`）⇒ 用**用户放下的位置**
+///      —— 这是显式意图，必须压过其它一切；
+///   3. `locked == false` 且没拖过、但画过（`last != 0`）⇒ 沿用上次（「不固定」的旧语义）；
+///   4. 都没用过 ⇒ 退回贴靠结果（首帧）。
+///
+/// ⛔ 为什么要抽出来单测：这四条判据的失效方式**全是静默的** —— 优先级写反只会让
+///   窗口「跑到别的地方」，界面上不报错、不崩溃，只能靠肉眼发现。
+#[cfg(target_os = "windows")]
+fn resolve_rel_x(
+    locked: bool,
+    aligned: i32,
+    custom_x: Option<i32>,
+    last: i32,
+    widget_w: i32,
+    taskbar_w: i32,
+) -> i32 {
+    let wanted = if locked {
+        aligned
+    } else {
+        match custom_x {
+            Some(x) => x,
+            // `last == 0` 是「还没画过」的哨兵（见 `LAST_X` 文档）
+            None if last != 0 => last,
+            None => aligned,
+        }
     };
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(taskbar, &mut rc);
-    }
-    ((rc.bottom - rc.top - WIDGET_H) / 2).max(0)
+    clamp_rel_x(wanted, widget_w, taskbar_w)
 }
 
 /// 在避让槽内按贴靠策略算出窗口左端。
@@ -1181,6 +1286,73 @@ fn color_diff(a: u32, b: u32) -> u32 {
     (ar.abs_diff(br) + ag.abs_diff(bg) + ab.abs_diff(bb)) / 3
 }
 
+/// 点 `(x, y)` 是否落在宽 `w` 高 `h`、圆角半径 `r` 的**圆角矩形**内。**纯函数**。
+///
+/// 判法：四个角各挖掉一个半径 `r` 的圆（圆心在内缩 `r` 处），其余区域直接命中。
+/// ⚠️ 只在「x 落在左/右角带 **且** y 落在上/下角带」时才做圆判定；任一带不在角上
+///   就直接命中 —— 否则中间的直边会被误判成角。
+#[cfg(target_os = "windows")]
+fn inside_rounded_rect(x: i32, y: i32, w: i32, h: i32, r: i32) -> bool {
+    if x < 0 || y < 0 || x >= w || y >= h {
+        return false;
+    }
+    let r = r.min(w / 2).min(h / 2).max(0);
+    if r == 0 {
+        return true;
+    }
+    let cx = if x < r {
+        r
+    } else if x >= w - r {
+        w - 1 - r
+    } else {
+        return true; // 不贴左右边 ⇒ 纵向整条都在矩形内
+    };
+    let cy = if y < r {
+        r
+    } else if y >= h - r {
+        h - 1 - r
+    } else {
+        return true; // 不贴上下边 ⇒ 横向整条都在矩形内
+    };
+    let dx = x - cx;
+    let dy = y - cy;
+    dx * dx + dy * dy <= r * r
+}
+
+/// 在「可拖拽」模式下给整块 widget 铺一层**淡底衬**。
+///
+/// ⛔⛔ **为什么必须有它**（2026-09-24 真机实测，不是推测）：
+///   `UpdateLayeredWindow` 分层窗的**命中测试按 alpha 走** —— alpha = 0 的像素把
+///   鼠标消息**放行给下层窗口**。沿 widget 垂直中线逐 2px 采样 **68 点**，只有
+///   **11 点**命中 widget，且全部落在**字形笔画**上（图标轮廓 x≈10-12/30-32、
+///   数字竖笔 78-100）；内边距、项间隙、**字形与图标的中空内部**统统穿透给
+///   `Shell_TrayWnd`。
+///   ⇒ 没有底衬的话，用户必须精确点中 2px 宽的笔画才能拖动 —— 交互不可用。
+///
+/// ⭐ 顺带它也是**可发现性**：开关一打开，窗口立刻出现底衬，用户就知道「现在能拖了」。
+/// ⚠️ 与 `blit_text_mask` 一样必须**预乘**；这里直接写整值（底衬先画，后续内容用
+///   「取最大 alpha」叠加，故底衬只可能被内容覆盖、不会被抹掉）。
+#[cfg(target_os = "windows")]
+fn fill_drag_backdrop(px: &mut [u32], w: i32, h: i32, color: (u8, u8, u8)) {
+    let (cr, cg, cb) = color;
+    let a = BACKDROP_ALPHA;
+    let packed = (a << 24)
+        | ((cr as u32 * a / 255) << 16)
+        | ((cg as u32 * a / 255) << 8)
+        | (cb as u32 * a / 255);
+    for y in 0..h {
+        for x in 0..w {
+            if !inside_rounded_rect(x, y, w, h, BACKDROP_RADIUS) {
+                continue;
+            }
+            let di = (y * w + x) as usize;
+            if di < px.len() {
+                px[di] = packed;
+            }
+        }
+    }
+}
+
 /// 把一段**文本掩码**按覆盖度预乘合成进主缓冲（`(dst_x, dst_y)` = 目标左上角）。
 ///
 /// ⛔ 为什么不能把 GDI 文本直接画进主缓冲：`DrawTextW` 在 32bpp DIB 上写的是
@@ -1239,6 +1411,166 @@ fn blit_text_mask(
             }
         }
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 拖拽（全部在**主线程**：鼠标消息只投递给创建窗口的那个线程）
+// ══════════════════════════════════════════════════════════════════════════
+//
+// ⭐ 交互口径（用户 2026-09-24）：设置页「固定位置」**关掉**后，任务栏窗口可以用
+//   鼠标拖着走；松开即记住位置，重启后仍在原处。
+//
+// ⛔ **为什么必须画底衬**：`ULW` 分层窗按 alpha 命中测试，透明像素把鼠标放行给下层
+//   ⇒ 只有可见笔画能接住按下（真机实测 68 采样点只中 11 点）。见 `fill_drag_backdrop`。
+
+/// 拖拽是否可用 —— 「固定位置」关掉时才允许。
+#[cfg(target_os = "windows")]
+fn drag_enabled() -> bool {
+    crate::config::with_config(|c| !c.taskbar_position_locked)
+}
+
+/// 读窗口当前的**屏幕**矩形 `(left, top, width, height)`（物理像素）。
+///
+/// ⚠️ `GetWindowRect` 对子窗也返回**屏幕**坐标 —— 拖拽的位移量必须在同一坐标系里算。
+#[cfg(target_os = "windows")]
+fn window_screen_rect(hwnd: *mut core::ffi::c_void) -> Option<(i32, i32, i32, i32)> {
+    let mut rc = windows_sys::Win32::Foundation::RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut rc) } == 0 {
+        return None;
+    }
+    Some((rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top))
+}
+
+/// 读窗口当前的**父窗客户区**左端 x（物理像素）—— 即 `SetWindowPos` / `ULW` 用的那个坐标系。
+///
+/// ⭐ 为什么不写成 `GetWindowRect().left - 任务栏屏幕左端`：那样只在
+///   「父窗客户区原点 == 父窗窗口左上角」时等价。本机 `Shell_TrayWnd` 实测确实相等
+///   （窗口 rect `(0,1380)`、客户区原点也是 `(0,1380)`），但那是**别人的样式**给的巧合，
+///   不是我们能依赖的契约。`ScreenToClient` 是显式换算，与父窗样式无关。
+///
+/// ⚠️ 拖拽**原点**与**落点**都必须走本函数：两处若用不同口径换算，
+///   窗口会在第一次 `WM_MOUSEMOVE` 时**跳一段固定偏移**（差值正好是客户区原点偏移）。
+#[cfg(target_os = "windows")]
+fn window_parent_x(hwnd: *mut core::ffi::c_void) -> Option<i32> {
+    let (screen_left, _, _, _) = window_screen_rect(hwnd)?;
+    let parent = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetParent(hwnd) };
+    if parent.is_null() {
+        return None;
+    }
+    let mut pt = windows_sys::Win32::Foundation::POINT {
+        x: screen_left,
+        y: 0,
+    };
+    // ⚠️ `ScreenToClient` 在 `Graphics::Gdi` 下（与 `GetWindowRect` / `SetWindowPos` 不同模块）。
+    if unsafe { windows_sys::Win32::Graphics::Gdi::ScreenToClient(parent, &mut pt) } == 0 {
+        return None;
+    }
+    Some(pt.x)
+}
+
+/// `WM_LBUTTONDOWN`：可拖拽时接管这次按下。返回 `true` 表示已开始拖拽。
+#[cfg(target_os = "windows")]
+fn drag_begin(hwnd: *mut core::ffi::c_void) -> bool {
+    if !drag_enabled() {
+        return false;
+    }
+    let Some(win_parent_x) = window_parent_x(hwnd) else {
+        return false;
+    };
+    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
+        return false;
+    }
+    DRAG_ORIGIN_CURSOR_X.store(pt.x, Ordering::Release);
+    DRAG_ORIGIN_WIN_X.store(win_parent_x, Ordering::Release);
+    DRAG_ACTIVE.store(true, Ordering::Release);
+    // ⭐ 必须 `SetCapture`：光标拖出 widget（甚至拖出任务栏）后仍要收到 `WM_MOUSEMOVE`，
+    //    否则拖拽会「粘住」—— 窗口停在光标离开的那一点不再跟随。
+    unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(hwnd) };
+    append_log(&format!(
+        "[widget] 拖拽开始: cursor_x={} parent_x={win_parent_x}",
+        pt.x
+    ));
+    true
+}
+
+/// `WM_MOUSEMOVE`：拖拽中 → 按光标位移移动窗口。
+#[cfg(target_os = "windows")]
+fn drag_move(hwnd: *mut core::ffi::c_void) {
+    if !DRAG_ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
+        return;
+    }
+    let Some((_, _, win_w, _)) = window_screen_rect(hwnd) else {
+        return;
+    };
+    let Some((_, _, tb_w, _)) = taskbar_rect() else {
+        return;
+    };
+    let dx = pt.x - DRAG_ORIGIN_CURSOR_X.load(Ordering::Acquire);
+    // ⚠️ 原点与目标**同一坐标系**（父窗客户区）⇒ 直接相加，不做任何「屏幕→客户区」换算。
+    //    混用两个坐标系会让窗口在首次移动时跳一段固定偏移（见 `window_parent_x`）。
+    let wanted = DRAG_ORIGIN_WIN_X.load(Ordering::Acquire) + dx;
+    let rel_x = clamp_rel_x(wanted, win_w, tb_w);
+    // ⚠️ 子窗的 `SetWindowPos` 坐标同样是**父窗客户区坐标**（与 `commit` 一致）。
+    // ⚠️ `SWP_NOSIZE`：宽度由内容决定，拖拽不改变内容 ⇒ 尺寸不该动。
+    //     （`ULW` 提交的位图会随窗口一起移动，无需重绘 —— 真机实测确认。）
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            rel_x,
+            widget_y_offset(),
+            0,
+            0,
+            windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOSIZE
+                | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOZORDER
+                | windows_sys::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
+        );
+    }
+    LAST_X.store(rel_x, Ordering::Release);
+}
+
+/// 结束拖拽：复位状态 → 释放捕获 → 把落点写进配置。
+///
+/// ⚠️ 这是**拖拽唯一的落盘点**；`WM_LBUTTONUP` 与 `WM_CAPTURECHANGED` 都走它
+///   （捕获被别处抢走时，窗口停在哪就记哪 —— 总比丢掉位置强）。
+#[cfg(target_os = "windows")]
+fn drag_finish(hwnd: *mut core::ffi::c_void) {
+    // ⛔ 先 `swap(false)` 再 `ReleaseCapture()`：`ReleaseCapture` 自身会投递一条
+    //    `WM_CAPTURECHANGED`，若那时标志仍为 true 会再进本函数（重复落盘 + 重复日志）。
+    if !DRAG_ACTIVE.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture() };
+    let Some((_, _, win_w, _)) = window_screen_rect(hwnd) else {
+        return;
+    };
+    let Some(win_parent_x) = window_parent_x(hwnd) else {
+        return;
+    };
+    let Some((_, _, tb_w, _)) = taskbar_rect() else {
+        return;
+    };
+    let rel_x = clamp_rel_x(win_parent_x, win_w, tb_w);
+    LAST_X.store(rel_x, Ordering::Release);
+    // ⛔⛔ **绝不能在这里 `emit("config-changed")`**：`emit` 在**调用它的那个线程**上
+    //    同步逐个执行回调（`tauri/src/event/listener.rs`），而本函数正跑在**主线程**的
+    //    窗口过程里 ⇒ 监听里的 `apply_from_config` 会调用 `app.run_on_main_thread(..)`
+    //    （内部同步等待主线程）⇒ **主线程等主线程，永久死锁**。
+    //    与 AGENTS.md 的 AB/BA 纪律同源。`with_config_mut` 自己会落盘，不需要任何事件。
+    crate::config::with_config_mut(|c| c.taskbar_custom_x = Some(rel_x));
+    append_log(&format!(
+        "[widget] 拖拽落位: rel_x={rel_x}（已写入 taskbar_custom_x）"
+    ));
 }
 
 /// 真实内容的自绘与提交（**主线程**调用）。
@@ -1319,20 +1651,31 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     }
     // ⚠️ 位置配置**在绘制前一次性取快照**（返回 owned 值）⇒ 锁在 GDI 调用之前就已释放，
     //    不会「持配置锁去做窗口操作」（AGENTS.md 的 AB/BA 死锁纪律）。
-    let (position, locked) =
-        crate::config::with_config(|c| (c.taskbar_position.clone(), c.taskbar_position_locked));
-    let slot_rel_x = SLOT_X.load(Ordering::Acquire) - taskbar_left();
+    let (position, locked, custom_x) = crate::config::with_config(|c| {
+        (
+            c.taskbar_position.clone(),
+            c.taskbar_position_locked,
+            c.taskbar_custom_x,
+        )
+    });
+    // ⚠️ `taskbar_rect()` 取一次同时拿到左端与宽度（宽度供 `resolve_rel_x` 钳制用）。
+    //    取不到时给一个「钳制不起作用」的宽度，退回旧行为而不是把窗口钉死在 0。
+    let (tb_left, tb_w) = match taskbar_rect() {
+        Some((left, _, w, _)) => (left, w),
+        None => (0, i32::MAX),
+    };
+    let slot_rel_x = SLOT_X.load(Ordering::Acquire) - tb_left;
     let slot_w = SLOT_W.load(Ordering::Acquire);
     let aligned = align_in_slot(slot_rel_x, slot_w, total_w, &position);
-    // 「未固定位置」⇒ 沿用上次画过的位置（哨兵 0 = 还没画过，退回贴靠结果）。
-    let rel_x = if locked {
-        aligned
-    } else {
-        match LAST_X.load(Ordering::Acquire) {
-            0 => aligned,
-            last => last,
-        }
-    };
+    // 四档优先级（固定 > 拖拽落点 > 上次 > 贴靠）与钳制都在纯函数里，可单测。
+    let rel_x = resolve_rel_x(
+        locked,
+        aligned,
+        custom_x,
+        LAST_X.load(Ordering::Acquire),
+        total_w,
+        tb_w,
+    );
     LAST_X.store(rel_x, Ordering::Release);
     // ⭐ 定位结果**必须落日志**：本模块最容易「看起来正常但位置不对」——
     //   贴靠算错、槽位过窄（`max_offset` 归零 ⇒ left/center/right 三者同解）、
@@ -1357,6 +1700,16 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
 
         // 内容色（预乘前的原色）：浅色主题黑、深色主题白
         let (cr, cg, cb): (u8, u8, u8) = if dark { (255, 255, 255) } else { (0, 0, 0) };
+        // ⛔ 不固定位置 ⇒ 用户可拖拽 ⇒ **必须铺底衬**：分层窗按 alpha 命中测试，
+        //    alpha = 0 的像素会把鼠标消息放行给下层（`Shell_TrayWnd`），
+        //    实测只有 11/68 个采样点能命中 widget（全落在字形笔画上）——
+        //    没有底衬就只能靠「精确点中 2px 宽的笔画」拖动，交互不可用。
+        //    详见 `fill_drag_backdrop` 文档。
+        // ⚠️ 固定位置时不铺：那时拖拽被禁用，底衬只是白占一片可见面积。
+        // ⚠️ 底衬必须**先**画（后续内容按「取最大 alpha」叠加 ⇒ 只会覆盖它、不会抹掉它）。
+        if !locked {
+            fill_drag_backdrop(px, total_w, h, (cr, cg, cb));
+        }
         // 图标在 widget 里垂直居中（`ICON_PX` ≤ `h`，余量上下各一半）
         let icon_y = (h - ICON_PX) / 2;
 
@@ -2448,6 +2801,132 @@ mod tests {
             let x = align_in_slot(slot_x, slot_w, content_w, pos);
             assert_eq!(x, slot_x, "槽装不下时 `{pos}` 应退化为贴槽左端");
         }
+    }
+
+    // ── 拖拽：位置钳制与四档优先级 ─────────────────────────────
+
+    /// 钳制必须**两端都夹住**：左端越界夹到 0，右端越界夹到 `taskbar_w - widget_w`。
+    ///
+    /// 可证伪：把 `.clamp(0, max)` 改成 `.max(0)`（丢掉右端），第 2 条断言立刻转红 ——
+    ///   窗口会被拖出任务栏右缘，内容还在但位置在屏幕外，用户只能重启恢复。
+    #[test]
+    fn clamp_rel_x_pins_both_ends() {
+        assert_eq!(clamp_rel_x(-50, 100, 1000), 0, "左端越界夹到 0");
+        assert_eq!(clamp_rel_x(5000, 100, 1000), 900, "右端越界夹到 w-widget_w");
+        assert_eq!(clamp_rel_x(300, 100, 1000), 300, "区间内必须原样保留");
+    }
+
+    /// 窗口比任务栏还宽（异常 DPI / 内容过多）⇒ 上界归零 ⇒ 钉在左端，**绝不返回负值**。
+    ///
+    /// 可证伪：把 `(taskbar_w - widget_w).max(0)` 里的 `.max(0)` 去掉，
+    ///   上界变成负数 ⇒ `clamp(0, 负)` **会 panic**（`min > max`），本条转红。
+    #[test]
+    fn clamp_rel_x_never_returns_negative_when_widget_overflows_taskbar() {
+        assert_eq!(clamp_rel_x(300, 1200, 1000), 0);
+    }
+
+    /// ⭐ 四档优先级的**唯一落地点**：固定 > 拖拽落点 > 上次 > 贴靠。
+    ///
+    /// 可证伪（三种，各自钉住一档）：
+    ///   ① 把 `locked` 分支去掉（改成永远走 `custom_x`）⇒ `locked=true` 那条转红；
+    ///   ② 把 `custom_x` 与 `last` 的优先级对调 ⇒ 「拖拽落点压过 last」那条转红；
+    ///   ③ 把 `last != 0` 写成 `last > 0` 之外的条件（如恒 true）⇒ 首帧那条转红。
+    #[test]
+    fn resolve_rel_x_priority_is_locked_then_custom_then_last_then_aligned() {
+        let (w, tb) = (100, 1000);
+        // ① 固定位置：压过一切（拖拽落点还在配置里，但此刻不该生效）
+        assert_eq!(
+            resolve_rel_x(true, 700, Some(300), 500, w, tb),
+            700,
+            "固定位置时必须用贴靠结果，即使有拖拽落点"
+        );
+        // ② 不固定 + 拖过：用用户放下的位置
+        assert_eq!(
+            resolve_rel_x(false, 700, Some(300), 500, w, tb),
+            300,
+            "用户显式拖拽的位置必须压过「上次画过的地方」"
+        );
+        // ③ 不固定 + 没拖过 + 画过：沿用上次
+        assert_eq!(
+            resolve_rel_x(false, 700, None, 500, w, tb),
+            500,
+            "没拖过时应沿用上次位置（「不固定」的旧语义）"
+        );
+        // ④ 不固定 + 没拖过 + 首帧（哨兵 0）：退回贴靠
+        assert_eq!(
+            resolve_rel_x(false, 700, None, 0, w, tb),
+            700,
+            "`last == 0` 是「还没画过」的哨兵，必须退回贴靠结果"
+        );
+    }
+
+    /// ⭐ 拖拽落点**同样要钳制**：配置里可能存着换分辨率/改缩放之前的旧值。
+    ///
+    /// 可证伪：把 `resolve_rel_x` 末尾的 `clamp_rel_x` 去掉 ⇒ 本条返回 99999 转红。
+    /// ⚠️ 这是「拖拽落点」与「贴靠结果」的关键区别 —— 后者由 `align_in_slot` 保证在槽内，
+    ///   前者来自**磁盘上的旧配置**，没有任何上界保证。
+    #[test]
+    fn resolve_rel_x_clamps_the_persisted_drag_position() {
+        assert_eq!(
+            resolve_rel_x(false, 0, Some(99999), 0, 100, 1000),
+            900,
+            "持久化的拖拽落点必须按任务栏宽度钳制"
+        );
+        assert_eq!(
+            resolve_rel_x(false, 0, Some(-99999), 0, 100, 1000),
+            0,
+            "负数落点同样要被夹回 0"
+        );
+    }
+
+    // ── 拖拽底衬的圆角判据 ───────────────────────────────────
+
+    /// ⭐ 圆角矩形 ≠ 内切椭圆：**四条直边的中点必须命中**。
+    ///
+    /// 可证伪：把实现改成椭圆判据（`(x-cx)²/r² + (y-cy)²/r² <= 1` 不分支直接算），
+    ///   左/右边中点会落到椭圆外 ⇒ 本条转红。这是最容易写出的错误实现。
+    #[test]
+    fn inside_rounded_rect_includes_edge_midpoints() {
+        let (w, h, r) = (100, 40, 6);
+        assert!(inside_rounded_rect(0, h / 2, w, h, r), "左边中点必须命中");
+        assert!(
+            inside_rounded_rect(w - 1, h / 2, w, h, r),
+            "右边中点必须命中"
+        );
+        assert!(inside_rounded_rect(w / 2, 0, w, h, r), "上边中点必须命中");
+        assert!(
+            inside_rounded_rect(w / 2, h - 1, w, h, r),
+            "下边中点必须命中"
+        );
+        assert!(inside_rounded_rect(w / 2, h / 2, w, h, r), "中心必须命中");
+    }
+
+    /// 四个**角点**必须被挖掉（否则底衬看起来是直角方块，与圆角设计不符）。
+    ///
+    /// 可证伪：把 `inside_rounded_rect` 改成恒 `true` ⇒ 本条四条断言全红。
+    #[test]
+    fn inside_rounded_rect_excludes_corners() {
+        let (w, h, r) = (100, 40, 6);
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert!(
+                !inside_rounded_rect(x, y, w, h, r),
+                "角点 ({x},{y}) 必须落在圆角之外"
+            );
+        }
+    }
+
+    /// 越界坐标一律不算命中（`fill_drag_backdrop` 依赖它做边界判断）。
+    /// `r == 0` 时退化为**实心矩形**（不 panic、不挖角）。
+    #[test]
+    fn inside_rounded_rect_handles_out_of_range_and_zero_radius() {
+        let (w, h) = (100, 40);
+        assert!(!inside_rounded_rect(-1, 20, w, h, 6));
+        assert!(!inside_rounded_rect(w, 20, w, h, 6));
+        assert!(!inside_rounded_rect(50, h, w, h, 6));
+        assert!(
+            inside_rounded_rect(0, 0, w, h, 0),
+            "半径 0 ⇒ 退化为实心矩形"
+        );
     }
 
     // ── wants_widget：窗口「该不该存在」的判据 ─────────────────

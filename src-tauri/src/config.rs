@@ -164,10 +164,21 @@ pub struct Config {
     /// 任务栏信息窗是否**固定位置**。
     ///
     /// - `true`：位置由 `taskbar_position` 决定，每次刷新按避让规则重算（不会被压住）；
-    /// - `false`：沿用上次位置、不再重算（语义 = 「不固定」）。
-    ///   ⛔ 用户可自由拖拽窗口的那条路**尚未实现**，故关闭时目前只表现为「不再自动移动」。
+    /// - `false`：位置由用户**手动拖拽**决定（`taskbar_custom_x`），不再重算
+    ///   —— 即「我自己摆，别动它」。
     #[serde(default = "default_true")]
     pub taskbar_position_locked: bool,
+    /// 用户**手动拖拽**后放下的窗口左端（相对任务栏客户区的**物理像素**）。
+    ///
+    /// - `Some(x)`：用户拖过 ⇒ 「不固定位置」时应回到这个位置；
+    /// - `None`：用户从没拖过 ⇒ 「不固定」沿用上次绘制的位置。
+    ///
+    /// ⚠️ 只在 `taskbar_position_locked == false` 时生效。固定位置时**忽略但不清除**
+    ///   —— 用户把开关再关掉，就能回到自己放下的地方。
+    /// ⚠️ 存的是物理像素，换分辨率/改缩放后可能与预期位置有偏差（读取时会按任务栏
+    ///   宽度**钳制**，不会跑出任务栏）。
+    #[serde(default)]
+    pub taskbar_custom_x: Option<i32>,
     #[serde(default)]
     pub hidden_audio_devices: Vec<String>,
     /// 日志级别："off"/"standard"/"verbose"
@@ -501,6 +512,7 @@ impl Default for Config {
             pinned_taskbar_devices: vec![],
             taskbar_position: default_taskbar_position(),
             taskbar_position_locked: true,
+            taskbar_custom_x: None,
             hidden_audio_devices: vec![],
             log_level: default_log_level(),
             legacy_log_enabled: None,
@@ -951,6 +963,7 @@ macro_rules! for_each_config_field {
             pinned_taskbar_devices,
             taskbar_position,
             taskbar_position_locked,
+            taskbar_custom_x,
             hidden_audio_devices,
             log_level,
             legacy_log_enabled,
@@ -1720,12 +1733,13 @@ mod tests {
     /// **覆盖性守卫**：`merge_config` 的字段清单必须与 `Config` 的落盘字段集**双向相等**。
     ///
     /// 为什么按**字段名集合**而不是数个数：TOML 没有 null，`toml` crate 序列化时会
-    /// **跳过 `None`**，所以 `Config::default()` 里有 6 个 `Option` 字段压根不出现在
-    /// 结果里（`legacy_log_enabled` + 5 个 `shortcut_*`）。数个数就得硬编码偏移量，
+    /// **跳过 `None`**，所以 `Config::default()` 里有 7 个 `Option` 字段压根不出现在
+    /// 结果里（`legacy_log_enabled` + 5 个 `shortcut_*` + `taskbar_custom_x`）。数个数就得硬编码偏移量，
     /// 而偏移量本身也会漂。
     ///
     /// ⚠️ **新增可选（`Option`）字段时**：请同时在下面的 `probe` 里把它设为 `Some`，
     /// 否则它默认不出现在序列化结果里，本用例覆盖不到它。
+    /// （`taskbar_custom_x` 就是这样被本用例抓出来的 —— 见下方 `probe`。）
     #[test]
     fn merge_field_list_covers_every_serialized_field() {
         use std::collections::BTreeSet;
@@ -1738,6 +1752,7 @@ mod tests {
             shortcut_volume_up: Some("C".to_string()),
             shortcut_volume_down: Some("D".to_string()),
             shortcut_volume_mute: Some("E".to_string()),
+            taskbar_custom_x: Some(120),
             ..Default::default()
         };
 
