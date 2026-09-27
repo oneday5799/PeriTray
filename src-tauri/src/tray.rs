@@ -277,6 +277,53 @@ fn theme_watch_state_now() -> ThemeWatchState {
     ThemeWatchState::load(crate::windows::system_dark_mode)
 }
 
+/// 任务栏底衬的**主题变更判据**（生产路径调用它）。
+///
+/// ── 为什么抽成函数：让「读哪个注册表值」可被测试断言 ──────────────────
+/// 「任务栏底衬跟随**系统**主题（`SystemUsesLightTheme`）」这件事，
+/// 第一版只是**写在调用点的字面代码**里（`sys_state.on_notify(system_uses_light_theme)`），
+/// 单测无法触及 —— 实测把生产代码改成读**应用**主题后，
+/// 只断言「`ThemeWatchState` 类型行为」的测试**依然全绿**，等于没测。
+///
+/// ⇒ 把「读哪个值」提升为**这个函数唯一做的事**：它内部固定读
+///   `system_uses_light_theme`（系统主题）。改动这个取值会让
+///   `taskbar_criterion_reads_system_theme` 用例转红。
+///   这与 `ordered_register_then_read` 是同一手法（把契约变成函数，而非注释）。
+///
+/// ⭐ 返回值语义 = 「系统主题确实变了，任务栏应重绘」。
+#[cfg(target_os = "windows")]
+fn theme_changed_for_taskbar(state: &mut ThemeWatchState) -> bool {
+    state.on_notify(taskbar_theme_reader())
+}
+
+/// 生产路径上「任务栏判据读取的到底是哪个主题」的**可断言投影**。
+///
+/// ⭐ 把读取器当成返回值暴露出来，测试就能**不碰注册表**地验证
+///   「这里读的是系统主题，而不是应用主题」——直接断言行为实现不了这一点
+///   （两个值在默认配置下恰好都是浅色，读哪个都「看起来正常」）。
+#[cfg(target_os = "windows")]
+fn taskbar_theme_reader() -> fn() -> bool {
+    crate::windows::system_uses_light_theme
+}
+
+/// 与 `theme_watch_state_now` 同理，但监视的是**系统**主题（`SystemUsesLightTheme`）。
+///
+/// ── 为什么要**两份**状态而不是共用一份 ─────────────────────────────────
+/// 托盘图标跟着**应用**主题（`AppsUseLightTheme`）换色，任务栏底衬跟着**系统**主题
+/// （`SystemUsesLightTheme`）。两者是注册表里**两个不同的值**，在
+/// 「应用深色 + 系统浅色」这类自定义主题下**取值相反**。
+/// ⇒ 若共用一个 `last`，切换系统主题时去重判据会读到**未变的应用主题**而返回 `false`，
+///   任务栏**照样不重绘** —— 等于没修。
+///
+/// ⚠️ 两者共用同一次注册表通知（同一把 key），不需要第二个 watcher 线程。
+///
+/// ⭐ 读取器经由 `taskbar_theme_reader()` 取得 —— **取值来源只有一处**，
+///   避免「初始状态读 A、判据读 B」这种分叉（分叉后测试仍可能全绿）。
+#[cfg(target_os = "windows")]
+fn system_theme_watch_state_now() -> ThemeWatchState {
+    ThemeWatchState::load(taskbar_theme_reader())
+}
+
 /// 主题监视的**启动次序**，抽出来是为了让「先注册、后读取」这件事可被断言。
 ///
 /// ── 为什么不能只靠注释保证（P3-11 验收教训）──────────────────────
@@ -344,6 +391,10 @@ fn start_theme_watcher() {
             // 改错也没有任何测试会转红（P3-11 第一版验收教训）。
             let mut registered = false;
             let mut state = ThemeWatchState { last: false };
+            // ── 系统主题的独立去重状态（任务栏底衬用）─────────────────────
+            // ⛔ 不能复用 `state`：它跟踪的是**应用**主题，见
+            //    `system_theme_watch_state_now` 的注释（共用会导致任务栏漏判）。
+            let mut sys_state = system_theme_watch_state_now();
             ordered_register_then_read(
                 || {
                     registered =
@@ -364,6 +415,11 @@ fn start_theme_watcher() {
                     if state.on_notify(crate::windows::system_dark_mode) {
                         std::thread::spawn(update_tray_icon);
                     }
+                    // ⚠️ 系统主题走**独立**判据；任务栏重绘本身是异步投递，
+                    //    不阻塞这个监听线程（`notify_system_theme_changed` 只置标志 + 投递）。
+                    if theme_changed_for_taskbar(&mut sys_state) {
+                        crate::taskbar_widget::notify_system_theme_changed();
+                    }
                     registered =
                         RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
                     continue;
@@ -372,6 +428,11 @@ fn start_theme_watcher() {
                 WaitForSingleObject(event, INFINITE);
                 if state.on_notify(crate::windows::system_dark_mode) {
                     std::thread::spawn(update_tray_icon);
+                }
+                // 见上：系统主题独立判据 ⇒ 通知任务栏重绘（真机缺陷修复：
+                // 原先只刷托盘图标，任务栏要等 hover 才更新）。
+                if theme_changed_for_taskbar(&mut sys_state) {
+                    crate::taskbar_widget::notify_system_theme_changed();
                 }
                 // 事件已被消费（手动重置事件 + 上轮等待返回后需重新注册）
                 registered =
@@ -903,6 +964,70 @@ mod tests {
             );
             // 而真正的新变化仍然会被捕获
             assert!(state.on_notify(|| false), "后续真实变化仍应触发");
+        }
+
+        /// 核心回归（任务栏底衬不随系统主题更新）：**任务栏判据读的必须是「系统」主题，
+        /// 而不是「应用」主题**。
+        ///
+        /// ── 为什么必须这样断言（第一版验收教训）────────────────────────
+        /// 第一版只断言 `ThemeWatchState` 这个**类型**能独立演进（用两个闭包模拟），
+        /// 完全没有触及生产代码「到底把哪个读取器传给判据」。
+        /// 实测：把生产代码改成读**应用**主题后，那版测试**依然全绿** —— 等于没测。
+        ///
+        /// ⇒ 本用例改为断言**生产路径的读取器来源**：`taskbar_theme_reader()`
+        ///   必须与 `system_uses_light_theme` 是同一个函数（按函数指针比较），
+        ///   且**不得**等于 `system_dark_mode`。
+        ///   把读取器改成应用主题 ⇒ 本用例立刻转红。
+        ///
+        /// ⚠️ 函数指针比较绕开了「两个值在默认配置下恰好相同」这个陷阱 ——
+        ///   直接比较返回值在浅色+浅色的机器上永远通过，没有区分力。
+        ///
+        /// ⚠️ 比较前先 `as *const ()` 再 `as usize`：裸 `fn as usize` 会触发
+        ///   rustc lint `fn_to_int`（「direct cast of function item into an integer」），
+        ///   而本仓警告闸门对 lints 零容忍。多一次中转即可，语义不变。
+        #[test]
+        fn taskbar_criterion_reads_system_theme() {
+            fn addr(f: fn() -> bool) -> usize {
+                f as *const () as usize
+            }
+            let reader = super::super::taskbar_theme_reader();
+            assert_eq!(
+                addr(reader),
+                addr(crate::windows::system_uses_light_theme),
+                "任务栏判据必须读**系统**主题（SystemUsesLightTheme）"
+            );
+            assert_ne!(
+                addr(reader),
+                addr(crate::windows::system_dark_mode),
+                "任务栏判据**绝不能**读应用主题（AppsUseLightTheme）——\
+                 两者在「应用深色+系统浅色」下取值相反，会导致任务栏不随系统主题重绘"
+            );
+        }
+
+        /// 系统主题变化时，任务栏判据必须返回 `true`（= 请求重绘）。
+        ///
+        /// 与上一条互补：上一条钉死「读哪个值」，本条钉死「变了要报 true」。
+        ///
+        /// ⚠️ 这里直接构造 `ThemeWatchState` 并喂值，**不经 probe 包装函数**——
+        ///   上一版为此加了个 `theme_changed_for_taskbar_probe`，它只被测试调用
+        ///   ⇒ 触发 `dead_code`（`#![warn(unused_imports, dead_code)]` 拦提交）。
+        ///   而「变化→true」本就是 `ThemeWatchState` 自身的职责，直接用即可。
+        #[test]
+        fn taskbar_criterion_fires_on_system_theme_change() {
+            // 初始为系统浅色
+            let mut state = ThemeWatchState::load(|| true);
+            // 系统切到深色 ⇒ 必须请求重绘（本次修复的正题）
+            assert!(
+                state.on_notify(|| false),
+                "系统主题 浅→深 必须触发任务栏重绘"
+            );
+            // 仍是深色 ⇒ 不重复重绘（去重）
+            assert!(!state.on_notify(|| false), "系统主题未变 ⇒ 不得重复重绘");
+            // 切回浅色 ⇒ 再次请求重绘
+            assert!(
+                state.on_notify(|| true),
+                "系统主题 深→浅 必须触发任务栏重绘"
+            );
         }
 
         /// 顺序反了会丢事件：这个对照用例把「旧次序为何有缺陷」写成可执行的断言。

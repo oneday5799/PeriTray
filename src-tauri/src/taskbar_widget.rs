@@ -489,6 +489,33 @@ static DRAG_ORIGIN_WIN_X: std::sync::atomic::AtomicI32 = std::sync::atomic::Atom
 ///   所以「重绘」就足以让新位置生效，无需额外搬运位置状态。
 #[cfg(target_os = "windows")]
 static FORCE_REPAINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 系统主题（深/浅）变更后，请求任务栏窗口重绘（**任意线程可调**）。
+///
+/// ── 为什么需要它（真机实测缺陷）─────────────────────────────────────
+/// `refresh_async` 的判据是「**数据变了** / **槽位移动了** / `FORCE_REPAINT`」三者之一。
+/// 系统切换深/浅模式时**三者全不满足**：设备数据没变、槽位没动，
+/// 只是**渲染参数**（底衬 alpha、内容明暗）变了 ⇒ 判据返回 `false` ⇒ 窗口不重绘。
+/// 表现就是「系统改了主题，任务栏窗口还是旧配色，**必须 hover 一下才更新**」——
+/// 因为 hover 的 50ms 轮询会走另一条重绘路径。
+///
+/// ⇒ 与「改贴靠位置」是**同一类缺陷**（见 `FORCE_REPAINT` 的注释）：
+///   渲染参数变化不会体现在数据判据里，必须**显式要求重绘**。
+///
+/// ⭐ 复用 `FORCE_REPAINT + refresh_async()` 这个**已经过实战验证**的组合，
+///   而不是新开一条重绘路径 —— 后者会绕过防抖与「未挂载早退」，制造第二套语义。
+///
+/// ⚠️ 不直接调 `repaint_from_snapshot`：主题变更时窗口可能**尚未挂载**
+///   （`should_show()` 为假），此时重绘请求应由 `refresh_async` 内部的
+///   `widget_alive()` 早退掉，而不是在这里各判一次。
+#[cfg(target_os = "windows")]
+pub fn notify_system_theme_changed() {
+    use std::sync::atomic::Ordering as O;
+    FORCE_REPAINT.store(true, O::Release);
+    refresh_async();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn notify_system_theme_changed() {}
 
 /// 诊断用的 FFI 集合。集中在一处便于核对「到底调了哪些 API」。
 #[cfg(target_os = "windows")]
