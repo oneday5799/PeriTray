@@ -213,6 +213,8 @@ impl Metrics {
     ///   每字符宽度估算）—— 那些值按字号比例缩放，不适合塞进固定字段。
     /// ⚠️ 走**内容**口径：文本宽度属于内容，必须与 `font` 同步缩放，
     ///   否则「字号小、估宽按大字号」⇒ 窗口比内容宽（留白）或反之（重叠）。
+    ///
+    /// ⭐ 生产调用点：`draw_items` 里换算 `EDGE_MARGIN_DIP`（靠左/靠右的留白）。
     pub fn dip(&self, dip: i32) -> i32 {
         Self::dip_of(self.content_dpi, dip)
     }
@@ -421,13 +423,17 @@ static REFRESH_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 #[cfg(target_os = "windows")]
 static REFRESH_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// 后台扫描出的视觉空白区左端（物理像素）。主线程只读，不做 GetPixel。
+/// 可用区（= 整条任务栏）左端的屏幕 x（物理像素）。
+///
+/// ⚠️ 自 2026-09-26 第二次方案变更后，它**恒等于任务栏左缘**（典型为 0）——
+///   像素扫描被移除（见 `find_widget_slot`），这里保留为原子量只是为了
+///   让「可用区」与窗口位置在绘制线程上仍走同一套传递路径。
 #[cfg(target_os = "windows")]
-static SLOT_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(100);
-/// 上一次分配的槽宽；视觉扫描会把 widget 自己的旧内容排除，避免自我占用导致下一轮消失。
+static SLOT_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// 可用区宽度（= 任务栏宽度）。同上，恒为整条任务栏宽度。
 #[cfg(target_os = "windows")]
 static SLOT_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
-/// 是否已有后台扫描结果；没有结果时主线程保持 widget 隐藏，避免首帧压住任务栏内容。
+/// 是否已取到任务栏矩形；取不到时主线程保持 widget 隐藏（防御：Explorer 未就绪）。
 #[cfg(target_os = "windows")]
 static SLOT_VALID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -489,6 +495,7 @@ static DRAG_ORIGIN_WIN_X: std::sync::atomic::AtomicI32 = std::sync::atomic::Atom
 ///   所以「重绘」就足以让新位置生效，无需额外搬运位置状态。
 #[cfg(target_os = "windows")]
 static FORCE_REPAINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// 系统主题（深/浅）变更后，请求任务栏窗口重绘（**任意线程可调**）。
 ///
 /// ── 为什么需要它（真机实测缺陷）─────────────────────────────────────
@@ -1456,189 +1463,134 @@ fn resolve_rel_x(
     clamp_rel_x(wanted, widget_w, taskbar_w)
 }
 
-/// 在避让槽内按贴靠策略算出窗口左端。
+/// 在任务栏上取「可用区域」——**就是整条任务栏**。
 ///
-/// ⭐ 抽成**纯函数**是为了能单测：贴靠判据极易写反（`right` 写成 `slot_x` 不报错，
-///   只是窗口跑到左边；`center` 少除一次 2 也只是偏一点），肉眼未必立刻发现。
+/// ⛔⛔⛔ **2026-09-26 第二次方案变更：彻底移除像素扫描。**
 ///
-/// ⚠️ 贴靠的参照系是**避让后的空白槽**，不是整条任务栏 —— 槽内 `center` 未必等于
-///   屏幕居中，但它是唯一「不会被邻居压住」的居中口径（见 PLAYBOOK §E9）。
-/// ⚠️ 槽宽小于内容宽时 `max_offset` 归零 ⇒ 三种策略都退化为贴槽左端；
-///   调用方在此之前已用 `wanted` 宽度筛过槽，正常不会走到这里（属防御分支）。
+///   本章先后试过两代「避让」实现，**两代都已删除**：
+///   ① 枚举任务栏子窗取矩形（`third_party_widget_rects`）；
+///   ② 逐列扫描任务栏像素找「视觉空白段」（`select_slot` / `pick_widest_run` /
+///      `erase_self_region` / `find_widget_slot` 的 BitBlt 部分）——
+///      即「第一代删掉后」留下来的那一半。
+///
+///   ⛔ **② 为什么也不能留**（用户 2026-09-26 第二次反馈：「靠左/右没有出现在
+///   整个任务栏的最左/右侧，居中也不对」）：
+///   · `SLOT_SAFE_MARGIN = 100` 把可用区间裁成 `[100, width-100]`
+///     ⇒ `slot_x` **永远 ≥ 100** ⇒ 「靠左」永远差 100px；
+///     右端同理永远差 100px；`center` 也因此在裁剪后的区间里算，不是真正的屏幕中心。
+///   · `pick_widest_run` 只返回**最宽的空白段**，`slot` 因此是
+///     「任务栏里某一段」而不是「整条任务栏」⇒ 三档位置全都建立在一个
+///     **与用户所见无关**的坐标系上。
+///   · 它还依赖 `wanted`（内容估算宽度）参与切段 ⇒ 设备数一变、槽就变 ⇒
+///     位置跟着漂 —— 用户看到的是「位置设置不生效」。
+///   ⇒ **根因不是参数没调对，而是「避让」这个前提本身**。用户要求的是
+///     「**直接使用整个任务栏**」，因此像素扫描整体退役。
+///
+/// ⭐ **现口径（用户钦定）**：可用区域 = `[任务栏左缘, 任务栏右缘]`，
+///   与「任务栏上有什么」**完全无关**。
+///   · `left`  ⇒ 窗口左缘贴任务栏左缘；
+///   · `right` ⇒ 窗口右缘贴任务栏右缘；
+///   · `center`⇒ 窗口在整条任务栏里居中。
+///   与第三方 widget（Lyricify 等）**重叠是允许的** —— 我方内容自带半透明底衬。
+///
+/// ⚠️ 返回 `(可用区左端屏幕 x, 可用区宽)`；取不到任务栏矩形时返回 `None`
+///   （此时调用方置 `SLOT_VALID=false` 并隐藏窗口）。
 #[cfg(target_os = "windows")]
-fn align_in_slot(slot_x: i32, slot_w: i32, content_w: i32, position: &str) -> i32 {
+fn find_widget_slot() -> Option<(i32, i32)> {
+    let (left, _, w, _) = taskbar_rect()?;
+    if w <= 0 {
+        return None;
+    }
+    Some((left, w))
+}
+
+/// 在可用区内按贴靠策略算出窗口左端。
+///
+/// ⭐ **位置口径的核心，必须保留**：`left`/`center`/`right` 三档全靠它。
+///   · `left`  ⇒ 距可用区左缘 `EDGE_MARGIN`；
+///   · `center`⇒ 居中（`max_offset / 2`，**不留边距**）；
+///   · `right` ⇒ 距可用区右缘 `EDGE_MARGIN`。
+///   ⛔ 抽成**纯函数**是为了能单测：贴靠判据极易写反（`right` 写成 `slot_x` 不报错，
+///   只是窗口跑到左边），肉眼未必立刻发现。
+///
+/// ⚠️ 可用区现在是**整条任务栏**（见 `find_widget_slot`），因此：
+///   · `center` **就是**任务栏正中（不再是「某个槽里的居中」）；
+///   · `left`/`right` 相对任务栏的最左/最右，各自再留 `edge_margin`。
+///   ⭐ 参数名沿用 `slot_*` 只是为了不动调用点；语义即「可用区」。
+///
+/// ⭐⭐ **`edge_margin` 的口径来自实测 Windows 自身组件**（2026-09-26 用户要求
+///   「可参考 Windows 开始按钮和时间日期组件」）。125% DPI 逐像素实测：
+///   · 开始按钮图标落在 `x = 26..54`（按钮窗口 `0..69`）⇒ **距左 26px**；
+///   · 时钟/托盘最右有内容的列 = `2535` ⇒ **距右 24px**。
+///   两者高度一致（24~26）⇒ 取 **`EDGE_MARGIN_DIP = 20`**（96 DPI 基准，经 `content_dpi`
+///   换算 ⇒ 125% 下 **25px**，正落在实测区间内）。
+///   ⛔ 不要重新引入「避让」那种更大的安全边距（旧的 `SLOT_SAFE_MARGIN = 100`
+///   比 Windows 观感大 4 倍，正是被用户否掉的原因）。
+///
+/// ⚠️ `edge_margin` 必须**由调用方按内容 DPI 传入**（纯函数纪律：不能在这里读 `Metrics`，
+///   否则单测会走 `config::with_config` panic，见 `config.rs:1172`）。
+/// ⚠️ 窗口太宽时边距会与 `max_offset` 冲突 ⇒ 先夹到 `max_offset`（`min`），
+///   否则 `left` 会算出「窗口右缘超出可用区」的负偏移（`right` 侧尤其危险）。
+#[cfg(target_os = "windows")]
+fn align_in_slot(
+    slot_x: i32,
+    slot_w: i32,
+    content_w: i32,
+    position: &str,
+    edge_margin: i32,
+) -> i32 {
     let max_offset = (slot_w - content_w).max(0);
+    // ⛔ 边距不得把窗口挤出可用区：窄屏/超宽内容时退化为贴边（见文档）。
+    let margin = edge_margin.clamp(0, max_offset / 2);
     let offset = match position {
-        "left" => 0,
-        "right" => max_offset,
+        "left" => margin,
+        "right" => max_offset - margin,
         // `center` 及任何未知值（`normalize_config` 已兜住非法值，此处仅防御）
         _ => max_offset / 2,
     };
     slot_x + offset
 }
 
-/// 在任务栏上找一段「视觉空白」并留安全边距。
+/// 「靠左/靠右」时窗口距任务栏边缘的留白（**DIP**，96 DPI 基准）。
 ///
-/// 判据与 PLAYBOOK §E9 对齐：扫描任务栏像素，二维相邻像素最大差大于 60
-/// 视为有内容；两端各留 100px，避免任务栏按钮向右长、第三方 widget 向左长时侵入。
+/// ⭐⭐ **取值依据 = 实测 Windows 自身组件**（2026-09-26 用户要求「可参考 Windows 开始
+///   按钮和时间日期组件，他们距离边缘保留了一段距离」）。125% DPI 逐像素实测：
+///   · **开始按钮**：图标像素落在 `x = 26..54`（按钮窗口本身是 `0..69`）⇒ 距左 **26px**；
+///   · **时钟/托盘**：最右有内容的列 = `2535`（任务栏右缘 2560）⇒ 距右 **24px**。
+///   两者几乎相同（24~26）⇒ 取 **20 DIP**，经内容 DPI 换算后 125% 下 = **25px**，
+///   正落在实测区间内。
 ///
-/// ⚠️ 这是保守判据：误把背景噪声算作占用只会少用空间，误把内容算成空白才会重叠。
-/// 每次重绘重新扫描，故歌词 widget 漂移后会触发重新定位，而不是继续使用旧坐标。
+/// ⛔ **不要退回旧 `SLOT_SAFE_MARGIN = 100`**：那是 125% 下的 **100px**，是 Windows 观感的
+///   4 倍，且它当初是为了「避让第三方 widget」而存在的（该方案已被用户否决）。
+///   本常量**只为观感**服务，与避让无关。
+///
+/// ⚠️ 单位是 **DIP**（不是像素）：必须经 `Metrics` 的 `content_dpi` 换算 —— 否则
+///   高 DPI 下留白会显得过窄。换算入口见调用点（`m` 已是内容口径）。
 #[cfg(target_os = "windows")]
-fn find_widget_slot(wanted: i32) -> Option<(i32, i32)> {
-    use windows_sys::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CAPTUREBLT,
-        DIB_RGB_COLORS, SRCCOPY,
-    };
-    let wanted = wanted.max(1);
-    let taskbar = unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
-            to_wide("Shell_TrayWnd").as_ptr(),
-            std::ptr::null(),
-        )
-    };
-    if taskbar.is_null() {
-        return None;
-    }
-    let mut rc = windows_sys::Win32::Foundation::RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(taskbar, &mut rc);
-    }
-    let width = (rc.right - rc.left).max(0);
-    let height = (rc.bottom - rc.top).max(0);
-    if width <= 0 || height <= 0 {
-        return None;
-    }
-    // 一次 BitBlt 抓取整个任务栏，再在本进程内扫描像素；
-    // ⛔ 不能逐像素 GetPixel（跨进程调用在本机实测约 24 秒/次）。
-    let screen = unsafe { GetDC(std::ptr::null_mut()) };
-    if screen.is_null() {
-        return None;
-    }
-    let mem = unsafe { CreateCompatibleDC(screen) };
-    let bitmap = unsafe { CreateCompatibleBitmap(screen, width, height) };
-    if mem.is_null() || bitmap.is_null() {
-        if !mem.is_null() {
-            unsafe { DeleteDC(mem) };
-        }
-        if !bitmap.is_null() {
-            unsafe { DeleteObject(bitmap) };
-        }
-        unsafe { ReleaseDC(std::ptr::null_mut(), screen) };
-        return None;
-    }
-    unsafe {
-        SelectObject(mem, bitmap);
-        if BitBlt(
-            mem,
-            0,
-            0,
-            width,
-            height,
-            screen,
-            rc.left,
-            rc.top,
-            SRCCOPY | CAPTUREBLT,
-        ) == 0
-        {
-            DeleteObject(bitmap);
-            DeleteDC(mem);
-            ReleaseDC(std::ptr::null_mut(), screen);
-            return None;
-        }
-    }
-    let mut bmi: BITMAPINFO = unsafe { std::mem::zeroed() };
-    bmi.bmiHeader = BITMAPINFOHEADER {
-        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        biWidth: width,
-        biHeight: -height,
-        biPlanes: 1,
-        biBitCount: 32,
-        biCompression: BI_RGB,
-        ..unsafe { std::mem::zeroed() }
-    };
-    let mut pixels = vec![0u32; (width * height) as usize];
-    let copied = unsafe {
-        GetDIBits(
-            mem,
-            bitmap,
-            0,
-            height as u32,
-            pixels.as_mut_ptr() as *mut core::ffi::c_void,
-            &mut bmi,
-            DIB_RGB_COLORS,
-        )
-    };
-    unsafe {
-        DeleteObject(bitmap);
-        DeleteDC(mem);
-        ReleaseDC(std::ptr::null_mut(), screen);
-    }
-    if copied == 0 {
-        return None;
-    }
-    let mut occupied = vec![false; width as usize];
-    // 12px 采样足够识别任务栏按钮/第三方 widget 的边界，再膨胀 ±12px。
-    const SAMPLE: usize = 12;
-    for x in (1..width).step_by(SAMPLE) {
-        let mut max_diff = 0u32;
-        for y in (0..height).step_by(SAMPLE) {
-            let a = pixels[(y * width + x) as usize];
-            let b = pixels[(y * width + x - 1) as usize];
-            max_diff = max_diff.max(color_diff(a, b));
-        }
-        for y in (SAMPLE as i32..height).step_by(SAMPLE) {
-            let a = pixels[(y * width + x) as usize];
-            let b = pixels[((y - SAMPLE as i32) * width + x) as usize];
-            max_diff = max_diff.max(color_diff(a, b));
-        }
-        // 旧 widget 自己的可见内容不是邻居；排除其采样列，否则下一轮会把自己判成占用。
-        let old_x = SLOT_X.load(Ordering::Acquire) - rc.left;
-        let old_w = SLOT_W.load(Ordering::Acquire);
-        if SLOT_VALID.load(Ordering::Acquire) && x >= old_x && x < old_x.saturating_add(old_w) {
-            continue;
-        }
-        if max_diff > 60 {
-            let lo = x.saturating_sub(SAMPLE as i32) as usize;
-            let hi = ((x + SAMPLE as i32).min(width - 1)) as usize;
-            for hit in &mut occupied[lo..=hi] {
-                *hit = true;
-            }
-        }
-    }
+const EDGE_MARGIN_DIP: i32 = 20;
 
-    // 任务栏两端安全边距（PLAYBOOK §E9.10：两端各留 >=100px）。
-    let left = 100i32.min(width / 2);
-    let right = (width - 100).max(left);
-    let mut run_start = left;
-    for x in left..=right {
-        let blocked = x == right || occupied[x as usize];
-        if blocked {
-            if x - run_start >= wanted {
-                return Some((rc.left + run_start, x - run_start));
-            }
-            run_start = x + 1;
-        }
-    }
-    None
+/// 内容可读的**最小窗口宽度**（物理像素）。
+///
+/// ⚠️ 现在只用于**绘制侧的防御**：可用区 = 整条任务栏后不再有「槽太窄」的情形，
+///   但窗口宽仍须有个下限，免得 `create_dib` 拿到 0 宽。
+///
+/// ⭐ 由 `Metrics` 推导（不写死）：一个图标可读的最小宽度 = 两端内边距 + 一个图标。
+///   ⚠️ 本机 125% 内容档（`default` ⇒ 内容按 96 DPI）下 = `6*2 + 32 = 44`。
+#[cfg(target_os = "windows")]
+fn min_run_w(m: &Metrics) -> i32 {
+    m.pad_x * 2 + m.icon
 }
 
 /// 单段文本宽度的**保守**估算（物理像素）。
 ///
 /// ⚠️ 为什么按码位分类、而不是统一乘一个系数：ASCII 数字/`%`/`N/A` 在 11 DIP Segoe UI
 ///   下约 6–7px，而中文（全角）约 11px。若统一按 8px 估，**中文会被低估**
-///   ⇒ `find_widget_slot` 可能返回一个比实际内容更窄的槽 ⇒ 内容溢出到邻居上。
-///   避让扫描的**方向性要求**：宁可高估（少用一点空间），不可低估（重叠）。
+///   ⇒ 绘制宽度估算偏小 ⇒ 内容溢出窗口右缘被裁掉。
+///   宽度估算的**方向性要求**：宁可高估（多留一点空间），不可低估（截断内容）。
 ///
 /// ⭐ 8/14 是 **DIP** 基准值 ⇒ 经 `m.dip()` 按 DPI 缩放（字号也跟着缩放，比例不变）。
 /// ⭐ 可证伪：把非 ASCII 的 14 改回 8，`cjk_is_not_underestimated` 会立刻转红。
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn estimate_text_px(s: &str, m: &Metrics) -> i32 {
     s.chars()
         .map(|c| m.dip(if (c as u32) < 0x80 { 8 } else { 14 }))
@@ -1646,7 +1598,7 @@ fn estimate_text_px(s: &str, m: &Metrics) -> i32 {
         .min(m.item_max_w)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn estimate_widget_width(items: &[WidgetItem], m: &Metrics) -> i32 {
     // ⚠️ 每台设备占「两段文本里更宽的那一段」—— 与 `draw_items` 的 `per_item` 同口径。
     let text_px: i32 = items
@@ -1659,17 +1611,6 @@ fn estimate_widget_width(items: &[WidgetItem], m: &Metrics) -> i32 {
         .sum();
     let gaps = m.item_gap * (items.len().saturating_sub(1) as i32);
     m.pad_x * 2 + text_px + items.len() as i32 * (m.icon + m.icon_text_gap) + gaps
-}
-
-#[cfg(target_os = "windows")]
-fn color_diff(a: u32, b: u32) -> u32 {
-    let ar = a & 0xff;
-    let ag = (a >> 8) & 0xff;
-    let ab = (a >> 16) & 0xff;
-    let br = b & 0xff;
-    let bg = (b >> 8) & 0xff;
-    let bb = (b >> 16) & 0xff;
-    (ar.abs_diff(br) + ag.abs_diff(bg) + ab.abs_diff(bb)) / 3
 }
 
 /// 点 `(x, y)` 是否落在宽 `w` 高 `h`、圆角半径 `r` 的**圆角矩形**内。**纯函数**。
@@ -2097,7 +2038,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
         .map(|i| m.icon + m.icon_text_gap + bat_w[i].0.max(vol_w[i].0))
         .collect();
     let content_w: i32 = per_item.iter().sum::<i32>() + m.item_gap * (items.len() as i32 - 1);
-    let total_w = content_w + m.pad_x * 2;
+    let desired_w = content_w + m.pad_x * 2;
     // ⛔ GetPixel 扫描必须在后台线程完成（WMI 之外也不能阻塞窗口线程）。
     // 后台快照任务已将估算宽度传给 `find_widget_slot`，这里仅读取原子坐标。
     if !SLOT_VALID.load(Ordering::Acquire) {
@@ -2122,7 +2063,17 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     };
     let slot_rel_x = SLOT_X.load(Ordering::Acquire) - tb_left;
     let slot_w = SLOT_W.load(Ordering::Acquire);
-    let aligned = align_in_slot(slot_rel_x, slot_w, total_w, &position);
+    // ⛔⛔ **窗口宽度不再被「槽」钳制**（2026-09-26 第二次方案变更）：
+    //   旧代码是 `desired_w.min(slot_w.max(min_run_w))` —— 那是为「避让后可能只剩
+    //   53px 的窄槽」写的补丁，副作用是**内容被截断**（用户正是抱怨这点）。
+    //   现在可用区 = **整条任务栏**（见 `find_widget_slot`）⇒ 窗口就按内容宽度画，
+    //   只在两个极端上兜底：① 不超过任务栏宽；② 不小于 `min_run_w`。
+    //   ⭐ 两者都**只会放宽**，不会像旧代码那样把窗口压窄 ⇒ 内容不再被裁。
+    let total_w = desired_w.min(tb_w.max(min_run_w(&m)));
+    // ⭐ 靠左/靠右的留白：**DIP → 物理像素**（见 `EDGE_MARGIN_DIP`）。
+    //   ⚠️ 走 `m`（内容 DPI），与窗口内容同口径 —— 否则高 DPI 下留白会显得过窄。
+    let edge_margin = m.dip(EDGE_MARGIN_DIP);
+    let aligned = align_in_slot(slot_rel_x, slot_w, total_w, &position, edge_margin);
     // 四档优先级（固定 > 拖拽落点 > 上次 > 贴靠）与钳制都在纯函数里，可单测。
     let rel_x = resolve_rel_x(
         locked,
@@ -2134,13 +2085,21 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     );
     LAST_X.store(rel_x, Ordering::Release);
     // ⭐ 定位结果**必须落日志**：本模块最容易「看起来正常但位置不对」——
-    //   贴靠算错、槽位过窄（`max_offset` 归零 ⇒ left/center/right 三者同解）、
-    //   未固定时沿用旧值，全都表现为「窗口在那儿，只是不在你以为的地方」。
+    //   贴靠算错、未固定时沿用旧值，全都表现为「窗口在那儿，只是不在你以为的地方」。
     //   ⚠️ 重绘是事件驱动的低频操作（非每帧），此处打日志不会淹没有用信息。
-    append_log(&format!(
-        "[widget] 定位: pos={position} locked={locked} slot=({slot_rel_x},w={slot_w}) \
-         content_w={total_w} → rel_x={rel_x}"
-    ));
+    // ⛔ `pos` 与 `rel_x` **必须成对观察**：三档 `rel_x` 若相同，说明贴靠未生效，
+    //   不是「设置没保存」。⭐ `余量` 把这一判据显式打出来。
+    //   ⭐ 可用区现为**整条任务栏**，正常应看到 `area=(0,w=任务栏宽)` 且
+    //      `left→0`、`right→余量`、`center→余量/2`。
+    // ⚠️ 降到**详细级**：本函数会在 hover 时被反复调用（实测 23 分钟 51 行），
+    //    属「每次重绘都打」的逐帧信息；而它真正要服务的是**排查**（贴靠问题）。
+    if crate::config::verbose_log_enabled() {
+        append_log(&format!(
+            "[widget] 定位: pos={position} locked={locked} area=({slot_rel_x},w={slot_w}) \
+             content_w={total_w} 余量={} → rel_x={rel_x}",
+            slot_w - total_w,
+        ));
+    }
     unsafe { ffi::show(hwnd as _) };
     let h = m.h;
     let Some(dib) = (unsafe { ffi::create_dib(total_w, h) }) else {
@@ -2446,6 +2405,13 @@ pub fn apply_from_config(app: &tauri::AppHandle) {
         }
         let want = should_show();
         let mounted = widget_alive();
+        // ⛔⛔ **已移除「位置不可用」提示（2026-09-26 方案变更）**：
+        //   它曾用于报告「槽不够宽 ⇒ 贴靠三档同解」。既然避让逻辑已整体删除
+        //   （见 `find_widget_slot` 的文档），可用区恒为整条任务栏、
+        //   不会再被第三方透明窗挤成 53px，
+        //   `SLOT_ALIGN_OK` / `POSITION_WARNED` / `POSITION_NOTED` / `notify_position_unavailable`
+        //   全部随之退役 —— **不再有「提示无空间」这条路径**。
+        //   ⭐ 现在的规则只有一条：能显示就显示（内容放不下由绘制侧截断）。
         match (want, mounted) {
             // 该显示但没挂 ⇒ 挂上（在主线程）
             (true, false) => {
@@ -2513,17 +2479,16 @@ fn fetch_into_snapshot() -> bool {
         }
     };
     let items = build_items(&devices);
-    // 视觉扫描必须留在后台：它要 BitBlt 整条任务栏，不能阻塞窗口线程。
-    // 估算宽度略保守（中文/图标按最大字符宽），避免实际绘制超出空白槽。
-    // ⛔ 测宽必须与 `draw_items` 用**同一份内容口径**（`current_content`）：
-    //    内容档位改了宽度就变，按旧口径找到的槽会与实际内容对不上（重叠或留白，且不报错）。
-    let wanted = estimate_widget_width(&items, &Metrics::current_content());
+    // ⛔ **不再做像素扫描 / 宽度估算**（2026-09-26 第二次方案变更，见 `find_widget_slot`）：
+    //    可用区恒为**整条任务栏**，与内容宽度无关 ⇒ 设备数变化不再让位置漂移。
+    //    ⚠️ `estimate_widget_width` 现仅用于**单测**核对绘制侧的 `desired_w` 口径；
+    //      生产路径的宽度由 `draw_items` 里的 `content_w + pad_x*2` 直接算。
     let slot_before = (
         SLOT_X.load(Ordering::Acquire),
         SLOT_W.load(Ordering::Acquire),
         SLOT_VALID.load(Ordering::Acquire),
     );
-    if let Some((slot_x, slot_w)) = find_widget_slot(wanted) {
+    if let Some((slot_x, slot_w)) = find_widget_slot() {
         SLOT_X.store(slot_x, Ordering::Release);
         SLOT_W.store(slot_w, Ordering::Release);
         SLOT_VALID.store(true, Ordering::Release);
@@ -3081,7 +3046,7 @@ mod tests {
         }
     }
 
-    // ── 宽度估算：避让扫描的 wanted（方向性：宁可高估，不可低估） ──
+    // ── 宽度估算（方向性：宁可高估，不可低估）—— 现服务于绘制侧 `desired_w` ──
 
     /// 100% 缩放的布局度量（测试固定用 96，避免依赖真机 DPI）。
     fn m96() -> Metrics {
@@ -3569,55 +3534,83 @@ mod tests {
     //   最危险的形态是「`right` 写成 `slot_x + slot_w`」—— 不越界检查的话，
     //   窗口右端会**越过槽右端**压到邻居身上，而视觉上只表现为「贴得紧一点」。
 
-    /// 三种策略在同一槽内的相对位置必须**互不相同**且顺序正确。
+    /// 三种策略在同一可用区内的相对位置必须**互不相同**且顺序正确。
     ///
-    /// 可证伪：把 `right` 的 `max_offset` 写成 `0`（与 left 相同）本条立刻转红。
+    /// 可证伪：把 `right` 的 `max_offset - margin` 写成 `max_offset`（丢掉边距）本条转红。
     #[test]
     fn align_in_slot_orders_left_center_right() {
         let (slot_x, slot_w, content_w) = (600, 300, 100);
-        let left = align_in_slot(slot_x, slot_w, content_w, "left");
-        let center = align_in_slot(slot_x, slot_w, content_w, "center");
-        let right = align_in_slot(slot_x, slot_w, content_w, "right");
-        assert_eq!(left, slot_x, "靠左 = 槽左端");
+        let m = 20;
+        let left = align_in_slot(slot_x, slot_w, content_w, "left", m);
+        let center = align_in_slot(slot_x, slot_w, content_w, "center", m);
+        let right = align_in_slot(slot_x, slot_w, content_w, "right", m);
+        assert_eq!(left, slot_x + m, "靠左 = 可用区左端 + 留白");
         assert!(left < center && center < right, "三者必须严格递增");
-        assert_eq!(center, slot_x + 100, "居中 = 槽左端 + 剩余/2");
-    }
-
-    /// ⭐ 真正的语义判据：**右端贴槽右端**（而不是「起点贴槽右端」）。
-    ///
-    /// 这是最容易写错的一处：`right` 若返回 `slot_x + slot_w`，内容会整段溢出到槽外，
-    /// 且 `left < center < right` 那条用例**仍然通过** —— 必须靠本条钉住。
-    #[test]
-    fn align_in_slot_right_aligns_content_right_edge_to_slot() {
-        let (slot_x, slot_w, content_w) = (600, 300, 100);
-        let x = align_in_slot(slot_x, slot_w, content_w, "right");
         assert_eq!(
-            x + content_w,
-            slot_x + slot_w,
-            "靠右后内容右端应恰好等于槽右端（不得溢出）"
+            center,
+            slot_x + 100,
+            "居中 = 可用区左端 + 剩余/2（**不留白**）"
         );
     }
 
+    /// ⭐⭐ **本次需求的核心判据**：靠左/靠右时**距边缘恰好 `edge_margin`**，
+    /// 且**内容绝不越出可用区**。
+    ///
+    /// ⛔ 上一版是「紧贴边缘」（`left == slot_x`），用户明确要求参考 Windows
+    ///   开始按钮/时钟的留白（实测 24~26px @125%）。
+    ///
+    /// 可证伪：
+    ///   ① 把 `"left" => margin` 改回 `0` ⇒ 第 1 条断言转红；
+    ///   ② 把 `"right" => max_offset - margin` 改成 `max_offset` ⇒ 第 2 条转红；
+    ///   ③ 反过来把 `max_offset - margin` 写成 `max_offset + margin` ⇒ 越界 ⇒ 第 2 条转红。
+    #[test]
+    fn align_in_slot_keeps_edge_margin_on_both_sides() {
+        for (slot_x, slot_w, content_w, m) in [
+            // 真机形状：整条任务栏 2560，内容 274，留白 25（= 20 DIP @125%）
+            (0, 2560, 274, 25),
+            // 换个尺寸确保不是巧合
+            (100, 800, 200, 20),
+        ] {
+            let left = align_in_slot(slot_x, slot_w, content_w, "left", m);
+            assert_eq!(
+                left,
+                slot_x + m,
+                "靠左必须距可用区左缘恰好 {m}px（不得紧贴）"
+            );
+
+            let right = align_in_slot(slot_x, slot_w, content_w, "right", m);
+            assert_eq!(
+                (slot_x + slot_w) - (right + content_w),
+                m,
+                "靠右必须距可用区右缘恰好 {m}px（不得紧贴、不得溢出）"
+            );
+            assert!(
+                right + content_w <= slot_x + slot_w,
+                "靠右时内容右端绝不可越过可用区右缘（right={right}）"
+            );
+        }
+    }
+
     /// 未知值（防御分支）与 `center` 同解 —— `normalize_config` 已兜住非法值，
-    /// 这里只保证「万一漏进来一个奇怪的值，也不会算出槽外坐标」。
+    /// 这里只保证「万一漏进来一个奇怪的值，也不会算出可用区外坐标」。
     #[test]
     fn align_in_slot_unknown_position_falls_back_to_center() {
-        let args = (600, 300, 100);
+        let args = (600, 300, 100, 20);
         assert_eq!(
-            align_in_slot(args.0, args.1, args.2, "middle"),
-            align_in_slot(args.0, args.1, args.2, "center"),
+            align_in_slot(args.0, args.1, args.2, "middle", args.3),
+            align_in_slot(args.0, args.1, args.2, "center", args.3),
             "未知贴靠值必须退化为居中（而不是越界或 panic）"
         );
     }
 
-    /// 内容比槽宽时（`wanted` 筛选本应挡住，属防御分支）：`max_offset` 归零 ⇒
-    /// 三种策略**都**退化为贴槽左端，且**绝不返回负偏移**（负偏移会把窗口推到任务栏之外）。
+    /// 可用区比内容窄时（防御分支）：`max_offset` 归零 ⇒ 边距被夹成 0 ⇒
+    /// 三种策略**都**退化为贴可用区左端，且**绝不返回负偏移**（负偏移会把窗口推到任务栏之外）。
     #[test]
     fn align_in_slot_never_returns_negative_offset_when_content_overflows() {
         let (slot_x, slot_w, content_w) = (600, 80, 200);
         for pos in ["left", "center", "right", "unknown"] {
-            let x = align_in_slot(slot_x, slot_w, content_w, pos);
-            assert_eq!(x, slot_x, "槽装不下时 `{pos}` 应退化为贴槽左端");
+            let x = align_in_slot(slot_x, slot_w, content_w, pos, 20);
+            assert_eq!(x, slot_x, "可用区装不下时 `{pos}` 应退化为贴左端");
         }
     }
 
@@ -3694,6 +3687,54 @@ mod tests {
             resolve_rel_x(false, 0, Some(-99999), 0, 100, 1000),
             0,
             "负数落点同样要被夹回 0"
+        );
+    }
+
+    /// ⭐⭐ **位置语义的可证伪测试**：可用区 = 整条任务栏时，
+    /// `left`/`center`/`right` 必须分别落在**左侧留白后 / 正中 / 右侧留白前**。
+    ///
+    /// ── 为什么这条是本次方案变更的**核心回归** ────────────────────────
+    /// 旧实现（像素扫描避让）里，可用区是「任务栏里某一段**空白**」：
+    ///   · `SLOT_SAFE_MARGIN = 100` ⇒ `slot_x ≥ 100` ⇒ 「靠左」永远差 100px；
+    ///   · `pick_widest_run` 只给最宽段 ⇒ `center` 在**裁剪后**的区间里算。
+    /// 用户实测反馈正是「靠左/右没有出现在整个任务栏的最左/右侧，居中也不对」。
+    /// ⇒ 本条以**整条任务栏**（`slot_x = 0`、`slot_w = 屏幕宽`）为口径断言三档位置；
+    ///   居中不留边距，左右各留 Windows 风格边距。若有人把避让扫描加回来 ⇒ **转红**。
+    ///
+    /// 可证伪：把 `align_in_slot` 的 `"left" => 0` 改成 `100`（旧安全边距）
+    /// ⇒ 第 1 条断言转红；把 `"right" => max_offset` 改成 `slot_w`
+    /// ⇒ 第 3 条断言转红（右缘溢出）。
+    #[test]
+    fn align_in_slot_uses_the_whole_taskbar_as_area() {
+        // 复刻真机：任务栏 2560 宽、内容 274 宽 ⇒ `max_offset = 2286`。
+        let (area_x, area_w, content_w) = (0, 2560, 274);
+        let max_offset = area_w - content_w;
+
+        const EDGE_MARGIN: i32 = 25; // 20 DIP @ 125% DPI
+        assert_eq!(
+            align_in_slot(area_x, area_w, content_w, "left", EDGE_MARGIN),
+            EDGE_MARGIN,
+            "靠左必须保留 Windows 风格边距"
+        );
+        assert_eq!(
+            align_in_slot(area_x, area_w, content_w, "center", EDGE_MARGIN),
+            max_offset / 2,
+            "居中必须在整条任务栏里居中（左右不额外留边距）"
+        );
+        assert_eq!(
+            align_in_slot(area_x, area_w, content_w, "right", EDGE_MARGIN),
+            max_offset - EDGE_MARGIN,
+            "靠右必须在右缘前保留 Windows 风格边距"
+        );
+
+        // ⛔⛔ 最重要的性质：三档**必须严格递增** —— 相等就意味着贴靠失效
+        //   （旧方案把窗口钳成 53px 时正是三档同解）。
+        let l = align_in_slot(area_x, area_w, content_w, "left", EDGE_MARGIN);
+        let c = align_in_slot(area_x, area_w, content_w, "center", EDGE_MARGIN);
+        let r = align_in_slot(area_x, area_w, content_w, "right", EDGE_MARGIN);
+        assert!(
+            l < c && c < r,
+            "三档必须严格递增（left={l} < center={c} < right={r}）"
         );
     }
 
