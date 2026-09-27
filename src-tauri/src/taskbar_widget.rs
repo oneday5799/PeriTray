@@ -580,11 +580,7 @@ mod ffi {
     pub unsafe fn reparent(hwnd: HWND, taskbar: HWND) -> (HWND, u32) {
         // ⛔ 顺序：先改样式
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-        SetWindowLongPtrW(
-            hwnd,
-            GWL_STYLE,
-            ((style & !(WS_POPUP as u32)) | (WS_CHILD as u32)) as isize,
-        );
+        SetWindowLongPtrW(hwnd, GWL_STYLE, ((style & !WS_POPUP) | WS_CHILD) as isize);
         // ⛔ 双判：SetParent 返回「前一个父窗」，NULL 有歧义 ⇒ 先清错误码
         windows_sys::Win32::Foundation::SetLastError(0);
         let old = SetParent(hwnd, taskbar);
@@ -1094,7 +1090,7 @@ pub fn spawn_widget() -> MountReport {
 /// ⚠️ 判据粒度是**单段**（电量段、音量段各算一次），不是单台设备 ——
 ///   一台设备的宽度取两段的最大值（见 `draw_items` 的 `per_item`）。
 /// ⚠️ 标称值见文件头的 `ITEM_MAX_W_DIP`（DIP）—— 本段只讲「为什么有上限」。
-
+///
 /// hover 底衬的不透明度（0–255）—— **浅色系统主题**。
 ///
 /// ⭐ 取值出处：FluentFlyout `Controls/TaskbarWidgetControl.xaml.cs` 的 `Grid_MouseEnter`
@@ -2625,7 +2621,7 @@ struct TickPlan {
 ///   两者都不报错、不崩溃，只能靠用例钉住。
 #[cfg(target_os = "windows")]
 fn plan_tick(alive: bool, taskbar_changed: bool, tick: u64) -> TickPlan {
-    let due = tick % REFRESH_EVERY_TICKS == 0;
+    let due = tick.is_multiple_of(REFRESH_EVERY_TICKS);
     if !alive {
         return TickPlan {
             raise: false,
@@ -3327,7 +3323,7 @@ mod tests {
             pinned_dev("c", None, None, None, Some("ep-1")),
         ];
         for d in cases {
-            let items = build_items(&[d.clone()]);
+            let items = build_items(std::slice::from_ref(&d));
             assert!(items[0].has_audio, "{} 应判为有音频", d.name);
         }
         // 三者皆无 ⇒ 无音频
