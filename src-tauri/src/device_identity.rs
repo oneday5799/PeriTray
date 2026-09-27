@@ -985,6 +985,40 @@ fn pinned_placeholder_name(p: &crate::config::PinnedDevice) -> String {
         .unwrap_or_else(|| p.key.clone())
 }
 
+/// ⭐⭐ 「这台设备此刻该显示的名字」的**唯一实现**。
+///
+/// **为什么必须抽出来（不能各写一份）**：任务栏 widget 与设置页选择器**都要**显示
+/// 同一个名字，而两者的数据结构不同（`PhysicalDevice` vs `MergedDevice`）。
+/// 各写一份 ⇒ 两处口径迟早分叉（**已实测**：选择器认 `alias` + 全局重命名，
+/// widget 侧只认 `pick_display_name` 的原始输出 ⇒ **用户在设置里改过名，
+/// 任务栏 tooltip 显示旧名**）。按 AGENTS.md「复用同一判据 = 同一函数且参数
+/// 逐字一致」，抽成本函数、两处共用。
+///
+/// 三级优先级（与选择器既有行为**逐字相同**）：
+/// 1. `PinnedDevice.alias`（用户给固定设备起的别名）——**仅当本设备确实被固定**；
+/// 2. `config.device_names` 全局重命名（`resolve_device_name` 的两级回退）；
+/// 3. 传入的 `raw_name`（= `pick_display_name` 的输出）。
+///
+/// ⛔ `fallback` 的算法**必须与显示侧 / 选择器侧逐字相同**
+/// （都是 `DeviceKey::Name(core_name(&name)).encode()`）——这是 AGENTS.md 点名的
+/// 「偷懒传 `None` ⇒ 已固定却显示未勾选」那个坑的同一个根。
+pub fn resolved_display_name(
+    raw_name: &str,
+    key: &str,
+    pinned: &[crate::config::PinnedDevice],
+    config: &crate::config::Config,
+) -> String {
+    let fallback = DeviceKey::Name(core_name(raw_name)).encode();
+    pinned
+        .iter()
+        .find(|p| crate::config::pinned_device_matches(p, key, Some(&fallback)))
+        .and_then(|p| p.alias.as_deref())
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::config::resolve_device_name(raw_name, config))
+}
+
 /// 选择器里的一台设备：并集口径 + 已套用显示名的**最终**形态（第 3 层 T3-1）。
 ///
 /// 与 `MergedDevice` 的关系：本类型是它的**装配结果** —— 多出两个「只有命令层才知道
@@ -1053,12 +1087,9 @@ pub fn build_selectable_devices(
             let hit = pinned
                 .iter()
                 .find(|p| crate::config::pinned_device_matches(p, &m.key, Some(&fallback)));
-            let name = hit
-                .and_then(|p| p.alias.as_deref())
-                .map(str::trim)
-                .filter(|a| !a.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| crate::config::resolve_device_name(&m.name, config));
+            // ⭐ 名称解析**委托给共享函数**（与任务栏 widget 侧同一份实现），
+            //   避免两处各写一份后分叉（`resolved_display_name` 的文档有实测背景）。
+            let name = resolved_display_name(&m.name, &m.key, pinned, config);
             SelectableDevice {
                 key: m.key.clone(),
                 name,

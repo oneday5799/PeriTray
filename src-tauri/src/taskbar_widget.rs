@@ -263,6 +263,85 @@ fn taskbar_dpi() -> u32 {
     }
 }
 
+/// 把一个 **DIP** 标称值换算成本机物理像素，**走「内容」口径**。///
+/// ⭐ 供 `taskbar_tooltip` 复用 ⇒ tooltip 的字号/宽度与 widget 的文字**同一尺度**。
+/// ⛔⛔ **必须是内容口径、不是系统 DPI**（早先误用了 `taskbar_dpi()`，125% 下得 14px）：
+/// widget 上的文字按 `taskbar_content_scale` 解析（**默认档 = 96 DPI 基准 ⇒ 11px**），
+/// 而底衬/任务栏按系统 DPI（125% ⇒ 50px）。两者是**故意**分开的（`E14` 的硬红线）。
+/// 误用系统 DPI ⇒ 125% 下 tooltip 文字 14px 而 widget 文字 11px
+/// ⇒ **提示比它所描述的内容还大**，与 FluentFlyout 实测「tooltip 与 widget 文字等大」相反。
+#[cfg(target_os = "windows")]
+pub fn content_px(dip: i32) -> i32 {
+    Metrics::current_content().dip(dip)
+}
+
+/// 任务栏矩形 `(left, top, width, height)`（**屏幕坐标**，物理像素）。
+///
+/// ⭐ 供 `taskbar_tooltip` 定位用：提示要落在**任务栏外缘**，
+/// 而原生 tooltip 默认贴着工具窗口（＝本 widget，在任务栏**内**）摆 ⇒ 压在任务栏上。
+#[cfg(target_os = "windows")]
+pub fn taskbar_rect_tuple() -> Option<(i32, i32, i32, i32)> {
+    taskbar_rect()
+}
+
+/// 主屏宽度（物理像素）。给 tooltip 做「不出屏」钳制。
+#[cfg(target_os = "windows")]
+pub fn screen_size() -> (i32, i32) {
+    unsafe {
+        (
+            windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(0), // SM_CXSCREEN
+            windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(1), // SM_CYSCREEN
+        )
+    }
+}
+
+/// 第 `index` 个设备条目在**屏幕**上的 `(x, width)`。
+///
+/// ⭐ 单一来源 = [`item_rects`]（`draw_items` 算出的那份）⇒ tooltip 的横向锚点
+/// 与视觉位置**不可能分叉**（与「绘制与测宽同源」同一条纪律）。
+#[cfg(target_os = "windows")]
+pub fn item_rect_on_screen(index: usize) -> Option<(i32, i32)> {
+    let rects = LAST_ITEM_RECTS.lock().ok()?;
+    let r = *rects.get(index)?;
+    // `item_rects` 出的是 widget **客户区**坐标；这里换算到屏幕。
+    let (widget_x, _, w, _) = window_screen_rect(WIDGET_HWND.load(Ordering::SeqCst) as _)?;
+    // ⛔ 拒绝**占位矩形**：建窗时 widget 是 `(0,0,1,1)`，`GetWindowRect` 会**成功**
+    //   返回 `w=1` —— 此时算出的锚点 x 是 0，tooltip 会闪现在屏幕**最左端**。
+    //   （`GetWindowRect` 只在 hwnd 无效时才失败；占位矩形是**合法**的返回值。）
+    //   真正的防线是调用侧「先 `commit` 再发布」，这里是第二道。
+    if w <= 1 {
+        return None;
+    }
+    Some((widget_x + r.left, r.right - r.left))
+}
+
+/// 最近一帧的逐项矩形（**主线程写、任意线程读**）。
+///
+/// ⛔ 用 `Mutex` 而非裸静态：这是**跨线程**共享的容器。
+///   锁内**只做 clone、不做别的** ⇒ 持锁时间极短，符合持锁区纪律。
+/// 第 `index` 个设备命中的**屏幕** `(x, width)`（诊断转发）。
+#[cfg(target_os = "windows")]
+pub fn item_anchor_screen(index: usize) -> Option<(i32, i32)> {
+    item_rect_on_screen(index)
+}
+
+/// 已发布命中的条目数（诊断用）。
+#[cfg(target_os = "windows")]
+pub fn item_rect_count() -> usize {
+    LAST_ITEM_RECTS.lock().map(|v| v.len()).unwrap_or(0)
+}
+
+static LAST_ITEM_RECTS: std::sync::Mutex<Vec<windows_sys::Win32::Foundation::RECT>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// 记录本帧的逐项矩形，供 tooltip 定位使用（`draw_items` 末尾调用，主线程）。
+#[cfg(target_os = "windows")]
+fn publish_item_rects(rects: &[windows_sys::Win32::Foundation::RECT]) {
+    if let Ok(mut g) = LAST_ITEM_RECTS.lock() {
+        *g = rects.to_vec();
+    }
+}
+
 /// 诊断快照：`hwnd` / `SetParent` 错误码 / `GetParent` 复核结果的原始值。
 ///
 /// ⚠️ 抽成类型而不是直接暴露静态量，是为了让「挂载是否成功」有**单一判据入口**
@@ -361,7 +440,7 @@ mod snapshot {
 }
 
 #[cfg(target_os = "windows")]
-use crate::process::{append_log, to_wide};
+use crate::process::{append_log, append_verbose_log, to_wide};
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicIsize, Ordering};
 
@@ -405,6 +484,11 @@ const WM_APP_REFRESH: u32 = 0x8000 + 1;
 /// ⛔ 也**不能**由维护线程直接调 `SetWindowPos` —— 窗口属于创建它的线程（主线程）。
 #[cfg(target_os = "windows")]
 const WM_APP_RAISE: u32 = 0x8000 + 2;
+/// 「把提示挪到第 `wp` 个设备上方」——由 50ms hover 轮询线程投递（**跨线程只投递**）。
+///
+/// ⛔ 单独一条消息而不是复用 `WM_APP_REFRESH`：定位**不涉及重绘**，
+///   混进去会让「仅切换悬停设备」也触发一整帧 DIB 重建（4~6ms + 逐像素合成）。
+const WM_APP_TOOLTIP_SHOW: u32 = 0x8000 + 3;
 
 /// 防抖状态：`true` = 已有一次刷新在路上（**合并窗口**）。
 ///
@@ -459,6 +543,30 @@ static LAST_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(
 ///   光标短暂离开窗口时不该让底衬闪烁。
 #[cfg(target_os = "windows")]
 static HOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 光标当前落在**第几个**设备条目上（`-1` = 未命中/间隙）。
+///
+/// ⛔ `isize` 而非 `usize`：**需要一个「无」的值**，用 `usize` 就得拿 `MAX` 当哨兵，
+/// 而哨兵值参与算术极易出错（`index + 1` 溢出成 0）。
+/// ⭐ 由 hover 轮询线程**写**、主线程经 `WM_APP_TOOLTIP_SHOW` **读**（经消息传参，
+///   不直接读这个原子量 ⇒ 无锁序登记）。
+static HOVERED_ITEM: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(-1);
+
+/// 「本轮悬停」的时间起点（`GetTickCount64` 毫秒）。
+///
+/// ⭐ 三态编码（**不是** `Option`，省一次分支也省一个锁）：
+/// · `0`   —— 当前不在任何设备上（无计时）
+/// · `>0`  —— 悬停起点毫秒数（正在计时）
+/// · `-1`  —— 本轮已显示过（**不重复投递**，否则每 50ms 重画一次）
+#[cfg(target_os = "windows")]
+static HOVER_SINCE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+/// 单调毫秒时钟（`GetTickCount64`）——⛔ **不能**用 `SystemTime`：
+///   它随时可能被用户改钟表/夏令时回拨，用它算「过了 500ms」会算出负数或天文数字。
+#[cfg(target_os = "windows")]
+fn now_ms() -> u64 {
+    unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() }
+}
 
 // ── 拖拽状态（全部只在**主线程**读写，用原子量是为了免锁、免锁序登记）──────
 //
@@ -526,7 +634,7 @@ pub fn notify_system_theme_changed() {}
 
 /// 诊断用的 FFI 集合。集中在一处便于核对「到底调了哪些 API」。
 #[cfg(target_os = "windows")]
-mod ffi {
+pub(crate) mod ffi {
     /// 常量：`DrawTextW` 的格式标志（`windows-sys` 未导出，按 WinUser.h 定义）。
     #[cfg(target_os = "windows")]
     const DT_LEFT: u32 = 0x0000_0000;
@@ -543,7 +651,7 @@ mod ffi {
     #[cfg(target_os = "windows")]
     const DT_END_ELLIPSIS: u32 = 0x0000_8000;
 
-    use super::{Metrics, WM_APP_RAISE, WM_APP_REFRESH};
+    use super::{Metrics, WM_APP_RAISE, WM_APP_REFRESH, WM_APP_TOOLTIP_SHOW};
     use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW,
@@ -704,6 +812,14 @@ mod ffi {
     /// ⚠️ 投递失败（窗口已销毁）静默忽略 —— 属「无状态后果」类，下一次兜底会补上。
     pub unsafe fn post_refresh(hwnd: HWND) {
         PostMessageW(hwnd, WM_APP_REFRESH, 0, 0);
+    }
+
+    /// 请求**显示**第 `index` 条提示。**任意线程可调**（只投递，不碰窗口）。
+    ///
+    /// ⛔ `index < 0` 表示「隐藏」——而不是「显示第 -1 条」：
+    ///   鼠标离开 widget 时必须**立即消失**，不能留一个 5s 超时的残影。
+    pub unsafe fn post_tooltip_show(hwnd: HWND, index: isize) {
+        PostMessageW(hwnd, WM_APP_TOOLTIP_SHOW, index as usize, 0);
     }
 
     // ── DIB / ULW ──────────────────────────────────────────────────────
@@ -911,6 +1027,39 @@ mod ffi {
         )
     }
 
+    /// 建一个 **ClearType** 字体（**质量 5**），供「**不透明**背景上直接画字」用。
+    ///
+    /// ⭐ 为什么 tooltip 要另开一个、而不是复用上面的 `create_font`：
+    ///   分层窗口的**通用**画字路径是「白底黑字掩码 → 覆盖度 → 预乘」（见
+    ///   `render_text_mask`），因为 widget 的底衬**半透明**，直接画进去的文字
+    ///   alpha 字节恒为 0 ⇒ 会被 `ULW` 当全透明。
+    ///   但 tooltip 的气泡是**不透明**的（`--flyout-bg` 实色）⇒ 可以直接在一个
+    ///   **实色** DIB 上用 GDI 画字 ⇒ 能用 **ClearType** 子像素抗锯齿。
+    ///   ⚠️ 灰度 AA（`ANTIALIASED_QUALITY`）在 14px 下笔画边缘会被「摊平」成灰边
+    ///   ⇒ 真机观感就是用户说的「**发虚**」。子像素渲染按 RGB 排列分别着色三遍，
+    ///   边缘因此**锐利得多**。
+    /// ⛔ 前提是**必须实色背景**：ClearType 的彩色边缘依赖「底色已知且不透明」，
+    ///   一旦叠到半透明底衬上就会脏（`taskbar_widget` 头部记着这条）。
+    pub unsafe fn create_font_cleartype(px_height: i32, bold: bool) -> HFONT {
+        let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
+        CreateFontW(
+            -px_height,
+            0,
+            0,
+            0,
+            if bold { 700 } else { 400 },
+            0,
+            0,
+            0,
+            0x01, // DEFAULT_CHARSET
+            0,    // OUT_DEFAULT_PRECIS
+            0,    // CLIP_DEFAULT_PRECIS
+            5,    // CLEARTYPE_QUALITY
+            0,    // DEFAULT_PITCH
+            face.as_ptr(),
+        )
+    }
+
     pub unsafe fn destroy_font(f: HFONT) {
         DeleteObject(f as HGDIOBJ);
     }
@@ -948,7 +1097,33 @@ mod ffi {
             }
             return 0;
         }
-        // ── 手动拖拽 ────────────────────────────────────────────────────
+        if msg == WM_APP_TOOLTIP_SHOW {
+            // ⭐ 显示/隐藏提示（主线程执行）。
+            // ⛔ 只发消息、不取数、不重绘 widget（提示的显隐与 widget 绘制是两件事）。
+            //   ⛔⛔ 提示**绝不能**在这里触发 widget 重绘：重绘会走
+            //   `repaint_from_snapshot` → `draw_items` → `sync` → 重入本分支。
+            let idx = wp as isize;
+            // ⭐ **每次**决策都记标准级：包括「要显示」与「要隐藏」两条路径。
+            //   此前只记成功路径 ⇒ 「提示停在最左端」这类**位置类**故障
+            //   在日志里没有现场，无法定位（真机连报三次）。
+            super::append_log(&format!(
+                "[widget] tooltip: 收到 SHOW idx={} 锚点={:?} rects={} widget={:?}",
+                idx,
+                if idx >= 0 {
+                    super::item_anchor_screen(idx as usize)
+                } else {
+                    None
+                },
+                super::item_rect_count(),
+                super::window_screen_rect(hwnd)
+            ));
+            if idx < 0 {
+                crate::taskbar_tooltip::hide();
+            } else if (idx as usize) <= 32 {
+                crate::taskbar_tooltip::show(idx as usize);
+            }
+            return 0;
+        }
         // ⚠️ 只在「固定位置」关掉时接管（`drag_begin` 内部判 `drag_enabled()`）；
         //   固定位置时**不拦截**，交回 `DefWindowProcW` 保持原行为。
         if msg == WM_LBUTTONDOWN {
@@ -1613,13 +1788,38 @@ fn estimate_widget_width(items: &[WidgetItem], m: &Metrics) -> i32 {
     m.pad_x * 2 + text_px + items.len() as i32 * (m.icon + m.icon_text_gap) + gaps
 }
 
+/// 逐项的**客户区矩形**（物理像素）：`(left, top, right, bottom)`。
+///
+/// ⭐ 抽成**纯函数**的唯一理由：**绘制与 tooltip 注册必须共用同一份布局**。
+/// 旧实现只用 running `cursor` 逐项自增、用完即弃 ⇒ 任何第二处要「第 i 项在哪」
+/// 就只能重新推导一遍 ⇒ 分叉后 tooltip 会指向错误的设备，**且不报错**
+/// （与本文件「绘制与测宽必须同走 `current_content()`」是同一条纪律）。
+///
+/// ⚠️ 纯函数（不读配置、不调 GDI、不碰全局）⇒ 可单测，判据见
+/// `item_rects_match_draw_loop` 与 `item_rects_are_disjoint`。
+#[cfg(target_os = "windows")]
+fn item_rects(per_item: &[i32], m: &Metrics, h: i32) -> Vec<windows_sys::Win32::Foundation::RECT> {
+    let mut out = Vec::with_capacity(per_item.len());
+    let mut cursor = m.pad_x;
+    for &w in per_item {
+        out.push(windows_sys::Win32::Foundation::RECT {
+            left: cursor,
+            top: 0,
+            right: cursor + w,
+            bottom: h,
+        });
+        cursor += w + m.item_gap;
+    }
+    out
+}
+
 /// 点 `(x, y)` 是否落在宽 `w` 高 `h`、圆角半径 `r` 的**圆角矩形**内。**纯函数**。
 ///
 /// 判法：四个角各挖掉一个半径 `r` 的圆（圆心在内缩 `r` 处），其余区域直接命中。
 /// ⚠️ 只在「x 落在左/右角带 **且** y 落在上/下角带」时才做圆判定；任一带不在角上
 ///   就直接命中 —— 否则中间的直边会被误判成角。
 #[cfg(target_os = "windows")]
-fn inside_rounded_rect(x: i32, y: i32, w: i32, h: i32, r: i32) -> bool {
+pub(crate) fn inside_rounded_rect(x: i32, y: i32, w: i32, h: i32, r: i32) -> bool {
     if x < 0 || y < 0 || x >= w || y >= h {
         return false;
     }
@@ -2037,6 +2237,11 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     let per_item: Vec<i32> = (0..items.len())
         .map(|i| m.icon + m.icon_text_gap + bat_w[i].0.max(vol_w[i].0))
         .collect();
+    // ⭐ 逐项 x 起点**物化成纯函数**（`item_rects`）：绘制与 tooltip 注册**共用同一份**。
+    //   旧代码只用 running `cursor` 现算、用完即弃 ⇒ tooltip 若自行重算就是
+    //   **第二个布局来源**，分叉后提示会挂到错误的设备上且不报错
+    //   （与 AGENTS.md「绘制与测宽必须同源」是同一类纪律）。
+    let item_rects = item_rects(&per_item, &m, m.h);
     let content_w: i32 = per_item.iter().sum::<i32>() + m.item_gap * (items.len() as i32 - 1);
     let desired_w = content_w + m.pad_x * 2;
     // ⛔ GetPixel 扫描必须在后台线程完成（WMI 之外也不能阻塞窗口线程）。
@@ -2130,8 +2335,10 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
         // 图标在 widget 里垂直居中（`m.icon` ≤ `h`，余量上下各一半）
         let icon_y = (h - m.icon) / 2;
 
-        let mut cursor = m.pad_x;
+        // ⭐ x 起点从 `item_rects` 取（与 tooltip 共用），不再用 running cursor 自增。
+        //   ⛔ 两者**必须**同源：分叉 ⇒ tooltip 指向的设备与视觉位置错位，不报错。
         for (i, it) in items.iter().enumerate() {
+            let cursor = item_rects[i].left;
             // ⚠️ 用户固定的设备（此刻读不出数据）用**半透明**显示，
             //    与「有数据」区分；这是「pin = 强制显示 + 置灰」在 widget 上的落地。
             let alpha_scale: f32 = if should_dim_item(it) { 0.45 } else { 1.0 };
@@ -2202,12 +2409,43 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
                     );
                 }
             }
-            cursor += per_item[i] + m.item_gap;
         }
     }
 
     // widget 已是 `Shell_TrayWnd` 的子窗：`UpdateLayeredWindow` 的位置必须是
     // **父窗客户区坐标**（不是屏幕坐标）⇒ x 用上面算出的相对值、y 用垂直居中偏移。
+    //
+    // ⛔⛔ **必须先 `commit` 再把布局交给 tooltip**：tooltip 的锚点走
+    //   `item_rect_on_screen` → `GetWindowRect(widget)`，而**只有 `ULW` 才真正
+    //   给窗口定位**。建窗时 widget 的占位矩形是 `(0,0,1,1)`
+    //   ⇒ 首帧若在此之前发布布局，锚点 x 就是 0 ⇒ **提示闪现在屏幕最左端**。
+    //   （真机实测：日志里 `窗=(-14,1324)` 与 `窗=(1109,1324)` 交替出现。）
+    //   ⇒ 顺序即契约：**先落位，再发布**。
+    let ok = unsafe { ffi::commit(hwnd as _, &dib, rel_x, widget_y_offset()) };
+    if !ok {
+        let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        append_log(&format!("[widget] UpdateLayeredWindow 失败: err={}", err));
+    }
+
+    // ⭐ 落位之后，把**本帧布局**交给 tooltip：同一份 `item_rects` ⇒ 命中区与视觉位置
+    //   **不可能分叉**。传 `items` 的名字 + rect，两者由本函数一次算出。
+    {
+        publish_item_rects(&item_rects);
+        let entries: Vec<crate::taskbar_tooltip::TipEntry> = items
+            .iter()
+            .zip(item_rects.iter())
+            .map(|(it, r)| crate::taskbar_tooltip::TipEntry {
+                text: it.name.clone(),
+                rect: *r,
+            })
+            .collect();
+        crate::taskbar_tooltip::sync(hwnd as _, &entries);
+        // 开发门控：强制显示某条 tooltip（把「能否渲染」「位置对不对」
+        // 变成可自动判定的**像素**判据——本机无法注入鼠标，自然 hover 无法自动验收）。
+        // ⛔ 不设环境变量时本函数立即返回，零开销。
+        crate::taskbar_tooltip::dev_force_show(hwnd as _);
+    }
+
     let ok = unsafe { ffi::commit(hwnd as _, &dib, rel_x, widget_y_offset()) };
     if !ok {
         let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
@@ -2238,6 +2476,11 @@ fn draw_blank(hwnd: *mut core::ffi::c_void, w: i32) -> bool {
     }
     let ok = unsafe { ffi::commit(hwnd as _, &dib, 0, widget_y_offset()) };
     unsafe { ffi::free_dib(&dib) };
+    // ⭐ 开发门控**在 blank 阶段也要跑**：`draw_blank` 用 `commit(.., 0, ..)`
+    //   ⇒ 此刻 widget **本身**就在任务栏最左端。若门控只挂在 `draw_items` 上，
+    //   就永远观测不到「tooltip 落在最左端」这个状态——而那正是用户报告的现象。
+    //   （不设 `PM_DEV_TOOLTIP_SHOW` 时本函数立即返回，零开销。）
+    crate::taskbar_tooltip::dev_force_show(hwnd as _);
     ok
 }
 
@@ -2251,6 +2494,10 @@ fn repaint_from_snapshot(hwnd: *mut core::ffi::c_void) {
     } else {
         append_log("[widget] repaint 失败");
     }
+    // ⭐ tooltip 状态随每次重绘记一条**详细级**日志：这是「提示到底建没建、活了没」
+    //   的唯一观测点（tip 是**顶层**窗，外部探针看不见它与 widget 的父子关系）。
+    //   ⛔ 走详细级：重绘是 hover 时也会触发的高频动作，标准级会被淹没。
+    append_verbose_log(&format!("[widget] {}", tooltip_diag()));
 }
 
 /// 建窗期的**首帧**：还没有数据，先画空内容占位。
@@ -2289,6 +2536,27 @@ pub fn probe() -> MountReport {
     }
 }
 
+/// tooltip 侧的诊断读数：`"tip=0x… alive=true tools=N"`，或 `"tip=none"`。
+///
+/// ⭐ 挂在**主线程**的 `repaint_from_snapshot` 尾部，不另开消息——
+/// 那个点本来就在主线程（`WM_APP_REFRESH` → 窗口过程），而窗口过程**只在创建线程**
+/// 上被调用 ⇒ 查询 tip 状态必须从那里走。
+#[cfg(target_os = "windows")]
+pub fn tooltip_diag() -> String {
+    if !crate::taskbar_tooltip::tip_alive() {
+        return "tip=none".to_string();
+    }
+    format!(
+        "tip={:#x} alive=true",
+        crate::taskbar_tooltip::tip_hwnd_for_probe()
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn tooltip_diag() -> String {
+    "tip=n/a".to_string()
+}
+
 /// 销毁 widget 并**清掉句柄记录**（使后续 `probe()` 明确返回「未挂载」）。
 ///
 /// 用途：① 诊断收尾（`PM_DEV_TASKBAR_WIDGET_DESTROY` 门控）；
@@ -2299,6 +2567,10 @@ pub fn probe() -> MountReport {
 pub fn destroy_widget() {
     let hwnd = WIDGET_HWND.swap(0, Ordering::SeqCst) as *mut core::ffi::c_void;
     forget_widget();
+    // ⛔ **必须先毁 tip 再毁 widget**：tip 的命中区来自 widget 每帧发布的
+    //   `item_rects`（`TipEntry.rect`），widget 一消失这些矩形就成了过期数据
+    //   ⇒ 顺序反了会在「下一帧同步」之前留下一个定位在旧处的孤儿 tip 窗口。
+    crate::taskbar_tooltip::destroy();
     if !hwnd.is_null() {
         unsafe { ffi::destroy(hwnd) };
         append_log("[widget] destroyed");
@@ -2331,15 +2603,91 @@ fn should_dim_item(it: &WidgetItem) -> bool {
     it.pinned && !it.connected
 }
 
+/// 为每台设备解析**显示名**（`alias` → 全局重命名 → 短名，三级）。
+///
+/// ⭐ 委托给 `device_identity::resolved_display_name` —— **与设置页选择器同一份实现**
+/// （那里也已改成调它）。两处各写一份必然分叉，症状是「用户在设置里改过名、
+/// 任务栏 tooltip 显示旧名」。
+///
+/// ⚠️ 持锁纪律：这里**只读配置**且在闭包内**纯计算**（不调任何 Tauri 窗口/托盘 API）
+/// ⇒ 符合 AGENTS.md「持锁区只能做纯内存操作」。
 #[cfg(target_os = "windows")]
+/// ⭐ 「解析每台设备显示名」的**可注入纯函数**。
+///
+/// ⛔ **为什么要这一层间接**：`resolve_widget_labels` 要读**全局配置**（单测里不可控），
+/// 而判据必须能证明「**生产路径真的走了三级链**」。
+/// 第一版判据只测 `device_identity::resolved_display_name` 这个纯函数本身
+/// ⇒ **实测注入「把生产侧退回 `d.name.clone()`」后仍 337 全绿**（等于没测，
+/// 与 AGENTS.md 记的「第一版只断言局部量 ⇒ 改回错误实现依然全绿」同一个坑）。
+/// ⇒ 判据改为**穿过本函数**：传入不同 `resolver` 就能验证**接线**，而不只是算法。
+fn resolve_labels_with<F>(
+    devices: &[crate::device_identity::PhysicalDevice],
+    resolver: F,
+) -> Vec<String>
+where
+    F: Fn(&crate::device_identity::PhysicalDevice) -> String,
+{
+    devices.iter().map(resolver).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_widget_labels(devices: &[crate::device_identity::PhysicalDevice]) -> Vec<String> {
+    // ⛔ 先取 `pinned` 的**快照**（owned）再进闭包：持锁区内只做纯内存计算，
+    //    不调任何窗口/托盘 API（AGENTS.md 的持锁区纪律）。
+    let pinned = crate::config::with_config(|c| c.pinned_taskbar_devices.clone());
+    let mut config_snapshot = crate::config::Config::default();
+    crate::config::with_config(|c| {
+        config_snapshot.device_names = c.device_names.clone();
+    });
+    resolve_labels_with(devices, |d| {
+        crate::device_identity::resolved_display_name(&d.name, &d.key, &pinned, &config_snapshot)
+    })
+}
+
+/// = [`build_items_with_labels`] 的「不做名称解析」特例：**labels 全部为 `None`**
+/// ⇒ 每项退回 `d.name`（`pick_display_name` 的输出）。
+///
+/// ⚠️ **只被 `#[cfg(test)]` 使用**（生产路径走 [`resolve_widget_labels`]）。
+/// ⛔ 因此**必须**带 `#[cfg(test)]`：AGENTS.md 记过「test-only 包装函数不加
+/// `cfg(test)` ⇒ 触发 `dead_code` ⇒ 警告闸门拦提交」（E15.5 实测）。
+/// 加上后既满足闸门，也让「生产不走这条」变成**可编译期验证**的事实。
+#[cfg(all(target_os = "windows", test))]
 fn build_items(devices: &[crate::device_identity::PhysicalDevice]) -> Vec<WidgetItem> {
+    let labels: Vec<Option<String>> = vec![None; devices.len()];
+    build_items_with_opt_labels(devices, &labels)
+}
+
+/// 从后端聚合结果构造 widget 条目列表（**纯函数**，可单测）。
+///
+/// ⭐ `labels` 是**已经解析好的显示名**（[`resolve_widget_labels`] 的输出）。
+/// ⛔ 本函数**刻意不读配置**——它要保持纯函数可单测；解析放在调用方。
+/// ⛔ 别退回到「在 build_items 里读配置」：那会让它不再可单测，且与选择器侧分叉。
+#[cfg(target_os = "windows")]
+fn build_items_with_labels(
+    devices: &[crate::device_identity::PhysicalDevice],
+    labels: &[String],
+) -> Vec<WidgetItem> {
+    let owned: Vec<Option<String>> = labels.iter().map(|s| Some(s.clone())).collect();
+    build_items_with_opt_labels(devices, &owned)
+}
+
+#[cfg(target_os = "windows")]
+fn build_items_with_opt_labels(
+    devices: &[crate::device_identity::PhysicalDevice],
+    labels: &[Option<String>],
+) -> Vec<WidgetItem> {
     let mut items: Vec<WidgetItem> = devices
         // ⛔ 过滤必须在 map 之前：`pinned` 是「用户勾选」的唯一标记，
         //    它在 `group_taskbar_devices` 里同时覆盖「命中已选」与「反向补建的空占位」。
         .iter()
-        .filter(|d| d.pinned)
-        .map(|d| WidgetItem {
-            name: d.name.clone(),
+        .enumerate()
+        .filter(|(_, d)| d.pinned)
+        .map(|(i, d)| WidgetItem {
+            name: labels
+                .get(i)
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| d.name.clone()),
             icon: d.audio_kind,
             battery: d.battery,
             volume: d.volume,
@@ -2478,7 +2826,7 @@ fn fetch_into_snapshot() -> bool {
             return false;
         }
     };
-    let items = build_items(&devices);
+    let items = build_items_with_labels(&devices, &resolve_widget_labels(&devices));
     // ⛔ **不再做像素扫描 / 宽度估算**（2026-09-26 第二次方案变更，见 `find_widget_slot`）：
     //    可用区恒为**整条任务栏**，与内容宽度无关 ⇒ 设备数变化不再让位置漂移。
     //    ⚠️ `estimate_widget_width` 现仅用于**单测**核对绘制侧的 `desired_w` 口径；
@@ -2687,7 +3035,71 @@ fn start_hover_watcher() {
             //    鼠标每进出一次就重拉一遍设备列表。
             unsafe { ffi::post_refresh(hwnd as _) };
         }
+        // ── 光标落在**第几个设备**上 ──────────────────────────────────
+        // ⭐ 500ms 延迟只作用于**首次出现**；已在显示时切换设备**立即**跟随。
+        //
+        // ⚠️⚠️ 初版把「`idx < 0`」一律当作「离开 ⇒ 隐藏」，而**设备之间的空隙**
+        //   同样给出 `idx < 0`。后果（真机复现）：光标从设备 0 扫到设备 1 时
+        //   途经空隙 ⇒ 提示先**消失**、再等**满 500ms** 才在新设备上方出现。
+        //   用户看到的正是「提示首帧在**上一个**设备上方，然后才跳过来」。
+        //   ⇒ 判据必须是「**是否还在 widget 内**」，不是「是否命中某个设备」。
+        if want {
+            let idx = hovered_item_index(cursor, rect);
+            let shown = HOVER_SINCE.load(Ordering::Acquire) == -1;
+            if idx < 0 {
+                // 仍在 widget 内、只是落在设备间的空隙 ⇒ **什么都不做**：
+                // 既不隐藏，也不重置计时（否则「扫过空隙」会不断推迟出现）。
+            } else if idx != HOVERED_ITEM.load(Ordering::Acquire) {
+                HOVERED_ITEM.store(idx, Ordering::Release);
+                if shown {
+                    // ⚡ 已显示 ⇒ **立即**切到新设备，不再等 500ms。
+                    //   否则用户会看到「旧设备的提示还挂着」的错觉。
+                    unsafe { ffi::post_tooltip_show(hwnd as _, idx) };
+                } else {
+                    HOVER_SINCE.store(now_ms() as isize, Ordering::Release);
+                }
+            } else {
+                let since = HOVER_SINCE.load(Ordering::Acquire);
+                if since > 0
+                    && (now_ms() as isize).saturating_sub(since) as u64
+                        >= crate::taskbar_tooltip::TIP_DELAY_MS
+                {
+                    HOVER_SINCE.store(-1, Ordering::Release); // 标记「已显示」⇒ 不再重复投递
+                    unsafe { ffi::post_tooltip_show(hwnd as _, idx) };
+                }
+            }
+        } else if HOVER_SINCE.swap(0, Ordering::AcqRel) != 0 {
+            // 真正离开 widget ⇒ 立即隐藏（残影比延迟更招人烦）
+            unsafe { ffi::post_tooltip_show(hwnd as _, -1) };
+            // ⛔⛔ **必须复位 `HOVERED_ITEM`**，否则下一次悬停**同一个**设备时
+            //   `idx != HOVERED_ITEM` **不成立** ⇒ 走不进「重置计时」分支
+            //   ⇒ `HOVER_SINCE` 停在 0 ⇒ **再也不投递显示** ⇒ 提示再也不出现。
+            HOVERED_ITEM.store(-1, Ordering::Release);
+        }
     });
+}
+
+/// 光标落在第几个设备条目上（`None` = 落在间隙/未命中）。
+///
+/// ⭐ 判据与 tooltip 的 `rect` **同一份数据**（`LAST_ITEM_RECTS`）⇒
+/// 「提示命中区」与「光标命中判据」不可能不一致。
+/// ⚠️ y 方向**不判**：widget 是个扁条，y 判据由 `want_hover` 已经把关。
+fn hovered_item_index(cursor: Option<(i32, i32)>, win_rect: Option<(i32, i32, i32, i32)>) -> isize {
+    let (Some((cx, _)), Some((wx, _ww, _, _))) = (cursor, win_rect) else {
+        return -1;
+    };
+    let Ok(rects) = LAST_ITEM_RECTS.lock() else {
+        return -1;
+    };
+    // `item_rects` 是客户区坐标；这里把光标换算到同一坐标系再比
+    for (i, r) in rects.iter().enumerate() {
+        let left = wx + r.left;
+        let right = wx + r.right;
+        if cx >= left && cx < right {
+            return i as isize;
+        }
+    }
+    -1
 }
 
 /// 启动维护线程（幂等，重复调用只起一个）。
@@ -3044,6 +3456,177 @@ mod tests {
                 "widget 上不应再出现设备名: {s}"
             );
         }
+    }
+
+    // ── tooltip 文本：设备名的三级解析 ──
+
+    /// ⭐⭐ tooltip 显示的名字必须是「**alias → 全局重命名 → 短名**」三级链的结果。
+    ///
+    /// **为什么这条是硬判据**：`PhysicalDevice.name` 来自 `pick_display_name`
+    /// （**纯函数、不读配置**），而用户在设置页改过的名字存在 `config.device_names`
+    /// 与 `PinnedDevice.alias` 里 ⇒ 若 widget 侧直接用 `d.name`，
+    /// **tooltip 会显示旧名**（而设置页/选择器显示新名）。
+    ///
+    /// ⚠️ **判据形状的教训（本次实测踩到）**：第一版只测
+    /// `device_identity::resolved_display_name` 这个**纯函数本身** ⇒ 实测把生产侧
+    /// （`resolve_widget_labels`）改成 `d.name.clone()` 后，**337 条依然全绿**——
+    /// 「算法对」不等于「接线对」。⇒ 本条改为**穿过** [`resolve_labels_with`]，
+    /// 同时验证**接线**（见 [`widget_labels_are_wired_to_the_resolver`]）。
+    #[test]
+    fn tooltip_label_follows_alias_then_rename_then_short_name() {
+        let d = dev("小爱音箱-9205", Some(50), None, None, None, true);
+        let key = d.key.clone();
+        let devices = vec![d];
+
+        // ① 无 alias、无重命名 ⇒ 短名
+        let empty = crate::config::Config::default();
+        let no_pins: Vec<crate::config::PinnedDevice> = Vec::new();
+        assert_eq!(
+            resolve_labels_with(&devices, |d| {
+                crate::device_identity::resolved_display_name(&d.name, &d.key, &no_pins, &empty)
+            }),
+            vec!["小爱音箱-9205".to_string()]
+        );
+
+        // ② 全局重命名（`device_names`）⇒ 生效
+        let mut renamed = crate::config::Config::default();
+        renamed
+            .device_names
+            .insert("小爱音箱-9205".to_string(), "客厅音箱".to_string());
+        assert_eq!(
+            resolve_labels_with(&devices, |d| {
+                crate::device_identity::resolved_display_name(&d.name, &d.key, &no_pins, &renamed)
+            }),
+            vec!["客厅音箱".to_string()],
+            "用户在设置里改的名必须生效"
+        );
+
+        // ③ `alias` **优先于**全局重命名
+        let pins = vec![crate::config::PinnedDevice {
+            key,
+            fallback: None,
+            alias: Some("我的耳机".to_string()),
+        }];
+        assert_eq!(
+            resolve_labels_with(&devices, |d| {
+                crate::device_identity::resolved_display_name(&d.name, &d.key, &pins, &renamed)
+            }),
+            vec!["我的耳机".to_string()],
+            "alias 优先级必须高于全局重命名"
+        );
+
+        // ④ 空白 alias 视为未设置 ⇒ 回落全局重命名（而不是显示空白）
+        let blank = vec![crate::config::PinnedDevice {
+            key: crate::device_identity::DeviceKey::Name("小爱音箱-9205".into()).encode(),
+            fallback: None,
+            alias: Some("   ".to_string()),
+        }];
+        assert_eq!(
+            resolve_labels_with(&devices, |d| {
+                crate::device_identity::resolved_display_name(&d.name, &d.key, &blank, &renamed)
+            }),
+            vec!["客厅音箱".to_string()],
+            "空白 alias 必须被忽略（否则 tooltip 显示空白）"
+        );
+    }
+
+    /// ⭐ **接线判据**：tooltip 用的 `WidgetItem.name` 必须来自 `labels`，而不是 `d.name`。
+    ///
+    /// ⛔ 这条是上条的**互补**：上条验「三级链算法对」，本条验「**真的把 labels 传下去了**」。
+    /// 少了本条，把 `build_items_with_labels` 里的 `labels.get(i)` 改回 `d.name.clone()`
+    /// 仍会全绿——那正是本次最初发生的失效。
+    ///
+    /// 可证伪：把 `build_items_with_opt_labels` 的 `name:` 字段改回 `d.name.clone()`
+    /// ⇒ 本条转红。
+    #[test]
+    fn widget_labels_are_wired_to_the_resolver() {
+        let d = dev("小爱音箱-9205", Some(50), None, None, None, true);
+        let devices = vec![d];
+        // 假装解析出了另一个名字
+        let labels = vec!["我的耳机".to_string()];
+        let items = build_items_with_labels(&devices, &labels);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].name, "我的耳机",
+            "WidgetItem.name 必须取自解析后的 labels"
+        );
+
+        // 反控：不给 labels 时退回 `d.name`（这是 `build_items` 的语义）
+        let plain = build_items(&devices);
+        assert_eq!(
+            plain[0].name, "小爱音箱-9205",
+            "无 labels 时必须退回 d.name"
+        );
+    }
+
+    // ── 逐项布局（tooltip 命中区与绘制共用同一份） ──
+    /// ⭐⭐ `item_rects` 必须与**绘制循环**逐字同源。
+    ///
+    /// 旧实现只用 running `cursor` 逐项自增、用完即弃 ⇒ tooltip 若自行重算就是
+    /// **第二个布局来源**，分叉后提示会挂到错误设备上且**不报错**。
+    ///
+    /// 本条把「首项贴 `pad_x`、逐项加 `item_gap`」钉死：
+    /// 可证伪——把 `item_rects` 里的 `cursor = m.pad_x` 改回 `0`（漏掉左内边距）
+    /// 或把 `cursor += w + m.item_gap` 改成 `cursor += w`（漏掉项间隙），
+    /// 本条**立刻转红**。
+    #[test]
+    fn item_rects_match_draw_loop() {
+        let m = m96();
+        let per_item = [40_i32, 30, 55];
+        let r = item_rects(&per_item, &m, m.h);
+        assert_eq!(r.len(), 3);
+        // 首项左端 = 左内边距
+        assert_eq!(r[0].left, m.pad_x, "首项必须贴左内边距");
+        // 每项宽度 = 给定宽度
+        assert_eq!(r[0].right - r[0].left, 40);
+        assert_eq!(r[1].right - r[1].left, 30);
+        assert_eq!(r[2].right - r[2].left, 55);
+        // 逐项推进 = 宽 + 项间隙
+        assert_eq!(r[1].left - r[0].right, m.item_gap, "项间必须留 item_gap");
+        assert_eq!(r[2].left - r[1].right, m.item_gap);
+        // 纵向铺满整窗（tooltip 命中区的高度 = 窗口高）
+        assert!(r.iter().all(|x| x.top == 0 && x.bottom == m.h));
+    }
+
+    /// ⛔ tooltip 的 `rect` **必须互不重叠**。
+    ///
+    /// 为什么这是硬要求：重叠区会让 `QuotaDock` 式的「一设备一 `TOOLINFO`」判不出
+    /// 「光标属于谁」⇒ 提示串到别的设备上，**且不会报错**。
+    /// `QuotaDock` 自己也把这条写成测试（`taskbar.rs` 的
+    /// 「每个厂商拥有互不重叠的独立悬浮区域」）。
+    ///
+    /// 可证伪：把 `item_rects` 里的 `cursor += w + m.item_gap` 改成 `cursor += w`（重叠）
+    /// 或 `- m.item_gap`（反重叠）⇒ 本条转红。
+    #[test]
+    fn item_rects_are_disjoint() {
+        let m = m96();
+        let per_item = [40_i32, 30, 55, 20];
+        let r = item_rects(&per_item, &m, m.h);
+        // ⛔ 不用 `{:?}` 打印 `RECT`：它是 `windows-sys` 的裸结构体，**未实现 `Debug`**
+        //   （derive 会报 `E0277`）。这里只报坐标。
+        for w in r.windows(2) {
+            assert!(
+                w[0].right <= w[1].left,
+                "相邻项的 rect 不得重叠：[{},{}] vs [{},{}]",
+                w[0].left,
+                w[0].right,
+                w[1].left,
+                w[1].right
+            );
+        }
+    }
+
+    /// 单项时不得越出「内容宽 = Σ宽 + 间隙×(n−1) + 两端内边距」。
+    ///
+    /// 可证伪：把 `item_rects` 的推进写成 `cursor += w + m.item_gap * 2` ⇒ 转红。
+    #[test]
+    fn item_rects_total_width_matches_content_formula() {
+        let m = m96();
+        let per_item = [40_i32, 30, 55];
+        let r = item_rects(&per_item, &m, m.h);
+        let content_w: i32 =
+            per_item.iter().sum::<i32>() + m.item_gap * (per_item.len() as i32 - 1);
+        assert_eq!(r.last().unwrap().right, m.pad_x + content_w);
     }
 
     // ── 宽度估算（方向性：宁可高估，不可低估）—— 现服务于绘制侧 `desired_w` ──

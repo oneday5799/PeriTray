@@ -21,6 +21,7 @@ mod process;
 mod shortcut;
 mod state;
 #[cfg(target_os = "windows")]
+mod taskbar_tooltip;
 mod taskbar_widget;
 #[cfg(target_os = "windows")]
 mod toast;
