@@ -1449,7 +1449,8 @@ mod tests {
         );
     }
 
-    /// 下面的实例路径全部是**本机实测原文**（`.workbuddy-ai/scratch/probe_bt_container_map.py`）。
+    /// 下面的实例路径全部是**本机实测原文**（`BTHENUM` 设备节点与 `BTHENUM\{GUID}`
+    /// 两种服务实例形态，各取一例）。
     #[test]
     fn mac_extracted_from_both_bluetooth_instance_shapes() {
         // 形态一：设备节点（经典蓝牙）

@@ -289,9 +289,9 @@ for (const dirName of ["scripts"]) {
     try {
       execFileSync(process.execPath, ["--check", path.join(DIST, dirName, f)], {
         // ⚠️ stdin 必须是 "ignore"：`node --check` 不读 stdin，而某些环境下 libuv
-        // 创建「子进程 stdin 管道」会失败（本机返回 EBUSY / errno -4082）。
+        // 创建「子进程 stdin 管道」会失败（本机返回 EBUSY / errno -4082，子进程从未被创建）。
         // 用默认的 stdio:"pipe" 会让本检查对**全部**文件假红，进而拦死 pre-commit。
-        // 详见 .workbuddy-ai/memory/PLAYBOOK.md §J.5。
+        // 实测矩阵与已排除假设见 Wiki「08-工程化与工具链」第 4 类校验。
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (e) {
