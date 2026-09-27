@@ -596,6 +596,173 @@ pub async fn toggle_pinned_taskbar_device(
     Ok(())
 }
 
+/// 设置页「任务栏组件」折叠区的**已钉设备清单**（用户 2026-09-28）。
+///
+/// ⭐ 与 `get_selectable_devices` 的分工（**刻意不同，勿合并**）：
+/// · 那个是「**可勾选**的候选」（两页并集、**不做** pin 补建）⇒ 给「选择器」用；
+/// · 本命令是「**已经钉上**的清单」⇒ 给设置页展开区 + 「移除」按钮用。
+///   必须**含已断开设备**：用户钉了 5 台、此刻只插着 2 台，那 3 台也要列出来
+///   （否则「移除」按钮够不着它们，用户永远清不掉）。
+///
+/// ⇒ 数据源直接取 `group_taskbar_devices`：它本就含「pinned 但本次没枚举到」的
+///   **反向补建占位条目**（`connected == false`），正是「已断开」的表达。
+#[derive(serde::Serialize)]
+pub struct PinnedTaskbarEntry {
+    /// 身份键（原样回传给移除接口）
+    pub key: String,
+    /// 最终显示名（`alias` > 全局重命名 > 短名），**后端算好**
+    pub name: String,
+    /// ⭐ 是否**在线/已连接**。`false` ⇒ 设置页应置灰呈现「已断开」而非隐藏
+    pub connected: bool,
+    /// 固定的**兜底键**（`n:<core_name(显示名)>`），「移除」时**必须原样回传**。
+    ///
+    /// ⚠️ 为什么清单要带它：`group_taskbar_devices` 产出的 `PhysicalDevice` 不含
+    ///   `fallback` 字段（它内部算完只留 `key`）。而「移除」走
+    ///   `toggle_pinned_taskbar_device`，那边**按 `key` + `fallback` 两层删净命中项** ——
+    ///   只传 `key` 时，「容器变化后新旧两条键并存」的场景会删不干净，
+    ///   表现为「点了移除它还在」。
+    /// ⇒ 这里按**显示侧同一公式**现算（`DeviceKey::Name(core_name(name)).encode()`），
+    ///   不让前端参与（`core_name` 在 JS 侧无法等价复现）。
+    pub fallback: String,
+    /// ⭐ 属于该物理设备的**音频端点 id** 列表。
+    ///
+    /// ⚠️ 为什么必须有它：音量控制页的卡片身份是 `AudioDevice.id`，而它的
+    ///   `name` 是**音频端点名**（`耳机 (小爱音箱-9205)`），与本结构的 `name`
+    ///   （`小爱音箱-9205`）**不是同一个字符串** ⇒ 音量页若按名字判「钉了没」，
+    ///   菜单文案**永远不会**翻成「移出任务栏」（真机现象）。
+    ///   ⇒ 把端点 id 交给前端，两页各按**自己的原生标识**判，判据本身仍全在后端。
+    #[serde(default)]
+    pub audio_ids: Vec<String>,
+}
+
+#[tauri::command(async)]
+pub async fn get_pinned_taskbar_list() -> Result<Vec<PinnedTaskbarEntry>, String> {
+    let devices = run_blocking(devices_for_taskbar).await??;
+    let audio = run_blocking(crate::audio::enumerate_output_devices)
+        .await?
+        .map_err(|e| e.to_string())?;
+    // ⛔ 只取 `pinned` 快照：显示名由 `group_taskbar_devices` 内部的
+    //   `resolved_display_name` 解析（它自己会再取一次配置），此处**不重复**克隆整份配置。
+    let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
+    let grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
+    let out: Vec<PinnedTaskbarEntry> = grouped
+        .into_iter()
+        .filter(|d| d.pinned)
+        .map(|d| PinnedTaskbarEntry {
+            // ⭐ 两级匹配（与显示侧同款判据）：先按**身份键**，再按 `core_name` 兜底
+            //   —— 虚拟端点/驱动异常时身份键可能退化，名字仍能对上同一台物理设备。
+            audio_ids: audio
+                .iter()
+                .filter(|a| {
+                    crate::device_identity::audio_endpoint_key(a).encode() == d.key
+                        || crate::dedup::core_name(&a.name) == crate::dedup::core_name(&d.name)
+                })
+                .map(|a| a.id.clone())
+                .collect(),
+            fallback: crate::device_identity::DeviceKey::Name(crate::dedup::core_name(&d.name))
+                .encode(),
+            key: d.key,
+            name: d.name,
+            connected: d.connected,
+        })
+        .collect();
+    Ok(out)
+}
+
+/// 弹出窗口设备卡片右键菜单：**按设备名**钉到/移出任务栏（用户 2026-09-28）。
+///
+/// ⭐ 为什么**必须由后端解析 `key`/`fallback`**（不能沿用设置页那条命令让前端传参）：
+///   设置页的选择器拿的是 `SelectableDevice`，**后端已把 `key` 与 `fallback` 算好**；
+///   而弹出窗口的卡片是 `crate::device::Device`，**没有 fallback 字段**，而
+///   `fallback = DeviceKey::Name(core_name(&name)).encode()` 在 JS 侧**无法复现**
+///   （`simplifyDeviceName` 取第一个 `(`、`core_name` 取 `" ("`，且后者会剥 17 种
+///   协议后缀；见 `SelectableDevice::fallback` 文档的 ⛔⛔）。
+///   ⇒ 让前端传 `name`、后端解析，是唯一不产生「判据分叉」的接法
+///   ——与托盘的 `toggle_device_tray`（按 name 切 `Vec<String>`）同一套路。
+///
+/// 语义与 `try_toggle_pinned_taskbar_device` **完全一致**（复用它，不重写），
+/// 故上限、fallback 撞键、「点一次翻转一次」等语义自动保持同一份。
+#[tauri::command(async)]
+pub async fn toggle_taskbar_device_pin(
+    app: tauri::AppHandle,
+    name: String,
+    // ⭐ 音量页传入**音频端点 id**（`AudioDevice.id`）；设备页不传（`None`）。
+    //
+    // ⚠️ 为什么音量页**不能**只靠 `name`：那儿的卡片是 `AudioDevice`，它的 `name`
+    //   是**音频端点名**（可能带「扬声器/耳机」前缀），与 `PhysicalDevice.name`
+    //   （`pick_display_name` 的输出）**不是同一个字符串** ⇒ 按名字反查会「未找到设备」。
+    //   端点 id 稳定，且能经 `audio_endpoint_key` 换算成**与设备页同一套**身份键。
+    device_id: Option<String>,
+) -> Result<bool, String> {
+    let log_name = name.clone();
+    // ⛔ 解析身份要**取快照后在锁外**做：`group_taskbar_devices` 走设备枚举，
+    //   持着配置锁去跑它会长时间占锁（且枚举本身还可能回调配置）。
+    let resolved = run_blocking(move || {
+        let devices = devices_for_taskbar()?;
+        let audio = crate::audio::enumerate_output_devices().map_err(|e| e.to_string())?;
+        let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
+        let grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
+        // ⭐ 两条定位路径，**共用 `audio_endpoint_key` 这一份公式**：
+        // · 音量页（有 `device_id`）⇒ 按端点换算身份键，**完全不依赖名字**；
+        // · 设备页（无 `device_id`）⇒ 按显示名反查 `PhysicalDevice`。
+        // ⚠️ 两条路都必须落到**同一个** `key` 口径，否则同一台设备在两页会
+        //   被当成两台、钉了这边丢了那边。
+        let hit = match device_id.as_deref() {
+            Some(id) => crate::audio::enumerate_output_devices()
+                .map_err(|e| e.to_string())?
+                .iter()
+                .find(|a| a.id == id)
+                .map(crate::device_identity::audio_endpoint_key)
+                .map(|k| k.encode()),
+            None => grouped
+                .iter()
+                .find(|d| d.name == name)
+                .map(|d| d.key.clone()),
+        };
+        let fallback =
+            crate::device_identity::DeviceKey::Name(crate::dedup::core_name(&name)).encode();
+        Ok::<_, String>((hit, fallback))
+    })
+    .await?;
+
+    let (key_opt, fallback) = resolved?;
+    let Some(key) = key_opt else {
+        // ⚠️ 找不到 = 这台设备此刻不在枚举结果里（刚拔掉/刚断开）。
+        //   **不静默成功**：否则前端会把菜单项翻成「已钉」而实际没钉。
+        return Err(format!("未找到设备：{log_name}"));
+    };
+
+    let key_for_log = key.clone();
+    let fb = fallback.clone(); // ⛔ 闭包要 `move`，而后面读状态还要用 `fallback` ⇒ 先留一份
+    let outcome = run_blocking(move || {
+        config::with_config_mut(|c| try_toggle_pinned_taskbar_device(c, &key, Some(&fb), None))
+    })
+    .await?;
+
+    if let Err(msg) = outcome {
+        standard_log!(
+            "[cmd] toggle_taskbar_device_pin: {} 拒绝: {}",
+            log_name,
+            msg
+        );
+        return Err(msg);
+    }
+    // ⭐ 回传**切换后**的状态，让前端用它更新菜单文案，不必再查一次。
+    let now_pinned = config::with_config(|c| {
+        config::matches_pinned_taskbar(&c.pinned_taskbar_devices, &key_for_log, Some(&fallback))
+    });
+    standard_log!(
+        "[cmd] toggle_taskbar_device_pin: {} key={} now_pinned={}",
+        log_name,
+        key_for_log,
+        now_pinned
+    );
+    let config_snapshot = config::with_config(|c| c.clone());
+    // 忽略 emit 失败：属「无状态后果」的 UI 呈现类
+    let _ = app.emit("config-changed", config_snapshot);
+    Ok(now_pinned)
+}
+
 // ── 音频命令 ─────────────────────────────────────────────
 
 #[tauri::command(async)]

@@ -742,7 +742,13 @@ fn main() {
             commands::get_cached_devices,
             commands::get_taskbar_devices,
             commands::get_selectable_devices,
+            // ⛔ `get_selectable_devices` / `toggle_pinned_taskbar_device` 仍供
+            //   **设置页的「移除」**用（按 key+fallback 删净命中项）；
+            //   设备**添加**已改到弹出窗口右键菜单，走下面这个「按 name 解析」的接口
+            //   （前端算不出 `fallback`，必须由后端解析，否则会出现第二套判据）。
             commands::toggle_pinned_taskbar_device,
+            commands::get_pinned_taskbar_list,
+            commands::toggle_taskbar_device_pin,
             commands::get_config,
             commands::get_config_load_error,
             commands::get_shortcut_register_failed,

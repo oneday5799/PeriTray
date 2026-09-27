@@ -662,7 +662,10 @@ fn pick_display_name(names: &[String]) -> String {
 /// ⛔ **此处必须自己复核、不得只信任调用方**（与 `normalize_encoded_key` 同一条纪律）：
 /// 本函数把「容器串已归一化/已排除占位」的责任收回来自己承担，
 /// 代价是一次 `usable_container` 调用，换来的是**不依赖上游不出错**。
-fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
+// ⭐ **pub**：音量页的「钉到任务栏」要按**音频端点**反查物理身份，
+//   而唯一权威公式就在这里 —— 提成 pub 是为了让命令**复用**它，
+//   而不是在前端或命令里另写一份（另写必然与 grouper 漂移）。
+pub fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
     match audio
         .container_id
         .as_deref()

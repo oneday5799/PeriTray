@@ -261,6 +261,54 @@ window.clampMenuPosition = function (menu, x, y) {
   menu.style.top = posY + "px";
 };
 
+// ── 任务栏「已钉设备」名单（**设备页与音量页共用**）────────────────────
+//
+// ⭐ 为什么放 `common.js` 而不是某个 tab 的脚本：两个 tab 的右键菜单都要读它，
+// 而 `popup-audio.js`（加载序 2/4）**先于** `popup-devices.js`（3/4）执行
+// ⇒ 放在 devices 里会让 audio 在定义时拿到 `undefined`。共用状态必须回到
+// 最先加载的公共层——这是加载序决定的，不是风格偏好。
+//
+// ⛔ 名单按**显示名**存：音量页的卡片名是**音频端点名**、设备页是
+//   `PhysicalDevice.name`，两者字符串不同但指向同一台设备。按名判只是**文案**用途，
+//   真正的写入一律由后端按身份键裁决，前端不参与判据。
+// ⭐ 两份名单：**显示名**（设备页用）与**音频端点 id**（音量页用）。
+//
+// ⛔ 两者**必须分开**，因为两页卡片的原生标识不同：
+//   · 设备信息页卡片是 `Device`，名字就是 `PhysicalDevice.name`；
+//   · 音量控制页卡片是 `AudioDevice`，名字是**音频端点名**（`耳机 (小爱音箱-9205)`），
+//     与 `PhysicalDevice.name`（`小爱音箱-9205`）**不是同一个字符串**。
+//   ⇒ 音量页若按名字判「钉了没」，文案**永远不会**翻成「移出任务栏」（真机现象）。
+//   ⇒ 端点 id 由后端一并返回（`PinnedTaskbarEntry.audio_ids`），各页按自己的标识判。
+//   判据本身仍全在后端：这里只用于**菜单文案**。
+let taskbarPinnedNameSet = new Set();
+let taskbarPinnedAudioIdSet = new Set();
+
+window.isTaskbarPinnedName = function (name) {
+  return taskbarPinnedNameSet.has(name);
+};
+
+window.isTaskbarPinnedAudioId = function (id) {
+  return taskbarPinnedAudioIdSet.has(id);
+};
+
+window.refreshTaskbarPinnedNames = async function () {
+  const inv = window.getInvoke ? window.getInvoke() : null;
+  if (!inv) return;
+  try {
+    const rows = (await inv("get_pinned_taskbar_list")) || [];
+    taskbarPinnedNameSet = new Set(rows.map((r) => r.name));
+    const ids = [];
+    for (const r of rows) {
+      for (const id of r.audio_ids || []) ids.push(id);
+    }
+    taskbarPinnedAudioIdSet = new Set(ids);
+  } catch (e) {
+    // ⚠️ 失败时**不清空**已有集合：菜单文案退到「钉到任务栏」比「全部显示已钉」更安全
+    //    （最坏是文案不准，点下去仍由后端按身份键翻转真实状态）。
+    console.warn("refreshTaskbarPinnedNames failed", e);
+  }
+};
+
 window.hideAllContextMenus = function () {
   for (const holder of contextMenuHolders) {
     if (holder.menu) {

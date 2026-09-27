@@ -2712,12 +2712,16 @@ fn build_items_with_opt_labels(
 
 /// 判据的**纯函数形式**（可单测，不读全局状态）。
 ///
-/// ⭐ 抽出来的理由：这是「默认关闭」这条用户口径的**唯一落地点**。
-///   若将来有人把它改回「有数据就显示」（`group_taskbar_devices` 的旧保留规则），
-///   行为会变回「升级后窗口自己冒出来」—— 那种回归没有任何报错，只能靠用例钉住。
+/// ⭐ 判据本体在 `config::taskbar_widget_visible`（开关 ∧ 列表非空）——放配置层是因为
+///   设置页要读同一口径（渲染开关的初值），两边各判一次必然漂移。
+///
+/// ⛔ **旧口径已退役**（用户 2026-09-28）：此前是「`pinned_taskbar_devices` 非空即显示」，
+///   也就是**拿设备列表当开关**。那让「关闭组件」等价于「清空设备列表」——
+///   用户重新打开时设备全没了，与「关闭但保留设备信息」的口径直接冲突。
+///   ⇒ 现在是显式开关 `taskbar_widget_enabled`，且关闭**不碰**列表。
 #[cfg(target_os = "windows")]
 fn wants_widget(c: &crate::config::Config) -> bool {
-    !c.pinned_taskbar_devices.is_empty()
+    crate::config::taskbar_widget_visible(c)
 }
 
 /// 窗口是否**应该存在**。
@@ -4564,29 +4568,56 @@ mod tests {
 
     // ── wants_widget：窗口「该不该存在」的判据 ─────────────────
 
-    /// ⭐ 用户口径（2026-09-24）：「默认关闭，只有用户选择了设备时才开启显示」。
+    /// ⭐ 用户口径（2026-09-28 修订）：「**默认关闭**；关闭只隐藏窗口，**不丢设备**」。
     ///
-    /// 可证伪：把判据改成 `true`（或改成旧的「有数据就显示」）本条立刻转红。
-    /// ⚠️ 这条口径**改变**了既有行为 —— 未固定任何设备的用户升级后窗口**默认不出现**，
-    ///   这正是刻意要的（窗口不再自己冒出来）。
+    /// ⛔ 旧口径已退役：此前是「列表非空即显示」，等于**拿设备列表当开关**——
+    ///   「关闭组件」就等于「清空设备」，用户重开时设备全没了。
+    ///
+    /// 可证伪：把 `config::taskbar_widget_visible` 改回「只看列表非空」⇒ 本组三条全红。
     #[test]
-    fn widget_shows_only_when_devices_are_pinned() {
+    fn widget_visibility_is_switch_and_list() {
         use crate::config::{Config, PinnedDevice};
 
-        let empty = Config::default();
-        assert!(
-            !wants_widget(&empty),
-            "未固定任何设备 ⇒ 窗口不应存在（默认关闭）"
-        );
-
-        let pinned = Config {
+        let one_pin = |enabled: bool| Config {
             pinned_taskbar_devices: vec![PinnedDevice {
                 key: "c:abc".to_string(),
                 fallback: None,
                 alias: None,
             }],
+            taskbar_widget_enabled: enabled,
             ..Default::default()
         };
-        assert!(wants_widget(&pinned), "已固定设备 ⇒ 窗口应存在");
+
+        // ① 默认关闭：新装（无设备 + 开关默认关）⇒ 不显示
+        assert!(
+            !wants_widget(&Config::default()),
+            "默认（无设备、开关默认关）⇒ 窗口不应存在"
+        );
+
+        // ② 开关开 + 有设备 ⇒ 显示
+        assert!(
+            wants_widget(&one_pin(true)),
+            "开关开且已钉设备 ⇒ 窗口应存在"
+        );
+
+        // ③ ⭐ 开关关 + **仍保留设备** ⇒ 不显示，但**列表一个字都没少**
+        let off = one_pin(false);
+        assert!(!wants_widget(&off), "开关关 ⇒ 窗口不应存在");
+        assert_eq!(
+            off.pinned_taskbar_devices.len(),
+            1,
+            "⭐ 关闭**不得**清空设备列表（否则用户重开时设备全丢）"
+        );
+    }
+
+    /// 开关开但**一台设备都没钉** ⇒ 不得显示（否则任务栏上出现空窗）。
+    #[test]
+    fn switch_on_without_devices_does_not_show_empty_window() {
+        use crate::config::Config;
+        let c = Config {
+            taskbar_widget_enabled: true,
+            ..Default::default()
+        };
+        assert!(!wants_widget(&c), "开关开但无设备 ⇒ 不得显示空窗");
     }
 }

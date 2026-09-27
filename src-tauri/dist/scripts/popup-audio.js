@@ -350,6 +350,40 @@ async function showAudioContextMenu(x, y, device) {
     }
   }
 
+  // ⭐ 「钉到任务栏」——与设备信息页同一功能（用户 2026-09-28 要求两页都能加）。
+  //
+  // ⭐ 位置：**菜单最底部、「空间音效」之下**（用户 2026-09-28 指定）。
+  //    故本块刻意排在上面那段 await 之后追加——顺带天然满足
+  //    ⛔「菜单项必须在所有 await 之后追加」：`showAudioContextMenu` 带
+  //    `audioMenuToken` 重入令牌，提前追加会与空间音效查询竞态。
+  //
+  // ⚠️ 这里必须传 **`device_id`**（音频端点 id）而不能只传 `device.name`：
+  //   音量页卡片的 `name` 是**音频端点名**（可能带「扬声器/耳机」前缀），
+  //   与任务栏侧的 `PhysicalDevice.name` 不是同一个字符串 ⇒ 后端按名字查不到。
+  //   端点 id 经后端 `audio_endpoint_key` 换算出的身份键**与设备页完全一致**，
+  //   所以同一台设备在两页钉的结果是同一条记录（不会重复、不会各钉各的）。
+  const pinItem = document.createElement("div");
+  pinItem.className = "context-menu-item";
+  // ⭐ 音量页按**端点 id** 判（不是名字）：卡片的 `device.name` 是音频端点名，
+  //    与 `PhysicalDevice.name` 不是同一个字符串 ⇒ 按名字判文案永远不变。
+  pinItem.textContent = window.isTaskbarPinnedAudioId(device.id)
+    ? "移出任务栏"
+    : "钉到任务栏";
+  pinItem.addEventListener("click", async () => {
+    try {
+      await invoke("toggle_taskbar_device_pin", {
+        name: device.name,
+        deviceId: device.id,
+      });
+      // ⭐ 刷新的是**共用**名单（名字集 + 音频 id 集），音量页与设备页据此改文案。
+      await window.refreshTaskbarPinnedNames();
+    } catch (e) {
+      showToast(e);
+    }
+    hideAllContextMenus();
+  });
+  menu.appendChild(pinItem);
+
   document.body.appendChild(menu);
   clampMenuPosition(menu, x, y);
   activeAudioMenu = menu;
@@ -472,6 +506,9 @@ async function loadAudioDevices() {
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
     deviceShortcuts = cfg.device_shortcuts || {};
+    // ⭐ 右键菜单「钉到任务栏/移出任务栏」要判当前状态 ⇒ 设备就绪后拉一次共用名单。
+    //    不 await：菜单在用户右键时才用，届时早已拿到；不阻塞音量页首屏。
+    window.refreshTaskbarPinnedNames();
     renderAudioDevices();
     if (audioDevices.length > 0 && !selectedDeviceId) {
       const firstVisible = audioDevices.find(d => !hiddenAudioDevices.includes(d.name));

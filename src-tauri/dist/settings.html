@@ -679,15 +679,29 @@
 
     <!-- Tab: Taskbar -->
     <div class="tab-content" id="tab-taskbar">
-      <div class="card">
+      <div class="card expandable" id="taskbar-widget-card">
         <div class="card-left">
-          <span class="card-title">在任务栏显示的设备
-            <span class="tooltip-trigger" data-tip="选择需要在任务栏信息窗口中显示的设备。最多可固定 8 个。">?</span>
-          </span>
-          <div class="card-desc">选择需要在任务栏信息窗口中显示的设备</div>
+          <div class="card-title">任务栏组件</div>
+          <div class="card-desc">在任务栏上显示所选设备的信息</div>
         </div>
         <div class="card-actions">
-          <button class="add-device-btn" id="btn-taskbar-devices">选择设备</button>
+          <label class="toggle">
+            <!-- ⛔ **不写 `checked`**：默认关闭（用户 2026-09-28 口径），
+                 真实初值一律由 `bindToggle` 从 config 同步进来。 -->
+            <input type="checkbox" id="toggle-taskbar-widget">
+            <span class="slider"></span>
+          </label>
+          <div class="card-arrow" id="arrow-taskbar-widget">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="taskbar-widget-items">
+          <!-- ⭐ 展开区 = **已添加设备清单**（含已断开）+ 每行一个「移除」按钮。
+               设备来源改为弹出窗口右键菜单「钉到任务栏」，此处只负责**查看与移除**。 -->
+          <div class="card-item" id="taskbar-widget-empty" style="display: none;">
+            <div class="card-item-name" id="taskbar-widget-empty-text">尚未添加设备</div>
+          </div>
+          <div id="taskbar-widget-devices"></div>
         </div>
       </div>
 

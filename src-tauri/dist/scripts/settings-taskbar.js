@@ -1,96 +1,141 @@
-/* settings-taskbar.js — 设置页·任务栏 tab：任务栏信息窗口的显示设备选择与窗口位置固定
+/* settings-taskbar.js — 设置页·任务栏 tab：任务栏组件总开关 + 已添加设备管理 + 窗口位置固定
  * 加载序 6/8 · 提供：initTaskbarTab()
  * 依赖：common.js / settings.js(config/bindToggle/initComboBox/createExpandableCard/saveConfig)
  *
- * ⭐ 本页四个控件**全部接线真实数据**：
- *    · 设备选择（`initTaskbarDevicePicker`）→ `get_selectable_devices` / `toggle_pinned_taskbar_device`
- *      （设备页 ∪ 输出端点 ∪ 输入端点的**并集**；本文件不读 config，勾选态由后端 `pinned` 给出）
+ * ⭐ 本页控件全部接线真实数据：
+ *    · 「任务栏组件」开关       → `config.taskbar_widget_enabled`（默认关）
+ *    · 已添加设备清单 + 「移除」 → `get_pinned_taskbar_list` / `toggle_pinned_taskbar_device`
  *    · 「固定任务栏窗口位置」开关 → `config.taskbar_position_locked`
  *    · 「任务栏窗口位置」下拉     → `config.taskbar_position`（left/center/right）
  *    · 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default/follow_system）
  *
- * ⛔ 后三者的落盘**不是可选的**：后端 `taskbar_widget::should_show()` 的判据是
- *    「`pinned_taskbar_devices` 非空」（用户口径 2026-09-24：默认关闭，选了设备才显示），
- *    窗口的挂载/拆除/重定位/重绘全部由 `config-changed` 驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
+ * ⛔ 设备**添加**入口已从本页移除（用户 2026-09-28）：改到**弹出窗口**的设备卡片
+ *    右键菜单「钉到任务栏」，与托盘的「添加到托盘」同一范式。本页只保留
+ *    「查看已添加 + 移除」，且清单**必须含已断开设备**。
+ *
+ * ⛔ 落盘**不是可选的**：后端 `taskbar_widget::should_show()` 的判据是
+ *    「开关开 **且** 已钉设备非空」，窗口挂载/拆除/重绘全由 `config-changed`
+ *    驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
 function initTaskbarTab() {
-  initTaskbarDevicePicker();
+  initTaskbarWidgetCard();
   initTaskbarPinCard();
   initTaskbarContentScale();
 }
+// ── 任务栏组件：总开关 + 已添加设备清单 ────────────────────────────
+//
+// ⭐ 开关落 `config.taskbar_widget_enabled`（**默认关**，用户 2026-09-28 口径）。
+// ⛔ **关闭不得清空设备列表** —— 用户要求「关闭后保留设备信息，方便重新打开」；
+//    后端 `should_show()` 也据此判为「开关 ∧ 列表非空」，两侧口径必须一致。
+// ⭐ 展开区列出**已添加**的设备（含已断开，置灰呈现）+ 每行「移除」按钮；
+//    设备本身由弹出窗口右键菜单「钉到任务栏」添加，本页不再提供选择器。
+function initTaskbarWidgetCard() {
+  const card = document.getElementById("taskbar-widget-card");
+  const toggle = document.getElementById("toggle-taskbar-widget");
+  const items = document.getElementById("taskbar-widget-items");
+  const arrow = document.getElementById("arrow-taskbar-widget");
+  const list = document.getElementById("taskbar-widget-devices");
+  const empty = document.getElementById("taskbar-widget-empty");
+  if (!card || !toggle || !items || !list) return;
 
-// 「在任务栏显示的设备」——交互范式对齐「强制静音」：点击弹出复选菜单。
-//
-// ⭐ **每次点击都重新拉取**设备并集，而不是在页面加载时缓存一份：
-//   · 任务栏（另一个窗口）可能刚改过固定项 ⇒ 缓存会让勾选态过期；
-//   · 设备热插拔（插拔耳机/接收器）后菜单要立刻反映，不能等页面刷新；
-//   · 设备侧 WMI 取数 600ms+ 是**点击时**才付的成本，页面加载时不必付。
-//
-// **初始**勾选态一律取后端返回的 `pinned`（它用的是 `pinned_device_matches` 两级判据：
-// key 精确命中 + fallback 兜底）。⛔ 不可在前端「只比 key」自行推断 —— 那与后端不等价，
-// 会出现「界面没勾、后端其实已固定」⇒ 点一下变成又插一条（与 `67841b0` 同源缺陷）。
-// ⚠️ 但 `createCheckableMenu` 要求调用方**在切换后自己维护**它传入的 `checked` Set
-//    （见 `onToggle` 内注释），故该 Set 是「后端初始态 + 本次会话内的点击增量」。
-async function initTaskbarDevicePicker() {
-  const btn = document.getElementById("btn-taskbar-devices");
-  if (!btn) return;
-  btn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    let devices;
+  const expandable = createExpandableCard(items, arrow);
+
+  // ⭐ 开关 → `config.taskbar_widget_enabled`。
+  // ⚠️ 判据写 `=== true` 而不是 `!!get()`：`!!undefined` 会把「老配置缺键」翻成 true，
+  //    与「默认关闭」相悖（后端读入时已把老配置迁移成显式 true）。
+  bindToggle("toggle-taskbar-widget", {
+    get: () => config.taskbar_widget_enabled === true,
+    set: (v) => { config.taskbar_widget_enabled = !!v; },
+  });
+
+  // 开关联动展开（与「固定位置」卡同款；用固定高度，理由见那边注释）
+  toggle.addEventListener("change", () => {
+    expandable.set(toggle.checked, "999px");
+  });
+  // ⭐ 初始展开态**跟随开关**：开关开 ⇒ 展开（用户要看设备清单）；关 ⇒ 收起。
+  expandable.setInstant(toggle.checked, "999px");
+  expandable.bindHeaderClick(card, {
+    extraGuards: [".toggle", "input"],
+    expandHeight: "999px",
+  });
+
+  async function refreshList() {
+    let rows = [];
     try {
-      devices = await invoke("get_selectable_devices");
+      // ⭐ 后端**已含已断开设备**（`group_taskbar_devices` 的反向补建占位条目），
+      //    故前端不需要（也不该）自己按 `connected` 过滤。
+      rows = (await invoke("get_pinned_taskbar_list")) || [];
     } catch (err) {
-      window.showToast("读取设备列表失败：" + err);
+      window.showToast("读取已添加设备失败：" + err);
       return;
     }
+    list.textContent = "";
+    // ⭐ 空态给一行说明，而不是留白 —— 否则用户会以为卡片坏了。
+    if (empty) {
+      empty.style.display = rows.length ? "none" : "";
+      const txt = document.getElementById("taskbar-widget-empty-text");
+      if (txt) {
+        txt.textContent = rows.length
+          ? ""
+          : "尚未添加设备（可在弹出窗口的设备卡片右键菜单中添加）";
+      }
+    }
+    for (const r of rows) {
+      const row = document.createElement("div");
+      row.className = "card-item";
 
-    // 后端已按 `pin.alias > resolve_device_name > 短名` 解析好 `name`，前端**原样显示**。
-    // ⛔ 不要在此对 name 再做 `simplifyDeviceName`：后端返回的**已经是短名**
-    //    （`pick_display_name` 内部过了一次 `core_name`），故再处理**恒等无害但无意义**；
-    //    留在这里只会让人误以为「前端也参与名字归一」，将来某侧改了就对不上。
-    const items = (devices || []).map((d) => ({ key: d.key, label: d.name }));
-    const checked = new Set((devices || []).filter((d) => d.pinned).map((d) => d.key));
-    // key -> 该设备的 fallback：取消/新增时都要原样回传，让后端判据与显示侧一致。
-    const fallbackOf = new Map((devices || []).map((d) => [d.key, d.fallback]));
+      const name = document.createElement("div");
+      name.className = "card-item-name";
+      name.textContent = r.name;
+      // ⭐ 已断开**置灰而非隐藏**：用户需要看见「这台我还钉着，只是没连」，
+      //    否则会以为添加失败、反复去添加。
+      if (!r.connected) {
+        name.classList.add("dimmed");
+        name.title = "设备当前未连接";
+      }
 
-    createCheckableMenu({
-      anchor: btn,
-      items,
-      checked,
-      emptyText: "未发现可显示的设备",
-      onToggle: async (key) => {
-        // ⛔⛔ **必须自己维护 `checked` 这个 Set** —— 这是 `createCheckableMenu` 的既有契约：
-        //    它只在**构造时**读一次 `checked`（`settings.js:163`），`onToggle` 之后重画时
-        //    读的仍是**同一个 Set**（`:176`）。若调用方不改它，图标就**永不变化**
-        //    （点第二下仍是勾，用户以为取消不了）。`settings-devices.js:315/318` 即此范式。
-        const wasPinned = checked.has(key);
+      const controls = document.createElement("div");
+      controls.className = "card-item-controls";
+      const remove = document.createElement("button");
+      remove.className = "add-device-btn";
+      remove.textContent = "移除";
+      remove.addEventListener("click", async () => {
+        remove.disabled = true;
         try {
-          // ⭐ `fallback` 由后端在 `get_selectable_devices` 里算好返回，这里**原样回传**。
-          // ⛔ 不在前端用 simplifyDeviceName 现算：那与后端 core_name 不等价（JS 不剥协议
-          //    后缀、取第一个括号），会让兜底键与显示侧判据对不上。
-          // ⚠️ `alias` 刻意**不传**（用户 2026-09-24 决定）：别名只能由用户显式设置，
-          //    勾选固定不该顺手写入一个「用户没设过的别名」。
+          // ⛔ 复用 `toggle_pinned_taskbar_device`（语义 = 已钉则取消）：它按
+          //    `key` + `fallback` **删净**全部命中项，两层判据与显示侧完全一致。
+          //    ⚠️ `alias: null` —— 别名不由本页设置（沿用旧选择器的口径）。
           await invoke("toggle_pinned_taskbar_device", {
-            key,
-            fallback: fallbackOf.get(key) ?? null,
+            key: r.key,
+            fallback: r.fallback ?? null,
             alias: null,
           });
-          // ⭐ 只在**后端确认成功**后翻转本地勾选态：后端可能因超上限拒绝，
-          //    那时界面必须保持原样，否则「看到已勾、实际没固定」。
-          if (wasPinned) checked.delete(key);
-          else checked.add(key);
+          await refreshList();
         } catch (err) {
-          // 上限（PINNED_TASKBAR_LIMIT = 8）等拒绝原因由后端给出，原样展示给用户。
-          // ⛔ **不 rethrow**：`createCheckableMenu` 的 onToggle 调用点**没有 try/catch**
-          //    （`settings.js:174`），抛出会变成 unhandled rejection 污染控制台。
-          //    勾选态**不翻转** —— 与后端状态保持一致（下次点开菜单会重新拉取刷新）。
           window.showToast(String(err));
+        } finally {
+          remove.disabled = false;
         }
-      },
+      });
+      controls.appendChild(remove);
+
+      row.appendChild(name);
+      row.appendChild(controls);
+      list.appendChild(row);
+    }
+  }
+
+  // ⭐ 首次进入 tab 就拉清单（设备枚举 600ms+，不能放页面加载时）。
+  //    再次进入时刷新：设备可能被弹出窗口「钉/移出」，或热插拔。
+  refreshList();
+  const view = document.querySelector('[data-tab="taskbar"]');
+  if (view) {
+    view.addEventListener("click", () => {
+      if (view.classList.contains("active")) refreshList();
     });
-  });
+  }
 }
 
-// 「固定任务栏窗口位置」——带开关的折叠卡，对齐「关机/重启时自动调整音量」。
+
 function initTaskbarPinCard() {
   const card = document.getElementById("taskbar-pin-card");
   const toggle = document.getElementById("toggle-taskbar-pin");

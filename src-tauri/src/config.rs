@@ -148,10 +148,41 @@ pub fn pinned_device_matches(p: &PinnedDevice, key: &str, fallback: Option<&str>
 /// 抽成自由函数而非 `Config` 方法，是为了让调用方先取一次快照
 /// （`config::with_config(|c| c.pinned_taskbar_devices.clone())`）再逐台设备比对，
 /// 避免每台设备各取一次配置锁。
+/// 判定某物理设备是否被固定（列表级：**任一**固定项命中即算）。
+///
+/// 抽成自由函数而非 `Config` 方法，是为了让调用方先取一次快照
+/// （`config::with_config(|c| c.pinned_taskbar_devices.clone())`）再逐台设备比对，
+/// 避免每台设备各取一次配置锁。
 pub fn matches_pinned_taskbar(pinned: &[PinnedDevice], key: &str, fallback: Option<&str>) -> bool {
     pinned
         .iter()
         .any(|p| pinned_device_matches(p, key, fallback))
+}
+
+/// 任务栏信息窗**是否应当显示**（配置口径，纯函数，可单测）。
+///
+/// ⭐ 判据 = **总开关开** 且 **已钉设备非空**，两个条件都要：
+/// · 只看开关 ⇒ 开了但一台没钉，会在任务栏上出现一个**空窗**；
+/// · 只看列表 ⇒ 没法「关掉但保留设备」，这正是该开关存在的原因。
+pub fn taskbar_widget_visible(c: &Config) -> bool {
+    c.taskbar_widget_enabled && !c.pinned_taskbar_devices.is_empty()
+}
+
+/// ⭐ 升级兼容：老配置**没有** `taskbar_widget_enabled` 键（读出来是 `false`），
+/// 但它可能**已经钉了设备**——那正是「升级前窗口可见」的状态。
+/// ⇒ 读入归一化时把这种情况翻成 `true`，**一次性**改变配置。
+///
+/// ⚛️ 判据必须是「该键在**文件里**出现过」，**不能**只看 `== false`：
+///   用户**主动**关掉开关后值同样是 `false`，若被无脑翻成 `true`，
+///   「关闭」就永远关不掉——那是比「升级后消失」更严重的功能失效。
+/// ⚠️ `contains` 是**子串**匹配：正文任意位置出现过该字符串即算「出现过」，
+///   偏保守（宁可漏迁移、也不误把「用户关过的」翻回开），方向是安全的。
+pub fn migrate_taskbar_switch(text: &str, c: &mut Config) -> bool {
+    if text.contains("taskbar_widget_enabled") || c.pinned_taskbar_devices.is_empty() {
+        return false; // 用户表过态，或从未用过（保持默认关闭）
+    }
+    c.taskbar_widget_enabled = true;
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,6 +225,26 @@ pub struct Config {
     /// 见 `PinnedDevice` 文档）。空表 = 未固定任何设备。
     #[serde(default)]
     pub pinned_taskbar_devices: Vec<PinnedDevice>,
+    /// 任务栏信息窗的**总开关**（用户 2026-09-28 要求，默认关闭）。
+    ///
+    /// ⛔ **与 `pinned_taskbar_devices` 是两个独立维度，缺一不可**：
+    /// · 本字段 = 「要不要**显示**这个窗」；
+    /// · `pinned_taskbar_devices` = 「这个窗里**显示谁**」。
+    /// 关掉本字段**不碰** `pinned_taskbar_devices` ⇒ 用户重新打开时设备列表原样回来，
+    /// 不必重新勾选（这正是「关闭后保留任务栏设备的信息」这条要求的落点）。
+    /// ⇒ 旧版把「列表非空」当显示开关的做法**必须退役**：那样「关掉」就等于
+    /// 「清空列表」，与用户口径直接冲突。
+    ///
+    /// ⭐ 用裸 `bool` 而**不是** `Option<bool>`（`Option` 路线已试过并否决）：
+    ///   serde 对 `None` **跳过序列化** ⇒ 新装用户配置里永远没这个键
+    ///   ⇒ 用户在设置页拨了开关、一保存就丢；而想「始终落盘」又会给老配置
+    ///   凭空塞进一个 `false`，反而把「升级前可见」的状态写死成关闭。
+    ///   ⇒ 升级兼容改由 [`migrate_taskbar_switch`] 在**读入归一化**时一次性处理。
+    ///
+    /// ⚠️ 裸 `#[serde(default)]`（= false）本身**不是**问题：老用户加载后为 `false`，
+    ///   迁移按「键不存在 且 列表非空」把它翻成 `true` 再落盘。
+    #[serde(default)]
+    pub taskbar_widget_enabled: bool,
     /// 任务栏信息窗的**横向贴靠位置**：`"left"` / `"center"` / `"right"`。
     ///
     /// ⚠️ 贴靠发生在**避让后的视觉空白槽内**，不是整个任务栏（见 `taskbar_widget`）：
@@ -562,6 +613,7 @@ impl Default for Config {
             wireless_only: true,
             tray_devices: vec![],
             pinned_taskbar_devices: vec![],
+            taskbar_widget_enabled: false,
             taskbar_position: default_taskbar_position(),
             taskbar_position_locked: true,
             taskbar_custom_x: None,
@@ -708,7 +760,12 @@ fn backup_broken_config(path: &std::path::Path) -> Option<std::path::PathBuf> {
 /// 不会让脏值先经 `get_config` 发给前端。
 fn parse_config_text(text: &str) -> Result<(Config, bool), toml::de::Error> {
     let mut config: Config = toml::from_str(text)?;
-    let normalized = normalize_config(&mut config);
+    let mut normalized = normalize_config(&mut config);
+    // ⭐ 升级兼容走这里：老配置没有 `taskbar_widget_enabled` 键，
+    //   但可能已钉了设备 ⇒ 那正是「升级前窗口可见」的状态，翻成 `true`。
+    //   ⚠️ 必须在 `normalize_config` **之后**跑：它才刚把非法值修干净，
+    //   此时 `pinned_taskbar_devices` 才是可信的最终值。
+    normalized |= migrate_taskbar_switch(text, &mut config);
     Ok((config, normalized))
 }
 
@@ -751,6 +808,38 @@ pub fn init_config() {
         *guard = config;
         sync_log_cache(&guard);
     }
+    // ⭐ 任务栏开关的升级迁移**必须立刻落盘**（与上面的「归一化不写盘」相反）。
+    //
+    // ⚠️ 为什么这一条要破例：`migrate_taskbar_switch` 是**一次性**改写
+    // （老配置 ⇒ 补出 `taskbar_widget_enabled = true`）。不落盘的后果是
+    // **每次启动都重跑一遍**，而期间用户只要在设置页把开关关掉，
+    // 下一启动又会被翻回 true ⇒ 「**关不掉**」——一个不可自行恢复的功能性失效。
+    // 归一化不落盘是安全的（幂等、可反复重算），迁移不落盘则不是。
+    {
+        let already_on_disk = std::fs::read_to_string(config_path())
+            .map(|t| t.contains("taskbar_widget_enabled"))
+            .unwrap_or(true); // 读不到文件 ⇒ 交给正常写盘流程，不在此处干预
+        let need_persist = crate::state::lock_unpoisoned(CONFIG.get().unwrap())
+            .taskbar_widget_enabled
+            && !already_on_disk;
+        if need_persist {
+            // ⛔ 走 `write_config_atomically`（**同步**）而**不是** `enqueue_persist`：
+            //   后者要调用方先把配置**序列化好**传进来，而在 `init_config` 这个位置
+            //   持锁读配置再序列化会与写盘线程抢锁；且迁移本就该「启动时一次定局」。
+            let snapshot = crate::state::lock_unpoisoned(CONFIG.get().unwrap()).clone();
+            match toml::to_string_pretty(&snapshot) {
+                Ok(text) => {
+                    if write_config_atomically(&text, &config_path()).is_ok() {
+                        standard_log!(
+                            "[config] 任务栏开关迁移：老配置已含已钉设备 ⇒ 置为开启并写盘（仅此一次）"
+                        );
+                    }
+                }
+                Err(e) => standard_log!("[config] 任务栏开关迁移：序列化失败 err={}", e),
+            }
+        }
+    }
+
     // 「载入时归一化」必须记在**日志级别缓存建立之后**。
     //
     // 踩过的坑：这一行原先写在解析分支里（即 `sync_log_cache` 之前），
@@ -1014,6 +1103,7 @@ macro_rules! for_each_config_field {
             wireless_only,
             tray_devices,
             pinned_taskbar_devices,
+            taskbar_widget_enabled,
             taskbar_position,
             taskbar_position_locked,
             taskbar_custom_x,
@@ -1232,8 +1322,9 @@ mod tests {
     use super::{
         apply_device_rename, claim_revision, config_lock_held, config_path,
         default_battery_refresh_secs, default_battery_thresholds, enqueue_persist,
-        finalize_before_persist, flush_persist, merge_config, normalize_config, parse_config_text,
-        resolve_device_name, revision_is_latest, with_config, write_config_atomically, Config,
+        finalize_before_persist, flush_persist, merge_config, migrate_taskbar_switch,
+        normalize_config, parse_config_text, resolve_device_name, revision_is_latest,
+        taskbar_widget_visible, with_config, write_config_atomically, Config, PinnedDevice,
         MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED, VALID_TASKBAR_POSITIONS,
     };
     use std::sync::atomic::Ordering;
@@ -1881,6 +1972,118 @@ mod tests {
         assert!(
             stale.is_empty(),
             "merge_config 的清单里有字段已不落盘（可能已从 Config 删除或改成了跳过序列化）：{stale:?}"
+        );
+    }
+
+    // ── taskbar_widget_enabled：升级兼容迁移 ───────────────────────
+
+    fn cfg_with_pins(n: usize, enabled: bool) -> Config {
+        Config {
+            pinned_taskbar_devices: (0..n)
+                .map(|i| PinnedDevice {
+                    key: format!("c:{}", i),
+                    fallback: None,
+                    alias: None,
+                })
+                .collect(),
+            taskbar_widget_enabled: enabled,
+            ..Default::default()
+        }
+    }
+
+    /// ⭐ 老配置（**没有**这个键）+ 已钉设备 ⇒ 迁移成「开」，维持升级前可见性。
+    ///
+    /// 可证伪：把 `migrate_taskbar_switch` 改成恒 `false` ⇒ 本条转红，
+    /// 而真机上表现为「老用户升级后任务栏窗口凭空消失」。
+    #[test]
+    fn migration_opens_switch_for_legacy_config_with_devices() {
+        let legacy = "pinned_taskbar_devices = [{ key = \"c:abc\" }]
+";
+        let mut c = Config {
+            pinned_taskbar_devices: vec![PinnedDevice {
+                key: "c:abc".into(),
+                fallback: None,
+                alias: None,
+            }],
+            ..Default::default()
+        };
+        assert!(!c.taskbar_widget_enabled, "前提：读出来默认是关");
+        assert!(migrate_taskbar_switch(legacy, &mut c), "老配置应触发迁移");
+        assert!(c.taskbar_widget_enabled, "迁移后必须为开，否则窗口凭空消失");
+        assert_eq!(
+            c.pinned_taskbar_devices.len(),
+            1,
+            "⭐ 迁移**不得**动设备列表"
+        );
+    }
+
+    /// ⛔ 用户**主动关过**的开关**不得**被翻回开——否则「关闭」永远关不掉。
+    ///
+    /// 这是本迁移最危险的失败模式：它是**不可逆的数据改写**，
+    /// 一次误判就让用户永久失去关闭能力（只能手改配置文件）。
+    #[test]
+    fn migration_does_not_override_explicit_user_choice() {
+        let explicit_off = "taskbar_widget_enabled = false
+pinned_taskbar_devices = [{ key = \"c:abc\" }]
+";
+        let mut c = cfg_with_pins(1, false);
+        assert!(
+            !migrate_taskbar_switch(explicit_off, &mut c),
+            "键已出现过 ⇒ 用户表过态 ⇒ 不得迁移"
+        );
+        assert!(!c.taskbar_widget_enabled, "用户的「关」必须被尊重");
+    }
+
+    /// 新装用户（从未钉过设备）⇒ 保持默认关闭，**不触发**迁移。
+    #[test]
+    fn migration_is_noop_for_fresh_install() {
+        let fresh = "log_level = \"standard\"
+";
+        let mut c = Config::default();
+        assert!(!migrate_taskbar_switch(fresh, &mut c), "无设备 ⇒ 不迁移");
+        assert!(
+            !c.taskbar_widget_enabled,
+            "新装必须是关闭（用户口径：默认关闭）"
+        );
+    }
+
+    /// ⭐ 迁移只在**键不存在**时发生；显式 `true` 同样不得被改。
+    #[test]
+    fn migration_preserves_explicit_true() {
+        let txt = "taskbar_widget_enabled = true
+";
+        let mut c = cfg_with_pins(1, true);
+        assert!(!migrate_taskbar_switch(txt, &mut c));
+        assert!(c.taskbar_widget_enabled, "显式开必须保持");
+    }
+
+    /// 迁移必须**只改开关一个字段**，其余配置逐字不动。
+    #[test]
+    fn migration_touches_nothing_but_the_switch() {
+        let mut c = cfg_with_pins(3, false);
+        let before_pins = c.pinned_taskbar_devices.clone();
+        let before_names = c.device_names.clone();
+        let before_pos = c.taskbar_position.clone();
+        migrate_taskbar_switch(
+            "pinned_taskbar_devices = []
+",
+            &mut c,
+        );
+        assert_eq!(c.pinned_taskbar_devices, before_pins, "设备列表不得被改");
+        assert_eq!(c.device_names, before_names, "重命名表不得被改");
+        assert_eq!(c.taskbar_position, before_pos, "位置设置不得被改");
+    }
+
+    /// ⭐ 端到端：老配置文本经 `parse_config_text` 后，窗口仍应可见。
+    #[test]
+    fn parse_config_text_migrates_legacy_text() {
+        let legacy = "pinned_taskbar_devices = [{ key = \"c:abc\" }]
+";
+        let (c, changed) = parse_config_text(legacy).expect("老配置应能解析");
+        assert!(changed, "应报告发生了迁移");
+        assert!(
+            taskbar_widget_visible(&c),
+            "老用户升级后窗口**必须**仍然可见"
         );
     }
 

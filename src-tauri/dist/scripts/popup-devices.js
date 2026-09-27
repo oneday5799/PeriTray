@@ -13,6 +13,10 @@ let deviceNames = {};
 let deviceGroups = {};
 let useSystemBt = false;
 let trayDevices = [];
+// ⭐ 右键菜单「钉到任务栏/移出任务栏」的状态源是 **`common.js` 的共用名单**
+//   （`isTaskbarPinnedName` / `refreshTaskbarPinnedNames`）——音量页也要用同一份，
+//   而 `popup-audio.js` 先于本文件加载，故那份状态**必须**在公共层。
+// ⛔ 名单按**显示名**存、只用于**文案**；真正的钉/移一律由后端按身份键裁决。
 
 // ── 本地快照水合（页面重载/重启后的秒显数据源）──────────
 
@@ -42,6 +46,8 @@ async function hydrateFromSnapshot() {
     useSystemBt = config.use_system_bt || false;
     trayDevices = config.tray_devices || [];
     allDevices = snap.devices;
+    // ⭐ 快照水合路径同样要拉已钉名单（无真实请求时的快速首屏）
+    window.refreshTaskbarPinnedNames();
     renderDevices();
     feLog(`快照水合完成: ${allDevices.length} 台`);
     return !!document.querySelector("#device-list .card.device");
@@ -93,6 +99,9 @@ async function loadDevices(fresh24g = false, opts = {}) {
     useSystemBt = config.use_system_bt || false;
     trayDevices = config.tray_devices || [];
     renderDevices();
+    // ⭐ 真实数据就绪后拉一次「已钉到任务栏」名单（右键菜单文案读它）。
+    //    不 await：菜单在用户右键时才用，届时早已拿到；不阻塞首屏渲染。
+    window.refreshTaskbarPinnedNames();
     saveDevicesSnapshot();
     // 代际校验：期间被更新的拉取取代则不再回写 toast 状态
     if (gen === loadGen && notify) showToast("已刷新");
@@ -538,6 +547,27 @@ function showContextMenu(x, y, dev) {
     hideAllContextMenus();
   });
   menu.appendChild(trayItem);
+  menu.appendChild(trayItem);
+
+  // ⭐ 「钉到任务栏」——与上面「添加到托盘」同一范式（用户 2026-09-28）。
+  //    语义是**切换**（已钉则显示「移出任务栏」）；后端 `toggle_taskbar_device_pin`
+  //    返回切换**之后**的状态 ⇒ 直接用它更新本地 Set，不必再查一次。
+  // ⛔ 后端按 `name` 自行解析 `key`/`fallback`（`core_name` 在 JS 侧无法等价复现），
+  //    前端只管传名字与显示文案。
+  const isPinned = window.isTaskbarPinnedName(dev.name);
+  const pinItem = document.createElement("div");
+  pinItem.className = "context-menu-item";
+  pinItem.textContent = isPinned ? "移出任务栏" : "钉到任务栏";
+  pinItem.addEventListener("click", async () => {
+    try {
+      await invoke("toggle_taskbar_device_pin", { name: dev.name });
+      await window.refreshTaskbarPinnedNames();
+    } catch (e) {
+      showToast(e);
+    }
+    hideAllContextMenus();
+  });
+  menu.appendChild(pinItem);
 
   document.body.appendChild(menu);
   clampMenuPosition(menu, x, y);
