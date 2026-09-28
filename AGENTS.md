@@ -495,6 +495,7 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   ⚠️ **别改用 `%LOCALAPPDATA%\<标识>`**：包身份下它被虚拟化重定向，**虚拟路径本身不存在**，
   而 `explorer.exe` 不是打包进程、按字面路径找 ⇒ 「查看日志」按钮照样失效。
   **评审检查项**：新增任何落盘路径时，先问「MSIX 下这个目录可写吗？」
-- **远程校验**：push 到 main 与 PR 由 CI 工作流（.github/workflows/ci.yml）
-  复跑本地闸门全套（check.mjs / rustfmt / cargo check -D warnings / cargo test），
+- **远程校验**：**任何分支的 push** 与 PR 都由 CI 工作流（.github/workflows/ci.yml）
+  复跑本地闸门全套（check.mjs / rustfmt / cargo check -D warnings / cargo test）——
+  特性分支上就能拿到远端结论，不必等合并；同一 ref 连续推送会取消过期运行，
   Rust 工具链按仓库根的 `rust-toolchain.toml` 安装并断言生效版本（见「提交自动闸门」）
