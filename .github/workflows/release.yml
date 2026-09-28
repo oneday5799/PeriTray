@@ -147,7 +147,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      # 需要 checkout 才能读到仓库里的手写 release notes（tmp-release-notes.md）
+      # 需要 checkout 才能读到 tag 的附注正文（手写 release notes 随 tag 走）
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -167,23 +167,40 @@ jobs:
             echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
           fi
 
-      # 手写 release notes（面向用户的可感知改动）优先；缺失时回退到自动生成的变更列表。
+      # 手写 release notes（面向用户的可感知改动）写在**附注 tag 的正文**里；
+      # 缺失时回退到自动生成的变更列表。
       # action v3 对「空 body_path」与「文件不存在」都会静默回退，不会让发布失败。
       # 二者只取其一：本仓不用 PR，自动生成的正文实际只有一行 compare 链接，而手写正文
       # 末尾已自带该链接 ⇒ 同时开启只会把同一个链接打印两遍（v1.3.7-beta.1 实测如此）。
+      #
+      # ⛔⛔ **必须先判 tag 是否附注**：`for-each-ref --format='%(contents)'` 对
+      #   **轻量 tag 会取到该 commit 的提交说明**（实测：`chore(release): v9.9.9`
+      #   连同整段含 API 名的 body 一起被取出）⇒ 未经判定的轻量 tag 会把
+      #   **实现术语当成 Release 正文**发出去，且 Release 页看上去一切正常。
+      #   正解判据是对象类型：`git cat-file -t <tag>` == `tag` 才算附注。
       - name: Resolve release notes
         id: notes
         shell: bash
         run: |
-          candidate="tmp-release-notes.md"
-          if [ -f "$candidate" ]; then
-            echo "path=$candidate" >> "$GITHUB_OUTPUT"
+          set -uo pipefail
+          TAG="${{ github.ref_name }}"
+          out="$RUNNER_TEMP/release-notes.md"
+          # 写到 runner 临时目录，**不入库**（这是本方案的全部意义）
+          if [ "$(git cat-file -t "$TAG" 2>/dev/null || true)" != "tag" ]; then
+            echo "::error::tag $TAG 是**轻量 tag**（ref 直接指向 commit），没有可读的附注正文。"
+            echo "::error::发布流程第 3 步要求附注 tag：git tag -a $TAG -F <notes文件>"
+            echo "::error::（tag 尚未发布、删掉重来成本很低；一旦发出去，notes 写错只能补发新 tag）"
+            exit 1
+          fi
+          git for-each-ref --format='%(contents)' "refs/tags/$TAG" > "$out"
+          if [ -s "$out" ]; then
+            echo "path=$out" >> "$GITHUB_OUTPUT"
             echo "generate=false" >> "$GITHUB_OUTPUT"
-            echo "使用手写 release notes：$candidate（不再追加自动变更列表）"
+            echo "使用附注 tag 里的手写 release notes（不再追加自动变更列表）"
           else
             echo "path=" >> "$GITHUB_OUTPUT"
             echo "generate=true" >> "$GITHUB_OUTPUT"
-            echo "未找到 $candidate，回退到自动生成的变更列表"
+            echo "tag 无附注正文，回退到自动生成的变更列表"
           fi
 
       # ⚠️ Release 页**只挂 NSIS 安装包**，不带 MSIX。

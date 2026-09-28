@@ -180,22 +180,29 @@
 **走「打 tag → CI 自动发布」，不需要手工 `gh release create`。**
 
 1. **版本号同步五处**：tauri.conf.json、Cargo.toml `[package]`、package.json、
-   Cargo.lock（`cargo check` 自动刷新）、settings.html 占位文案；
-   **并把 release notes 写进仓库根的 `tmp-release-notes.md`**
-   （面向用户写作，规范见上节；该文件随发版提交一起入库）
-2. 两者一起作为**单个** `chore(release): vX.Y.Z` 提交并 push
-3. **打 tag 并 push**：`git tag v<ver> && git push origin v<ver>`
-   ——tag 含 `-`（如 v1.3.7-beta.1）时 CI 自动标记为预发布
-4. **CI 自动发布**：release job 依次做 checkout → 解析 `tmp-release-notes.md` →
+   Cargo.lock（`cargo check` 自动刷新）、settings.html 占位文案
+2. 五处一起作为**单个** `chore(release): vX.Y.Z` 提交并 push
+3. **打附注 tag 并 push**（release notes 写在 **tag 正文**里，**不入库**）：
+   `git tag -a v<ver> -F <notes文件> && git push origin v<ver>`
+   ——tag 含 `-`（如 v1.4.0-beta.1）时 CI 自动标记为预发布。
+   ⛔ **必须是附注 tag（`-a`）**：轻量 tag 的 ref 直接指向 commit，
+   CI 若不判类型会取到**提交说明**并当成 Release 正文发出去（见第 4 步）
+4. **CI 自动发布**：release job 依次做 checkout → **从 tag 附注正文取 release notes** →
    双矩阵构建 NSIS 安装包 → `softprops/action-gh-release@v3` 创建 Release 并追加产物。
-   正文规则：**有 `tmp-release-notes.md` 就用 `body_path` 注入它、并关闭 `generate_release_notes`**
+   正文规则：**取到正文就用 `body_path` 注入、并关闭 `generate_release_notes`**
    （否则自动生成的 changelog 会拼在手写正文后面）；**没有则回退**到 `generate_release_notes`。
+   ⛔⛔ 判据是**对象类型**：`git cat-file -t <tag> == tag` 才算附注。
+   `for-each-ref --format='%(contents)'` 对**轻量 tag 返回的是该 commit 的提交说明**
+   （含 API 名等实现术语）⇒ 漏判会静默产出「看起来正常、实则是提交说明」的正文。
+   ⛔ **轻量 tag 现在会让 release job 直接失败**（`exit 1` + `::error::` 提示），
+   因为本仓不用 PR ⇒ 「回退自动生成」的正文只有一行 compare 链接，等于发一个空 Release。
+   这让「必须 `-a`」从约定变成**结构约束**：tag 没发布时删掉重来成本极低，
+   而发出去之后 notes 就锁死了。
    ⚠️ 本仓**不用 PR** ⇒ 自动生成的正文实际只有一行 compare 链接，
    **手写 notes 才是正文的主要来源**。
    ⚠️ 该 action 对「空 `body_path`」与「文件不存在」**都会静默回退**，不会让发布失败。
-5. **发版后删除 `tmp-release-notes.md`**，单独一个提交
-   （`chore: 移除临时 release notes 文件`）——保持工作区干净，避免下一版误用旧 notes
-6. **WIKI 校准轮**（正式版必做，beta 跳过；连续多个 beta 晋级时补做一次）：
+   ⛔ **tag 一旦推送即不可改**：notes 写错只能补发一个新 tag。
+5. **WIKI 校准轮**（正式版必做，beta 跳过；连续多个 beta 晋级时补做一次）：
    版本演进史补行 / 进行中分支表刷新 / 本版 commits 是否有漏更的触发项 /
    README↔WIKI 入口互通——清单见 WIKI「Wiki-维护规范」§2 模式 B
 
