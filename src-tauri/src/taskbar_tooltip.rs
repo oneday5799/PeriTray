@@ -488,10 +488,10 @@ fn render_and_show(index: usize) {
     }
     // ⛔ 拿不到气泡几何 ⇒ **先隐藏**再返回：不隐藏的话，上一次显示的提示会
     //   **留在旧位置**（内容还是旧的），看起来像「提示卡住不动」。
-    let Ok(entries) = ENTRIES.lock() else {
-        hide();
-        return;
-    };
+    // ⚠️ 统一走 `lock_unpoisoned`：**中毒时恢复**而不是「隐藏提示并放弃」。
+    //   原写法是 `let Ok(entries) = … else { hide(); return; }` ⇒ 一旦中毒，提示
+    //   **永久**不再显示且无任何日志（观察不到、也自愈不了）。
+    let entries = crate::state::lock_unpoisoned(&ENTRIES);
     let Some(entry) = entries.get(index) else {
         hide();
         return;
@@ -992,12 +992,9 @@ pub fn destroy() {
     if !f.is_null() {
         unsafe { ffi::destroy_font(f) };
     }
-    if let Ok(mut g) = ENTRIES.lock() {
-        g.clear();
-    }
-    if let Ok(mut g) = LAST_SYNCED.lock() {
-        g.clear();
-    }
+    // 中毒时**照样清空**：跳过清理才是错的（残留条目会让下次显示旧内容）。
+    crate::state::lock_unpoisoned(&ENTRIES).clear();
+    crate::state::lock_unpoisoned(&LAST_SYNCED).clear();
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1020,7 +1017,7 @@ pub fn sync(_owner: HWND, entries: &[TipEntry]) {
         render_and_show(shown as usize);
     }
     {
-        let last = LAST_SYNCED.lock().unwrap_or_else(|e| e.into_inner());
+        let last = crate::state::lock_unpoisoned(&LAST_SYNCED);
         if *last == entries {
             return;
         }
@@ -1033,12 +1030,15 @@ pub fn sync(_owner: HWND, entries: &[TipEntry]) {
     if hwnd.is_null() {
         return;
     }
-    if let Ok(mut g) = ENTRIES.lock() {
-        *g = entries.to_vec();
-    }
-    if let Ok(mut last) = LAST_SYNCED.lock() {
-        *last = entries.to_vec();
-    }
+    // ⛔⛔ **这两行原来正是「同一函数两种中毒语义」的现场**：
+    //   上面读路径用 `unwrap_or_else(into_inner)`（中毒→恢复），这里却用 `if let Ok`
+    //   （中毒→静默跳过）。后果是**闩锁**：ENTRIES 中毒而 LAST_SYNCED 未中毒时，
+    //   本次写 ENTRIES 被跳过、LAST_SYNCED 却更新成功 ⇒ 下一帧 `*last == entries`
+    //   成立 ⇒ 提前 return ⇒ **ENTRIES 此后再也不会更新**，叠加 ① 的读路径
+    //   「中毒就 hide」⇒ tooltip 永久消失、无日志、只能重启。
+    //   两处写现在与读路径**同一语义**（中毒恢复），闩锁不可能成立。
+    *crate::state::lock_unpoisoned(&ENTRIES) = entries.to_vec();
+    *crate::state::lock_unpoisoned(&LAST_SYNCED) = entries.to_vec();
     // ⭐ 重新落位见函数开头（**必须在**「没变就返回」之前）。
 }
 

@@ -301,7 +301,8 @@ pub fn screen_size() -> (i32, i32) {
 /// 与视觉位置**不可能分叉**（与「绘制与测宽同源」同一条纪律）。
 #[cfg(target_os = "windows")]
 pub fn item_rect_on_screen(index: usize) -> Option<(i32, i32)> {
-    let rects = LAST_ITEM_RECTS.lock().ok()?;
+    // 中毒时恢复（原来 `.ok()?` 会让 tooltip 锚点**永久**失效）。
+    let rects = crate::state::lock_unpoisoned(&LAST_ITEM_RECTS);
     let r = *rects.get(index)?;
     // `item_rects` 出的是 widget **客户区**坐标；这里换算到屏幕。
     let (widget_x, _, w, _) = window_screen_rect(WIDGET_HWND.load(Ordering::SeqCst) as _)?;
@@ -328,7 +329,8 @@ pub fn item_anchor_screen(index: usize) -> Option<(i32, i32)> {
 /// 已发布命中的条目数（诊断用）。
 #[cfg(target_os = "windows")]
 pub fn item_rect_count() -> usize {
-    LAST_ITEM_RECTS.lock().map(|v| v.len()).unwrap_or(0)
+    // 诊断量：中毒时给真实长度（原来 `unwrap_or(0)` 会让排查时**谎报 0 条**）。
+    crate::state::lock_unpoisoned(&LAST_ITEM_RECTS).len()
 }
 
 static LAST_ITEM_RECTS: std::sync::Mutex<Vec<windows_sys::Win32::Foundation::RECT>> =
@@ -337,9 +339,8 @@ static LAST_ITEM_RECTS: std::sync::Mutex<Vec<windows_sys::Win32::Foundation::REC
 /// 记录本帧的逐项矩形，供 tooltip 定位使用（`draw_items` 末尾调用，主线程）。
 #[cfg(target_os = "windows")]
 fn publish_item_rects(rects: &[windows_sys::Win32::Foundation::RECT]) {
-    if let Ok(mut g) = LAST_ITEM_RECTS.lock() {
-        *g = rects.to_vec();
-    }
+    // 中毒时照样发布：静默跳过会让上一帧矩形**永久**留着（命中判定错位）。
+    *crate::state::lock_unpoisoned(&LAST_ITEM_RECTS) = rects.to_vec();
 }
 
 // ── 音量滚轮：窗口线程只做「命中 + 记账」，写音量交给后台线程 ──────────
@@ -361,10 +362,9 @@ fn volume_worker_sender() -> Option<std::sync::mpsc::Sender<(String, bool)>> {
     type Chan = std::sync::mpsc::Sender<(String, bool)>;
     static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<Chan>>> = std::sync::OnceLock::new();
     let slot = SLOT.get_or_init(|| std::sync::Mutex::new(None));
-    let mut guard = match slot.lock() {
-        Ok(g) => g,
-        Err(_) => return None,
-    };
+    // 中毒时恢复：原来 `Err(_) => return None` ⇒ sender **永久**拿不到
+    // ⇒ 滚轮调音量彻底失效且无日志。
+    let mut guard = crate::state::lock_unpoisoned(slot);
     if guard.is_none() {
         let (tx, rx) = std::sync::mpsc::channel::<(String, bool)>();
         let spawned = std::thread::Builder::new()
@@ -445,10 +445,7 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     };
     // ⭐ 触发区用 `LAST_ITEM_RECTS` —— 与 tooltip **同一份**矩形（用户 2026-09-28
     //   要求「触发区域与 tooltip 一致」）。它是 widget 局部坐标 ⇒ 减去窗口原点。
-    let rects = match LAST_ITEM_RECTS.lock() {
-        Ok(g) => g.clone(),
-        Err(_) => return false,
-    };
+    let rects = crate::state::lock_unpoisoned(&LAST_ITEM_RECTS).clone();
     let local = (pt.x - wx, pt.y - wy);
     let Some(idx) = hit_test_item_rects(&rects, local) else {
         // 未命中也要留痕：「滚轮没反应」时这是**唯一**能区分
@@ -3385,9 +3382,7 @@ fn hovered_item_index(cursor: Option<(i32, i32)>, win_rect: Option<(i32, i32, i3
     let (Some((cx, _)), Some((wx, _ww, _, _))) = (cursor, win_rect) else {
         return -1;
     };
-    let Ok(rects) = LAST_ITEM_RECTS.lock() else {
-        return -1;
-    };
+    let rects = crate::state::lock_unpoisoned(&LAST_ITEM_RECTS);
     // `item_rects` 是客户区坐标；这里把光标换算到同一坐标系再比
     for (i, r) in rects.iter().enumerate() {
         let left = wx + r.left;
@@ -5106,5 +5101,51 @@ mod tests {
             ..Default::default()
         };
         assert!(!wants_widget(&c), "开关开但无设备 ⇒ 不得显示空窗");
+    }
+
+    // ── 中毒（poison）后的可证伪验证 ──────────────────────────────────
+    //
+    // ⛔ 为什么要有这组：`LAST_ITEM_RECTS` 原先的 6 处都是裸 `.lock()`，
+    //   其中 4 处写成「中毒就跳过/放弃」（`.ok()?` / `if let Ok` / `Err(_) => return`）。
+    //   中毒一旦发生，**跳过一次就永远跳**（没有自愈、没有日志）⇒ 命中判定、
+    //   tooltip 锚点、滚轮音量会静默永久失效。现在统一走 `lock_unpoisoned`
+    //   （中毒恢复）。**下面两条断言正是这个差异的可证伪判据。**
+
+    /// 真实调用点：把 `LAST_ITEM_RECTS` 弄中毒后，`publish_item_rects` + `item_rect_count`
+    /// 仍须正常工作（修复前：`item_rect_count` 恒报 0、发布被静默丢弃）。
+    ///
+    /// ⚠️ 本测试会**永久中毒**该全局（`std::sync::Mutex` 无法解除中毒）。
+    ///   这是安全的：修复后所有访问点都走恢复式入口，中毒对其不再有行为差异——
+    ///   而这恰好就是本测试想证明的那件事。
+    #[test]
+    fn item_rects_survive_poisoning() {
+        use windows_sys::Win32::Foundation::RECT;
+        let r = |v: i32| RECT {
+            left: v,
+            top: 0,
+            right: v + 10,
+            bottom: 10,
+        };
+        publish_item_rects(&[r(1), r(20)]);
+        assert_eq!(item_rect_count(), 2, "前置断言：正常路径先能用");
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = crate::state::lock_unpoisoned(&LAST_ITEM_RECTS);
+            panic!("inject: 让 LAST_ITEM_RECTS 中毒");
+        }));
+        assert!(LAST_ITEM_RECTS.is_poisoned(), "前置断言：此刻确实中毒");
+
+        publish_item_rects(&[r(5)]);
+        assert_eq!(
+            item_rect_count(),
+            1,
+            "⭐ 中毒后发布**必须**生效、计数**必须**是真实值（修复前：恒 0）"
+        );
+        // 命中判定也须继续工作（原先 `Err(_) => return false` ⇒ 恒不命中）
+        let hit = hovered_item_index(Some((7, 5)), Some((0, 0, 100, 20)));
+        assert_eq!(
+            hit, 0,
+            "⭐ 中毒后命中判定仍须工作（修复前：恒 -1 = 滚轮无响应）"
+        );
     }
 }

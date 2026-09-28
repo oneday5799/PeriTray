@@ -115,6 +115,17 @@
   ⚠️ 顺带：**`.lock()` 本身就不该出现**——加锁一律走统一入口，`state.rs` 的
   `lock_unpoisoned` 实现与其中毒单测除外（P3-10 收敛后**已无例外**）。判据见
   `state.rs` 模块文档 §五③。
+- ⛔ **同一函数内不得混用两种「中毒语义」**（2026-09-28 实测踩到，判据：
+  `state.rs::skipped_style_write_silently_loses_data_while_recovered_write_lands`）。
+  中毒后只有两种结局：**恢复**（`lock_unpoisoned`）或**跳过**
+  （`.ok()?` / `if let Ok` / `Err(_) => return`）。跳过式的真面目是
+  **分支体一次都不执行** ⇒ 数据静默丢失、**无报错无痕迹**。
+  ⚠️ 混用会造出**闩锁**：读侧恢复、写侧跳过，而某个「没变就 return」的早退
+  判据恰好读的是**写侧已更新**的那个量 ⇒ 下一帧判定「没变」⇒ 写侧**永远不再执行**。
+  实测现场：`taskbar_tooltip.rs::sync()` 里 `ENTRIES` 写被跳过、`LAST_SYNCED` 写成功
+  ⇒ tooltip 永久消失且无日志（该缺陷已随 v1.4.0-beta.1 发布，2026-09-28 修复）。
+  **评审检查项**：见到 `lock_unpoisoned` 与 `.lock()` 出现在**同一个函数**里，
+  问一句「这两侧的中毒结局一致吗」。
   **其中「菜单/托盘 API」这一半已有机械防线（B8）**：这类调用一律走 `tray.rs` 的薄包装
   （`apply_tooltip` / `apply_text` / `apply_icon` / `apply_menu`），包装内的
   `debug_assert!(!config::config_lock_held())` 会在**开发期立刻 panic** 并指出是哪个 API。

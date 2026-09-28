@@ -593,6 +593,39 @@ mod tests {
         assert_eq!(*lock_unpoisoned(&m), 42, "中毒后仍应能读写内部数据");
     }
 
+    /// **对照臂**：为什么「统一入口」不能退回「中毒就跳过」的写法。
+    ///
+    /// 2026-09-28 实测发现 `taskbar_tooltip.rs::sync()` **同一个函数里两种语义**：
+    /// 读路径 `unwrap_or_else(into_inner)`（恢复），写路径 `if let Ok`（跳过）⇒ 中毒时
+    /// 写 `ENTRIES` 被跳过、写 `LAST_SYNCED` 却成功 ⇒ 下一帧「没变就返回」成立 ⇒
+    /// `ENTRIES` **永远不再更新** ⇒ tooltip 永久消失且无任何日志。
+    ///
+    /// 本用例把两种写法并排跑，把差异钉成可证伪判据：跳过式那侧**分支体一次都不执行**
+    /// ⇒ 数据静默丢失（无报错、无痕迹）。⛔ 本文件是 P3-10 判据豁免的中毒单测所在处，
+    /// 故这里是全仓**唯一**允许出现裸 `.lock()` 的非 `state.rs` 场景的同族位置。
+    #[test]
+    fn skipped_style_write_silently_loses_data_while_recovered_write_lands() {
+        let m = Mutex::new(Vec::<u32>::new());
+        poison_mutex(&m);
+
+        // 修复后的写法：恢复 ⇒ 写入生效
+        lock_unpoisoned(&m).push(1);
+
+        // 修复前的写法：中毒 ⇒ `if let Ok` 分支体根本不执行 ⇒ 静默丢数据
+        let mut skipped_body_ran = false;
+        if let Ok(mut g) = m.lock() {
+            g.push(2);
+            skipped_body_ran = true;
+        }
+
+        assert_eq!(lock_unpoisoned(&m).as_slice(), &[1], "恢复式写必须生效");
+        assert!(
+            !skipped_body_ran,
+            "对照：中毒时 `if let Ok` 分支体**根本不执行**——现场表现是「滚轮没反应 /
+             tooltip 不出现 / 诊断报 0 条」而**查不到任何原因**"
+        );
+    }
+
     /// 同 `poison_mutex`，作用于 RwLock 的写锁。
     fn poison_rwlock<T>(m: &RwLock<T>) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
