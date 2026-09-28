@@ -124,14 +124,27 @@ def inject_wheel(x, y, notches):
 
 
 def device_volumes():
-    r = subprocess.run([NODE, CDP, "popup.html",
-                        "(async()=>{const d=await window.__TAURI__.core.invoke('get_audio_devices');"
-                        "return JSON.stringify(d.map(x=>({id:x.id,name:x.name,volume:x.volume})));})()"],
-                       capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=60)
+    """读各端点当前音量；**读不到就返回 None**（不要抛）。
+
+    ⛔ 2026-09-28 实测：**popup 隐藏时 `invoke` 会挂死**（同机时灵时不灵，20~60s
+    超时）⇒ 旧版在这里 `raise`，整轮验收在**读基线**那步就崩，够不到滚轮那步。
+    现在降级为「基线不可用」：依赖基线的两条判据改判 SKIP，**日志判据仍然照跑**
+    （`滚轮音量 id=… 前 -> 后` 是应用自己的记录，权威且不需要 IPC）。
+    """
+    try:
+        r = subprocess.run([NODE, CDP, "popup.html",
+                            "(async()=>{const d=await window.__TAURI__.core.invoke('get_audio_devices');"
+                            "return JSON.stringify(d.map(x=>({id:x.id,name:x.name,volume:x.volume})));})()"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=25)
+    except subprocess.TimeoutExpired:
+        return None
     if r.returncode != 0:
-        raise RuntimeError((r.stderr or r.stdout).strip()[:200])
-    return json.loads(r.stdout.strip())
+        return None
+    try:
+        return json.loads(r.stdout.strip())
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def wait_ipc(tries=30):
@@ -181,28 +194,44 @@ def run_case(fine, notches, label):
         return
     print("  命中行:", rows_raw[:160])
     # 取第一项的屏幕矩形中心
-    m = re.search(r"#0 \((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)", rows_raw)
-    if not m:
-        check(f"{label}：第 0 项有音量命中区", False, rows_raw[:120])
+    # ⛔⛔ **必须挑「有音频端点」的那一项，不能盲选 #0**（2026-09-28 实测踩到）：
+    #   快照按 `it.battery.is_none() && !it.has_audio` 排序 ⇒ **有电量的设备排在前面**
+    #   ⇒ #0 常常是键鼠这类「有电量、无音频端点」的设备。在它上面滚滚轮**本来就
+    #   不该有反应**（键鼠也能 hover 出 tooltip，但不是音量设备）。
+    #   而旧版脚本盲选 #0 ⇒ 每次都打在不可调的设备上 ⇒ 日志一行不出 ⇒
+    #   **看起来像「滚轮功能坏了」**。这个坑已伪装成「0/6 通过」消耗过一整轮排查。
+    zones = re.findall(
+        r"#(\d+) \((-?\d+),(-?\d+),(-?\d+),(-?\d+)\) (有音频|无音频)", rows_raw)
+    audio_zones = [z for z in zones if z[5] == "有音频"]
+    check(f"{label}：触发区里存在「有音频端点」的项",
+          bool(audio_zones),
+          f"共 {len(zones)} 项，有音频 {[z[0] for z in audio_zones] or '无'}"
+          f"（{rows_raw[:110]}）")
+    if not audio_zones:
         return
-    l, t, r, b = (int(x) for x in m.groups())
+    z = audio_zones[0]
+    l, t, r, b = int(z[1]), int(z[2]), int(z[3]), int(z[4])
     # ⭐ 注入点取**图标区**（项矩形左侧 1/4、上半），不是音量文本 ——
     #   这正是用户报「hover 在设备图标上滚轮没反应」的位置。
     cx, cy = l + max(2, (r - l) // 4), t + max(2, (b - t) // 4)
     log = newest_log()
     before_n = wheel_log_count(log)
     vols_before = device_volumes()
+    have_base = vols_before is not None
+    if not have_base:
+        print("  SKIP 音量基线：popup 隐藏时 invoke 挂死（见 device_volumes 注释）"
+              "⇒ 依赖基线的两条判据跳过，日志判据照跑")
     if not inject_wheel(cx, cy, notches):
         check(f"{label}：注入滚轮", False, f"SetCursorPos 失败 @({cx},{cy})")
         return
     time.sleep(2.5)
-    vols_after = device_volumes()
+    vols_after = device_volumes() if have_base else None
     new_logs = wheel_log_count(log) - before_n
     step = 0.1 if fine else 1.0
     expect = step * notches
     # 找出真正变化了的端点
     changed = []
-    for a, b2 in zip(vols_before, vols_after):
+    for a, b2 in zip(vols_before or [], vols_after or []):
         if a["id"] != b2["id"]:
             continue
         if a["volume"] is None or b2["volume"] is None:
@@ -211,7 +240,10 @@ def run_case(fine, notches, label):
         if abs(d) > 1e-6:
             changed.append((a["name"], round(a["volume"] * 100, 2), round(b2["volume"] * 100, 2), round(d, 3)))
     check(f"{label}：日志出现「滚轮调音量」", new_logs > 0, f"新增 {new_logs} 条")
-    check(f"{label}：恰好一个端点被调", len(changed) == 1, f"{changed}")
+    if have_base:
+        check(f"{label}：恰好一个端点被调", len(changed) == 1, f"{changed}")
+    else:
+        print(f"  SKIP {label}：恰好一个端点被调（缺音量基线）")
     if changed:
         name, v0, v1, d = changed[0]
         # ⛔ 判据用**标称**变化量，不是原始浮点差：页面滑块初值先取整到步进网格

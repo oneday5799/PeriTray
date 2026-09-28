@@ -462,24 +462,34 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
         }
         return false;
     };
+    // ⛔ 下面这些早退**必须留痕**：滚轮的第一报障是「滚轮没反应」，而命中判定之后的
+    //   每一条早退都曾是**一行日志都不打**的静默 return ⇒ 现场完全无法归因
+    //   （2026-09-28 实测：验收脚本一直往**无音频端点**的 #0 上注入，日志里什么都没有，
+    //   差点被误读成「滚轮功能坏了」）。判据：命中之后不许有静默 return。
+    let reject = |why: &str| {
+        if crate::config::verbose_log_enabled() {
+            append_log(&format!("[widget] 滚轮未受理: idx={idx} 原因={why}"));
+        }
+        false
+    };
     // 该项必须**真的有音频端点**（键鼠也能 hover 出 tooltip，但不可调音量）
     let items = match snapshot::load() {
         Some(v) => v,
-        None => return false,
+        None => return reject("快照为空"),
     };
     let Some(it) = items.get(idx) else {
-        return false;
+        return reject("索引越界");
     };
     if !it.has_audio {
-        return false;
+        return reject("该项无音频端点（键鼠类设备不可调音量）");
     }
     // 端点 id 随快照带出来（`WidgetItem::audio_device_id`），**不在这里按名字反查**
     //   —— 那是身份判定，必须留在后端同一判据里。
     let Some(device_id) = it.audio_device_id.clone() else {
-        return false;
+        return reject("有音频但拿不到端点 id");
     };
     let Some(tx) = volume_worker_sender() else {
-        return false;
+        return reject("拿不到后台写线程");
     };
     // 记标准级：这是**用户动作的结果**（「滚轮没反应」是最可能的报障）
     append_log(&format!(
@@ -2709,12 +2719,19 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
                 .iter()
                 .enumerate()
                 .map(|(i, r)| {
+                    // ⚠️ 后缀「有音频/无音频」是**判据的一部分**，不是装饰：
+                    //   滚轮只在**有音频端点**的项上生效（键鼠也能 hover 出 tooltip），
+                    //   而项的排序把「有电量」的设备排在前面 ⇒ #0 常常是**无音频**的那台。
+                    //   不标出来，验收脚本会一直往一台不可调的设备上注入，
+                    //   报障时也无法区分「没命中」与「这项本来就不能调」。
+                    let audio = items.get(i).map(|it| it.has_audio).unwrap_or(false);
                     format!(
-                        "#{i} ({},{},{},{})",
+                        "#{i} ({},{},{},{}) {}",
                         r.left + ox,
                         r.top + oy,
                         r.right + ox,
-                        r.bottom + oy
+                        r.bottom + oy,
+                        if audio { "有音频" } else { "无音频" }
                     )
                 })
                 .collect();
