@@ -171,7 +171,7 @@ MANUAL  以下条目脚本不做（会误报），须按主方案指定方式另
     `fn rollback_on_fail(flag: &AtomicBool, ok: bool)`）。**抓到 2 处未同步的残留措辞**
     （§1.2 与 §4.7 仍写「抽出共用工具 / 复用回滚工具」）并就地订正。
   · 注入类三项的最终结论（2026-09-19，详见 tools/verify-batch-4.sh 的 MANUAL 段）：
-    · P2-3 —— **已由等价判据覆盖**：`node tools/verify-l1l2.mjs` 的 H 组在**部分注入**
+    · P2-3 —— **已由等价判据覆盖**：`node tools/local/verify-l1l2.mjs` 的 H 组在**部分注入**
       （`event` 在、`core` 不在）下加载真实 popup.html；H0 是前置断言、H0b 是对照。
       可证伪性实跑：`--inject-broken=l1` ⇒ H2 转红。
     · P2-7 —— **已固化为常驻单测** `battery_notify::tests::cache_lock_is_released_before_emit`
@@ -181,7 +181,7 @@ MANUAL  以下条目脚本不做（会误报），须按主方案指定方式另
       实跑交换两行 ⇒ 2 条用例转红。端到端「插 sleep + 真实切主题」的增量只剩
       「注册表通知链路可用」（已由 `real_state_wrapper_does_not_panic` 覆盖到「不 panic」），
       而真实切主题会闪烁用户桌面 ⇒ **不再执行，显式接受残余风险**（§8.3 第 14 条允许的第二种方式）。
-    · P0-4 类锁序：见 `tools/verify-b14.mjs`。
+    · P0-4 类锁序：见 `tools/local/verify-b14.mjs`。
 EOF
 
 echo

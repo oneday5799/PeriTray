@@ -43,3 +43,6 @@ Thumbs.db
 # tools/local 里截图/临时产物的默认落盘目录（脚本按 OUT/OUT_DIR 变量写这里）。
 /tools/local/_out/
 /tools/local/*.png
+
+# 验收脚本写进 dist/ 的临时探针页（frontendDist 编译期嵌入二进制，残留会被打进包里）。
+/src-tauri/dist/__probe_*.html

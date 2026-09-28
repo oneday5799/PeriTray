@@ -193,7 +193,7 @@ MANUAL  以下条目按主方案 §六「验证」列只能靠**注入**或**评
 
   · P2-3【已由等价判据覆盖，2026-09-19 实跑】原注入项是「DevTools 里
     `delete window.__TAURI__` 后触发一次事件监听路径，断言走防御式分支」。
-    等价判据是 `node tools/verify-l1l2.mjs` 的 H 组：无头 Edge 加载**真实 popup.html**，
+    等价判据是 `node tools/local/verify-l1l2.mjs` 的 H 组：无头 Edge 加载**真实 popup.html**，
     桩把 `window.__TAURI__` 做成**部分注入**（`event` 在、`core` 不在）——
     这正是原注入项要构造的场景。其中 H0 是**前置断言**（此刻 `getInvoke()` 为 null，
     否则 H1/H2 是恒真）、H0b 是**对照**（旧形态确实抛 `TypeError` ⇒ 守卫非多余）。

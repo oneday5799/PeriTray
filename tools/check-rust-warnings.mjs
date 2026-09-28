@@ -1,5 +1,12 @@
 /**
- * Rust 警告闸门 —— 「零源码警告」判据的**唯一入口**（CI 与 pre-commit 共用）
+ * Rust 警告闸门 —— 「零源码警告」判据在 **pre-commit 路径上的唯一入口**
+ *
+ * ⚠️ **2026-09-28 订正**：本文件头原写「CI 与 pre-commit 共用」，**与实际不符**——
+ *    `.github/workflows/ci.yml` 走的是 `cargo check` + `RUSTFLAGS: -D warnings`
+ *    （rustc 侧硬失败）。两者**不共用**这条命令，但**结论一致且 CI 更严**：
+ *    本脚本要费心区分的那类噪音（Cargo 自己的产物 I/O 诊断）**不经 rustc**，
+ *    因此 `-D warnings` 碰不到它，也就不需要这套过滤。
+ *    本文件**只有 `tools/pre-commit` 调用**（已用 `grep -rl` 核过，无其他调用点）。
  *
  * 运行：`node tools/check-rust-warnings.mjs`
  *

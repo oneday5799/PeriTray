@@ -50,12 +50,24 @@
  * ⚠️ 这是一次性验收实用脚本（与 L1/L2 一起归档），**不是**每次提交都跑的回归闸门。
  * 它按当时的注册面**硬编码**了期望集合；日后正常新增事件监听时，请同步 EXPECTED
  * 而不是把它当 CI 用。若需要常规回归，应改为独立测试框架下的用例。
+ * ── 2026-09-28 归档说明（本文件已移入 tools/local/）────────────────────
+ * ① **判据对应的缺陷早已修复并结案**（见 Wiki 12-代码审查与整改复盘），本脚本是那一次的
+ *    一次性验收器，**不被任何闸门调用**（`verify-final.sh` / `verify-batch-4.sh` 只在
+ *    MANUAL 文本里提到它）。
+ * ② ⛔ **观测通道在本机不可用**：`--headless=new --dump-dom` 实测**退出码 0 但 stdout
+ *    与 stderr 全为 0 字节** ⇒ 脚本必然走到「未取到断言输出」并 `exit 2`。
+ *    ⚠️ 因此**退出码 2 不是判据转红，是探针根本没跑起来**——两者必须区分，否则就是
+ *    「永远红的检查」，会训练出「红了就忽略」的习惯（AGENTS.md 验收纪律的反面）。
+ *    在非沙箱 shell 里是否可用**未验证**，故文件保留而不删除。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-const ROOT = path.resolve(import.meta.dirname, "..");
+// ⚠️ 本文件在 tools/local/ 下（2026-09-28 从 tools/ 归档过来）⇒ 要上跳**两级**。
+//    原来写 ".." 时它假定自己在 tools/ 下，搬进来后会把 ROOT 算成 tools/ ⇒
+//    报 ENOENT（src-tauri/dist/settings.html）。**搬家必查相对根**。
+const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const DIST = path.join(ROOT, "src-tauri", "dist");
 const SCRIPTS = path.join(DIST, "scripts");
 const AUDIO_JS = path.join(SCRIPTS, "popup-audio.js");
@@ -458,8 +470,14 @@ try {
 
   const m = out.match(/<pre id="__l_out">([\s\S]*?)<\/pre>/);
   if (!m) {
-    console.error("✗ 未取到断言输出（探针未执行？）。DOM 片段：");
+    console.error("⚠ SKIP 观测通道不可用：未取到断言输出（探针未执行，**不是判据转红**）。");
+    console.error("  最可能原因：无头 Edge 的 --dump-dom 在本机无输出（实测 0 字节 / 退出码 0）。");
+    console.error("  DOM 片段：");
     console.error(out.slice(0, 1200));
+    // ⛔ 这条 SKIP 分支在 try/finally **之外** ⇒ 不清理就会把探针 HTML 留在
+    //    dist/ 里，而 dist/ 是 frontendDist（**编译期嵌入二进制**）⇒ 残留会被
+    //    打进安装包，还可能被 git add -A 提交进去。2026-09-28 实测就这样漏了两个。
+    if (fs.existsSync(PROBE)) fs.unlinkSync(PROBE);
     process.exit(2);
   }
   const lines = m[1]
