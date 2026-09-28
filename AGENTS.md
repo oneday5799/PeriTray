@@ -302,6 +302,18 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 **维护注意**：新增页面/目录需同步更新 `tools/check.mjs` 的 PAGES 数组；
 若标识符审计出现误报，优先扩展 check.mjs 的声明提取规则，而非绕过钩子。
 
+**三个「入库与否」有讲究的目录**（2026-09-28 整理）：
+
+| 目录 | 是否入库 | 是什么 / 为什么这样 |
+|---|---|---|
+| `ck/` | ⛔ `.gitignore` 排除 | 任务栏自绘 spike 阶段参考的 **6 个第三方开源项目源码**（40 MB / 625 文件）。结论已提炼进 Wiki 15 §7.6；仓库需要的是那份「怎么查」的指针，不需要 40 MB 别人的代码 |
+| `tools/local/` | ✅ 入库 | 45 个自包含验收脚本（`probe_*` / `verify-*` / `inject-*` / `shot-*` / `measure-*` / `diag-*`）。⛔ **全是本机口径**（写死 DPI 125%、任务栏 2560 宽、具体设备名）⇒ 换机器必须重跑并复核期望值。截图产物落 `_out/`，已忽略 |
+| `tools/skills/peri-tray-release.md` | ✅ 入库 | 发版 playbook（原在 AI 工作目录里，目录退役前迁入） |
+
+⚠️ `tools/local/` 有一批脚本写死 `C:\Users\Oneday\...` 的 WorkBuddy 运行时路径——那是
+**仓库外**的独立工具链；换机器改用 `PATH` 上的 `node` 即可。判据：`C:\Users\...` 归本机、
+`D:\Code\PeriTray\...` 归本仓，**同名前缀不代表同一处，别做全局替换**。
+
 ## 验收与回归纪律（修复类改动强制）
 
 > 原理解释、实测证据与完整避坑清单（30 条）见

@@ -32,8 +32,14 @@ Thumbs.db
 /src-tauri/msix/stage/
 /src-tauri/msix/output/
 
-# AI 协作的本地工作记忆（会话日志 + 项目笔记，含本机绝对路径，不适合共享）。
-# ⚠️ 只是不入库，**不是缓存、不要删除**：里面的约定与踩坑记录是本机独有的。
-/.workbuddy-ai/
+
+# 任务栏自绘 spike 阶段的**参考源码**（6 个同类开源项目，40 MB / 625 文件）：
+# StockBar / TokenBar / FluentFlyout / QuotaDock / bt-battery-bar / gold-monitor。
+# ⚠️ **绝不入库**：第三方源码 + 体量大；结论已提炼进 Wiki 15，这里只留「怎么查」用的原件。
+/ck/
 
 
+
+# tools/local 里截图/临时产物的默认落盘目录（脚本按 OUT/OUT_DIR 变量写这里）。
+/tools/local/_out/
+/tools/local/*.png
