@@ -228,6 +228,24 @@ unsafe fn get_device_name(device: &IMMDevice) -> Result<String> {
     Ok(name)
 }
 
+/// 读**单个**端点的当前音量。
+///
+/// ⭐ 为什么不复用 `enumerate_output_devices()`：任务栏窗口的滚轮调音量要做
+///   **读—改—写**，而全量枚举要几百毫秒（且随设备数增长）；每滚一格都枚举一遍
+///   会让快速滚动明显滞后。这里只 `GetDevice` + `Activate` 目标端点，与
+///   `set_device_volume` 完全对称。
+pub fn get_device_volume(device_id: &str) -> Result<f32> {
+    // 与 set_device_volume 同款收尾：闭包直接返回 COM 的 Result，末尾用 ?? 拆两层，
+    // 再包一层 Ok —— 少了最外层 Ok 会与本函数的返回类型不符（编译器会明确报出来）。
+    Ok(unsafe {
+        with_enumerator(|enumerator| -> Result<f32> {
+            let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
+            let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
+            endpoint.GetMasterVolumeLevelScalar()
+        })??
+    })
+}
+
 pub fn set_device_volume(device_id: &str, volume: f32) -> Result<()> {
     verbose_log!("[audio] set_device_volume {} {}", device_id, volume);
     let mute_lock = crate::config::with_config(|c| c.mute_lock);

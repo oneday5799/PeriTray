@@ -342,6 +342,157 @@ fn publish_item_rects(rects: &[windows_sys::Win32::Foundation::RECT]) {
     }
 }
 
+// ── 音量滚轮：窗口线程只做「命中 + 记账」，写音量交给后台线程 ──────────
+//
+// ⛔ **为什么不能在 `wnd_proc` 里直接写音量**：`set_device_volume` 要 COM
+//   `Activate` + `SetMasterVolumeLevelScalar`，是**阻塞**调用；`wnd_proc` 跑在
+//   窗口线程（= 主线程）⇒ 一次卡住就表现为「任务栏窗口冻结、点不动」。
+//   与本模块既有纪律一致（拖拽只改原子量、绘制只读快照）。
+//
+// ⭐ **为什么用「单后台线程 + 通道」而不是每次 `thread::spawn`**：读—改—写必须
+//   **串行**。快速滚动时若并发执行，每个线程读到的都是同一个旧基准
+//   ⇒ 滚 5 格只生效 1 格（用户看到「滚轮失灵」）。用通道把请求排队、由一个线程
+//   按序处理 ⇒ 步进不丢，且**不需要新增全局锁**（也就不必在 `state.rs` 的
+//   锁序表里登记新边）。
+
+/// 取（并按需启动）音量滚轮工作线程的发送端。
+#[cfg(target_os = "windows")]
+fn volume_worker_sender() -> Option<std::sync::mpsc::Sender<(String, bool)>> {
+    type Chan = std::sync::mpsc::Sender<(String, bool)>;
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<Chan>>> = std::sync::OnceLock::new();
+    let slot = SLOT.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = match slot.lock() {
+        Ok(g) => g,
+        Err(_) => return None,
+    };
+    if guard.is_none() {
+        let (tx, rx) = std::sync::mpsc::channel::<(String, bool)>();
+        let spawned = std::thread::Builder::new()
+            .name("pm-wheel-volume".to_string())
+            .spawn(move || volume_worker_loop(rx));
+        if let Err(e) = spawned {
+            append_log(&format!("[widget] 音量滚轮线程启动失败: {e}"));
+            return None;
+        }
+        *guard = Some(tx);
+    }
+    guard.clone()
+}
+
+/// 工作线程主循环：按序「读当前值 → 加一格 → 写回」。
+#[cfg(target_os = "windows")]
+fn volume_worker_loop(rx: std::sync::mpsc::Receiver<(String, bool)>) {
+    while let Ok((device_id, up)) = rx.recv() {
+        // ⚠️ 精细调节**每格现读**：用户可能在设置里中途改开关
+        let fine = crate::config::with_config(|c| c.volume_fine_adjust);
+        match crate::audio::get_device_volume(&device_id) {
+            Ok(cur) => {
+                let next = apply_wheel_volume(cur, up, fine);
+                if (next - cur).abs() < f32::EPSILON {
+                    // 已在 0% 或 100%：页面里滑块同样不动，不算失败
+                    if crate::config::verbose_log_enabled() {
+                        append_log(&format!("[widget] 滚轮到边界: {cur} dir={up}"));
+                    }
+                } else if let Err(e) = crate::audio::set_device_volume(&device_id, next) {
+                    append_log(&format!("[widget] 滚轮写音量失败: {e}"));
+                } else {
+                    // ⭐⭐ **乐观更新 + 立即重绘**（用户 2026-09-28：滚动时音量信息
+                    //   刷新率太低、不实时）。原先只调 `refresh_async()`，它要先跑
+                    //   完一整轮 WMI 枚举（数百毫秒）才重画 ⇒ 数字明显滞后于滚动。
+                    //   ⇒ 先把**刚写进去的值**就地落到快照，再直接 `post_refresh`
+                    //   让主线程马上重绘这一帧（单帧 0.45ms，见 `snapshot::store`）。
+                    //   真实值仍由随后那轮枚举校正（不会漂移：写的就是真值）。
+                    if snapshot::update_volume(&device_id, next) {
+                        let handle = WIDGET_HWND.load(std::sync::atomic::Ordering::SeqCst);
+                        if widget_alive() {
+                            unsafe { ffi::post_refresh(handle as *mut core::ffi::c_void) };
+                        }
+                    }
+                    if crate::config::verbose_log_enabled() {
+                        append_log(&format!("[widget] 滚轮音量 id={device_id} {cur} -> {next}"));
+                    }
+                }
+            }
+            Err(e) => append_log(&format!("[widget] 滚轮读音量失败: {e}")),
+        }
+        // ⭐ 复用「FORCE_REPAINT + refresh_async()」这条**已过实战验证**的重绘路径
+        //   （`refresh_async` 自带防抖与「未挂载早退」），不新开通道。
+        FORCE_REPAINT.store(true, std::sync::atomic::Ordering::Release);
+        refresh_async();
+    }
+}
+
+/// `WM_MOUSEWHEEL`：光标落在某项的音量行上 ⇒ 受理一次调音量请求。
+///
+/// 返回 `true` = 命中并已受理（消息必须被吃掉，不能落到 `DefWindowProcW`——
+/// 那会被转发给父窗口（任务栏），变成「滚动整个任务栏」）。
+#[cfg(target_os = "windows")]
+fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
+    // wParam 高 16 位是滚轮增量（120/格），低 16 位是按键状态（忽略）
+    let delta = ((wp >> 16) & 0xFFFF) as u16 as i16;
+    let Some(up) = wheel_direction(delta) else {
+        return false;
+    };
+    // ⚠️ 用 `GetCursorPos` 而不是 lParam 里的屏幕坐标：多显示器下 lParam 存的是
+    //   16 位有符号坐标、跨屏会溢出（本模块的 hover 轮询也统一用 `GetCursorPos`）。
+    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
+        return false;
+    }
+    // 命中矩形是**窗口局部坐标** ⇒ 减去窗口原点
+    let Some((wx, wy, _, _)) = window_screen_rect(hwnd) else {
+        return false;
+    };
+    // ⭐ 触发区用 `LAST_ITEM_RECTS` —— 与 tooltip **同一份**矩形（用户 2026-09-28
+    //   要求「触发区域与 tooltip 一致」）。它是 widget 局部坐标 ⇒ 减去窗口原点。
+    let rects = match LAST_ITEM_RECTS.lock() {
+        Ok(g) => g.clone(),
+        Err(_) => return false,
+    };
+    let local = (pt.x - wx, pt.y - wy);
+    let Some(idx) = hit_test_item_rects(&rects, local) else {
+        // 未命中也要留痕：「滚轮没反应」时这是**唯一**能区分
+        // 「压根没收到消息」与「收到了但位置不对」的信息。
+        if crate::config::verbose_log_enabled() {
+            let desc: Vec<String> = rects
+                .iter()
+                .map(|r| format!("({},{},{},{})", r.left, r.top, r.right, r.bottom))
+                .collect();
+            append_log(&format!(
+                "[widget] 滚轮未命中: 光标=({},{}) 局部={:?} 触发区={desc:?}",
+                pt.x, pt.y, local
+            ));
+        }
+        return false;
+    };
+    // 该项必须**真的有音频端点**（键鼠也能 hover 出 tooltip，但不可调音量）
+    let items = match snapshot::load() {
+        Some(v) => v,
+        None => return false,
+    };
+    let Some(it) = items.get(idx) else {
+        return false;
+    };
+    if !it.has_audio {
+        return false;
+    }
+    // 端点 id 随快照带出来（`WidgetItem::audio_device_id`），**不在这里按名字反查**
+    //   —— 那是身份判定，必须留在后端同一判据里。
+    let Some(device_id) = it.audio_device_id.clone() else {
+        return false;
+    };
+    let Some(tx) = volume_worker_sender() else {
+        return false;
+    };
+    // 记标准级：这是**用户动作的结果**（「滚轮没反应」是最可能的报障）
+    append_log(&format!(
+        "[widget] 滚轮调音量: idx={idx} dir={} step={:.1}%",
+        if up { "up" } else { "down" },
+        volume_step(crate::config::with_config(|c| c.volume_fine_adjust))
+    ));
+    tx.send((device_id, up)).is_ok()
+}
+
 /// 诊断快照：`hwnd` / `SetParent` 错误码 / `GetParent` 复核结果的原始值。
 ///
 /// ⚠️ 抽成类型而不是直接暴露静态量，是为了让「挂载是否成功」有**单一判据入口**
@@ -401,6 +552,13 @@ pub struct WidgetItem {
     pub has_audio: bool,
     /// 端点是否静音（画成 `🔇` 或降低不透明度）
     pub is_muted: Option<bool>,
+    /// 该设备的**音频端点 id**；滚轮调音量必须靠它写回（`None` = 没有端点）。
+    ///
+    /// ⭐ 为什么 `volume` 不够：滚轮要做**读—改—写**，而 `volume` 只是**上次快照**
+    ///   的值；用它当基准会在快速滚动时丢步（每格都基于同一个陈旧起点）。
+    ///   而「按名字/身份反查端点」是身份判定，必须留在后端同一处判据里
+    ///   （见 `device_identity::audio_endpoint_key`），故随设备把 id 带出来。
+    pub audio_device_id: Option<String>,
     /// 是否是系统默认音频设备（前缀标记，帮助用户一眼认出放声口）
     pub is_default: bool,
     /// 用户固定的设备（读不出数据也保留；仅离线占位条目置灰）
@@ -431,6 +589,28 @@ mod snapshot {
         }
         *guard = Some(items);
         true
+    }
+
+    /// 就地更新某端点的音量（**滚轮乐观更新**）。返回是否真的改了。
+    ///
+    /// ⭐ 为什么需要（用户 2026-09-28：滚动时音量刷新率太低）：`refresh_async`
+    ///   要先跑完一整轮 WMI/端点枚举（数百毫秒）才重画 ⇒ 数字明显滞后于滚动。
+    ///   这里先落**刚写进去的那个值**，主线程立即重绘；随后那轮枚举会用真值校正。
+    /// ⚠️ 只按 `audio_device_id` 匹配（**不是**按名字/身份键）：端点 id 是
+    ///   `AudioDevice` 的天然主键，而此处拿不到端点枚举上下文。
+    pub fn update_volume(device_id: &str, volume: f32) -> bool {
+        let mut guard = crate::state::lock_unpoisoned(&SNAPSHOT);
+        let Some(items) = guard.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        for it in items.iter_mut() {
+            if it.audio_device_id.as_deref() == Some(device_id) && it.volume != Some(volume) {
+                it.volume = Some(volume);
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// 读一份快照副本（**主线程**调）。
@@ -663,8 +843,8 @@ pub(crate) mod ffi {
         RegisterClassW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
         UpdateLayeredWindow, GWL_STYLE, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE,
         SWP_NOSIZE, SWP_NOZORDER, ULW_ALPHA, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_MOUSEMOVE, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_POPUP,
+        WM_MOUSEMOVE, WM_MOUSEWHEEL, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_POPUP,
     };
 
     /// 注册 widget 窗口类（幂等）。返回类名（`to_wide` 后的指针由调用方持有）。
@@ -1124,6 +1304,15 @@ pub(crate) mod ffi {
             }
             return 0;
         }
+        if msg == WM_MOUSEWHEEL {
+            // ⭐ 音量滚轮（用户 2026-09-28）。命中判定与记账都在**窗口线程**完成
+            //   （纯内存：读上一帧发布的矩形 + 取方向），**实际写音量在后台线程**。
+            // ⛔ 必须 `return 0` 吃掉这条消息：落到 `DefWindowProcW` 会被转发给
+            //   父窗口（任务栏）⇒ 变成「滚动整个任务栏」。
+            if super::wheel_adjust_volume(hwnd, wp) {
+                return 0;
+            }
+        }
         // ⚠️ 只在「固定位置」关掉时接管（`drag_begin` 内部判 `drag_enabled()`）；
         //   固定位置时**不拦截**，交回 `DefWindowProcW` 保持原行为。
         if msg == WM_LBUTTONDOWN {
@@ -1361,7 +1550,7 @@ fn format_battery(it: &WidgetItem) -> String {
 ///   没有音量就显示 N/A）。两者在数据层仍由 `has_audio` 区分 —— 将来若要改成
 ///   「无端点整段不画」，不必回头动数据。
 #[cfg(target_os = "windows")]
-fn format_volume(it: &WidgetItem) -> String {
+fn format_volume(it: &WidgetItem, fine_adjust: bool) -> String {
     if !it.has_audio {
         // 键鼠这类无音频端点的设备：用户明确要求显示 N/A（而不是留空）
         return "N/A".to_string();
@@ -1371,10 +1560,86 @@ fn format_volume(it: &WidgetItem) -> String {
     if it.is_muted == Some(true) {
         return "静音".to_string();
     }
+    // ⭐ **是否带小数由「音量精细调节」开关决定**（用户 2026-09-28）：
+    //   · 开 ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了但数字没变」
+    //     看起来像失效；
+    //   · 关 ⇒ `40%`：此时滚轮是 1% 步进，多余的小数位是噪音。
+    // ⚠️ **参数传入而不是这里读配置**：本函数被单测直接调用，且绘制路径要求
+    //   「GDI 调用之前不持锁」（见 `draw_items` 里的配置快照）⇒ 由调用方读一次传进来。
     match it.volume {
+        Some(v) if fine_adjust => format!("{:.1}%", v * 100.0),
         Some(v) => format!("{}%", (v * 100.0).round() as i32),
         None => "N/A".to_string(),
     }
+}
+
+// ── 滚轮调音量：纯函数（可单测）────────────────────────────────
+//
+// ⭐ 与「弹出窗口·音量控制页」的滑块滚轮**逐字对齐**（`popup-audio.js`）：
+//   ① 滑块值域是 `0..100`（百分点），COM 给的是 `0..1` 分数；
+//   ② 滑块**初值先取整**（`fineAdjustEnabled ? Math.round(v*1000)/10
+//      : Math.round(v*100)`，`popup-audio.js:181`）；
+//   ③ 步进：精细 ⇒ `round((v ± 0.1) * 10) / 10`；普通 ⇒ 上 `floor(v)+1`、
+//      下 `ceil(v)-1`（**不是** `round(v±1)`）。
+// ⛔ ②③ 任何一条照抄错，手感都会与页面对不上（② 错 ⇒ 每格少 1%，
+//   实测 `0.12f32` = 11.9999997% 不取整则 floor 得 11 ⇒ 向上只到 12%）。
+
+/// 滚轮一格的步进量（0.1 / 1 个百分点）。**纯函数**：便于钉住「与页面一致」。
+fn volume_step(fine_adjust: bool) -> f32 {
+    if fine_adjust {
+        0.1
+    } else {
+        1.0
+    }
+}
+
+/// `WM_MOUSEWHEEL` 的 wParam 高字（滚轮增量，120/格）⇒ 方向。
+/// 返回 `None` 表示**不该处理**（增量为 0：某些触控板/精密滚轮会发 0）。
+fn wheel_direction(delta: i16) -> Option<bool> {
+    match delta {
+        d if d > 0 => Some(true),  // 向上滚 = 增大音量
+        d if d < 0 => Some(false), // 向下滚 = 减小音量
+        _ => None,
+    }
+}
+
+/// 按一格滚轮算出新音量。**f64 中间量**对齐 JS（页面滑块是双精度）。
+fn apply_wheel_volume(current: f32, up: bool, fine_adjust: bool) -> f32 {
+    let v = current as f64;
+    // ① 换算到百分点 + ② 照抄页面的「初值先取整」
+    let base = if fine_adjust {
+        (v * 1000.0).round() / 10.0
+    } else {
+        (v * 100.0).round()
+    };
+    let step = volume_step(fine_adjust) as f64; // 0.1 或 1（百分点）
+    let next = if fine_adjust {
+        ((base + if up { step } else { -step }) * 10.0).round() / 10.0
+    } else if up {
+        base.floor() + 1.0
+    } else {
+        base.ceil() - 1.0
+    };
+    (next.clamp(0.0, 100.0) / 100.0) as f32
+}
+
+/// 命中测试：光标（窗口局部坐标）落在哪一项的**整块**区域内。
+///
+/// ⭐ **触发区必须与 tooltip 完全一致**（用户 2026-09-28 明确要求）：两者都用
+///   `item_rects` 发布的同一份矩形。第一版只把「音量文本那一行」当触发区，
+///   于是「鼠标停在图标上滚」完全无效 —— 而那恰恰是最顺手的位置。
+///   ⛔ 分叉后既不一致（图标上滚没反应）又不易察觉（tooltip 明明弹了）。
+fn hit_test_item_rects(
+    rects: &[windows_sys::Win32::Foundation::RECT],
+    pt: (i32, i32),
+) -> Option<usize> {
+    rects.iter().enumerate().find_map(|(i, r)| {
+        if pt.0 >= r.left && pt.0 < r.right && pt.1 >= r.top && pt.1 < r.bottom {
+            Some(i)
+        } else {
+            None
+        }
+    })
 }
 
 /// 图标资源与解码（**编译期嵌入 + 进程内缓存**）。
@@ -1774,13 +2039,13 @@ fn estimate_text_px(s: &str, m: &Metrics) -> i32 {
 }
 
 #[cfg(all(target_os = "windows", test))]
-fn estimate_widget_width(items: &[WidgetItem], m: &Metrics) -> i32 {
+fn estimate_widget_width(items: &[WidgetItem], m: &Metrics, fine_adjust: bool) -> i32 {
     // ⚠️ 每台设备占「两段文本里更宽的那一段」—— 与 `draw_items` 的 `per_item` 同口径。
     let text_px: i32 = items
         .iter()
         .map(|it| {
             let bat = estimate_text_px(&format_battery(it), m);
-            let vol = estimate_text_px(&format_volume(it), m);
+            let vol = estimate_text_px(&format_volume(it, fine_adjust), m);
             bat.max(vol)
         })
         .sum();
@@ -2212,9 +2477,13 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
         .iter()
         .map(|it| format_battery(it).encode_utf16().collect())
         .collect();
+    // ⭐ 「音量精细调节」只在这里读一次：决定音量文本**要不要小数位**。
+    //   读配置只取 bool、立刻释放锁（不跨任何 GDI 调用）——符合本文件
+    //   「GDI 之前不持锁」的纪律。
+    let fine_adjust = crate::config::with_config(|c| c.volume_fine_adjust);
     let vol_texts: Vec<Vec<u16>> = items
         .iter()
-        .map(|it| format_volume(it).encode_utf16().collect())
+        .map(|it| format_volume(it, fine_adjust).encode_utf16().collect())
         .collect();
     // 每段记 `(文本实际宽, 是否需要省略号)`：实际宽 = `min(自然宽, item_max_w)`；
     // 自然宽 > 上限 ⇒ 该段要画 `…`（否则会**硬切半个字形**）。
@@ -2307,6 +2576,9 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     }
     unsafe { ffi::show(hwnd as _) };
     let h = m.h;
+    // ⭐ `icon_y` 提到这里（与 `h` 同一处）：绘制与「音量行命中矩形」**共用同一个值**。
+    //   放在绘制块内部时命中矩形看不到它（作用域外）⇒ 只能另算一份 ⇒ 两个来源。
+    let icon_y = (h - m.icon) / 2;
     let Some(dib) = (unsafe { ffi::create_dib(total_w, h) }) else {
         append_log("[widget] CreateDIBSection 失败");
         unsafe { ffi::destroy_font(font) };
@@ -2333,7 +2605,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
             fill_hover_backdrop(px, total_w, h, alpha, m.radius);
         }
         // 图标在 widget 里垂直居中（`m.icon` ≤ `h`，余量上下各一半）
-        let icon_y = (h - m.icon) / 2;
+        // ⚠️ `icon_y` 已提到上面与 `h` 同处声明（音量行命中矩形也要用），此处不重复定义。
 
         // ⭐ x 起点从 `item_rects` 取（与 tooltip 共用），不再用 running cursor 自增。
         //   ⛔ 两者**必须**同源：分叉 ⇒ tooltip 指向的设备与视觉位置错位，不报错。
@@ -2431,6 +2703,26 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     //   **不可能分叉**。传 `items` 的名字 + rect，两者由本函数一次算出。
     {
         publish_item_rects(&item_rects);
+        // ⭐ 滚轮触发区**就是** tooltip 用的这份 `item_rects`（同一块、同一时刻发布），
+        //   因此「图标上滚」与「tooltip 弹出的范围」不可能对不上。
+        //   详细级记屏幕坐标：滚轮报障时这是唯一能回答「触发区在哪」的信息。
+        if crate::config::verbose_log_enabled() {
+            let (ox, oy, _, _) = window_screen_rect(hwnd).unwrap_or((0, 0, 0, 0));
+            let desc: Vec<String> = item_rects
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    format!(
+                        "#{i} ({},{},{},{})",
+                        r.left + ox,
+                        r.top + oy,
+                        r.right + ox,
+                        r.bottom + oy
+                    )
+                })
+                .collect();
+            append_log(&format!("[widget] 滚轮触发区(屏幕,同 tooltip): {desc:?}"));
+        }
         let entries: Vec<crate::taskbar_tooltip::TipEntry> = items
             .iter()
             .zip(item_rects.iter())
@@ -2694,6 +2986,7 @@ fn build_items_with_opt_labels(
             // ⭐ 判据必须是 `is_some()`：`Some(0.0)` 是合法音量（静音到 0）
             has_audio: d.volume.is_some() || d.is_muted.is_some() || d.audio_device_id.is_some(),
             is_muted: d.is_muted,
+            audio_device_id: d.audio_device_id.clone(),
             is_default: d.is_default == Some(true),
             pinned: d.pinned,
             connected: d.connected,
@@ -3356,6 +3649,7 @@ mod tests {
             volume,
             has_audio,
             is_muted,
+            audio_device_id: None,
             is_default: false,
             pinned: false,
             connected: false,
@@ -3388,13 +3682,13 @@ mod tests {
     fn missing_volume_always_shows_na() {
         // 无音频端点（`has_audio = false`）
         assert_eq!(
-            format_volume(&item(Some(60), None, false, None)),
+            format_volume(&item(Some(60), None, false, None), false),
             "N/A",
             "无音频端点的设备必须显示 N/A（用户明确要求），不能留空"
         );
         // 有音频端点但音量暂时读不出
         assert_eq!(
-            format_volume(&item(None, None, true, None)),
+            format_volume(&item(None, None, true, None), false),
             "N/A",
             "有端点但读不出音量，同样是 N/A"
         );
@@ -3407,43 +3701,234 @@ mod tests {
     fn battery_and_volume_degrade_independently() {
         // 有电量、无音量
         assert_eq!(format_battery(&item(Some(77), None, false, None)), "77%");
-        assert_eq!(format_volume(&item(Some(77), None, false, None)), "N/A");
+        assert_eq!(
+            format_volume(&item(Some(77), None, false, None), false),
+            "N/A"
+        );
         // 无电量、有音量
         assert_eq!(
             format_battery(&item(None, Some(0.5), true, Some(false))),
             "N/A"
         );
+        // 音量文本的格式随「音量精细调节」变（见 volume_decimals_follow_the_fine_adjust_switch）
         assert_eq!(
-            format_volume(&item(None, Some(0.5), true, Some(false))),
+            format_volume(&item(None, Some(0.5), true, Some(false)), false),
             "50%"
         );
+        assert_eq!(
+            format_volume(&item(None, Some(0.5), true, Some(false)), true),
+            "50.0%"
+        );
+    }
+
+    /// ⭐⭐ **音量文本是否带小数，由「音量精细调节」开关决定**（用户 2026-09-28）。
+    ///
+    /// · **开** ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了但数字
+    ///   没变」看起来像失效；
+    /// · **关** ⇒ `40%`：此时滚轮是 1% 步进，多余的小数位是噪音。
+    ///
+    /// ⛔ 可证伪：把 `format_volume` 的 `match` 去掉 `fine_adjust` 分支（两种都输出
+    ///   同一种格式），本条立刻转红。
+    #[test]
+    fn volume_decimals_follow_the_fine_adjust_switch() {
+        // 精细调节**开** ⇒ 一位小数
+        assert_eq!(
+            format_volume(&item(None, Some(0.125), true, Some(false)), true),
+            "12.5%",
+            "0.1% 步进时必须看得出变化"
+        );
+        assert_eq!(
+            format_volume(&item(None, Some(0.4), true, Some(false)), true),
+            "40.0%"
+        );
+        assert_eq!(
+            format_volume(&item(None, Some(0.0), true, Some(false)), true),
+            "0.0%",
+            "0 是合法音量，不能当「读不出」"
+        );
+        // 精细调节**关** ⇒ 整数（且仍是四舍五入，不是截断）
+        assert_eq!(
+            format_volume(&item(None, Some(0.125), true, Some(false)), false),
+            "13%",
+            "关 ⇒ 不显示小数；12.5 四舍五入成 13"
+        );
+        assert_eq!(
+            format_volume(&item(None, Some(0.4), true, Some(false)), false),
+            "40%"
+        );
+        assert_eq!(
+            format_volume(&item(None, Some(0.0), true, Some(false)), false),
+            "0%"
+        );
+        // 两种档位下，N/A / 静音 的显示都**不受开关影响**
+        assert_eq!(
+            format_volume(&item(None, None, true, None), true),
+            "N/A",
+            "读不出音量时与开关无关"
+        );
+        assert_eq!(format_volume(&item(None, None, true, None), false), "N/A");
+        assert_eq!(
+            format_volume(&item(Some(80), Some(0.4), true, Some(true)), true),
+            "静音",
+            "静音优先于百分比，与开关无关"
+        );
+    }
+
+    // ── 滚轮调音量：与弹出窗口逐字对齐 ────────────────────────
+    //
+    // ⭐ 对齐对象是 `popup-audio.js` 的滑块：初值**先取整**（:181），
+    //   步进 coarse 用 `floor(pct)+1` / `ceil(pct)-1`、fine 用 `round((pct±0.1)*10)/10`。
+
+    /// ⛔ 步进量：精细 0.1、普通 1（百分点）。
+    #[test]
+    fn wheel_step_follows_fine_adjust() {
+        assert_eq!(volume_step(true), 0.1);
+        assert_eq!(volume_step(false), 1.0);
+    }
+
+    /// ⛔ 方向解析：0 增量**不受理**（精密滚轮/触控板会发 0，语义是「不处理」）。
+    #[test]
+    fn wheel_direction_ignores_zero_delta() {
+        assert_eq!(wheel_direction(120), Some(true));
+        assert_eq!(wheel_direction(-120), Some(false));
+        assert_eq!(wheel_direction(0), None);
+    }
+
+    /// ⭐⭐ **与页面逐字一致**的判据。期望值写**分数**（0..1），注释写百分点。
+    ///   普通档刻意用 `floor(pct)+1` / `ceil(pct)-1`：页面里 12 向下滚得 **11**
+    ///   （不是 12）。⛔ "顺手简化"成 `clamp(pct ± 1)` 会让两端手感对不上页面。
+    #[test]
+    fn wheel_matches_popup_slider_exactly() {
+        // 普通档（1 个百分点，基准 = round(v*100)）
+        assert_eq!(apply_wheel_volume(0.123, true, false), 0.13, "12 → 13");
+        assert_eq!(apply_wheel_volume(0.123, false, false), 0.11, "12 → 11");
+        assert_eq!(apply_wheel_volume(0.12, true, false), 0.13);
+        assert_eq!(apply_wheel_volume(0.12, false, false), 0.11);
+        // 精细档（0.1 个百分点，基准 = round(v*1000)/10）
+        assert_eq!(apply_wheel_volume(0.123, true, true), 0.124, "12.3 → 12.4");
+        assert_eq!(apply_wheel_volume(0.123, false, true), 0.122, "12.3 → 12.2");
+        assert_eq!(apply_wheel_volume(0.12, true, true), 0.121, "12.0 → 12.1");
+        assert_eq!(apply_wheel_volume(0.12, false, true), 0.119, "12.0 → 11.9");
+        // 浮点边界：95 + 0.1 在 f64 下就是 95.1（不是 95.09999…）⇒ 95.1
+        assert_eq!(apply_wheel_volume(0.95, true, true), 0.951);
+    }
+
+    /// ⛔⛔ **「先取整」这一步的专属判据**：COM 的 `0.12f32` 实际是 `11.99999973%`。
+    ///   少了取整、直接 `floor` 得 11 ⇒ 向上一格只到 12%，比页面**少一格**。
+    ///   可证伪：把 `apply_wheel_volume` 里的 `base` 改成 `v * 100.0`（不取整），
+    ///   本条立刻转红。
+    #[test]
+    fn wheel_rounds_the_base_like_the_page_slider() {
+        assert_eq!(
+            apply_wheel_volume(0.1199999, true, false),
+            0.13,
+            "基准必须先 round 到 12，否则 11.99999 向上只到 12"
+        );
+        assert_eq!(
+            apply_wheel_volume(0.1299999, false, false),
+            0.12,
+            "round 到 13 后向下 ⇒ 12"
+        );
+    }
+
+    /// ⭐ 两端**夹紧**；精细档在小值上也要真的动（不能因舍入卡住）。
+    #[test]
+    fn wheel_clamps_at_both_ends() {
+        assert_eq!(apply_wheel_volume(0.0, false, false), 0.0, "0% 不能再降");
+        assert_eq!(apply_wheel_volume(1.0, true, false), 1.0, "100% 不能再升");
+        assert_eq!(apply_wheel_volume(0.0, false, true), 0.0);
+        assert_eq!(apply_wheel_volume(1.0, true, true), 1.0);
+        assert_eq!(apply_wheel_volume(0.04, false, true), 0.039, "4.0 → 3.9");
+        assert_eq!(apply_wheel_volume(0.001, true, true), 0.002, "0.1 → 0.2");
+    }
+
+    /// ⭐ 命中测试：**整项**区域都算（= tooltip 的触发区），项与项之间不命中。
+    /// ⛔ 可证伪：把 `hit_test_item_rects` 改成只匹配「音量文本那一行」的窄矩形，
+    ///   本条立刻转红 —— 表现是「hover 出 tooltip 了，但滚轮没反应」。
+    #[test]
+    fn hit_test_covers_the_whole_item_like_the_tooltip() {
+        let rects = vec![
+            windows_sys::Win32::Foundation::RECT {
+                left: 10,
+                top: 20,
+                right: 70,
+                bottom: 60,
+            },
+            windows_sys::Win32::Foundation::RECT {
+                left: 78,
+                top: 20,
+                right: 120,
+                bottom: 60,
+            },
+        ];
+        // 图标区（上半、靠左）必须命中 —— 这是用户最顺手的位置
+        assert_eq!(
+            hit_test_item_rects(&rects, (20, 30)),
+            Some(0),
+            "图标上应命中"
+        );
+        // 音量行（下半、靠右）也命中
+        assert_eq!(
+            hit_test_item_rects(&rects, (50, 50)),
+            Some(0),
+            "音量行应命中"
+        );
+        // 第二项
+        assert_eq!(hit_test_item_rects(&rects, (100, 40)), Some(1));
+        // 项与项之间的空隙、以及边界外，都不命中
+        assert_eq!(
+            hit_test_item_rects(&rects, (74, 40)),
+            None,
+            "项间空隙不命中"
+        );
+        assert_eq!(
+            hit_test_item_rects(&rects, (70, 40)),
+            None,
+            "右边界外不命中"
+        );
+        assert_eq!(
+            hit_test_item_rects(&rects, (40, 61)),
+            None,
+            "下边界外不命中"
+        );
+        assert_eq!(hit_test_item_rects(&rects, (9, 40)), None, "左边界外不命中");
     }
 
     /// 静音优先于百分比：静音时显示「静音」而不是端点里那个与听觉不符的旧音量值。
     #[test]
     fn muted_device_shows_muted_instead_of_percent() {
         assert_eq!(
-            format_volume(&item(Some(80), Some(0.4), true, Some(true))),
+            format_volume(&item(Some(80), Some(0.4), true, Some(true)), false),
             "静音"
         );
         // ⚠️ 不能只断言「不含 40%」这类弱判据 —— 必须断言**就是**「静音」，
         //    否则「静音 + 百分比同时出现」这种回归照样能通过。
     }
 
-    /// 音量取整：`0.4` ⇒ `40%`，`0.996` ⇒ `100%`（防止 99% 因截断显示成 99 而非 100）。
+    /// ⚠️ **契约已变更**（2026-09-28）：音量显示改为**固定一位小数**（`40.0%`）——
+    ///   滚轮有 0.1% 步进档，只显示整数会让人以为滚轮没生效。
+    ///   保留的判据是「四舍五入到 0.1 个百分点」：`0.996` ⇒ `99.6%`。
+    /// ⚠️ **契约已变更**（2026-09-28）：音量显示的格式**由「音量精细调节」决定**——
+    ///   开 ⇒ 一位小数（`40.0%`），关 ⇒ 整数（`40%`）。
+    ///   保留的判据是「四舍五入、不是截断」：`0.996` ⇒ `100%`（关）/ `99.6%`（开）。
     #[test]
-    fn volume_is_rounded_to_nearest_percent() {
+    fn volume_rounds_rather_than_truncates() {
         assert_eq!(
-            format_volume(&item(None, Some(0.4), true, Some(false))),
+            format_volume(&item(None, Some(0.4), true, Some(false)), false),
             "40%"
         );
         assert_eq!(
-            format_volume(&item(None, Some(0.996), true, Some(false))),
-            "100%"
+            format_volume(&item(None, Some(0.996), true, Some(false)), false),
+            "100%",
+            "0.996 必须进位到 100%，不能显示成 99%（截断会让用户以为还差一点满格）"
+        );
+        assert_eq!(
+            format_volume(&item(None, Some(0.996), true, Some(false)), true),
+            "99.6%"
         );
         // 0.0 且未静音 = 音量真为 0 ⇒ 显示 0%（合法，不是 N/A）
         assert_eq!(
-            format_volume(&item(None, Some(0.0), true, Some(false))),
+            format_volume(&item(None, Some(0.0), true, Some(false)), false),
             "0%"
         );
     }
@@ -3454,7 +3939,7 @@ mod tests {
     fn metric_texts_do_not_contain_device_name() {
         let mut it = item(Some(50), Some(0.5), true, Some(false));
         it.name = "罗技MX Master".to_string();
-        for s in [format_battery(&it), format_volume(&it)] {
+        for s in [format_battery(&it), format_volume(&it, false)] {
             assert!(
                 !s.contains("罗技") && !s.contains("MX"),
                 "widget 上不应再出现设备名: {s}"
@@ -3738,10 +4223,12 @@ mod tests {
         let follow = estimate_widget_width(
             &eight,
             &Metrics::for_scales(120, TaskbarContentScale::FollowSystem),
+            false,
         );
         let def = estimate_widget_width(
             &eight,
             &Metrics::for_scales(120, TaskbarContentScale::Default),
+            false,
         );
         assert!(
             def < follow,
@@ -3751,7 +4238,7 @@ mod tests {
         //   内容不随系统缩放（底衬仍会变，但底衬不参与测宽）。
         assert_eq!(
             def,
-            estimate_widget_width(&eight, &Metrics::for_dpi(96)),
+            estimate_widget_width(&eight, &Metrics::for_dpi(96), false),
             "默认档的测宽必须与 100% 系统缩放下完全一致"
         );
     }
@@ -3788,8 +4275,8 @@ mod tests {
         let mut two = one.clone();
         two.push(item(Some(60), Some(0.6), true, Some(false)));
 
-        let w1 = estimate_widget_width(&one, &m);
-        let w2 = estimate_widget_width(&two, &m);
+        let w1 = estimate_widget_width(&one, &m, false);
+        let w2 = estimate_widget_width(&two, &m, false);
         assert!(
             w1 >= m.pad_x * 2 + m.icon + m.icon_text_gap,
             "单台至少要装下内边距 + 图标 + 间隙: {w1}"
@@ -3816,7 +4303,7 @@ mod tests {
             wider > narrower,
             "样本本身要能区分宽窄，否则本条无区分力（{wider} vs {narrower}）"
         );
-        let w = estimate_widget_width(&[it], &m);
+        let w = estimate_widget_width(&[it], &m, false);
         assert!(
             w >= m.pad_x * 2 + m.icon + m.icon_text_gap + wider,
             "宽度必须覆盖更宽的那段文本：{w} < 内边距 + 图标 + 间隙 + {wider}"
@@ -3833,9 +4320,9 @@ mod tests {
             .map(|i| item(Some(50 + i as i32), Some(0.5), true, Some(false)))
             .collect();
         // 真机可用区约 1300px（任务栏 2560px 减两端各 100px 再减任务栏自身内容）
-        let w = estimate_widget_width(&eight, &m96());
+        let w = estimate_widget_width(&eight, &m96(), false);
         assert!(w < 1300, "8 台估算过宽，会找不到避让槽: {w}");
-        let w120 = estimate_widget_width(&eight, &Metrics::for_dpi(120));
+        let w120 = estimate_widget_width(&eight, &Metrics::for_dpi(120), false);
         assert!(w120 < 1300, "125% 缩放下 8 台估算过宽: {w120}");
         assert!(w120 > w, "125% 必须比 100% 宽: {w120} vs {w}");
     }
