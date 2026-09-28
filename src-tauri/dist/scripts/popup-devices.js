@@ -18,6 +18,35 @@ let trayDevices = [];
 //   而 `popup-audio.js` 先于本文件加载，故那份状态**必须**在公共层。
 // ⛔ 名单按**显示名**存、只用于**文案**；真正的钉/移一律由后端按身份键裁决。
 
+// ── 配置派生量 → 本页运行态（单一来源）──────────────────
+//
+// ⭐ 返回「是否真的变了」：**只有变了才需要重渲染**。
+//   `config-changed` 发得很频繁（改音量微调/静音锁/主题…都会发），
+//   无条件 `renderDevices()` 是白做功，还会打断 hover 态。
+function applyDeviceConfig(config) {
+  const names = config.device_names || {};
+  const groups = config.device_groups || {};
+  const hidden = config.hidden_devices || [];
+  const hiddenG = config.hidden_groups || [];
+  const sysBt = !!config.use_system_bt;
+  const tray = config.tray_devices || [];
+  const changed =
+    JSON.stringify(names) !== JSON.stringify(deviceNames) ||
+    JSON.stringify(groups) !== JSON.stringify(deviceGroups) ||
+    JSON.stringify(hidden) !== JSON.stringify(hiddenDevices) ||
+    JSON.stringify(hiddenG) !== JSON.stringify(hiddenGroups) ||
+    sysBt !== useSystemBt ||
+    JSON.stringify(tray) !== JSON.stringify(trayDevices);
+  if (!changed) return false;
+  deviceNames = names;
+  deviceGroups = groups;
+  hiddenDevices = hidden;
+  hiddenGroups = hiddenG;
+  useSystemBt = sysBt;
+  trayDevices = tray;
+  return true;
+}
+
 // ── 本地快照水合（页面重载/重启后的秒显数据源）──────────
 
 const SNAPSHOT_KEY = "pm_devices_snapshot";
@@ -39,12 +68,7 @@ async function hydrateFromSnapshot() {
     if (!Array.isArray(snap.devices) || snap.devices.length === 0) return false;
     // 渲染依赖的配置派生量先行就绪（本地读取，毫秒级）
     const config = await invoke("get_config");
-    hiddenDevices = config.hidden_devices || [];
-    hiddenGroups = config.hidden_groups || [];
-    deviceNames = config.device_names || {};
-    deviceGroups = config.device_groups || {};
-    useSystemBt = config.use_system_bt || false;
-    trayDevices = config.tray_devices || [];
+    applyDeviceConfig(config);
     allDevices = snap.devices;
     // ⭐ 快照水合路径同样要拉已钉名单（无真实请求时的快速首屏）
     window.refreshTaskbarPinnedNames();
@@ -92,12 +116,7 @@ async function loadDevices(fresh24g = false, opts = {}) {
     // 手动刷新走 get_devices_fresh：强制现查 2.4G 电量（绕过缓存，鼠标休眠时较慢）
     allDevices = await invoke(fresh24g ? "get_devices_fresh" : "get_devices");
     const config = await invoke("get_config");
-    hiddenDevices = config.hidden_devices || [];
-    hiddenGroups = config.hidden_groups || [];
-    deviceNames = config.device_names || {};
-    deviceGroups = config.device_groups || {};
-    useSystemBt = config.use_system_bt || false;
-    trayDevices = config.tray_devices || [];
+    applyDeviceConfig(config);
     renderDevices();
     // ⭐ 真实数据就绪后拉一次「已钉到任务栏」名单（右键菜单文案读它）。
     //    不 await：菜单在用户右键时才用，届时早已拿到；不阻塞首屏渲染。
@@ -461,6 +480,24 @@ onTauriEvent("24g-battery-updated", scheduleSilentRefresh);
 onTauriEvent("bt-battery-updated", scheduleSilentRefresh);
 onTauriEvent("devices-changed", scheduleSilentRefresh);
 
+// ⛔ 本页原先**完全没有** `config-changed` 订阅 ⇒ `deviceNames` 只在
+//   `loadDevices` / 快照水合时刷新。而「在音量控制页改名/恢复默认」走的是
+//   `rename_device` 命令，它只**发事件**、不回调本页 ⇒ 本页标题停留在旧名，
+//   要等下次整表重拉（重开弹窗/手动刷新/设备增删推送）才更新。
+//   ⛔ 这正是「只有设备页 → 音量页能同步，反过来不行」的原因：音量页订阅了
+//   `audio-devices-changed`，本页没有对应订阅。
+// ⚠️ 兜底：无 payload 时**只取 config**（不整表重拉设备）——设备枚举要几百毫秒，
+//   而这类事件要的仅仅是名字/分组/隐藏这几项派生量。
+onTauriEvent("config-changed", async (event) => {
+  let cfg = event && event.payload ? event.payload : null;
+  if (!cfg) {
+    const fn = getInvoke();
+    if (!fn) return;
+    cfg = await fn("get_config");
+  }
+  if (applyDeviceConfig(cfg)) renderDevices();
+});
+
 function showContextMenu(x, y, dev) {
   hideAllContextMenus();
   const invoke = getInvoke();
@@ -476,8 +513,11 @@ function showContextMenu(x, y, dev) {
     hideAllContextMenus();
     showRenameDialog({
       deviceName: dev.name,
+      // ☽ “”恢复默认”按钮的可见性走两级查找：别名可能只落在长形态键上
+      //    （从音量页改名的情形），否则按钮不出现、
+      //    用户没法清掉出别名。
       displayName: getDisplayName(dev, deviceNames),
-      nameSource: deviceNames[dev.name],
+      nameSource: window.lookupDeviceAlias(deviceNames, dev.name),
       onUpdate: (names) => { deviceNames = names; },
       onRender: renderDevices,
     });

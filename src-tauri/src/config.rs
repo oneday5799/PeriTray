@@ -469,6 +469,74 @@ fn backfill_device_name_keys(config: &mut Config) -> bool {
     true
 }
 
+/// 把 `PinnedDevice.alias`（**只有**任务栏 tooltip 认它）折进全局 `device_names`。
+///
+/// ⛔ **为什么需要它**：`resolved_display_name` 的第 1 级是「固定项自带的 alias」，
+///   其余所有表面（设备信息页、音量页、托盘、设置页）都只认 `device_names`
+///   ⇒ 旧配置里带 alias 的固定项会出现**「任务栏一个名、别处另一个名」**。
+///   `alias` 字段如今**没有任何 UI 入口**（旧选择器已退役，只剩
+///   `try_toggle_pinned_taskbar_device` 的形参），所以它是**纯历史数据**——
+///   折进 `device_names` 既保住用户当初起的名，又让两侧口径一致。
+///
+/// **键取 `fallback` 的短名部分**（`n:<core_name>`）——与 `resolved_display_name`
+/// 构造 `fallback` 的算法是同一个（`DeviceKey::Name(core_name(name))`），
+/// 写出来的键因此正是各表面查找时算出的那个短名。
+///
+/// **不覆盖已存在的 `device_names` 条目**（先到者为准）：用户后来在别处改过名就以那个为准。
+/// 返回 `true` 表示至少写入了一条。
+fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
+    // 先收集再改：`device_names` 的插入与 `alias` 的清空都会改变被遍历的结构。
+    //
+    // ⭐⭐ **折叠后必须清掉 `alias` 本身**（P0，用户 2026-09-28 评审定案）：
+    //   `resolved_display_name` 的第 1 级是 `pin.alias`、**优先于** `device_names`。
+    //   若只折进全局表却留着 alias，用户日后全局改名为 Y 时：
+    //   任务栏仍显示 alias「X」、其余各处显示 Y ⇒ **刚修掉的不一致原样复发**，
+    //   而且只在旧配置（带 alias）上出现，极难联想到是这里。
+    //   ⇒ 这一级历史层级就此退休：值已进全局表，别名不再有独立含义。
+    //
+    // ⚠️ `device_names` 已有同键条目时**不覆盖**（用户后来在别处改过名，以那个为准），
+    //   但 alias **照样清**——否则又变成「任务栏一个名、别处另一个名」。
+    //
+    // ⚠️ 算不出短名（既无 `n:` 兜底键、`key` 也不是 `n:` 形态）时**保留 alias**：
+    //   宁可留着不一致，也不能把用户当初起的名丢掉。
+    let mut additions: Vec<(String, String)> = Vec::new();
+    let mut to_clear: Vec<usize> = Vec::new();
+    for (i, p) in config.pinned_taskbar_devices.iter().enumerate() {
+        let Some(alias) = p.alias.as_deref().map(str::trim).filter(|a| !a.is_empty()) else {
+            continue;
+        };
+        // `fallback` 本身就是 `n:<短名>`；退化时从 `key` 的 `n:` 形态再取一次。
+        // ⚠️ 一律取**owned** `String`：`core_name` 返回 String，与 `&str` 混用会
+        //    逼出借用技巧（曾写成 `Box::leak` ⇒ 直接内存泄漏，禁）。
+        let short: Option<String> = p
+            .fallback
+            .as_deref()
+            .and_then(|f| f.strip_prefix("n:"))
+            .map(str::to_string)
+            .or_else(|| p.key.strip_prefix("n:").map(core_name));
+        let Some(short) = short
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if !config.device_names.contains_key(&short) {
+            additions.push((short, alias.to_string()));
+        }
+        to_clear.push(i);
+    }
+    if additions.is_empty() && to_clear.is_empty() {
+        return false;
+    }
+    for (k, v) in additions {
+        config.device_names.insert(k, v);
+    }
+    for i in to_clear {
+        config.pinned_taskbar_devices[i].alias = None;
+    }
+    true
+}
+
 /// 应用一次设备改名：**归并写入 / 归并删除**（方案 D 的写入侧，纯函数，便于单测）。
 ///
 /// `original` 是前端传来的**名字**（音量页 = 带括号原串 `扬声器 (DUNU DTC100pro)`；
@@ -489,6 +557,10 @@ fn backfill_device_name_keys(config: &mut Config) -> bool {
 /// 才能 `emit`，直接单测代价高；而这段归并逻辑恰恰**必须**被单测钉住（它是静默失效的来源）。
 /// 抽成纯函数后既可直接测，也与本仓 `normalize_config` 的既有风格一致。
 pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) -> bool {
+    // ⭐ **后端也要 trim**（P4）：前端 `showRenameDialog` 虽有 `input.value.trim()`，
+    //   但命令是公开入口，直接调用可存进 `"  "` ⇒ 各表面的 `if (custom)` 判空
+    //   失败、静默回落原名，表现为「改名没生效」且无处可查。
+    let new_name = new_name.trim();
     let short = core_name(original);
     if new_name.is_empty() || new_name == original {
         // 恢复默认：**删净所有指向同一台设备的键**，不能只删入口传来的那一个形态。
@@ -506,18 +578,56 @@ pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) 
             .retain(|k, _| k != original && core_name(k) != target);
         return config.device_names.len() != before;
     }
-    let mut changed = false;
-    if config.device_names.get(original).map(String::as_str) != Some(new_name) {
-        config
-            .device_names
-            .insert(original.to_string(), new_name.to_string());
-        changed = true;
+    // ⭐ 归并集 = {入口键, 短名键} ∪ {**已存在的**同 `core_name` 键}（C）。
+    //
+    // ⛔ 为什么必须扫已存在的键：只写前两条时，若配置里还留着**另一种**长形态的
+    //   键（历史条目、或同一台设备有两个不同端点名如 `扬声器 (X)` 与 `耳机 (X)`），
+    //   它会保持旧值 ⇒ 配置里长期存在**互相矛盾的两条别名**。显示上暂时无害
+    //   （读取永远短名键优先，加载时 `backfill_device_name_keys` 也保证短名键存在），
+    //   但这依赖一条**隐式不变量**；哪天有人调整读取顺序，它立刻变成显示 bug。
+    //   ⇒ 与删除侧（按 `core_name` 全删）保持对称：写也按 `core_name` 全写。
+    //
+    // ⚠️ 先收集再插入：`HashMap` 迭代期间不得写入。
+    let mut keys: Vec<String> = Vec::new();
+    for k in [original.to_string(), short.clone()] {
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
     }
-    if config.device_names.get(&short).map(String::as_str) != Some(new_name) {
-        config.device_names.insert(short, new_name.to_string());
-        changed = true;
+    for k in config.device_names.keys() {
+        if !keys.contains(k) && core_name(k) == short {
+            keys.push(k.clone());
+        }
+    }
+    let mut changed = false;
+    for k in keys {
+        if config.device_names.get(&k).map(String::as_str) != Some(new_name) {
+            config.device_names.insert(k, new_name.to_string());
+            changed = true;
+        }
     }
     changed
+}
+
+/// 显示名长度上限（**只管显示，不管数据**）。
+///
+/// ⭐ 为什么需要：任务栏窗口是**原生分层窗**，宽度由文字估算撑开（`current_content()`
+///   的估宽按「宁可高估、不可低估」），一个几百字的别名会把窗口撑到超出屏幕。
+///   而四个网页表面靠 CSS `text-overflow: ellipsis` 天然截断，不需要这个上限。
+/// ⚠️ **只加在渲染前的最后一步**（`resolved_display_name` / `resolve_audio_display_name`），
+///   **不能**加在 `resolve_device_name` 上——重命名对话框的输入框预填也走那条路，
+///   一旦截断，用户编辑长名字时会看到被削过的初值，保存就把别名毁了。
+///   配置文件里始终保留用户原意。
+pub const MAX_DISPLAY_NAME_CHARS: usize = 32;
+
+/// 截断超长显示名，尾部补省略号（按**字符**计，不按字节——中文名按字节会砍掉一半汉字）。
+pub fn clamp_display_name(name: &str) -> String {
+    if name.chars().count() <= MAX_DISPLAY_NAME_CHARS {
+        return name.to_string();
+    }
+    let mut out: String = name.chars().take(MAX_DISPLAY_NAME_CHARS - 1).collect();
+    out.push('…');
+    out
 }
 
 /// 按「短名优先、原名回退」解析设备展示名（方案 D 的读取侧，三级回退）。
@@ -525,8 +635,14 @@ pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) 
 /// ```
 /// 1) device_names[core_name(raw_name)]   → 命中即用   ← 音量页与设备页靠这条统一
 /// 2) device_names[raw_name]              → 回退（历史条目 / 原串本身即短名）
-/// 3) raw_name                            → 原名
+/// 3) 任一 `core_name` 相同的键（键名排序取首个）← 防「一个形态空白、另一个有效」
+/// 4) raw_name                            → 原名
 /// ```
+///
+/// ⛔ 各级都必须跳过**空白**值：JS 侧 `if (custom)` 把 `""` 判假并回落原名，
+///   Rust 侧若照收就会在任务栏/托盘/通知里显示空白 ⇒ 两侧口径必须一致。
+/// ⚠️ 本函数与前端 `common.js` 的 `lookupDeviceAlias` 是**同一个判据的两份实现**，
+///   改一侧必须同步另一侧，否则又变成「同一个设备两套名字」。
 ///
 /// ⚠️ **为什么必须有第 1 级**：音量页用的 `AudioDevice.name` 是**未归一化原串**
 /// （`扬声器 (DUNU DTC100pro)`），而设备页用的 `Device.name` 是 `core_name` **短名**
@@ -537,11 +653,49 @@ pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) 
 /// ⛔ **不要用 `Device.name` 反推身份**（见 `device_identity.rs` 同名纪律）——
 /// 本函数只做**显示名解析**，不参与身份判定。
 pub fn resolve_device_name(raw_name: &str, config: &Config) -> String {
-    if let Some(v) = config.device_names.get(&core_name(raw_name)) {
+    resolve_device_name_in(raw_name, &config.device_names)
+}
+
+/// 同 [`resolve_device_name`]，但只吃**改名表本身**。
+///
+/// ⭐ 存在的理由：`battery_notify` 为避免在通知循环里持配置锁，只克隆了
+/// `device_names` 这一张表（`Config` 其余字段都很沉）。**判据必须与上面那个
+/// 函数逐字一致**（AGENTS.md「复用同一判据 = 同一函数」），故这里只做转发，
+/// 不复制 `core_name` 查找逻辑。
+pub fn resolve_device_name_in(
+    raw_name: &str,
+    device_names: &std::collections::HashMap<String, String>,
+) -> String {
+    // ⚠️⚠️ **空白值必须当「无别名」**（A）：`get()` 命中空串会 `return ""`，
+    //   而 JS 侧 `formatDeviceName` 的 `if (custom)` 把 `""` 判假、回落原名
+    //   ⇒ 同一个设备在**任务栏 tooltip / 托盘菜单 / 低电量通知**显示空白，
+    //   四个页面却正常。只有手改配置才可能写进空值，但「两处实现同一判据」
+    //   的老毛病就是这样一点点长出来的。
+    if let Some(v) = device_names
+        .get(&core_name(raw_name))
+        .filter(|v| !v.trim().is_empty())
+    {
         return v.clone();
     }
-    if let Some(v) = config.device_names.get(raw_name) {
+    if let Some(v) = device_names.get(raw_name).filter(|v| !v.trim().is_empty()) {
         return v.clone();
+    }
+    // ⭐ 第 4 级：**任一形态**的同源键有有效别名就用它。
+    //
+    // ⛔ 为什么必须有：前两级只看 `core_name(raw)` 与 `raw` 两个**确定的**键。
+    //   当「短名键是空白、长形态键有值」时（手改配置 / 历史条目），
+    //   音量页走长形态能取到别名、设备页走短名却只能回落原名
+    //   ⇒ **同一设备两套名字**，正是本轮一直在消灭的那类不一致。
+    //
+    // ⚠️ 多个同源键同时有效时按**键名排序**取第一个：`HashMap` 迭代顺序不确定，
+    //   不排序就会「同一个配置每次启动显示的名字可能不同」。
+    if let Some(v) = device_names
+        .iter()
+        .filter(|(k, v)| core_name(k) == core_name(raw_name) && !v.trim().is_empty())
+        .min_by_key(|(k, _)| k.as_str())
+        .map(|(_, v)| v.clone())
+    {
+        return v;
     }
     raw_name.to_string()
 }
@@ -593,6 +747,10 @@ fn normalize_config(config: &mut Config) -> bool {
     // ⭐ 历史改名回填（方案 D）：给「带括号原串」条目补一条 `core_name` 短名键。
     // 纯内存归并 ⇒ 符合本函数的「不持锁、不做 I/O」契约。
     changed |= backfill_device_name_keys(config);
+
+    // ⭐ 固定项自带别名折进全局改名表：让「只有任务栏认 alias」的历史数据
+    // 对所有表面可见（详见该函数注释）。放在回填之后 ⇒ alias 不会抢已有短名键。
+    changed |= fold_pinned_alias_into_device_names(config);
 
     changed
 }
@@ -1320,12 +1478,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_device_rename, claim_revision, config_lock_held, config_path,
+        apply_device_rename, claim_revision, clamp_display_name, config_lock_held, config_path,
         default_battery_refresh_secs, default_battery_thresholds, enqueue_persist,
-        finalize_before_persist, flush_persist, merge_config, migrate_taskbar_switch,
-        normalize_config, parse_config_text, resolve_device_name, revision_is_latest,
-        taskbar_widget_visible, with_config, write_config_atomically, Config, PinnedDevice,
-        MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED, VALID_TASKBAR_POSITIONS,
+        finalize_before_persist, flush_persist, fold_pinned_alias_into_device_names, merge_config,
+        migrate_taskbar_switch, normalize_config, parse_config_text, resolve_device_name,
+        resolve_device_name_in, revision_is_latest, taskbar_widget_visible, with_config,
+        write_config_atomically, Config, PinnedDevice, MAX_DISPLAY_NAME_CHARS, MERGED_FIELD_NAMES,
+        PERSIST_DONE, PERSIST_QUEUED, VALID_TASKBAR_POSITIONS,
     };
     use std::sync::atomic::Ordering;
 
@@ -2286,28 +2445,33 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(resolve_device_name("", &cfg), "", "空名不得 panic");
     }
 
-    /// ⛔ **反向注入靶子（T2-4）**：若回填被删掉，上面那条「音量页原串 ⇒ 自定义名」**必须转红**。
+    /// ⭐ 短名入口在**只有长形态键**时也必须解析到自定义名。
     ///
-    /// 本用例把「方案 D 的收益」独立钉一遍：**只有原串键**（历史数据）时，
-    /// 设备页用的**短名**也必须能解析到自定义名 —— 这只有回填能做到
-    /// （`core_name("DUNU DTC100pro") == "DUNU DTC100pro"`，两个键不同 ⇒ 必须真的有那条键）。
+    /// ⚠️ 契约已变更（2026-09-28）：本用例原先断言「未回填时设备页**拿不到**名」
+    ///   （那是在记录一个待修的静默失效）。现在 `resolve_device_name_in` 多了
+    ///   **第 3 级**（任一同 `core_name` 键），所以**回填之前**就已经能解析到了。
+    ///   回填仍然有价值：它让「短名键」存在，使绝大多数查询走 O(1) 的前两级、
+    ///   不必每次扫全表 —— 但它**不再是「能不能解析到」的前提**。
     #[test]
-    fn resolve_device_name_requires_backfilled_key_for_device_page() {
+    fn resolve_device_name_finds_the_alias_from_any_form() {
         let mut cfg = Config::default();
         // 模拟「历史数据」：只有带括号原串那一条（未经归一化的旧配置）
         cfg.device_names
             .insert("扬声器 (DUNU DTC100pro)".to_string(), "我的DAC".to_string());
 
-        // ⚠️ 此刻短名键**不存在** —— 这正是「未回填」的世界：
-        //    设备页（按短名查）会**回退到原名** ⇒ 用户看到「改了名的地方没变」
+        // 未回填：短名键不存在，但第 3 级按 `core_name` 找到长形态那条 ⇒ 照样命中
         assert_eq!(
             resolve_device_name("DUNU DTC100pro", &cfg),
-            "DUNU DTC100pro",
-            "未回填时，设备页拿不到自定义名（这就是要修的静默失效）"
+            "我的DAC",
+            "短名入口必须能从长形态键解析到（否则同一设备两套名字）"
         );
 
-        // 归一化（= 加载路径会做的事）之后，同一个查询**必须**命中自定义名
+        // 归一化之后：短名键已存在，走 O(1) 的第 1 级，结论一致
         normalize_config(&mut cfg);
+        assert!(
+            cfg.device_names.contains_key("DUNU DTC100pro"),
+            "回填应补出短名键"
+        );
         assert_eq!(
             resolve_device_name("DUNU DTC100pro", &cfg),
             "我的DAC",
@@ -2414,6 +2578,303 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
             "扬声器 (DUNU DTC100pro)"
         ));
         assert!(cfg.device_names.is_empty(), "实际 {cfg:?}");
+    }
+
+    // ── 固定项自带别名（`PinnedDevice.alias`）折进全局改名表 ──────────
+
+    /// ⭐ 旧配置里带 alias 的固定项 ⇒ 别名必须对**所有表面**可见，
+    /// 否则任务栏 tooltip 一个名、别处另一个名（这正是要修的不一致）。
+    #[test]
+    fn fold_pinned_alias_becomes_a_global_device_name() {
+        // ⚠️ 用结构体字面量而非「`default()` 之后再赋字段」——
+        //    后者会命中 clippy::field_reassign_with_default（闸门按 -D warnings 拦截）。
+        let mut cfg = Config {
+            pinned_taskbar_devices: vec![PinnedDevice {
+                key: "c:abc".to_string(),
+                // `fallback` = `n:<core_name(显示名)>`，与 `resolved_display_name` 同算法
+                fallback: Some("n:DUNU DTC100pro".to_string()),
+                alias: Some("我的DAC".to_string()),
+            }],
+            ..Config::default()
+        };
+
+        assert!(fold_pinned_alias_into_device_names(&mut cfg));
+
+        assert_eq!(
+            cfg.device_names.get("DUNU DTC100pro").map(String::as_str),
+            Some("我的DAC")
+        );
+        // ⛔ 折叠后**任何表面**都必须解析到同一个名字（此处以共享判据为准）
+        assert_eq!(resolve_device_name("DUNU DTC100pro", &cfg), "我的DAC");
+        assert_eq!(
+            resolve_device_name("扬声器 (DUNU DTC100pro)", &cfg),
+            "我的DAC",
+            "音频端点原串也必须解析到（音量页/托盘靠这条）"
+        );
+    }
+
+    /// ⛔ **不得覆盖**已有的 `device_names` 条目：用户后来在别处改过名就以那个为准；
+    /// 空 alias / 无 `n:` 兜底键 / 非空白的兜底键都不折叠。
+    #[test]
+    fn fold_pinned_alias_respects_existing_and_ignores_garbage() {
+        let mut cfg = Config {
+            device_names: [("DUNU DTC100pro".to_string(), "用户后来改的名".to_string())]
+                .into_iter()
+                .collect(),
+            pinned_taskbar_devices: vec![
+                // ① 已有条目 ⇒ 不覆盖
+                PinnedDevice {
+                    key: "c:abc".to_string(),
+                    fallback: Some("n:DUNU DTC100pro".to_string()),
+                    alias: Some("旧别名".to_string()),
+                },
+                // ② alias 为空白 ⇒ 跳过
+                PinnedDevice {
+                    key: "c:def".to_string(),
+                    fallback: Some("n:X".to_string()),
+                    alias: Some("   ".to_string()),
+                },
+                // ③ alias 为 None ⇒ 跳过
+                PinnedDevice {
+                    key: "c:ghi".to_string(),
+                    fallback: Some("n:Y".to_string()),
+                    alias: None,
+                },
+                // ④ 没有 `n:` 形态的兜底键 ⇒ 无从得知挂哪个短名，跳过
+                PinnedDevice {
+                    key: "c:jkl".to_string(),
+                    fallback: Some(r"i:USB\VID_1".to_string()),
+                    alias: Some("不该出现".to_string()),
+                },
+            ],
+            ..Config::default()
+        };
+
+        // 返回 true：① 号条目的 alias 被**清空**（这一级历史层级就此退休）
+        assert!(fold_pinned_alias_into_device_names(&mut cfg));
+
+        assert_eq!(
+            cfg.device_names.get("DUNU DTC100pro").map(String::as_str),
+            Some("用户后来改的名"),
+            "已有条目不得被 alias 覆盖"
+        );
+        assert!(
+            !cfg.device_names.contains_key("X")
+                && !cfg.device_names.contains_key("Y")
+                && !cfg.device_names.contains_key(r"i:USB\VID_1"),
+            "空/None/非 n: 前缀的条目都不得写入，实际 {:?}",
+            cfg.device_names
+        );
+
+        // ① 已有全局条目 ⇒ alias 仍要清：留着它会让任务栏继续显示旧名（P0）
+        assert_eq!(
+            cfg.pinned_taskbar_devices[0].alias, None,
+            "alias 必须退休，否则它作为更高优先级把任务栏拉回旧名"
+        );
+        // ② 无从迁移（空白别名）⇒ 原样保留
+        assert_eq!(cfg.pinned_taskbar_devices[1].alias.as_deref(), Some("   "));
+        // ③ 本来就是 None
+        assert_eq!(cfg.pinned_taskbar_devices[2].alias, None);
+        // ④ 算不出短名 ⇒ **保留** alias：宁可留不一致，也不能把用户起的名丢掉
+        assert_eq!(
+            cfg.pinned_taskbar_devices[3].alias.as_deref(),
+            Some("不该出现"),
+            "迁移不了时必须原样保留"
+        );
+    }
+
+    /// ⭐⭐ P0 的核心防线：`pin.alias` 折叠后必须清空。
+    ///
+    /// ⛔ 可证伪：去掉 `to_clear` 那段（只折进 `device_names`、保留 alias），
+    ///   本测试转红 —— 届时用户全局改名后任务栏显示旧 alias、别处显示新名。
+    #[test]
+    fn fold_pinned_alias_retires_the_alias_level() {
+        let mut cfg = Config {
+            pinned_taskbar_devices: vec![PinnedDevice {
+                key: "c:abc".to_string(),
+                fallback: Some("n:小爱音箱-9205".to_string()),
+                alias: Some("旧别名".to_string()),
+            }],
+            ..Config::default()
+        };
+
+        assert!(fold_pinned_alias_into_device_names(&mut cfg));
+
+        assert_eq!(
+            cfg.device_names.get("小爱音箱-9205").map(String::as_str),
+            Some("旧别名")
+        );
+        assert!(
+            cfg.pinned_taskbar_devices[0].alias.is_none(),
+            "alias 必须清空：它比 device_names 优先级更高，留着就压住了全局改名"
+        );
+        // 清空后任务栏与其它表面走**同一条**判据
+        assert_eq!(
+            crate::device_identity::resolved_display_name(
+                "小爱音箱-9205",
+                "c:abc",
+                &cfg.pinned_taskbar_devices,
+                &cfg
+            ),
+            "旧别名"
+        );
+    }
+
+    /// `resolve_device_name_in`（只吃改名表）必须与 `resolve_device_name`（吃整份
+    /// Config）**逐字同判** —— 前者是 `battery_notify` 持表快照时的入口。
+    #[test]
+    fn resolve_device_name_in_matches_the_config_variant() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("DUNU DTC100pro".to_string(), "我的DAC".to_string());
+
+        for raw in ["DUNU DTC100pro", "扬声器 (DUNU DTC100pro)", "别的设备"] {
+            assert_eq!(
+                resolve_device_name(raw, &cfg),
+                resolve_device_name_in(raw, &cfg.device_names),
+                "两种入口对 {raw:?} 必须一致"
+            );
+        }
+    }
+
+    // ── A：空白别名必须当「无别名」 ──────────────────────────
+
+    /// ⛔ A 的可证伪判据：`get()` 命中空串/纯空白时必须**回落原名**。
+    ///   修复前 `resolve_device_name_in` 会 `return ""` ⇒ 任务栏 tooltip /
+    ///   托盘菜单 / 低电量通知显示**空白**，而四个页面（JS 的 `if (custom)`
+    ///   判假）正常显示原名 ⇒ 同一设备两套名字。
+    #[test]
+    fn blank_alias_falls_back_to_the_raw_name() {
+        for blank in [
+            "", "   ", "	
+",
+        ] {
+            let mut cfg = Config::default();
+            cfg.device_names
+                .insert("DUNU DTC100pro".to_string(), blank.to_string());
+            cfg.device_names
+                .insert("扬声器 (DUNU DTC100pro)".to_string(), blank.to_string());
+
+            assert_eq!(
+                resolve_device_name("DUNU DTC100pro", &cfg),
+                "DUNU DTC100pro",
+                "空白别名（{blank:?}）必须回落原名"
+            );
+            assert_eq!(
+                resolve_device_name("扬声器 (DUNU DTC100pro)", &cfg),
+                "扬声器 (DUNU DTC100pro)",
+                "空白别名（{blank:?}）必须回落原名"
+            );
+        }
+    }
+
+    /// 空白别名不得**遮蔽**另一个形态的有效别名：短名键空、长形态键有值时，
+    /// 应回退到长形态那条，而不是直接返回原名。
+    #[test]
+    fn blank_alias_does_not_shadow_a_valid_one() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("DUNU DTC100pro".to_string(), "  ".to_string());
+        cfg.device_names
+            .insert("扬声器 (DUNU DTC100pro)".to_string(), "我的DAC".to_string());
+
+        assert_eq!(
+            resolve_device_name("DUNU DTC100pro", &cfg),
+            "我的DAC",
+            "短名键是空白时应继续回退到长形态的有效别名"
+        );
+    }
+
+    // ── B：显示名长度上限 ────────────────────────────────────
+
+    /// ⭐ 超长显示名必须被截断并补省略号，且**按字符而非字节**——
+    ///   按字节砍会把汉字劈开（`chars().count()` 才是「几个字」）。
+    #[test]
+    fn clamp_display_name_counts_chars_not_bytes() {
+        assert_eq!(clamp_display_name("短名"), "短名");
+        let exact: String = "字".repeat(MAX_DISPLAY_NAME_CHARS);
+        assert_eq!(clamp_display_name(&exact), exact, "恰好到上限不应截断");
+
+        let over: String = "字".repeat(MAX_DISPLAY_NAME_CHARS + 10);
+        let out = clamp_display_name(&over);
+        assert_eq!(out.chars().count(), MAX_DISPLAY_NAME_CHARS);
+        assert!(out.ends_with('…'), "截断后必须补省略号，实际 {out:?}");
+
+        let ascii = "a".repeat(MAX_DISPLAY_NAME_CHARS + 1);
+        assert_eq!(
+            clamp_display_name(&ascii).chars().count(),
+            MAX_DISPLAY_NAME_CHARS
+        );
+    }
+
+    /// ⭐ 截断只发生在**渲染前**，重命名对话框的初值（走 `resolve_device_name`）
+    ///   必须仍是完整别名 —— 否则用户编辑长名字会存回一个被削过的值。
+    #[test]
+    fn resolve_device_name_never_truncates() {
+        let long_alias = "超长别名".repeat(40);
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("DUNU DTC100pro".to_string(), long_alias.clone());
+
+        assert_eq!(
+            resolve_device_name("DUNU DTC100pro", &cfg),
+            long_alias,
+            "解析函数不得截断（重命名对话框的初值走它）"
+        );
+        assert_eq!(
+            crate::device_identity::resolved_display_name("DUNU DTC100pro", "c:abc", &[], &cfg)
+                .chars()
+                .count(),
+            MAX_DISPLAY_NAME_CHARS,
+            "渲染层才截断"
+        );
+    }
+
+    // ── C：写入时归并**所有**已存在的同 core_name 键 ──────────
+
+    /// ⛔ C 的可证伪判据：从**短名**入口改名时，配置里已存在的**长形态**键
+    ///   也必须被更新。修复前它保持旧值 ⇒ 配置里长期躺着互相矛盾的两条别名。
+    #[test]
+    fn rename_heals_every_existing_form_of_the_same_device() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("扬声器 (DUNU DTC100pro)".to_string(), "旧名A".to_string());
+        cfg.device_names
+            .insert("耳机 (DUNU DTC100pro)".to_string(), "旧名B".to_string());
+
+        assert!(apply_device_rename(&mut cfg, "DUNU DTC100pro", "我的DAC"));
+
+        for k in [
+            "DUNU DTC100pro",
+            "扬声器 (DUNU DTC100pro)",
+            "耳机 (DUNU DTC100pro)",
+        ] {
+            assert_eq!(
+                cfg.device_names.get(k).map(String::as_str),
+                Some("我的DAC"),
+                "形态 {k:?} 未被归并，实际 {:?}",
+                cfg.device_names
+            );
+        }
+    }
+
+    /// ⛔ 归并**不得**波及其他设备：不同 `core_name` 的键必须原样保留。
+    #[test]
+    fn rename_heal_does_not_touch_other_devices() {
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("DUNU DTC100pro".to_string(), "我的DAC".to_string());
+        cfg.device_names
+            .insert("OPPO Enco X".to_string(), "别人的名".to_string());
+
+        apply_device_rename(&mut cfg, "DUNU DTC100pro", "新DAC");
+
+        assert_eq!(
+            cfg.device_names.get("OPPO Enco X").map(String::as_str),
+            Some("别人的名"),
+            "别的设备不得被波及，实际 {:?}",
+            cfg.device_names
+        );
     }
 
     /// **重复写同一个名字 ⇒ 第二次报告「无变化」**（避免落盘层误判为配置变更）。

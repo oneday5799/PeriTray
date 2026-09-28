@@ -324,13 +324,8 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
         let notify = crate::config::with_config(|c| c.shortcut_switch_notify);
         if notify {
             let display = crate::config::with_config(|c| {
-                c.device_names.get(&next.name).cloned().unwrap_or_else(|| {
-                    if c.simplify_device_names {
-                        crate::tray::simplify_device_name(&next.name).to_string()
-                    } else {
-                        next.name.clone()
-                    }
-                })
+                // ⭐ 与托盘音频菜单共用同一判据（`tray::resolve_audio_display_name`）
+                crate::tray::resolve_audio_display_name(&next.name, c)
             });
             #[cfg(target_os = "windows")]
             {

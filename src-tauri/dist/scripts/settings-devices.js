@@ -15,8 +15,14 @@ async function loadDevicesAsync() {
     devices = await invoke("get_devices");
     deviceGroups = config.device_groups || {};
 
-    // 设备列表或分组映射无变化时跳过 DOM 重建，避免闪烁
-    const key = devices.map(d => d.name).join(",") + "|" + JSON.stringify(deviceGroups);
+    // 设备列表 / 分组映射 / **别名表** 无变化时跳过 DOM 重建，避免闪烁。
+    // ⛔ 别名表必须算进 key（用户 2026-09-28 报「设置页不跟着改名刷新」）：
+    //   渲染出来的文字来自 `getDisplayName(dev, config.device_names)`，
+    //   而 key 里只有设备名与分组 ⇒ 改完名这三个都没变 ⇒ key 相同 ⇒ 直接
+    //   `return`，DOM 留着**旧别名**。守卫本身是对的（防闪烁），只是漏了一个输入。
+    const key = devices.map(d => d.name).join(",")
+      + "|" + JSON.stringify(deviceGroups)
+      + "|" + JSON.stringify(config.device_names || {});
     if (key === prevRenderKey) return;
     prevRenderKey = key;
 
@@ -108,7 +114,12 @@ function renderGroups() {
 
       const nameEl = document.createElement("div");
       nameEl.className = "card-item-name";
-      nameEl.textContent = dev.name;
+      // ⭐ 必须走 `getDisplayName`（别名两级查找）：此前直接写 `dev.name`，
+      //    导致**在弹出窗口改过名、设置页仍显示原名**——同一台设备两处名字不一致。
+      //    `title` 一并给出别名，否则被省略号截断时无从查证。
+      const shownName = getDisplayName(dev, config.device_names || {});
+      nameEl.textContent = shownName;
+      if (shownName !== dev.name) nameEl.title = shownName;
 
       const isHidden = config.hidden_devices.includes(dev.name);
       if (isHidden) nameEl.classList.add("hidden");
@@ -304,7 +315,10 @@ async function renderLowBatteryContent() {
       emptyText: "没有无线设备",
       items: wireless.map(dev => ({
         key: dev.name,
-        label: fmtDevName(deviceNames[dev.name] || dev.name),
+        // ⚠️ 传**原名**即可：`fmtDevName` 内部已经做了别名查找 + 简化。
+        //    预先 `lookupDeviceAlias` 再传进去等于解析两次，别名里带括号时
+        //    还会被 `simplifyDeviceName` 再削一次。
+        label: fmtDevName(dev.name),
       })),
       checked: selected,
       onToggle: async (name) => {

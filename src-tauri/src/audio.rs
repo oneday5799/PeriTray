@@ -23,6 +23,16 @@ pub(crate) use crate::audio_policy::{CLSID_POLICY_CONFIG, IID_IUNKNOWN};
 pub struct AudioDevice {
     pub id: String,
     pub name: String,
+    /// `name` 的**括号内核心名**（`耳机 (小爱音箱-9205)` → `小爱音箱-9205`），
+    /// 由后端 `dedup::core_name` 算出。
+    ///
+    /// ⭐ **为什么必须由后端给**：前端需要它做「改名表」的短名回退查找，而
+    ///   `core_name` 会额外剥 17 种蓝牙协议后缀（` Stereo` / ` LE` / ` A2DP SNK` …），
+    ///   而 JS 侧 `simplifyDeviceName` 只取最外层括号内容、不剥后缀 ⇒ 两套口径。
+    ///   让前端自己推 ⇒ 遇到 `扬声器 (小爱音箱-9205 Stereo)` 这类名字时
+    ///   音量页查不到设备页改的别名（**只在一半页面生效**，极难归因）。
+    ///   与其在前端复制那份后缀表（双源必漂），不如把后端已有的结果带出来。
+    pub core_name: String,
     pub volume: f32,
     pub is_muted: bool,
     pub is_default: bool,
@@ -163,6 +173,7 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
                             get_device_volume_state(&device).unwrap_or((0.0, false));
                         devices.push(AudioDevice {
                             id: id_str.clone(),
+                            core_name: crate::dedup::core_name(&name),
                             name,
                             volume,
                             is_muted,

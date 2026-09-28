@@ -97,7 +97,9 @@ fn build_tooltip_text() -> String {
     config::with_config(|c| {
         for tray_name in &c.tray_devices {
             if let Some(dev) = devices.iter().find(|d| &d.name == tray_name) {
-                let display_name = c.device_names.get(&dev.name).unwrap_or(&dev.name);
+                // ⭐ 走共享解析（短名优先 + 原名回退）：单键查找在「别名只存在于另一种
+                //    形态键下」时取不到 ⇒ 托盘 tooltip 与别处显示不同名。
+                let display_name = config::resolve_device_name(&dev.name, c);
                 let dot = if dev.status == crate::wmi_query::BT_STATUS_CONNECTED {
                     "🟢"
                 } else {
@@ -750,6 +752,26 @@ fn update_tray_icon() {
 
 /// 简化设备名称：仅保留括号内内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
 /// 注意：与 dedup::core_name 语义不同——本函数不剥协议后缀、返回 &str，两者勿互相替换。
+/// **音量侧**（音频端点）的显示名：**别名优先**，否则按「简化设备名称」开关。
+///
+/// ⭐ 抽出来是因为这段判据在 `tray.rs`（音频菜单）与 `shortcut.rs`（切默认设备
+///   的热键通知）里是**逐字相同**的两份副本（P2）——副本必然漂移，
+///   而漂移的后果是「同一个设备在托盘菜单和热键通知里名字不同」。
+/// ⚠️ 只用于**音量侧**：设备信息页/任务栏的默认名是物理设备名，不走简化。
+pub(crate) fn resolve_audio_display_name(raw_name: &str, c: &crate::config::Config) -> String {
+    let aliased = crate::config::resolve_device_name(raw_name, c);
+    if aliased != raw_name {
+        return crate::config::clamp_display_name(&aliased);
+    }
+    // 同样接上显示名上限：托盘菜单宽度由文字撑开，几百字的别名会拉出一个
+    // 撑破屏幕宽度的菜单。`aliased != raw_name` 的早返回分支**也要过上限**。
+    if c.simplify_device_names {
+        crate::config::clamp_display_name(simplify_device_name(raw_name))
+    } else {
+        crate::config::clamp_display_name(raw_name)
+    }
+}
+
 pub(crate) fn simplify_device_name(name: &str) -> &str {
     if let Some(open) = name.find('(') {
         if let Some(close) = name.rfind(')') {
@@ -793,17 +815,8 @@ fn build_audio_devices_menu(
                 .filter(|device| !c.hidden_audio_devices.contains(&device.name))
                 .map(|device| {
                     let check = if device.is_default { " ✓" } else { "" };
-                    let display = c
-                        .device_names
-                        .get(&device.name)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            if c.simplify_device_names {
-                                simplify_device_name(&device.name).to_string()
-                            } else {
-                                device.name.clone()
-                            }
-                        });
+                    // ⭐ 别名优先，否则按「简化设备名称」开关（与音量页/设置页音量区同判据）
+                    let display = resolve_audio_display_name(&device.name, c);
                     (
                         format!("audio_dev_{}", device.id),
                         format!("{}{}", display, check),

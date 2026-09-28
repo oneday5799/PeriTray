@@ -266,6 +266,13 @@
 .audio-device-name {
   cursor: pointer;
   min-width: 0;
+  /* ⭐ 超长别名必须省略号截断，否则会把音量滑块挤出卡片。
+     ⚠️ 不能指望 `.card.device .card-title` 那条规则：音量页的卡片是
+     `.card column audio-device`（**没有** `.device`）⇒ 选择器不匹配。
+     设备信息页那条是设备页专用，这里必须自己声明一份。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .audio-device-name:hover {

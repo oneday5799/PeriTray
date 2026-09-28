@@ -127,12 +127,21 @@ function initTaskbarWidgetCard() {
   // ⭐ 首次进入 tab 就拉清单（设备枚举 600ms+，不能放页面加载时）。
   //    再次进入时刷新：设备可能被弹出窗口「钉/移出」，或热插拔。
   refreshList();
-  const view = document.querySelector('[data-tab="taskbar"]');
-  if (view) {
-    view.addEventListener("click", () => {
-      if (view.classList.contains("active")) refreshList();
+
+  // ⛔ 切到本页时刷新。旧写法是 `if (view.classList.contains("active")) refreshList()`，
+  //   **那是死代码**：`[data-tab="taskbar"]` 命中的是**导航项**，而 `.active` 是
+  //   **面板**（`.tab-content active`）才有的 class，导航项用的是 `.is-selected`
+  //   ⇒ 条件恒假 ⇒ 清单自初始化之后再没刷新过（在别处改名 / 钉移出都看不到）。
+  const nav = document.querySelector('.win-nav-item[data-tab="taskbar"]');
+  if (nav) {
+    nav.addEventListener("click", () => {
+      refreshList();
     });
   }
+
+  // ⭐ 对外暴露给设置页的 `config-changed` 处理器：改名发生在**别的窗口**时，
+  //   用户正停在任务栏 tab 上、也不会切 tab ⇒ 没有别的刷新时机。
+  window.refreshTaskbarWidgetCardList = refreshList;
 }
 
 

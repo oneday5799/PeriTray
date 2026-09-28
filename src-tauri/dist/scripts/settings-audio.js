@@ -44,7 +44,7 @@ function renderAudioDeviceGroups(audioDevices) {
 
     const nameEl = document.createElement("div");
     nameEl.className = "card-item-name";
-    nameEl.textContent = fmtDevName(dev.name);
+    nameEl.textContent = fmtDevName(dev);
     if (dev.is_default) {
       const badge = document.createElement("span");
       badge.style.cssText = "font-size:12px;color:#0078d7;margin-left:6px";
@@ -115,8 +115,21 @@ function initSpatialSoundSettings() {
 }
 
 // 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为设置页 config 单例）
-function fmtDevName(name) {
-  return window.formatDeviceName(name, config.device_names || {}, config.simplify_device_names !== false);
+// ⭐ 「设备名 → 后端算好的 `core_name`」映射的**唯一发布点**。
+//
+// 供 `settings-shortcut.js` 复用：那页的条目只有 `entry.name`（没有设备对象），
+// 而 `simplifyDeviceName` 不剥蓝牙后缀、与后端 `core_name` 不是一回事 ⇒ 直接
+// 用它会查不到设备页改的别名。做成显式全局（而非让对方自己再拉一次
+// `get_audio_devices`）是为了不引入第二个 IPC 与第二份数据源。
+function publishCoreNames(devices) {
+  window.__pmDeviceCoreNames = new Map((devices || []).map((d) => [d.name, d.core_name]));
+}
+
+// ⭐ 收**设备对象**：用后端算好的 `core_name` 做别名回退（见 common.js 同名函数注释）。
+function fmtDevName(dev) {
+  return window.formatDeviceName(
+    dev.name, config.device_names || {}, config.simplify_device_names !== false, dev.core_name
+  );
 }
 
 function initForceMuteSettings() {
@@ -132,6 +145,7 @@ function initForceMuteSettings() {
       console.error("Failed to load audio devices for force mute:", err);
       return;
     }
+    publishCoreNames(audioDevices);
     const hidden = config.hidden_audio_devices || [];
     const selected = new Set(config.force_mute_devices || []);
     const deviceNames = config.device_names || {};
@@ -143,7 +157,8 @@ function initForceMuteSettings() {
         .filter(dev => !hidden.includes(dev.name))
         .map(dev => ({
           key: dev.name,
-          label: fmtDevName(deviceNames[dev.name] || dev.name),
+          // ⚠️ 传**原名**即可：`fmtDevName` 内部已做别名查找 + 简化（预解析会重复两次）。
+          label: fmtDevName(dev),
         })),
       checked: selected,
       onToggle: async (name) => {
@@ -215,7 +230,7 @@ async function renderShutdownVolumeDevices() {
 
       const nameEl = document.createElement("div");
       nameEl.className = "card-item-name" + (isEnabled ? "" : " hidden");
-      nameEl.textContent = fmtDevName(dev.name);
+      nameEl.textContent = fmtDevName(dev);
 
       const controls = document.createElement("div");
       controls.className = "card-item-controls";

@@ -635,36 +635,64 @@ pub struct PinnedTaskbarEntry {
     pub audio_ids: Vec<String>,
 }
 
+/// 组装设置页「任务栏组件」清单里的**一行**（纯函数，便于单测钉住）。
+///
+/// ⭐ `name` 走 `resolved_display_name` ⇒ 与**任务栏窗口 tooltip 逐字一致**
+///   （`pin.alias` > `device_names` > `pick_display_name` 短名）。
+///   ⛔ 上一版直接返回 `d.name`（`pick_display_name` 的原始输出）⇒ 用户改过名后
+///   设置页仍显示旧名，与任务栏窗口不一致（用户 2026-09-28 报）。
+/// ⚠️ 身份判据（`audio_ids` / `fallback`）一律用**原始** `d.name` / `d.key`：
+///   别名是显示层概念，绝不能参与匹配。
+fn pinned_taskbar_entry(
+    d: &crate::device_identity::PhysicalDevice,
+    audio: &[crate::audio::AudioDevice],
+    pinned: &[config::PinnedDevice],
+    config_snapshot: &config::Config,
+) -> PinnedTaskbarEntry {
+    PinnedTaskbarEntry {
+        // ⭐ 两级匹配（与显示侧同款判据）：先按**身份键**，再按 `core_name` 兜底
+        //   —— 虚拟端点/驱动异常时身份键可能退化，名字仍能对上同一台物理设备。
+        audio_ids: audio
+            .iter()
+            .filter(|a| {
+                crate::device_identity::audio_endpoint_key(a).encode() == d.key
+                    || crate::dedup::core_name(&a.name) == crate::dedup::core_name(&d.name)
+            })
+            .map(|a| a.id.clone())
+            .collect(),
+        fallback: crate::device_identity::DeviceKey::Name(crate::dedup::core_name(&d.name))
+            .encode(),
+        key: d.key.clone(),
+        name: crate::device_identity::resolved_display_name(
+            &d.name,
+            &d.key,
+            pinned,
+            config_snapshot,
+        ),
+        connected: d.connected,
+    }
+}
+
 #[tauri::command(async)]
 pub async fn get_pinned_taskbar_list() -> Result<Vec<PinnedTaskbarEntry>, String> {
     let devices = run_blocking(devices_for_taskbar).await??;
     let audio = run_blocking(crate::audio::enumerate_output_devices)
         .await?
         .map_err(|e| e.to_string())?;
-    // ⛔ 只取 `pinned` 快照：显示名由 `group_taskbar_devices` 内部的
-    //   `resolved_display_name` 解析（它自己会再取一次配置），此处**不重复**克隆整份配置。
-    let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
+    // ⭐ 取一份**整份**配置快照：本命令的 `name` 字段要与**任务栏 tooltip 逐字一致**
+    //   ⇒ 必须走同一个 `resolved_display_name`（`pin.alias` > `device_names` > 短名）。
+    // ⛔⛔ **上一版这里注释写的是「显示名由 `group_taskbar_devices` 内部解析」——
+    //   那是错的**：`group_taskbar_devices` 返回的是 `pick_display_name` 的**原始输出**，
+    //   任务栏 widget 是**自己再套一层** `resolved_display_name`（见 `taskbar_widget.rs`
+    //   的 `resolve_widget_labels`）。本命令直接用 `d.name` ⇒ 设置页「任务栏」列表
+    //   在用户改过名后仍显示**旧名**，与任务栏窗口不一致（用户 2026-09-28 报）。
+    let config_snapshot = config::with_config(|c| c.clone());
+    let pinned = config_snapshot.pinned_taskbar_devices.clone();
     let grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
     let out: Vec<PinnedTaskbarEntry> = grouped
         .into_iter()
         .filter(|d| d.pinned)
-        .map(|d| PinnedTaskbarEntry {
-            // ⭐ 两级匹配（与显示侧同款判据）：先按**身份键**，再按 `core_name` 兜底
-            //   —— 虚拟端点/驱动异常时身份键可能退化，名字仍能对上同一台物理设备。
-            audio_ids: audio
-                .iter()
-                .filter(|a| {
-                    crate::device_identity::audio_endpoint_key(a).encode() == d.key
-                        || crate::dedup::core_name(&a.name) == crate::dedup::core_name(&d.name)
-                })
-                .map(|a| a.id.clone())
-                .collect(),
-            fallback: crate::device_identity::DeviceKey::Name(crate::dedup::core_name(&d.name))
-                .encode(),
-            key: d.key,
-            name: d.name,
-            connected: d.connected,
-        })
+        .map(|d| pinned_taskbar_entry(&d, &audio, &pinned, &config_snapshot))
         .collect();
     Ok(out)
 }
@@ -1158,11 +1186,78 @@ pub fn check_material_support(material: String) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        devices_for_taskbar_with, is_allowed_open_url, rollback_device_shortcut,
-        try_toggle_pinned_taskbar_device, try_toggle_tray_device, PINNED_TASKBAR_LIMIT,
-        TRAY_DEVICE_LIMIT,
+        devices_for_taskbar_with, is_allowed_open_url, pinned_taskbar_entry,
+        rollback_device_shortcut, try_toggle_pinned_taskbar_device, try_toggle_tray_device,
+        PINNED_TASKBAR_LIMIT, TRAY_DEVICE_LIMIT,
     };
     use crate::config::{matches_pinned_taskbar, Config, DeviceShortcut, PinnedDevice};
+
+    /// ⭐ 设置页「任务栏组件」清单的 `name` 必须与**任务栏窗口 tooltip 逐字一致**
+    /// ⇒ 走同一个 `resolved_display_name`。
+    ///
+    /// ⛔ 可证伪：把 `pinned_taskbar_entry` 里的 `resolved_display_name(...)` 退回
+    ///   `d.name.clone()`，本测试立刻转红（用户在设置页看到旧名、任务栏是新名）。
+    #[test]
+    fn pinned_taskbar_entry_uses_the_resolved_display_name() {
+        let d = crate::device_identity::PhysicalDevice {
+            key: "c:abc".to_string(),
+            name: "小爱音箱-9205".to_string(),
+            battery: Some(50),
+            audio_device_id: None,
+            volume: None,
+            is_muted: None,
+            is_default: None,
+            audio_endpoint_name: None,
+            audio_kind: crate::device_identity::AudioKind::Pointer,
+            categories: vec![],
+            node_count: 1,
+            connected: true,
+            pinned: true,
+        };
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("小爱音箱-9205".to_string(), "我的音箱".to_string());
+        let no_pins: Vec<PinnedDevice> = vec![];
+
+        let e = pinned_taskbar_entry(&d, &[], &no_pins, &cfg);
+        assert_eq!(e.name, "我的音箱", "全局改名必须生效（设置页不能显示旧名）");
+        // ⚠️ 身份判据不受别名影响：`fallback` 仍按**原始名**的短名算
+        assert_eq!(e.fallback, "n:小爱音箱-9205");
+        assert_eq!(e.key, "c:abc");
+    }
+
+    /// 固定项自带 `alias` 优先级**高于**全局改名（与任务栏 tooltip 同序）。
+    #[test]
+    fn pinned_taskbar_entry_prefers_pinned_alias() {
+        let d = crate::device_identity::PhysicalDevice {
+            key: "c:abc".to_string(),
+            name: "小爱音箱-9205".to_string(),
+            battery: None,
+            audio_device_id: None,
+            volume: None,
+            is_muted: None,
+            is_default: None,
+            audio_endpoint_name: None,
+            audio_kind: crate::device_identity::AudioKind::Pointer,
+            categories: vec![],
+            node_count: 1,
+            connected: true,
+            pinned: true,
+        };
+        let mut cfg = Config::default();
+        cfg.device_names
+            .insert("小爱音箱-9205".to_string(), "全局名".to_string());
+        let pins = vec![PinnedDevice {
+            key: "c:abc".to_string(),
+            fallback: Some("n:小爱音箱-9205".to_string()),
+            alias: Some("固定项别名".to_string()),
+        }];
+
+        assert_eq!(
+            pinned_taskbar_entry(&d, &[], &pins, &cfg).name,
+            "固定项别名"
+        );
+    }
 
     /// P1-4 的可证伪单测：`open_url` 只放行白名单协议。
     ///

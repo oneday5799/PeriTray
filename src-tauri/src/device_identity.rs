@@ -999,6 +999,10 @@ fn pinned_placeholder_name(p: &crate::config::PinnedDevice) -> String {
 ///
 /// 三级优先级（与选择器既有行为**逐字相同**）：
 /// 1. `PinnedDevice.alias`（用户给固定设备起的别名）——**仅当本设备确实被固定**；
+///    ⚠️ **该级自 2026-09-28 起恒为空**：`config::normalize_config` 的
+///    `fold_pinned_alias_into_device_names` 会把旧 alias 折进 `device_names` 并清空它
+///    （否则它压住全局改名 ⇒ 任务栏一个名、别处另一个名）。
+///    **字段保留仅为旧配置反序列化不丢数据**，别再往这里加新的语义。
 /// 2. `config.device_names` 全局重命名（`resolve_device_name` 的两级回退）；
 /// 3. 传入的 `raw_name`（= `pick_display_name` 的输出）。
 ///
@@ -1012,14 +1016,18 @@ pub fn resolved_display_name(
     config: &crate::config::Config,
 ) -> String {
     let fallback = DeviceKey::Name(core_name(raw_name)).encode();
-    pinned
+    let resolved = pinned
         .iter()
         .find(|p| crate::config::pinned_device_matches(p, key, Some(&fallback)))
         .and_then(|p| p.alias.as_deref())
         .map(str::trim)
         .filter(|a| !a.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| crate::config::resolve_device_name(raw_name, config))
+        .unwrap_or_else(|| crate::config::resolve_device_name(raw_name, config));
+    // ⭐ B：截断放在**渲染前最后这一步**，而不是 `resolve_device_name` 里——
+    //   重命名对话框的输入框预填也走后者，截在那里会让用户编辑长名字时
+    //   看到被削过的初值、存回去就把别名毁了（且配置里也会跟着变短）。
+    crate::config::clamp_display_name(&resolved)
 }
 
 /// 选择器里的一台设备：并集口径 + 已套用显示名的**最终**形态（第 3 层 T3-1）。
@@ -1571,6 +1579,7 @@ mod tests {
     fn audio(name: &str, id: &str, container: Option<&str>) -> crate::audio::AudioDevice {
         crate::audio::AudioDevice {
             id: id.to_string(),
+            core_name: crate::dedup::core_name(name),
             name: name.to_string(),
             volume: 0.5,
             is_muted: false,

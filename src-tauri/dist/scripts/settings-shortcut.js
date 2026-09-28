@@ -96,8 +96,14 @@ function initDeviceShortcutSettings() {
 
       const label = document.createElement("span");
       label.className = "card-title device-shortcut-label";
+      // ⭐ 快捷键条目只有名字 ⇒ 从本页的音频设备列表里取后端算好的 `core_name`，
+      //    避免退到 `simplifyDeviceName`（不剥蓝牙后缀）而查不到别名。
+      const devHit = (window.__audioDevicesForName || []).find((d) => d.name === entry.name);
       const displayName = window.formatDeviceName(
-        entry.name, config.device_names || {}, config.simplify_device_names !== false
+        entry.name,
+        config.device_names || {},
+        config.simplify_device_names !== false,
+        devHit && devHit.core_name
       );
       label.textContent = displayName;
       window.attachTooltip(label, entry.name, "start");

@@ -1,9 +1,10 @@
 /* common.js — 共享基础层（popup/settings 两页最先加载）：Tauri invoke/主题与材质应用/
  *            右键菜单族（默认菜单屏蔽/注册/钳位/关闭/子菜单外壳 createSubmenuShell/勾选图标 createCheckIcon）/
- *            设备显示名解析（simplifyDeviceName/formatDeviceName/getDisplayName）/
+ *            设备显示名解析（simplifyDeviceName/lookupDeviceAlias/formatDeviceName/getDisplayName）/
  *            对话框与 toast/快捷键录制器（码表为本文件内部实现细节，不对外）
  * 加载序 1/N · 提供：window 全局 API —— CATEGORIES/initTheme/applyThemeMode/applyMaterialMode/
- *             getInvoke/getDisplayName/simplifyDeviceName/formatDeviceName/attachTooltip/
+ *             getInvoke/getDisplayName/simplifyDeviceName/lookupDeviceAlias/formatDeviceName/
+ *             attachTooltip/
  *             attachSessionTooltip/showSessionTip/hideSessionTip/reconcileCards/registerContextMenu/
  *             clampMenuPosition/hideAllContextMenus/createSubmenuShell/createCheckIcon/
  *             showRenameDialog/createDialog/closeDialog/showToast/describeShortcutError/
@@ -131,8 +132,45 @@ onTauriEvent("material-changed", (e) => {
   if (!window.__materialChangeInProgress) applyMaterialMode(e.payload);
 });
 
+// 设备别名查找：**短名键 → 精确键**两级（与后端 `config::resolve_device_name` 同序同义）。
+//
+// ⭐ `coreName` 由**调用方从后端数据里取**（`AudioDevice.core_name`）。
+//   缺省时才退回 `simplifyDeviceName`（只取最外层括号、不剥蓝牙后缀）——
+//   那条退路在 `扬声器 (小爱音箱-9205 Stereo)` 这类名字上与后端 `core_name`
+//   不一致，曾导致「设备页改的别名、音量页查不到」。有后端值就别自己推。
+//
+// ⛔⛔ 为什么必须两级（这是「两页重命名不同步」的根因）：同一台设备在两页的 `name`
+//   **不是同一个字符串** —— 音量页是**音频端点名**（「耳机 (小爱音箱-9205)」），
+//   设备信息页是**物理设备名**（「小爱音箱-9205」）。后端写入侧
+//   `apply_device_rename` 会把**两种形态归并**（长形态键 + 短名键都写），
+//   可**从设备页发起时入口键本身就是短名**，长形态键未必已存在 ⇒ 只写短名键。
+//   若读取侧只查精确键，音量页就永远查不到 ⇒「设备页改了名、音量页不变」。
+//   后端 `resolve_device_name` 本来就是两级查找，前端此前却是单键 ⇒ 两侧口径不一致。
+// ⚠️ 边界：此处「短名」= `simplifyDeviceName`（取最外层括号内内容），而后端 `core_name`
+//   还会剥蓝牙协议后缀（` Stereo` / ` LE` …）。「类型 (设备名)」这种常见形态两者一致；
+//   带后缀的长形态回退会落空（此时退回显示括号内容，与关闭简化时的观感相同）。
+window.lookupDeviceAlias = function (customNames, name, coreName) {
+  if (!customNames || !name) return undefined;
+  // ⚠️ 空白值一律当「无别名」：后端 `resolve_device_name_in` 同样跳过，
+  //    两侧必须一致（否则任务栏显示空白、页面显示原名）。
+  const usable = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+  const short = coreName || window.simplifyDeviceName(name);
+  if (short !== name && usable(customNames[short])) return customNames[short];
+  if (usable(customNames[name])) return customNames[name];
+  // ⭐ 第 3 级：**任一形态**的同源键（与后端第 3 级一一对应）。
+  //    少了它，「短名键空白 + 长形态键有效」时设备页回落原名、音量页显示别名
+  //    ⇒ 同一设备两套名字。按键名排序取首个，保证同一个配置每次都一样。
+  const keys = Object.keys(customNames).sort();
+  for (const k of keys) {
+    if (!usable(customNames[k])) continue;
+    if (window.simplifyDeviceName(k) === short) return customNames[k];
+  }
+  return undefined;
+};
+
 window.getDisplayName = function (dev, deviceNames) {
-  return deviceNames[dev.name] || dev.name;
+  // `dev.core_name` 目前只有 `AudioDevice` 带；设备信息页的 `Device` 没有 ⇒ 走退路。
+  return window.lookupDeviceAlias(deviceNames, dev.name, dev.core_name) || dev.name;
 };
 
 // 简化设备名称：仅保留括号内的内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
@@ -149,8 +187,8 @@ window.simplifyDeviceName = function (name) {
 // 设备显示名统一解析：有重命名用重命名 -> 可选简化括号名 -> 原名。
 // customNames/simplify 由调用方注入数据源（popup 与 settings 的存储位置不同）。
 // 注意：getDisplayName 为无简化步骤的另一语义（仅重命名回退原名），勿混淆。
-window.formatDeviceName = function (name, customNames, simplify) {
-  const custom = customNames ? customNames[name] : undefined;
+window.formatDeviceName = function (name, customNames, simplify, coreName) {
+  const custom = window.lookupDeviceAlias(customNames, name, coreName);
   if (custom) return custom;
   if (simplify) return window.simplifyDeviceName(name);
   return name;

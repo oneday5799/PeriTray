@@ -21,8 +21,19 @@ const buttonMutedDevices = new Set();
 let activeAudioMenu = null;
 
 // 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为本页运行态）
-function deviceDisplayName(name) {
-  return window.formatDeviceName(name, audioDeviceNames, simplifyDeviceNames);
+// ⭐ 收「名字」或「设备对象」都行：对象自带后端算好的 `core_name`；
+// 只有字符串时回本页设备列表里按名字找一次（会话路由的 `outputDevice` 等
+// 手里只有名字）。**前端不再自己推短名** —— `simplifyDeviceName` 不剥蓝牙
+// 后缀，与后端 `core_name` 不是一回事。
+function deviceDisplayName(nameOrDev) {
+  const isStr = typeof nameOrDev === "string";
+  const name = isStr ? nameOrDev : nameOrDev.name;
+  let core = isStr ? undefined : nameOrDev.core_name;
+  if (!core) {
+    const hit = audioDevices.find((d) => d.name === name);
+    core = hit && hit.core_name;
+  }
+  return window.formatDeviceName(name, audioDeviceNames, simplifyDeviceNames, core);
 }
 
 // config -> 本页运行态字段（config-changed 监听与初次加载共用）
@@ -301,8 +312,11 @@ async function showAudioContextMenu(x, y, device) {
     hideAllContextMenus();
     showRenameDialog({
       deviceName: device.name,
-      displayName: audioDeviceNames[device.name] || device.name,
-      nameSource: audioDeviceNames[device.name],
+      // ⭐ 预填与「恢复默认」按钮的可见性都走两级查找：别名可能只落在短名键上
+      //    （从设备页改名的情形），否则输入框会预填成端点名、且「恢复默认」不出现。
+      displayName: window.lookupDeviceAlias(audioDeviceNames, device.name, device.core_name)
+        || device.name,
+      nameSource: window.lookupDeviceAlias(audioDeviceNames, device.name, device.core_name),
       onUpdate: (names) => { audioDeviceNames = names; },
       onRender: renderAudioDevices,
     });
@@ -923,7 +937,7 @@ function buildSessionSubmenu(menu, label, devices, allDevices, currentId, onSele
 
   shell.addItem("系统默认", isDefault, () => onSelect(""));
   for (const dev of devices) {
-    shell.addItem(deviceDisplayName(dev.name), dev.id === currentId, () => onSelect(dev.id));
+    shell.addItem(deviceDisplayName(dev), dev.id === currentId, () => onSelect(dev.id));
   }
   // 覆盖设备连接中但被隐藏（不在可见列表）：补「设备已隐藏」已选提示
   if (currentId && !listed && connected) {

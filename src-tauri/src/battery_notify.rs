@@ -110,10 +110,9 @@ fn select_pending_notices(
         }
 
         // 取用户自定义显示名，无则用原始名
-        let display_name = device_names
-            .get(&d.name)
-            .cloned()
-            .unwrap_or_else(|| d.name.clone());
+        // ⭐ 走共享解析（与托盘/任务栏/两页同一判据）：单键查找会漏掉
+        //    「别名只写在另一种形态键下」的情况 ⇒ 通知里的名字与界面不一致。
+        let display_name = config::resolve_device_name_in(d.name.as_str(), device_names);
 
         for &threshold in thresholds {
             // 先处理「重新武装」：电量明确回升时清掉去重标记（P3-3）。
