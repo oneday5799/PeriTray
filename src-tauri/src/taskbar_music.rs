@@ -513,6 +513,43 @@ fn subscribe(session: &GlobalSystemMediaTransportControlsSession) -> Option<Subs
 // 快照刷新
 // ═══════════════════════════════════════════════════════════════════
 
+/// 开发门控：把**艺人名强制清空**（`PM_DEV_EMPTY_ARTIST=1`）。
+///
+/// ⭐ **为什么需要它**（2026-09-29）：空 artist 是 2026-09-29 那次**访问违例闪退**
+///   的触发条件，而它的复现**不可控** —— 得恰好有个播放器不上报 artist。
+///   ⛔ **它不是那道闪退的兜底**：闪退已由机械判据
+///   `measure_text_on_empty_slice_returns_zero_and_never_touches_gdi` 覆盖
+///   （拆掉空串闸 → 测试进程 `0xc0000005`，CI 随时能跑）。
+///   ⇒ 本门控只补**判据覆盖不到的那一格**：空 artist 下面板的**实际观感**
+///   （宽度算窄、文本是否被裁切）—— 那只能看像素。
+///
+/// 📌 与 `PM_DEV_TOOLTIP_SHOW` 同款理由（见其注释：「本机无法注入鼠标，
+///   自然 hover 无法自动验收」）：**把不可注入的条件变成可判定的条件**。
+///
+/// ⚠️ 只清**艺人**、不动标题 —— 标题本就有「未在播放」兜底，
+///   两处都清会把变量混在一起。
+fn dev_empty_artist_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var("PM_DEV_EMPTY_ARTIST").is_ok();
+        if on {
+            crate::standard_log!(
+                "[music] ⚠️ 开发门控 PM_DEV_EMPTY_ARTIST 已开启：艺人名将被强制清空"
+            );
+        }
+        on
+    })
+}
+
+/// 门控的**纯**部分：抽出成函数才能单测（环境变量本身不好测，效果好测）。
+fn apply_dev_artist_gate(artist: String, on: bool) -> String {
+    if on {
+        String::new()
+    } else {
+        artist
+    }
+}
+
 /// ⭐⭐ 「当前该显示哪个会话」的**唯一判据**（纯函数，可单测）。
 ///
 /// 返回 `(下标, 钉子是否命中)`。
@@ -580,6 +617,10 @@ fn refresh_snapshot(mgr: &GlobalSystemMediaTransportControlsSessionManager) {
             if let Ok(a) = props.Artist() {
                 sessions[current].artist = a.to_string();
             }
+            sessions[current].artist = apply_dev_artist_gate(
+                std::mem::take(&mut sessions[current].artist),
+                dev_empty_artist_enabled(),
+            );
             if let Ok(Some(bytes)) = read_thumbnail(&props) {
                 cover_hash = fnv1a(&bytes);
                 cover_size = COVER_PX;
@@ -723,6 +764,23 @@ fn decode_cover(bytes: &[u8]) -> Option<CoverImage> {
 
 #[cfg(test)]
 mod tests {
+
+    /// 开发门控 `PM_DEV_EMPTY_ARTIST` 的**纯**判据。
+    ///
+    /// ⭐ 为什么要单测它：门控本身「有没有生效」很好测（「值变空」），
+    ///   但**它会不会误伤**（关着时必须原样透传）才是容易写错的地方。
+    #[test]
+    fn dev_artist_gate_blanks_only_when_enabled() {
+        assert_eq!(apply_dev_artist_gate("Aimer".into(), true), "");
+        assert_eq!(
+            apply_dev_artist_gate("Aimer".into(), false),
+            "Aimer",
+            "门控关着时必须原样透传（误伤会让所有会话都没艺人名）"
+        );
+        // 本来就是空串时，两种情况都应为空（幂等）
+        assert_eq!(apply_dev_artist_gate(String::new(), false), "");
+        assert_eq!(apply_dev_artist_gate(String::new(), true), "");
+    }
 
     /// ⭐⭐ **用户的显式选择必须赢过系统的自动判定**。
     ///
