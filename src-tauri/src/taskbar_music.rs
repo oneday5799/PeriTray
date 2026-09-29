@@ -77,6 +77,21 @@ pub struct MusicSnapshot {
     /// 封面缓存键（封面字节的 FNV-1a hash）。0 = 无封面。
     pub cover_hash: u64,
     pub cover_size: u32,
+    /// ⭐⭐ **用户显式选中的会话 id**（`None` = 跟随系统）。
+    ///
+    /// ⛔⛔ **为什么必须记 id 而不是记下标**（2026-09-29 修「切不过面板」）：
+    ///   `select_session` 改的是 `current` 下标，而下一次 `refresh_snapshot` 会用
+    ///   **系统**的 `GetCurrentSession()` **重算** `current`
+    ///   ⇒ 用户的选���下一轮就被抹掉。
+    ///   后果不是「选中错会话」，而是**「切换」按钮永远走不到切面板那一步**：
+    ///   `advance_switch_target` 的第①步判「还有下一个会话」在 `current` 恒为 0 时
+    ///   **永远成立** ⇒ 从设备面板**永远切不到音乐面板**（真机实测连点 13 次，
+    ///   面板纹丝不动、且**没有任何日志**）。
+    ///
+    ///   记 **id**（而非下标）是因为会话列表会因应用启停而**重排**，
+    ///   下标随时可能指向另一个应用。
+    ///   ⚠️ 该会话消失时（应用退出）清空 ⇒ 回落跟随系统，这是期望行为。
+    pub pinned_session_id: Option<String>,
 }
 
 impl MusicSnapshot {
@@ -178,6 +193,7 @@ static SNAPSHOT: Mutex<MusicSnapshot> = Mutex::new(MusicSnapshot {
     current: 0,
     cover_hash: 0,
     cover_size: 0,
+    pinned_session_id: None,
 });
 
 /// 后台线程是否已起来（避免重复起线程）。
@@ -211,6 +227,19 @@ pub fn select_session(idx: usize) {
     let mut s = lock_unpoisoned(&SNAPSHOT);
     if idx < s.sessions.len() {
         s.current = idx;
+        // ⭐ 记 **id**：下标会随会话列表重排而失效，id 不会
+        //   （会话 id = 源应用 AUMID，见 `SessionInfo::id`）
+        s.pinned_session_id = Some(s.sessions[idx].id.clone());
+        // ⛔⛔ **换会话必须同时清封面**（2026-09-29 修「闪现另一个会话的封面」）。
+        //   `cover_hash` 是**由 worker 异步解码后回填**的，而 `current` 是这里
+        //   **同步**改的 ⇒ 不清就会出现一段「`current` 已是新会话、`cover_hash`
+        //   还是旧会话」的**内部不自洽**快照 ⇒ 面板先画出**旧封面**，
+        //   等 worker 回来再重画 ⇒ 闪一下（真机实测）。
+        //   清成 0 ⇒ 期间**不画封面**（`cover(0)` 返回 `None`），
+        //   是「空缺」而不是「错误」——观感上明显更好，且绝不该改成
+        //   「在新会话的封面到位前先沿用旧封面」。
+        s.cover_hash = 0;
+        s.cover_size = 0;
     }
     drop(s);
     request_refresh();
@@ -484,18 +513,57 @@ fn subscribe(session: &GlobalSystemMediaTransportControlsSession) -> Option<Subs
 // 快照刷新
 // ═══════════════════════════════════════════════════════════════════
 
+/// ⭐⭐ 「当前该显示哪个会话」的**唯一判据**（纯函数，可单测）。
+///
+/// 返回 `(下标, 钉子是否命中)`。
+///
+/// 判据顺序**不可调换**：
+/// ① 用户钉住的 id 仍存在 ⇒ 用它（**用户的显式选择必须赢过系统的自动判定**）
+/// ② 否则系统的 `GetCurrentSession` 对应的会话
+/// ③ 否则 0
+///
+/// ⛔⛔ 反序的后果（2026-09-29 真机实测）：`select_session` 改的下标每轮都被
+///   冲回系统当前 ⇒ 「切换」按钮第①步「还有下一个会话」**恒成立**
+///   ⇒ 从设备面板**永远切不到音乐面板**，且**零日志**。
+fn resolve_current_index(
+    pinned: Option<&str>,
+    sessions: &[SessionInfo],
+    system_id: Option<&str>,
+) -> (usize, bool) {
+    if let Some(pid) = pinned {
+        if let Some(pos) = sessions.iter().position(|s| s.id == pid) {
+            return (pos, true);
+        }
+        // 钉住的会话已消失 ⇒ 落回系统当前（`false` = 钉子失效，调用方据此清空）
+    }
+    if let Some(sid) = system_id {
+        if let Some(pos) = sessions.iter().position(|s| s.id == sid) {
+            return (pos, false);
+        }
+    }
+    (0, false)
+}
+
 fn refresh_snapshot(mgr: &GlobalSystemMediaTransportControlsSessionManager) {
     let Ok(list) = list_sessions(mgr) else { return };
     let mut sessions: Vec<SessionInfo> = list.iter().map(|(_, i)| i.clone()).collect();
 
-    // 当前会话：优先系统给的 `GetCurrentSession`，否则第一个
-    let mut current = 0usize;
-    if let Ok(cur) = mgr.GetCurrentSession() {
-        if let Some(cid) = cur.SourceAppUserModelId().ok().map(|h| h.to_string()) {
-            if let Some(pos) = sessions.iter().position(|s| s.id == cid) {
-                current = pos;
-            }
-        }
+    // ⭐⭐ 当前会话：**用户钉住的优先**，否则用系统的 `GetCurrentSession`，再否则第一个。
+    //   ⚠️ 顺序不能反：反了就是「每轮刷新都把用户的选择抹回系统当前」，
+    //   而「切换」按钮的第①步（还有下一个会话）因此永远成立
+    //   ⇒ **永远切不到另一个面板**（见 `pinned_session_id` 的注释）。
+    let pinned = lock_unpoisoned(&SNAPSHOT).pinned_session_id.clone();
+    let system_id = mgr
+        .GetCurrentSession()
+        .ok()
+        .and_then(|cur| cur.SourceAppUserModelId().ok().map(|h| h.to_string()));
+    let (current, pinned_hit) =
+        resolve_current_index(pinned.as_deref(), &sessions, system_id.as_deref());
+    // ⛔ 钉子失效（应用退出）必须**在这里**清掉，不能放进下面的「内容有变化才写」里：
+    //   否则快照恰好没变化时钉子会**永久留着**，之后每轮都白跑一次「钉子查找」。
+    if pinned.is_some() && !pinned_hit {
+        let mut g = lock_unpoisoned(&SNAPSHOT);
+        g.pinned_session_id = None;
     }
 
     // ⭐ 标题/艺人/封面只对**当前会话**取（每次都取所有会话的封面纯属浪费）
@@ -543,7 +611,7 @@ fn refresh_snapshot(mgr: &GlobalSystemMediaTransportControlsSessionManager) {
 }
 
 /// 单向通知 widget 重绘 / 重估挂载。
-fn notify_widget() {
+pub fn notify_widget() {
     crate::taskbar_widget::on_music_changed();
 }
 
@@ -655,6 +723,74 @@ fn decode_cover(bytes: &[u8]) -> Option<CoverImage> {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⭐⭐ **用户的显式选择必须赢过系统的自动判定**。
+    ///
+    /// 可证伪：把 `resolve_current_index` 的判据顺序反过来（本用例立刻转红，
+    /// 且症状是「切换按钮永远切不到另一个面板」——**零日志**的那种）。
+    #[test]
+    fn pinned_session_wins_over_system_current() {
+        let sessions = vec![
+            SessionInfo {
+                id: "App.A".into(),
+                title: "A".into(),
+                artist: String::new(),
+                playing: true,
+                can_prev: false,
+                can_play_pause: true,
+                can_next: false,
+            },
+            SessionInfo {
+                id: "App.B".into(),
+                title: "B".into(),
+                artist: String::new(),
+                playing: false,
+                can_prev: false,
+                can_play_pause: true,
+                can_next: false,
+            },
+        ];
+        // 用户钉住 B，系统说当前是 A ⇒ 必须显示 B
+        let (idx, hit) = resolve_current_index(Some("App.B"), &sessions, Some("App.A"));
+        assert_eq!(idx, 1, "钉住的下标必须胜出（否则用户的选择每轮被抹掉）");
+        assert!(hit, "钉子命中");
+
+        // 没钉子 ⇒ 跟系统
+        let (idx, hit) = resolve_current_index(None, &sessions, Some("App.A"));
+        assert_eq!(idx, 0);
+        assert!(!hit, "未钉住时不应报告命中（否则会误清钉子）");
+
+        // 钉子指向已消失的会话 ⇒ 落回系统，且**报告未命中**以便清钉子
+        let (idx, hit) = resolve_current_index(Some("App.GONE"), &sessions, Some("App.A"));
+        assert_eq!(idx, 0, "钉子失效必须落回系统当前");
+        assert!(!hit, "失效的钉子必须报告未命中（调用方据此清空）");
+
+        // 都没有 ⇒ 0
+        assert_eq!(resolve_current_index(None, &sessions, None), (0, false));
+    }
+
+    /// 会话列表**重排**时下标会漂移 ⇒ 记 id 才安全。
+    /// 判据：同 id 在不同下标上都必须解析到**正确的那一个**。
+    #[test]
+    fn resolution_follows_the_id_not_the_index() {
+        let mk = |id: &str| SessionInfo {
+            id: id.into(),
+            title: id.into(),
+            artist: String::new(),
+            playing: false,
+            can_prev: false,
+            can_play_pause: true,
+            can_next: false,
+        };
+        let before = vec![mk("App.A"), mk("App.B")];
+        let after = vec![mk("App.B"), mk("App.C"), mk("App.A")]; // B/C 插入，A 挪到末尾
+        assert_eq!(resolve_current_index(Some("App.A"), &before, None).0, 0);
+        assert_eq!(
+            resolve_current_index(Some("App.A"), &after, None).0,
+            2,
+            "列表重排后仍须按 id 找到同一个会话（记下标就会指错应用）"
+        );
+    }
     use super::*;
 
     /// ⭐⭐⭐ **后台线程不能在「收到消息」时退出**（2026-09-28 用户报「音乐组件消失了」）。

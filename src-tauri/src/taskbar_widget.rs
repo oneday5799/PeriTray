@@ -375,19 +375,43 @@ fn advance_switch_target(hwnd: *mut core::ffi::c_void) {
     let n = snap.sessions.len();
     let cur_panel = current_panel();
 
-    // ① 优先切会话：确实还有**下一个**会话没看过
-    if n > 1 && snap.current + 1 < n {
+    // ① ⭐⭐ **会话轮转只在音乐面板里做**（2026-09-29 改）。
+    //
+    //   原先不分面板：设备面板上点「切换」也先切会话 ⇒ **从设备面板切到音乐
+    //   面板要点两次**（真机实测），而按钮就画在最右缘、提示写的就是「切换」，
+    //   用户的预期是「换一块显示的内容」。
+    //   ⇒ 设备面板上这个按钮**只切面板**，一次到位；
+    //     音乐面板上它才是「下一个会话」，会话走完再交给 ② 切面板。
+    //
+    //   ⚠️ 这也顺带修掉「永远切不过去」：`current` 由 worker 按系统当前重算，
+    //     不钉住的话第①步恒成立（见 `taskbar_music::pinned_session_id`）。
+    let on_music_panel = cur_panel == Some(crate::config::TaskbarPanel::Music);
+    if on_music_panel && n > 1 && snap.current + 1 < n {
         crate::taskbar_music::select_session(snap.current + 1);
         return;
     }
-    // ② 会话已走完（或本来就只有一个）⇒ 另一个面板可用就换过去
+    // ② 另一个面板可用就换过去
     if let (Some(from), Some(other)) = (cur_panel, other_panel_if_available(cur_panel)) {
         // ⭐ **先落配置，再启动画**（顺序即契约）：配置是**持久状态**，
         //   必须在任何可能失败的步骤之前就位（AGENTS.md「失败路径不得留下
         //   成功状态」的镜像要求：这里反过来——先落定，出错才不会退回旧面板
         //   却已经动过画面）。动画失败也只是「这次没播」，面板已换对。
         crate::config::with_config_mut(|c| c.taskbar_panel = other);
-        // ⭐ 同时把会话下标**归零**：换回来时从第一个会话开始，环才是闭合的
+        // ⭐⭐ **进入音乐面板一律从会话 0 开始**——这就是「环」的闭合点。
+        //
+        //   用户 2026-09-29 选定「单按钮 + 循环语义」，整个环是：
+        //   ```text
+        //   Devices --点--> Music/会话0 --点--> 会话1 --点--> Devices --点--> …
+        //   ```
+        //   ⚠️ 若**不**归零：从音乐面板离开时 `current` 停在 `n-1` 且被钉住，
+        //   再进来点一下又是「没有下一个」⇒ **直接切面板**
+        //   ⇒ **会话 0 永久不可达**（真机实测：音乐面板上点「切换」只会切面板）。
+        //   归零同时也让每次进入音乐面板的起点可预期。
+        //
+        //   ⚠️ 归零会带来「换会话 ⇒ 封面要重新解码」的窗口（worker 异步），
+        //   那由 `select_session` **同步清 `cover_hash`** 来保证快照自洽
+        //   （见 `taskbar_music::select_session`）——两处必须一起改，
+        //   只改其一会退回「闪现旧封面」。
         crate::taskbar_music::select_session(0);
         // ⛔ 会话轮转（上面的 ①）**不进动画**：同一面板内换歌，宽度不变，
         //   套一层横向滑动只会让整段歌名平移，观感更差。
@@ -399,8 +423,8 @@ fn advance_switch_target(hwnd: *mut core::ffi::c_void) {
         append_log(&format!("[widget] 切换组件 → {other:?}"));
         return;
     }
-    // ③ 没有可换的面板，但有多会话 ⇒ 会话内回绕
-    if n > 1 {
+    // ③ 没有可换的面板，但有多会话 ⇒ 会话内回绕（同样只在音乐面板）
+    if on_music_panel && n > 1 {
         crate::taskbar_music::select_session(0);
         return;
     }
@@ -1032,6 +1056,8 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         cur.title.encode_utf16().collect()
     };
     let artist_wide: Vec<u16> = cur.artist.encode_utf16().collect();
+    // ⚠️ **标题有「未在播放」兜底、艺人没有** —— 艺人可能是空串（实测某播放器上报
+    //   `artist = ""`），这是 2026-09-29 闪退的根因所在（见 `measure_text` 的注释）。
     let (t_nat, a_nat) = unsafe {
         (
             ffi::measure_text(memdc, font, &title_wide),
@@ -1056,8 +1082,6 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let gap = m.icon_text_gap;
 
     // ⭐ **封面右侧的间隙另算，比按键之间宽**（用户 2026-09-29：「把封面到上一首
-    // ⚠️ **标题有「未在播放」兜底、艺人没有** —— 艺人可能是空串（实测某播放器上报
-    //   `artist = ""`），这是 2026-09-29 闪退的根因所在（见 `measure_text` 的注释）。
     //   按钮和到两排文字的距离同时增加一些」）。
     //   · `gap`       = 按键↔按键、末段基准（保持 5px 不变）
     //   · `cover_gap` = 封面↔文字（静态）/ 封面↔第一键（hover）
@@ -2528,7 +2552,21 @@ pub(crate) mod ffi {
     /// ⚠️ **只在对齐方式与真实绘制一致时，测量值才对得上**；这里统一用
     ///   `DT_LEFT | DT_SINGLELINE | DT_NOPREFIX`（与 `draw_text` 完全一致），
     ///   否则会出现「算 40px、画 46px」的错位（文本被裁切）。
+    /// ⛔⛔ **空串必须在这里拦下**（2026-09-29 实测闪退，根因）：
+    ///
+    /// `Vec::<u16>::new().as_ptr()` 是**悬垂的对齐哨兵指针**（u16 对齐 = 2），
+    /// **不是有效内存**。而 `DrawTextW` 即使 `cch = 0` 也会去解引用它
+    /// ⇒ **访问违例**：进程直接消失，**无 panic、无 WER、panic 文件为空**
+    /// （这正是它此前被反复误判成「不是 panic、是访问违例之外的某种怪东西」的原因）。
+    ///
+    /// 触发条件很窄：**某个会话上报 `artist = ""`** ⇒ 同一首歌画得好好的，
+    /// 「切换媒体会话」后崩 ⇒ 看起来像会话切换的 bug，实际是**空串**。
+    /// ⚠️ 凡是「把 `&[u16]` 交给 GDI」的入口都要有这道闸
+    /// （本函数 / `render_text_mask` / `taskbar_tooltip::draw_text`），漏一处就还能崩。
     pub unsafe fn measure_text(memdc: HDC, font: HFONT, text: &[u16]) -> i32 {
+        if text.is_empty() {
+            return 0;
+        }
         let old = SelectObject(memdc, font as HGDIOBJ);
         let mut rc = windows_sys::Win32::Foundation::RECT {
             left: 0,
@@ -2552,21 +2590,7 @@ pub(crate) mod ffi {
     /// ⛔⛔ **为什么不能直接把 GDI 文本画进主缓冲**（本模块最隐蔽的一个坑）：
     ///   GDI 的 `DrawTextW` **不理解 per-pixel alpha** —— 它在 32bpp DIB 上写的是
     ///   `0x00RRGGBB`（**alpha 字节恒为 0**）。直接画进主缓冲，这些文字像素
-    /// ⛔⛔ **空串必须在这里拦下**（2026-09-29 实测闪退，根因）：
-    ///
-    /// `Vec::<u16>::new().as_ptr()` 是**悬垂的对齐哨兵指针**（u16 对齐 = 2），
-    /// **不是有效内存**。而 `DrawTextW` 即使 `cch = 0` 也会去解引用它
-    /// ⇒ **访问违例**：进程直接消失，**无 panic、无 WER、panic 文件为空**
-    /// （这正是它此前被反复误判成「不是 panic、是访问违例之外的某种怪东西」的原因）。
-    ///
-    /// 触发条件很窄：**某个会话上报 `artist = ""`** ⇒ 同一首歌画得好好的，
-    /// 「切换媒体会话」后崩 ⇒ 看起来像会话切换的 bug，实际是**空串**。
-    /// ⚠️ 凡是「把 `&[u16]` 交给 GDI」的入口都要有这道闸
-    /// （本函数 / `render_text_mask` / `taskbar_tooltip::draw_text`），漏一处就还能崩。
     ///   `alpha=0` ⇒ 被 `ULW` 当作**全透明** ⇒ **文字完全不显示**。
-        if text.is_empty() {
-            return 0;
-        }
     ///   （与「没设背景刷」的失败表现**一模一样**，极易误判成同一个问题。）
     /// ⇒ 正确做法：**在白底黑字的掩码上画**，然后按「暗到什么程度」反推覆盖度
     ///   ⇒ `alpha = 255 - gray`。这样抗锯齿边缘的覆盖度是**精确**的。
