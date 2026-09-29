@@ -1059,39 +1059,57 @@ pub fn destroy() {
 ///   顺序反了会让 `ULW` 提交到一个正在销毁的窗口。
 #[cfg(target_os = "windows")]
 pub fn sync(_owner: HWND, entries: &[TipEntry]) {
-    // ⛔⛔ **重新落位必须放在「没变就返回」之**前**。
-    //   本 bug 的形态恰恰是「**条目没变、只有 widget 移了**」：
-    //   设备快照前后一致，只有 `draw_blank`(x=0) → `draw_items`(x=1101) 切换时
-    //   窗口位置变了 ⇒ `*last == entries` 成立 ⇒ 提前 return ⇒ 永不重定位。
-    //   放在后面 = 这条路径永远走不到（真机复现：提示永久停在最左端）。
-    let shown = CURRENT_SHOWN.load(Ordering::Acquire);
-    if shown >= 0 {
-        render_and_show(shown as usize);
-    }
-    {
+    // ① 先判「变没变」。**读** `LAST_SYNCED` 放在动任何 Win32 状态之前 ——
+    //    条目清空要销毁窗口，而销毁期间若有提示在显示，顺序反了会让
+    //    `UpdateLayeredWindow` 提交到一个正在销毁的窗口。
+    let changed = {
         let last = crate::state::lock_unpoisoned(&LAST_SYNCED);
-        if *last == entries {
-            return;
-        }
-    }
+        *last != entries
+    };
     if entries.is_empty() {
         destroy();
         return;
     }
-    let hwnd = ensure_window();
-    if hwnd.is_null() {
-        return;
+    // ② 变了才重建窗口 + 写条目。
+    if changed {
+        let hwnd = ensure_window();
+        if hwnd.is_null() {
+            return;
+        }
+        // ⛔⛔ **这两行原来正是「同一函数两种中毒语义」的现场**：
+        //   上面读路径用 `unwrap_or_else(into_inner)`（中毒→恢复），这里却用 `if let Ok`
+        //   （中毒→静默跳过）。后果是**闩锁**：ENTRIES 中毒而 LAST_SYNCED 未中毒时，
+        //   本次写 ENTRIES 被跳过、LAST_SYNCED 却更新成功 ⇒ 下一帧 `*last == entries`
+        //   成立 ⇒ 提前 return ⇒ **ENTRIES 此后再也不会更新**，叠加 ① 的读路径
+        //   「中毒就 hide」⇒ tooltip 永久消失、无日志、只能重启。
+        //   两处写现在与读路径**同一语义**（中毒恢复），闩锁不可能成立。
+        *crate::state::lock_unpoisoned(&ENTRIES) = entries.to_vec();
+        *crate::state::lock_unpoisoned(&LAST_SYNCED) = entries.to_vec();
     }
-    // ⛔⛔ **这两行原来正是「同一函数两种中毒语义」的现场**：
-    //   上面读路径用 `unwrap_or_else(into_inner)`（中毒→恢复），这里却用 `if let Ok`
-    //   （中毒→静默跳过）。后果是**闩锁**：ENTRIES 中毒而 LAST_SYNCED 未中毒时，
-    //   本次写 ENTRIES 被跳过、LAST_SYNCED 却更新成功 ⇒ 下一帧 `*last == entries`
-    //   成立 ⇒ 提前 return ⇒ **ENTRIES 此后再也不会更新**，叠加 ① 的读路径
-    //   「中毒就 hide」⇒ tooltip 永久消失、无日志、只能重启。
-    //   两处写现在与读路径**同一语义**（中毒恢复），闩锁不可能成立。
-    *crate::state::lock_unpoisoned(&ENTRIES) = entries.to_vec();
-    *crate::state::lock_unpoisoned(&LAST_SYNCED) = entries.to_vec();
-    // ⭐ 重新落位见函数开头（**必须在**「没变就返回」之前）。
+    // ③ ⭐⭐ **重渲染/重新落位：必须在 ② 之后，且不能被「条目没变」跳过。**
+    //
+    // 这两条约束**方向相反**，合起来才唯一确定它只能待在 ③：
+    //
+    //   ⛔ **不能更早**（旧代码就在这里）：`render_and_show` 读的是**全局** `ENTRIES`，
+    //      早于写入就等于**拿上一帧的条目渲染当前画面** ⇒ tooltip 落后一拍。
+    //      实测 2026-09-29：点「切换」那一瞬新会话元数据未到、标题为空
+    //      （面板自己画兜底「未在播放」），tooltip 把这个**瞬时错值**渲染了出来；
+    //      下一帧本该自愈 —— 但**光标静止时没有下一帧**
+    //      （hover 轮询只在「换设备 / 首次延迟到期 / 离开」时投递，
+    //        `idx == HOVERED_ITEM` ⇒ 一条都不投）
+    //      ⇒ 那个错值被**无限期冻结**，直到用户重新 hover。
+    //      ⛔ 这类「靠下一帧自愈」的写法，等于把正确性押在「一定会有下一帧」上，
+    //        而静止光标恰好是这个前提失效的常态。
+    //
+    //   ⛔ **不能更晚 / 不能加在早退之后**（旧代码的早退就在 ② 之前）：
+    //      「重新落位」的触发形态恰恰是「**条目没变、只有 widget 移了**」——
+    //      设备快照前后一致，只有 `draw_blank`(x=0) → `draw_items`(x=1101) 切换时
+    //      窗口位置变了 ⇒ `changed == false` ⇒ 提前 return ⇒ 永不重定位。
+    //      放在早退之后 = 这条路径永远走不到（真机复现：提示永久停在最左端）。
+    let shown = CURRENT_SHOWN.load(Ordering::Acquire);
+    if shown >= 0 {
+        render_and_show(shown as usize);
+    }
 }
 
 /// **显示**第 `index` 条提示。**只能在主线程调用**。
