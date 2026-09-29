@@ -1043,6 +1043,16 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
         let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
         windows_sys::Win32::Graphics::Gdi::ReleaseDC(std::ptr::null_mut(), screen);
+        // ⚠️ **必须与 `draw_items_render` 同款判据**（2026-09-29 补齐）。
+        //   缺了它**不会闪退**（实测：NULL HDC 下 `measure_text` 只是**静默返回 0**，
+        //   判据 `measure_text_with_null_dc_does_not_crash_but_returns_garbage`），
+        //   但「文字宽度 = 0」会让 `body_w` 算窄 ⇒ **面板过窄、文本被裁切**，
+        //   且**零日志** —— 与「静默丢数据」同类的哑故障。
+        //   两条路径（设备 / 音乐）此前判据不一致，属于典型的分叉点。
+        if dc.is_null() {
+            windows_sys::Win32::Graphics::Gdi::DeleteObject(f);
+            return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
+        }
         (f, dc)
     };
     if memdc.is_null() {
@@ -5926,6 +5936,66 @@ pub fn destroy_widget() {}
 //   绘制路径依赖真实窗口与 GDI，无法在这些单测里覆盖，改由真机截图验收。
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
+
+    /// ⭐⭐ **空串闸的机械判据**（2026-09-29）：之前我写过「无法用单测覆盖，
+    /// 只能真机复现」——**那是错的**，测试进程里能建真实 DC。
+    ///
+    /// 判据的可证伪性：**删掉 `measure_text` 里的空串闸，本用例会让测试进程
+    /// 直接崩掉**（访问违例，`DrawTextW` 解引用 `Vec::new().as_ptr()` 的悬垂哨兵），
+    /// 而不是「断言失败」——所以 CI 上表现为**测试二进制异常退出**，
+    /// 这正是它当年在真机上的形态。
+    #[test]
+    fn measure_text_on_empty_slice_returns_zero_and_never_touches_gdi() {
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+        };
+        unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            let memdc = CreateCompatibleDC(screen);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            assert!(!memdc.is_null(), "测试自身前提：DC 应当建得出来");
+            let font = super::ffi::create_font(15, false);
+            assert!(!font.is_null(), "测试自身前提：字体应当建得出来");
+
+            // ① 空切片 ⇒ 0，且**不进 GDI**
+            let empty: &[u16] = &[];
+            assert_eq!(super::ffi::measure_text(memdc, font, empty), 0);
+
+            // ② 对照：非空串必须真的量出宽度（证明上面那个 0 不是「全都返回 0」）
+            let text: Vec<u16> = "Aimer".encode_utf16().collect();
+            assert!(
+                super::ffi::measure_text(memdc, font, &text) > 0,
+                "非空文本必须量出正宽度（否则本判据是假绿）"
+            );
+
+            let _ = SelectObject(memdc, std::ptr::null_mut());
+            DeleteObject(font);
+            DeleteDC(memdc);
+        }
+    }
+
+    /// ⭐ **摸清 `CreateCompatibleDC` 失败（NULL HDC）时 `measure_text` 的真实行为**。
+    ///
+    /// 这条不是为了「证明没事」，而是为了让「要不要给 `draw_music_render` 补
+    /// `memdc.is_null()`」这个决定**有据可依**，而不是靠「GDI 通常会返回 0」这种印象。
+    /// 测出来的结论直接写进 `draw_music_render` 的注释。
+    #[test]
+    fn measure_text_with_null_dc_does_not_crash_but_returns_garbage() {
+        let font = unsafe { super::ffi::create_font(15, false) };
+        assert!(!font.is_null());
+        let text: Vec<u16> = "Aimer".encode_utf16().collect();
+        let w = unsafe { super::ffi::measure_text(std::ptr::null_mut(), font, &text) };
+        // ⚠️ 结论（2026-09-29 实测）：**不崩，但返回的是垃圾值**。
+        //   `SelectObject(NULL, …)` 与 `DrawTextW(NULL, …, DT_CALCRECT)` 都不失败，
+        //   只是拿不到真实度量 ⇒ `rc` 保持全 0 ⇒ 返回 0。
+        //   ⇒ 危害不是「闪退」而是**静默错值**：文字宽度算成 0 ⇒
+        //     面板宽度算窄 ⇒ 文本被裁切，且**没有任何日志**。
+        assert_eq!(
+            w, 0,
+            "NULL HDC 下量宽会静默变成 0（不崩）——这正是必须补 null 检查的理由"
+        );
+        unsafe { windows_sys::Win32::Graphics::Gdi::DeleteObject(font) };
+    }
 
     /// ⭐ **音乐状态变化绝不能走设备取数通道**（用户 2026-09-29 报「点暂停后
     ///   播放/暂停键延迟数秒才变」）。
