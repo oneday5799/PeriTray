@@ -681,8 +681,8 @@
     <div class="tab-content" id="tab-taskbar">
       <div class="card expandable" id="taskbar-widget-card">
         <div class="card-left">
-          <div class="card-title">任务栏组件</div>
-          <div class="card-desc">在任务栏上显示所选设备的信息</div>
+          <div class="card-title">显示设备信息组件</div>
+          <div class="card-desc">在任务栏添加并显示设备信息组件，可手动切换</div>
         </div>
         <div class="card-actions">
           <label class="toggle">
@@ -702,6 +702,22 @@
             <div class="card-item-name" id="taskbar-widget-empty-text">尚未添加设备</div>
           </div>
           <div id="taskbar-widget-devices"></div>
+        </div>
+      </div>
+
+      <!-- 「显示音乐控制组件」与上面的「显示设备信息组件」是**两个独立开关**：
+           关掉其中一个**不会**影响另一个（用户 2026-09-28 明确要求）。
+           ⛔ 本卡是**单开关卡、无展开区**——音乐没有「已添加设备清单」那类内容。 -->
+      <div class="card" id="taskbar-music-card">
+        <div class="card-left">
+          <div class="card-title">显示音乐控制组件</div>
+          <div class="card-desc">在任务栏添加并显示音乐控制组件，可手动切换</div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-taskbar-music">
+            <span class="slider"></span>
+          </label>
         </div>
       </div>
 
@@ -766,11 +782,11 @@
           <div class="card-desc">设置任务栏信息窗口中图标和信息文字的大小</div>
         </div>
         <!-- ⛔ `data-value` 必须与后端 `TaskbarContentScale` 的序列化字面逐字一致
-             （`config.rs`：`"default"` / `"follow_system"`）——
+             （`config.rs`：`"default"` / `"smaller"`）——
              拼错任一侧都会让该档永远选不出来，且不报错。 -->
         <div class="win-combo-box" id="combo-taskbar-content-scale">
           <button class="win-combo-btn" role="combobox" aria-expanded="false">
-            <span class="win-combo-content">默认大小</span>
+            <span class="win-combo-content">默认</span>
             <span class="win-combo-chevron">
               <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
@@ -782,13 +798,13 @@
               <button class="win-combo-item" data-value="default">
                 <span class="win-combo-item-layout">
                   <span class="win-combo-item-pill"></span>
-                  <span class="win-combo-item-content">默认大小</span>
+                  <span class="win-combo-item-content">默认</span>
                 </span>
               </button>
-              <button class="win-combo-item" data-value="follow_system">
+              <button class="win-combo-item" data-value="smaller">
                 <span class="win-combo-item-layout">
                   <span class="win-combo-item-pill"></span>
-                  <span class="win-combo-item-content">跟随系统</span>
+                  <span class="win-combo-item-content">偏小</span>
                 </span>
               </button>
             </div>

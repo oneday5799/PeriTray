@@ -68,6 +68,700 @@
 //    否则 `#[cfg(not(windows))]` 的桩函数签名对不上。故**不**在文件顶写
 //    `#![cfg(target_os = "windows")]`，而是逐项按需 cfg（模块内 Win32 代码统一走 `ffi`）。
 
+// ═══════════════════════════════════════════════════════════════════
+// 单击 vs 拖拽的区分（音乐面板的按钮点击依赖它）
+// ═══════════════════════════════════════════════════════════════════
+
+/// 判定「这次按下是一次**点击**而不是拖拽窗口」的两个阈值。
+///
+/// ⛔ **为什么必须有这个判据**：`WM_LBUTTONDOWN` 现行实现是**无条件**
+///   `drag_begin` → `SetCapture`（见 `drag_begin`）⇒ 鼠标按下即进入拖拽态。
+///   音乐面板的三键与「切换」按钮靠**单击**触发 ⇒ 没有阈值就分不出
+///   「点一下按钮」与「按住拖窗口」，表现为**点按钮没反应 / 拖一下就误触发按钮**。
+///
+/// ⭐ 两个条件都满足才算点击：
+///   · 位移 < [`CLICK_SLOP_PX`]（默认 Windows 的拖拽阈值量级）
+///   · 按下到抬起 < [`CLICK_TIME_MS`]
+#[cfg(target_os = "windows")]
+const CLICK_SLOP_PX: i32 = 4;
+#[cfg(target_os = "windows")]
+const CLICK_TIME_MS: u64 = 400;
+
+#[cfg(target_os = "windows")]
+static PRESS_CURSOR: std::sync::Mutex<Option<(i32, i32, u64)>> = std::sync::Mutex::new(None);
+
+/// 记下按下时的光标与时刻（`WM_LBUTTONDOWN` 时调用）。
+#[cfg(target_os = "windows")]
+fn press_record() {
+    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
+        return;
+    }
+    *crate::state::lock_unpoisoned(&PRESS_CURSOR) = Some((pt.x, pt.y, now_ms()));
+}
+
+/// 抬起时判定这次是不是「点击」，并给出**按下时的窗口局部坐标**。
+#[cfg(target_os = "windows")]
+fn press_take_click() -> Option<(i32, i32)> {
+    let pressed = crate::state::lock_unpoisoned(&PRESS_CURSOR).take()?;
+    let (px, py, t0) = pressed;
+    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
+        return None;
+    }
+    let dx = (pt.x - px).abs();
+    let dy = (pt.y - py).abs();
+    if dx > CLICK_SLOP_PX || dy > CLICK_SLOP_PX {
+        return None; // 位移超阈值 ⇒ 是拖拽
+    }
+    if now_ms().saturating_sub(t0) > CLICK_TIME_MS {
+        return None; // 按太久 ⇒ 长按，不是点击
+    }
+    let handle = WIDGET_HWND.load(Ordering::SeqCst);
+    let (wx, wy, _, _) = window_screen_rect(handle as _)?;
+    Some((px - wx, py - wy))
+}
+
+/// 处理一次「点击」（`WM_LBUTTONUP` 时调用）。
+///
+/// ⭐ 判据与**音乐面板已发布的布局**比对（不现算矩形），与绘制同源。
+/// ⛔ 只发命令给后台线程 / 改配置，**绝不** `emit`、**绝不**持锁调窗口 API。
+#[cfg(target_os = "windows")]
+pub fn on_click(local: (i32, i32)) {
+    match current_panel() {
+        Some(crate::config::TaskbarPanel::Music) => {
+            let hit = hit_test_music(local);
+            if hit != MusicHit::None {
+                if crate::config::verbose_log_enabled() {
+                    append_log(&format!("[widget] 音乐面板点击: {hit:?} @({})", local.0));
+                }
+                activate_music(hit);
+            }
+        }
+        Some(crate::config::TaskbarPanel::Devices) => {
+            // 设备面板的设备项**没有**点击语义（按下即拖拽），但**最右的切换按钮有**
+            if dev_switch_hit(local) {
+                if crate::config::verbose_log_enabled() {
+                    append_log(&format!("[widget] 设备面板点击: Switch @({})", local.0));
+                }
+                advance_switch_target();
+                return;
+            }
+            if crate::config::verbose_log_enabled() {
+                append_log(&format!("[widget] 设备面板点击（无动作）@({})", local.0));
+            }
+        }
+        None => {}
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 音乐面板的交互：面板分派、挂载判据、单击、滚轮闸、切换状态机
+// ═══════════════════════════════════════════════════════════════════
+
+/// 音乐数据变化时的**唯一入口**（由 `taskbar_music` 后台线程调用）。
+///
+/// ⛔⛔ **它跑在 SMTC 的回调线程上**，因此只做两件事：
+///   ① 置 `FORCE_REPAINT`（重绘判据「数据变了 ∨ 槽位移动 ∨ FORCE_REPAINT」里的一项）
+///   ② 投递一条**异步**的挂载重估
+/// **绝不**在这里等主线程、也**绝不**调 Tauri 的窗口 API
+/// （`app.run_on_main_thread` 内部是 `rx.recv()` 无超时等主线程 ⇒ 在回调线程上
+/// 同步调它就是 AB/BA 死锁的前兆）。这与本文件「`wnd_proc` 绝不 emit」同源。
+///
+/// ⭐ 为什么必须能触发**挂载/卸载**而不只是重绘：音乐面板是**内容级**存在，
+///   「有没有会话」决定组件**在不在**；只重绘的话，无会话→有会话时窗口仍然挂着空窗。
+#[cfg(target_os = "windows")]
+pub fn on_music_changed() {
+    FORCE_REPAINT.store(true, Ordering::Release);
+    if let Some(app) = crate::taskbar_music::app() {
+        // ⛔ **异步**投递（`run_on_main_thread` 本身已是排队语义），不在此阻塞
+        let _ = app.run_on_main_thread(|| {
+            refresh_async();
+        });
+    } else {
+        // 没有 app 句柄（极早期）⇒ 只靠 2s 维护循环也会收敛
+        refresh_async();
+    }
+}
+
+/// 启动音乐后台线程（应用启动时调一次）。
+#[cfg(target_os = "windows")]
+pub fn start_music(app: &tauri::AppHandle) {
+    crate::taskbar_music::start(app.clone());
+}
+
+/// 音乐面板的命中结果（一次点击落在这张表的哪一格）。
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicHit {
+    None,
+    /// 上一首
+    Prev,
+    /// 播放 / 暂停
+    PlayPause,
+    /// 下一首
+    Next,
+    /// 「切换」按钮
+    Switch,
+}
+
+#[cfg(target_os = "windows")]
+fn point_in(r: &windows_sys::Win32::Foundation::RECT, p: (i32, i32)) -> bool {
+    p.0 >= r.left && p.0 < r.right && p.1 >= r.top && p.1 < r.bottom
+}
+
+/// 把光标局部坐标解析成音乐面板的命中结果（**读已发布的布局**，不现算）。
+#[cfg(target_os = "windows")]
+pub fn hit_test_music(cursor: (i32, i32)) -> MusicHit {
+    let Some(l) = music_layout() else {
+        return MusicHit::None;
+    };
+    if let Some(sb) = l.switch_btn {
+        if point_in(&sb, cursor) {
+            return MusicHit::Switch;
+        }
+    }
+    if !l.hovered {
+        return MusicHit::None; // 静态形态无可点区域
+    }
+    // 点在面板主体之外 ⇒ 不触发任何命令（否则「点空白」会误触发）
+    if !point_in(&l.item, cursor) {
+        return MusicHit::None;
+    }
+    for (i, r) in l.buttons.iter().enumerate() {
+        if r.right > r.left && point_in(r, cursor) {
+            return match i {
+                0 => MusicHit::Prev,
+                1 => MusicHit::PlayPause,
+                _ => MusicHit::Next,
+            };
+        }
+    }
+    MusicHit::None
+}
+
+/// 「切换」按钮的语义（用户 2026-09-28 指定的循环顺序）：
+///
+/// ```text
+///   会话1 → 会话2 → … → 会话N → 换组件 → 会话1 → …
+/// ```
+///
+/// ⛔⛔ **「只有一个会话」时，会话列表在第一次点击前就已经走完** ⇒ 下一步应当是
+///   **换组件**。我第一版写的守卫是 `if !need_panel_switch && n <= 1 { return; }`
+///   —— 它把「没有下一个会话」误当成「无处可切」，于是 N=1（绝大多数情况）时
+///   **点切换完全没反应**（用户 2026-09-28 实测报出）。
+///   ⇒ 正确判据是「**还有没有下一个会话**」，而不是「会话数是否 > 1」。
+fn advance_switch_target() {
+    let snap = crate::taskbar_music::snapshot();
+    let n = snap.sessions.len();
+    let cur_panel = current_panel();
+
+    // ① 优先切会话：确实还有**下一个**会话没看过
+    if n > 1 && snap.current + 1 < n {
+        crate::taskbar_music::select_session(snap.current + 1);
+        return;
+    }
+    // ② 会话已走完（或本来就只有一个）⇒ 另一个面板可用就换过去
+    if let Some(other) = other_panel_if_available(cur_panel) {
+        crate::config::with_config_mut(|c| c.taskbar_panel = other);
+        // ⭐ 同时把会话下标**归零**：换回来时从第一个会话开始，环才是闭合的
+        crate::taskbar_music::select_session(0);
+        FORCE_REPAINT.store(true, Ordering::Release);
+        refresh_async();
+        append_log(&format!("[widget] 切换组件 → {other:?}"));
+        return;
+    }
+    // ③ 没有可换的面板，但有多会话 ⇒ 会话内回绕
+    if n > 1 {
+        crate::taskbar_music::select_session(0);
+        return;
+    }
+    // ④ 无处可切（此时按钮本就不该显示，见 switch_visible）
+    if crate::config::verbose_log_enabled() {
+        append_log(&format!(
+            "[widget] 切换无可用目标: 面板={cur_panel:?} 会话数={n}"
+        ));
+    }
+}
+
+/// 另一个面板是否**也可用**（可用才换过去）。
+fn other_panel_if_available(
+    cur: Option<crate::config::TaskbarPanel>,
+) -> Option<crate::config::TaskbarPanel> {
+    let music_ok = crate::taskbar_music::snapshot().available();
+    let dev_ok = crate::config::with_config(crate::config::taskbar_devices_available);
+    let (other, other_ok) = match cur? {
+        crate::config::TaskbarPanel::Music => (crate::config::TaskbarPanel::Devices, dev_ok),
+        crate::config::TaskbarPanel::Devices => (crate::config::TaskbarPanel::Music, music_ok),
+    };
+    other_ok.then_some(other)
+}
+
+/// 执行一次音乐面板的点击。
+#[cfg(target_os = "windows")]
+pub fn activate_music(hit: MusicHit) {
+    match hit {
+        MusicHit::Prev => crate::taskbar_music::cmd_previous(),
+        MusicHit::PlayPause => crate::taskbar_music::cmd_play_pause(),
+        MusicHit::Next => crate::taskbar_music::cmd_next(),
+        MusicHit::Switch => advance_switch_target(),
+        MusicHit::None => {}
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 音乐面板：布局、绘制、命中
+// ═══════════════════════════════════════════════════════════════════
+
+/// 音乐面板的**本帧布局**（绘制时发布，命中时读取 —— 与设备面板的
+/// `LAST_ITEM_RECTS` 同一纪律：**绘制与命中必须同源**）。
+///
+/// ⛔ 面板内部有三类可点区域（上一首 / 播放暂停 / 下一首）+ 一个切换按钮，
+///   它们**不是** `LAST_ITEM_RECTS` 的下标，而是各自的子矩形。
+///   若命中时现算，就会出现「第二个布局来源」⇒ 点到别的按钮上且不报错。
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Default)]
+pub struct MusicLayout {
+    /// 封面 + 文本/按钮的整块区域（tooltip 命中用）。
+    pub item: windows_sys::Win32::Foundation::RECT,
+    /// 三个控制键：`[上一首, 播放/暂停, 下一首]`。宽度为 0 表示该键不可用。
+    pub buttons: [windows_sys::Win32::Foundation::RECT; 3],
+    /// 「切换」按钮（`None` = 本帧不显示）。
+    pub switch_btn: Option<windows_sys::Win32::Foundation::RECT>,
+    /// 本帧是否 hover（决定静态/控制形态）。
+    pub hovered: bool,
+}
+
+#[cfg(target_os = "windows")]
+static MUSIC_LAYOUT: std::sync::Mutex<Option<MusicLayout>> = std::sync::Mutex::new(None);
+
+/// 读回音乐面板的布局（命中判定用）。
+#[cfg(target_os = "windows")]
+pub fn music_layout() -> Option<MusicLayout> {
+    *crate::state::lock_unpoisoned(&MUSIC_LAYOUT)
+}
+
+#[cfg(target_os = "windows")]
+fn publish_music_layout(l: MusicLayout) {
+    *crate::state::lock_unpoisoned(&MUSIC_LAYOUT) = Some(l);
+}
+
+/// 音乐面板当前该显示哪一块（`None` = 音乐不可用）。
+///
+/// ⭐ 判据在 `config::taskbar_panel_for`（纯函数、可单测）；这里只补上
+///   「音乐会话是否存在」这个**配置层问不到**的事实。
+#[cfg(target_os = "windows")]
+pub fn current_panel() -> Option<crate::config::TaskbarPanel> {
+    let music_available = crate::taskbar_music::snapshot().available();
+    crate::config::with_config(|c| crate::config::taskbar_panel_for(c, music_available))
+}
+
+/// 「切换」按钮本帧是否该显示。
+///
+/// ⭐ 判据（用户 2026-09-28）：**有东西可切才显示**
+///   · 两个开关都开            ⇒ 能在「设备 / 音乐」之间切
+///   · 音乐面板 ∧ 会话数 > 1   ⇒ 能在多个媒体会话之间切
+///   · 只开一个开关且只有一个会话 ⇒ 无处可切 ⇒ **不显示**（占位也是噪音）
+#[cfg(target_os = "windows")]
+fn switch_visible(panel: crate::config::TaskbarPanel) -> bool {
+    let both_on = crate::config::with_config(|c| {
+        crate::config::taskbar_devices_available(c) && c.taskbar_music_enabled
+    });
+    let multi_session = matches!(panel, crate::config::TaskbarPanel::Music)
+        && crate::taskbar_music::snapshot().sessions.len() > 1;
+    both_on || multi_session
+}
+
+/// 设备面板的「切换」按钮矩形（`None` = 本帧不显示）。
+///
+/// ⛔⛔ **两个面板都必须有它**：切换按钮只画在音乐面板时，��到设备面板就是
+/// **单程票**——用户再也回不去音乐面板，只能去设置页（实测 2026-09-28：
+/// 修好「记住的选择」后组件确实切到了设备面板，却发现**回不来了**）。
+/// 用户原话是「在**任务栏组件**的最右边」，组件指整体而非音乐面板。
+#[cfg(target_os = "windows")]
+static DEV_SWITCH_RECT: std::sync::Mutex<Option<windows_sys::Win32::Foundation::RECT>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+fn publish_dev_switch(r: Option<windows_sys::Win32::Foundation::RECT>) {
+    *crate::state::lock_unpoisoned(&DEV_SWITCH_RECT) = r;
+}
+
+/// 设备面板的切换按钮是否被点到（命中判定与绘制同源，见 [`publish_dev_switch`]）。
+#[cfg(target_os = "windows")]
+fn dev_switch_hit(local: (i32, i32)) -> bool {
+    hit_rect(*crate::state::lock_unpoisoned(&DEV_SWITCH_RECT), local)
+}
+
+/// 点是否落在矩形内。
+#[cfg(target_os = "windows")]
+fn hit_rect(r: Option<windows_sys::Win32::Foundation::RECT>, local: (i32, i32)) -> bool {
+    let Some(r) = r else { return false };
+    local.0 >= r.left && local.0 < r.right && local.1 >= r.top && local.1 < r.bottom
+}
+
+/// 音乐面板绘制（**主线程**）。
+///
+/// 形态（用户 2026-09-28 指定）：
+/// · 静态 = 左边封面 + 上排标题 / 下排艺人
+/// · hover = 封面 + 三键（上一首 / 播放暂停 / 下一首）
+/// · 「切换」按钮恒在**最右侧**（仅在 `switch_visible` 时）
+///
+/// ⭐ 宽度**随形态变化**（用户选择）：hover 时变宽、离开时变窄。
+///   已核对不会自激：`want_hover` 用实际窗口矩形判「光标在内」，
+///   而**宽窗口包含窄窗口** ⇒ 变宽后光标必仍在内 ⇒ 不会「变宽→出界→变窄」的振荡。
+#[cfg(target_os = "windows")]
+pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
+    let dark = crate::windows::system_dark_mode();
+    let m = Metrics::current_content();
+    let snap = crate::taskbar_music::snapshot();
+    let hovered = HOVERED.load(Ordering::Acquire);
+    let cur = snap.current_session().cloned().unwrap_or_default();
+
+    // ── 建字体 + 测量（与设备面板同一套度量/测量入口）────────────────
+    let (font, memdc) = unsafe {
+        let f = ffi::create_font(m.font, true);
+        if f.is_null() {
+            return draw_blank(hwnd, m.pad_x * 2);
+        }
+        let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
+        let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
+        windows_sys::Win32::Graphics::Gdi::ReleaseDC(std::ptr::null_mut(), screen);
+        (f, dc)
+    };
+    if memdc.is_null() {
+        unsafe { ffi::destroy_font(font) };
+        return draw_blank(hwnd, m.pad_x * 2);
+    }
+
+    let title_wide: Vec<u16> = if cur.title.is_empty() {
+        "未在播放".encode_utf16().collect()
+    } else {
+        cur.title.encode_utf16().collect()
+    };
+    let artist_wide: Vec<u16> = cur.artist.encode_utf16().collect();
+    let (t_nat, a_nat) = unsafe {
+        (
+            ffi::measure_text(memdc, font, &title_wide),
+            ffi::measure_text(memdc, font, &artist_wide),
+        )
+    };
+    unsafe { windows_sys::Win32::Graphics::Gdi::DeleteDC(memdc) };
+
+    // ⭐ **两个尺寸是分别定的，别再让它们相等**（用户 2026-09-28 实测报「切换太大、三键太小」）：
+    //   · 三键占**满高度**（`m.h`）—— 它们是「有边框 + 内容」的线稿图标，32px 下边框只有
+    //     1.6px、暂停双竖条只有 25.6/1024 ≈ **0.8px** ⇒ 几乎看不见。占满高度后边框 2px、
+    //     竖条 1px，才读得出是三个键。控制行占满高也是常规做法。
+    //   · 「切换」图标**保持原尺寸**（= `m.icon`，与控制键同一边长）——
+    //     用户 2026-09-28 复核后要求改回。三键占满高度是它**自身线稿太细**所致
+    //     （内部元素 25.6/1024 ⇒ 32px 下 0.8px），与切换图标无关，两者不必一起改。
+    let switch_px = m.icon;
+    let gap = m.item_gap;
+    let text_w = t_nat.min(m.item_max_w).max(a_nat.min(m.item_max_w));
+
+    // ⭐⭐ **组件宽度恒定：正文区宽度只按静态形态定一次，两种形态共用**
+    //   （用户 2026-09-28：「以当前非 hover 时的长度为准，让 hover 时的长度固定一致」）。
+    //   此前 hover 用 `btn * 3 + gap * 2`（50×3+13×2 = 176）而静态是 164
+    //   ⇒ 指针一进组件，窗口宽度从 262 跳到 ~300，**整个面板左右窜动**。
+    //   现在 `body_w` 与 hovered **无关** ⇒ 两种形态的 `content_w` 逐字节相同。
+    //   ⚠️ 代价（可接受、且是这条要求的直接推论）：三键的边长不再恒为 `m.h`，
+    //   而要**在同一条带内均分**（下式）。`min(.., m.h)` 保证标题很长时也不会
+    //   超过控件高度。
+    let body_w = m.icon + m.icon_text_gap + text_w;
+    let btn = ((body_w - gap * 2) / 3).clamp(1, m.h);
+    let show_switch = switch_visible(crate::config::TaskbarPanel::Music);
+    let switch_w = if show_switch { switch_px + gap } else { 0 };
+    let content_w = m.icon + m.icon_text_gap + body_w + switch_w;
+    let desired_w = content_w + m.pad_x * 2;
+    if !SLOT_VALID.load(Ordering::Acquire) {
+        unsafe {
+            ffi::hide(hwnd as _);
+            ffi::destroy_font(font)
+        };
+        return true;
+    }
+    let (position, locked, custom_x) = crate::config::with_config(|c| {
+        (
+            c.taskbar_position.clone(),
+            c.taskbar_position_locked,
+            c.taskbar_custom_x,
+        )
+    });
+    let (tb_left, tb_w) = match taskbar_rect() {
+        Some((left, _, w, _)) => (left, w),
+        None => (0, i32::MAX),
+    };
+    let slot_rel_x = SLOT_X.load(Ordering::Acquire) - tb_left;
+    let slot_w = SLOT_W.load(Ordering::Acquire);
+    let total_w = desired_w.min(tb_w.max(min_run_w(&m)));
+    let edge_margin = m.dip(EDGE_MARGIN_DIP);
+    let aligned = align_in_slot(slot_rel_x, slot_w, total_w, &position, edge_margin);
+    let rel_x = resolve_rel_x(
+        locked,
+        aligned,
+        custom_x,
+        LAST_X.load(Ordering::Acquire),
+        total_w,
+        tb_w,
+    );
+    LAST_X.store(rel_x, Ordering::Release);
+    // ⭐ 与设备面板**同款定位日志**（详细级）：本模块最容易「看起来正常但位置不对」，
+    //   音乐面板刚引入时缺这条日志 ⇒ 出现「面板跑到别处」时无从判断是贴靠算错
+    //   还是根本没走定位。**两个面板的诊断口径必须对称**。
+    if crate::config::verbose_log_enabled() {
+        append_log(&format!(
+            "[widget] 定位: pos={position} locked={locked} area=({slot_rel_x},w={slot_w})              content_w={total_w} 余量={} → rel_x={rel_x} panel=Music hovered={hovered}              键={btn}px 切换={switch_px}px",
+            slot_w - total_w,
+        ));
+    }
+    unsafe { ffi::show(hwnd as _) };
+
+    let h = m.h;
+    let icon_y = (h - m.icon) / 2;
+    let Some(dib) = (unsafe { ffi::create_dib(total_w, h) }) else {
+        append_log("[widget] 音乐面板 CreateDIBSection 失败");
+        unsafe { ffi::destroy_font(font) };
+        return false;
+    };
+
+    // ── 布局一次算清并发布（绘制与命中共用这一份）───────────────────
+    let mut item_rect = windows_sys::Win32::Foundation::RECT {
+        left: m.pad_x,
+        top: 0,
+        right: m.pad_x + m.icon + m.icon_text_gap + body_w,
+        bottom: h,
+    };
+    let mut buttons = [windows_sys::Win32::Foundation::RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    }; 3];
+    let mut switch_btn = None;
+    if hovered {
+        // 均分后的余数**居中**（不分给某一侧）⇒ 视觉上不偏
+        let group_w = btn * 3 + gap * 2;
+        let mut x = item_rect.left + m.icon + m.icon_text_gap + (body_w - group_w) / 2;
+        for slot in buttons.iter_mut() {
+            *slot = windows_sys::Win32::Foundation::RECT {
+                left: x,
+                top: icon_y,
+                right: x + btn,
+                bottom: icon_y + btn,
+            };
+            x += btn + gap;
+        }
+    }
+    if show_switch {
+        let x = item_rect.right + gap;
+        // ⭐ 命中矩形用**切换图标自己的边长**（比三键小）⇒ 点空白不会误触发「切换」。
+        //   垂直居中：图标比三键矮，要在三键的行内居中才视觉对齐。
+        let sy = (h - switch_px) / 2;
+        switch_btn = Some(windows_sys::Win32::Foundation::RECT {
+            left: x,
+            top: sy,
+            right: x + switch_px,
+            bottom: sy + switch_px,
+        });
+        item_rect.right = x + switch_px;
+    }
+    let tip_text = if cur.title.is_empty() {
+        "未在播放".to_string()
+    } else {
+        format!("{}\n{}", cur.title, cur.artist)
+    };
+    publish_music_layout(MusicLayout {
+        item: item_rect,
+        buttons,
+        switch_btn,
+        hovered,
+    });
+    // ⭐ **同时发布 `LAST_ITEM_RECTS`**：音乐面板也必须走**同一条** hover 轮询与
+    //   tooltip 锚点路径（`hovered_item_index` / `item_rect_on_screen` 都读它）。
+    //   不发布 ⇒ hover 永远判不出「落在第几项」⇒ 提示不出现、且没有任何报错
+    //   （这正是 `LAST_ITEM_RECTS` 当初被立为「四路同源单一来源」的原因）。
+    //   下标语义：`[0]` = 面板主体，`[1]` = 切换按钮（若有）。
+    {
+        let mut rects = vec![item_rect];
+        if let Some(sb) = switch_btn {
+            rects.push(sb);
+        }
+        publish_item_rects(&rects);
+    }
+
+    unsafe {
+        let px = std::slice::from_raw_parts_mut(dib.bits, (total_w * h) as usize);
+        px.fill(0);
+        if hovered {
+            let alpha = hover_backdrop_alpha_for(crate::windows::system_uses_light_theme());
+            fill_hover_backdrop(px, total_w, h, alpha, m.radius);
+        }
+        let (cr, cg, cb): (u8, u8, u8) = if dark { (255, 255, 255) } else { (0, 0, 0) };
+
+        // ① 封面（已解码 + 已预乘，直接 source-over）
+        if let Some(cov) = crate::taskbar_music::cover(snap.cover_hash) {
+            // ⛔ 走**预乘直通**：封面缓存里存的就是预乘数据（见 taskbar_music::COVER_IMAGE）
+            if let Some((cpx, cw, chh)) = resample::scale_cached_premul(
+                resample::NS_COVER | (snap.cover_hash as u32),
+                m.icon as u32,
+                &(cov.data.clone(), cov.px, cov.px),
+            ) {
+                for yy in 0..(chh as i32).min(h - icon_y) {
+                    for xx in 0..(cw as i32).min(total_w - item_rect.left) {
+                        let si = ((yy * cw as i32 + xx) * 4) as usize;
+                        let a = cpx[si + 3] as u32;
+                        if a == 0 {
+                            continue;
+                        }
+                        let di = ((icon_y + yy) * total_w + item_rect.left + xx) as usize;
+                        if di < px.len() {
+                            px[di] = blend_over(
+                                px[di],
+                                a,
+                                cpx[si] as u32,
+                                cpx[si + 1] as u32,
+                                cpx[si + 2] as u32,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let body_x = item_rect.left + m.icon + m.icon_text_gap;
+        if hovered {
+            // ② 三键：不可用的键画**半透明**（与 FluentFlyout 一致：不隐藏、只置灰）
+            let slots = [
+                music_icons::Icon::Prev,
+                if cur.playing {
+                    music_icons::Icon::Pause
+                } else {
+                    music_icons::Icon::Play
+                },
+                music_icons::Icon::Next,
+            ];
+            for (i, slot) in buttons.iter().enumerate() {
+                if slot.right <= slot.left {
+                    continue;
+                }
+                let enabled = match i {
+                    0 => cur.can_prev,
+                    1 => cur.can_play_pause,
+                    _ => cur.can_next,
+                };
+                let scale = if enabled { 1.0f32 } else { 0.5f32 };
+                if let Some(scaled) = music_icons::get(slots[i], dark)
+                    .and_then(|r| music_icons::scale_to_slot(slots[i], r, m.icon as u32))
+                {
+                    let (ipx, iw, ih) = scaled;
+                    for yy in 0..(ih as i32).min(h - slot.top) {
+                        for xx in 0..(iw as i32).min(total_w - slot.left) {
+                            let si = ((yy * iw as i32 + xx) * 4) as usize;
+                            let a = (ipx[si + 3] as f32 * scale).round().clamp(0.0, 255.0) as u32;
+                            if a == 0 {
+                                continue;
+                            }
+                            let di = ((slot.top + yy) * total_w + slot.left + xx) as usize;
+                            if di < px.len() {
+                                px[di] = blend_over(
+                                    px[di],
+                                    a,
+                                    ipx[si] as u32 * a / 255,
+                                    ipx[si + 1] as u32 * a / 255,
+                                    ipx[si + 2] as u32 * a / 255,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // ③ 静态：上排标题 / 下排艺人（两行，与设备面板的电量/音量同款行高）
+            let t_clamped = t_nat.min(m.item_max_w);
+            let a_clamped = a_nat.min(m.item_max_w);
+            if t_clamped > 0 {
+                if let Some(mask) = ffi::render_text_mask(
+                    t_clamped,
+                    m.text_row_h,
+                    font,
+                    &title_wide,
+                    t_nat > t_clamped,
+                ) {
+                    blit_text_mask(px, total_w, &mask, body_x, icon_y, (cr, cg, cb), 1.0);
+                }
+            }
+            if a_clamped > 0 {
+                if let Some(mask) = ffi::render_text_mask(
+                    a_clamped,
+                    m.text_row_h,
+                    font,
+                    &artist_wide,
+                    a_nat > a_clamped,
+                ) {
+                    blit_text_mask(
+                        px,
+                        total_w,
+                        &mask,
+                        body_x,
+                        icon_y + m.text_row_h,
+                        (cr, cg, cb),
+                        0.5,
+                    );
+                }
+            }
+        }
+
+        // ④ 「切换」按钮恒在最右
+        if let Some(sb) = switch_btn {
+            if let Some(scaled) = music_icons::get(music_icons::Icon::Switch, dark).and_then(|r| {
+                music_icons::scale_to_slot(music_icons::Icon::Switch, r, switch_px as u32)
+            }) {
+                let (ipx, iw, ih) = scaled;
+                for yy in 0..(ih as i32).min(h - sb.top) {
+                    for xx in 0..(iw as i32).min(total_w - sb.left) {
+                        let si = ((yy * iw as i32 + xx) * 4) as usize;
+                        let a = ipx[si + 3] as u32;
+                        if a == 0 {
+                            continue;
+                        }
+                        let di = ((sb.top + yy) * total_w + sb.left + xx) as usize;
+                        if di < px.len() {
+                            px[di] = blend_over(
+                                px[di],
+                                a,
+                                ipx[si] as u32 * a / 255,
+                                ipx[si + 1] as u32 * a / 255,
+                                ipx[si + 2] as u32 * a / 255,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // ⑤ tooltip 条目（音乐面板只有一条 + 切换按钮一条）
+        let mut entries: Vec<crate::taskbar_tooltip::TipEntry> =
+            vec![crate::taskbar_tooltip::TipEntry {
+                text: tip_text,
+                rect: item_rect,
+            }];
+        if let Some(sb) = switch_btn {
+            entries.push(crate::taskbar_tooltip::TipEntry {
+                text: "切换".to_string(),
+                rect: sb,
+            });
+        }
+        crate::taskbar_tooltip::sync(hwnd as _, &entries);
+    }
+
+    unsafe { ffi::commit(hwnd, &dib, rel_x, widget_y_offset()) };
+    unsafe {
+        ffi::free_dib(&dib);
+        ffi::destroy_font(font)
+    };
+    true
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 布局度量：**标称值一律是 DIP**（96 DPI 基准），绘制前按实际 DPI 换算
 // ══════════════════════════════════════════════════════════════════════
@@ -135,7 +829,7 @@ pub struct Metrics {
     /// **内容**口径的 DPI。`icon` / `font` / `pad_x` / `icon_text_gap` / `item_gap` /
     /// `item_max_w` / `text_row_h` 由它换算，也由 `dip()` 消费。
     ///
-    /// ⚠️ 由 `taskbar_content_scale` 决定：`FollowSystem` ⇒ 等于 `dpi`；
+    /// ⚠️ 由 `taskbar_content_scale` 决定：`Default` ⇒ 等于 `dpi`；
     ///   `Default` ⇒ 恒 **96**（不随系统放大）。解析见 `for_scales`。
     pub content_dpi: u32,
     pub h: i32,
@@ -154,7 +848,7 @@ pub struct Metrics {
 
 #[cfg(target_os = "windows")]
 impl Metrics {
-    /// 按给定 DPI 换算，**底衬与内容同口径**（= `FollowSystem` 档，也是本设置引入前的行为）。
+    /// 按给定 DPI 换算，**底衬与内容同口径**（= `Default` 档，也是本设置引入前的行为）。
     ///
     /// ⚠️ 保留这个签名是给**只消费底衬量**的调用点用的（`create_popup` /
     ///   `widget_y_offset` / `draw_blank` / `draw_frame`）：它们只用 `h` / `radius`，
@@ -173,10 +867,47 @@ impl Metrics {
     ) -> Self {
         let bd = if backdrop_dpi == 0 { 96 } else { backdrop_dpi };
         let cd = match content_scale {
-            crate::config::TaskbarContentScale::Default => 96,
-            crate::config::TaskbarContentScale::FollowSystem => bd,
+            // 「默认」= 与底衬同口径（系统 DPI）
+            crate::config::TaskbarContentScale::Default => bd,
+            // 「偏小」= 比系统**低一档**
+            crate::config::TaskbarContentScale::Smaller => Self::step_down_dpi(bd),
         };
         Self::for_dpis(bd, cd)
+    }
+
+    /// 「偏小」档的内容 DPI = **比系统低一档**（用户 2026-09-29 定义：
+    /// 「把内容的大小降一档，例如当前系统缩放是 125%，则使用 100% 的缩放」）。
+    ///
+    /// ⭐ 走 **Windows 标准缩放阶梯**（100/125/150/175/200/225/250/300/350/400/
+    ///   500/600/800/1000）取**上一档**，而不是「乘 0.75」——
+    ///   后者在 125% 上会得到 93.75%（不是任何一档），而用户要的是**100%**。
+    ///
+    /// ⛔ **已在最小档（100%）时保持 100%，不再往下** —— 再降就是 75%，
+    ///   那会让内容小于设计基准（图标 24px），与「偏小」的字面含义不符。
+    /// ⛔ 不在阶梯上的 DPI（自定义缩放）⇒ 退回「乘 3/4 后不低于 96」。
+    pub fn step_down_dpi(dpi: u32) -> u32 {
+        const LADDER: [u32; 14] = [
+            96, 120, 144, 168, 192, 216, 240, 288, 336, 384, 480, 576, 768, 960,
+        ];
+        let d = if dpi == 0 { 96 } else { dpi };
+        // 找阶梯里 <= d 的最大下标
+        let mut idx = 0usize;
+        for (i, v) in LADDER.iter().enumerate() {
+            if *v <= d {
+                idx = i;
+            } else {
+                break;
+            }
+        }
+        if idx == 0 {
+            return LADDER[0]; // 已在 100%，不再降
+        }
+        if LADDER[idx] == d {
+            LADDER[idx - 1]
+        } else {
+            // 自定义缩放：按比例降一档，但不低于 100%
+            ((d as f64 * 0.75).round() as u32).max(LADDER[0])
+        }
     }
 
     /// 真正的换算实现：**两条 DPI 各自成组**，字段归属见结构体文档。
@@ -224,7 +955,7 @@ impl Metrics {
         ((dip as f32) * dpi as f32 / 96.0).round() as i32
     }
 
-    /// 当前任务栏 DPI 下的**底衬**度量（内容口径 = 系统口径，即 `FollowSystem`）。
+    /// 当前任务栏 DPI 下的**底衬**度量（内容口径 = 系统口径，即 `Default`）。
     ///
     /// ⚠️ 取**任务栏**的 DPI 而不是进程/桌面的：widget 是任务栏的子窗，
     ///   多显示器「各屏缩放不同」时只有任务栏所在屏的 DPI 是对的。
@@ -437,6 +1168,20 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     //   16 位有符号坐标、跨屏会溢出（本模块的 hover 轮询也统一用 `GetCursorPos`）。
     let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
     if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
+        return false;
+    }
+    // ⛔⛔ **面板闸**（2026-09-28 引入音乐组件时加）：本函数用命中下标去
+    //   `snapshot::load()`（**设备**快照）取要调音量的设备。音乐面板发布的矩形
+    //   下标空间与之**完全不同**（封面+三键=1 项，可能还有切换按钮）⇒ 不设闸就会
+    //   「在音乐面板上滚滚轮，把**别的设备**的音量改了」，而且**不报错、日志正常**
+    //   ——这是本仓最怕的那类静默失效。
+    if !matches!(current_panel(), Some(crate::config::TaskbarPanel::Devices)) {
+        if crate::config::verbose_log_enabled() {
+            append_log(&format!(
+                "[widget] 滚轮未受理: 当前面板={:?}（滚轮调音量只属于设备面板）",
+                current_panel()
+            ));
+        }
         return false;
     }
     // 命中矩形是**窗口局部坐标** ⇒ 减去窗口原点
@@ -1323,6 +2068,9 @@ pub(crate) mod ffi {
         // ⚠️ 只在「固定位置」关掉时接管（`drag_begin` 内部判 `drag_enabled()`）；
         //   固定位置时**不拦截**，交回 `DefWindowProcW` 保持原行为。
         if msg == WM_LBUTTONDOWN {
+            // ⭐ 记按下点与时刻（供 UP 时区分「点击」与「拖拽」——音乐面板的按钮
+            //   靠点击触发，而 `drag_begin` 是**无条件** SetCapture 的）
+            super::press_record();
             if super::drag_begin(hwnd) {
                 return 0;
             }
@@ -1330,6 +2078,13 @@ pub(crate) mod ffi {
             // 非拖拽期间到达的移动消息由 `drag_move` 自行忽略（判 `DRAG_ACTIVE`）。
             super::drag_move(hwnd);
         } else if msg == WM_LBUTTONUP {
+            // ⛔ **顺序要紧**：先判点击、再 `drag_finish`。
+            //   `drag_finish` 会清 `DRAG_ACTIVE` 并把落点写进配置；若它先跑，
+            //   「点一下按钮」会被当成「在原地松手」= 拖拽结束 ⇒ 位置被记一次
+            //   （无害），但反过来（先判点击）才能拿到按下时的局部坐标。
+            if let Some(local) = super::press_take_click() {
+                super::on_click(local);
+            }
             super::drag_finish(hwnd);
         } else if msg == WM_CAPTURECHANGED {
             // 捕获被别处抢走（任务栏抢焦点、其它窗口 `SetCapture`…）：
@@ -1665,6 +2420,471 @@ fn hit_test_item_rects(
 /// ⚠️ 解码（PNG → RGBA）用 `image` crate，结果按 `(kind, dark)` 缓存到
 ///   `OnceLock`：图标内容编译期就固定，重复解码纯浪费。
 #[cfg(target_os = "windows")]
+/// 图标重采样（**预乘空间**）+ 结果缓存。
+///
+/// ⛔⛔ **为什么需要它（2026-09-29 用户报「跟随系统缩放后图标变糊，且越大越糊」）**：
+///   母图只有 **32×32**，而 `m.icon = 32 × content_dpi/96`（125% ⇒ 40、150% ⇒ 48……）。
+///   100% 时 32→32 走**恒等分支、零重采样** ⇒ 锐利；一旦 >100% 就变成
+///   **32→N 的放大**——放大**不可能凭空造出细节**，双线性只能把每个源像素摊成
+///   渐变块，于是 1px 笔画（暂停双竖条只有 25.6/1024）糊成灰带，**缩放越大越糊**。
+///   ⇒ 解法不是换一个更好的**放大**滤波器，而是**换母图**：生成脚本输出
+///   **256×256** 母图，于是任何现实目标尺寸（≤128px，即 400%）都走**缩小**，
+///   而缩小是重采样**准确**的方向（面积平均 = 超采样渲染）。
+#[cfg(target_os = "windows")]
+mod resample {
+    use super::RgbaAlias;
+
+    /// 缓存键的命名空间（避免不同图标的键撞车）。
+    /// 设备图标 `0..16`、音乐图标 `16..32`、封面用 `NS_COVER | hash`。
+    pub const NS_DEVICE: u32 = 0;
+    pub const NS_MUSIC: u32 = 16;
+    pub const NS_COVER: u32 = 0x8000_0000;
+    /// 封面缩小后的**轻锐化强度**（见 `unsharp_mask_premul` 的实测数据）。
+    /// ⛔ >1.0 收益趋平且开始显形（实测细节能量：k=0.5 → 63108、k=0.8 → 65382、
+    ///   k=1.0 → 66616，基准未锐化 58294）⇒ **0.8 是性价比拐点**。
+    ///   ⛔ 上面的 **overshoot 钳制**是「敢给到 0.8」的前提——没有它，
+    ///   理想阶跃边上 k=0.5 就会冲出「越过 90% 再跌回」的振铃波形。
+    const COVER_SHARPEN: f64 = 0.8;
+
+    /// `(槽位, 目标边长) -> 结果`。键空间 = 图标数 × 尺寸数，天然有界。
+    static CACHE: std::sync::Mutex<Vec<(u32, u32, RgbaAlias)>> = std::sync::Mutex::new(Vec::new());
+
+    /// 取缓存的缩放结果，没有就现算并记下。
+    ///
+    /// ⭐ **必须有缓存**：重采样是 O(母图像素数) 的，而 `scale_to` 在**每帧重绘**
+    ///   时对每个图标都调一次（此前还会每次新分配一个 `Vec`）。缓存键只含
+    ///   「图标 + 尺寸」，两者都要用户改设置/换主题才会变 ⇒ 稳态下**零重算**。
+    pub fn scale_cached(slot: u32, side: u32, src: &RgbaAlias) -> Option<RgbaAlias> {
+        {
+            let c = crate::state::lock_unpoisoned(&CACHE);
+            if let Some((_, _, r)) = c.iter().find(|(s, d, _)| *s == slot && *d == side) {
+                return Some(r.clone());
+            }
+        }
+        let r = resample(src, side)?;
+        let mut c = crate::state::lock_unpoisoned(&CACHE);
+        // 上限只是防御：正常键空间是「图标数 × 用过的尺寸数」，不会逼近
+        if c.len() < 64 {
+            c.push((slot, side, r.clone()));
+        }
+        Some(r)
+    }
+
+    /// ⛔ **给「已经是预乘」的数据用**（音乐封面缓存就是预乘的）。
+    ///
+    /// 直插会把透明像素的 RGB 混进半透明边缘 ⇒ 图标外圈出现黑晕/白边，
+    /// 所以直插必须**先预乘再插值、插完再反预乘**；可输入若**本身就是预乘**的，
+    /// 再走一遍「预乘 → 反预乘」就是**二次预乘** ⇒ 画出来偏暗。
+    /// 预乘空间对加权平均是**封闭**的（平均的预乘 = 预乘的平均），所以直接平均即可。
+    pub fn scale_cached_premul(slot: u32, side: u32, src: &RgbaAlias) -> Option<RgbaAlias> {
+        {
+            let c = crate::state::lock_unpoisoned(&CACHE);
+            if let Some((_, _, r)) = c.iter().find(|(s, d, _)| *s == slot && *d == side) {
+                return Some(r.clone());
+            }
+        }
+        let (px, sw, sh) = src;
+        let (sw, sh) = (*sw, *sh);
+        if sw == 0 || sh == 0 || side == 0 {
+            return None;
+        }
+        let mut out = vec![0u8; (side * side * 4) as usize];
+        if sw == side && sh == side {
+            out.copy_from_slice(px);
+        } else if side <= sw {
+            // ⭐ 封面用 **Lanczos3** 而不是面积平均（见 `lanczos3_downscale_premul` 的实测数据）
+            lanczos3_downscale_premul(px, sw, sh, side, &mut out);
+            unsharp_mask_premul(&mut out, side, side, COVER_SHARPEN);
+        } else {
+            catmull_rom_upscale_premul(px, sw, sh, side, &mut out);
+        }
+        let r = (out, side, side);
+        let mut c = crate::state::lock_unpoisoned(&CACHE);
+        if c.len() < 64 {
+            c.push((slot, side, r.clone()));
+        }
+        Some(r)
+    }
+
+    /// 预乘空间里的重采样，**先预乘再插值、插完再反预乘**（直插会把透明像素的
+    /// RGB 混进半透明边缘 ⇒ 图标外圈出现黑晕/白边）。
+    fn resample(src: &RgbaAlias, side: u32) -> Option<RgbaAlias> {
+        let (px, sw, sh) = src;
+        let (sw, sh) = (*sw, *sh);
+        if sw == 0 || sh == 0 || side == 0 {
+            return None;
+        }
+        if sw == side && sh == side {
+            return Some((px.clone(), side, side)); // 恒等：零重采样
+        }
+        let mut out = vec![0u8; (side * side * 4) as usize];
+        if side <= sw {
+            box_downscale(px, sw, sh, side, &mut out);
+        } else {
+            catmull_rom_upscale(px, sw, sh, side, &mut out);
+        }
+        Some((out, side, side))
+    }
+
+    /// **面积平均**缩小：对每个目标像素求它覆盖的源区域的**加权平均**。
+    ///
+    /// ⭐ 这是缩小的**正确**滤波器：它等价于「先在高分辨率下渲染再降采样」
+    ///   （超采样），既不会像最近邻那样丢像素（细笔画断裂、斜边出现台阶），
+    ///   也不会像双线性那样在 5:1 的比例下只取到 4 个采样点（严重混叠）。
+    fn box_downscale(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8]) {
+        box_accumulate(px, sw, sh, side, out, true)
+    }
+
+    /// ⭐ **Lanczos3（窗化 sinc）可分离缩小**，输入输出**都是预乘**。
+    ///
+    /// ⚠️⛔⛔ **封面不能用面积平均**（用户 2026-09-29 实测报「封面非常模糊」，
+    ///   且 128→40 仍糊）。两者差别在**模糊半径**：3.2:1 的 box 平均在**输出**尺度上
+    ///   约糊 1.6px，照片上非常明显；实测（对照「单步 400→40 lanczos3」）：
+    ///   ```text
+    ///   128→40 nearest 13.40 │ cubic 2.03 │ mitchell 1.89 │ lanczos3 1.80
+    ///   400→40 单步 cubic 0.65 │ mitchell 0.67
+    ///   ```
+    ///   图标（线稿）用 box 没问题，所以**只给封面这条路径换**，不动图标。
+    ///
+    /// ⭐ 预乘空间对**插值**是封闭的（预乘的插值 = 插值的预乘），所以这里
+    ///   直接对预乘值加权即可，不需要「先反预乘再插值」那套。
+    fn lanczos3_downscale_premul(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8]) {
+        /// Lanczos3 核：`sinc(x)·sinc(x/3)`，半宽 3。
+        fn lanczos(x: f64) -> f64 {
+            const A: f64 = 3.0;
+            let ax = x.abs();
+            if ax >= A {
+                0.0
+            } else if ax < 1e-9 {
+                1.0
+            } else {
+                let t = std::f64::consts::PI * x;
+                (t.sin() / t) * ((t / A).sin() / (t / A).sin())
+            }
+        }
+        /// 每个目标像素在源轴上的采样点 + 归一化权重。
+        fn axis_weights(src: u32, dst: u32) -> Vec<Vec<(u32, f64)>> {
+            const A: f64 = 3.0;
+            let scale = src as f64 / dst as f64;
+            // ⚠️⚠️ **缩小必须把核「拉宽」到 `scale` 倍**（`max`，不是 `min`）：
+            //   6.4:1 缩小时若仍用 ±3 源像素的核，就等于**点采样**——混叠严重
+            //   （`image` crate 也是按 `support = A * max(scale,1)` 做的）。
+            let fscale = scale.max(1.0);
+            let support = A * fscale;
+            let mut table = Vec::with_capacity(dst as usize);
+            for i in 0..dst {
+                // ⛔⛔ 目标 → 源的映射是**乘** `scale`，不是除 —— 我第一版写成了
+                //   `(i + 0.5) / scale - 0.5`，于是 40 个输出像素的采样中心全部
+                //   落在源图 x∈[0,9]（40×6.4 的正确位置应是 x∈[0,256]），
+                //   屏幕上表现为「封面变成一块纯色」（那张封面左上角正好是天空）。
+                let center = (i as f64 + 0.5) * scale - 0.5;
+                let lo = ((center - support).ceil() as i64).max(0) as u32;
+                let hi = (((center + support).floor() as i64 + 1) as u32).min(src);
+                let mut taps: Vec<(u32, f64)> = Vec::new();
+                let mut sum = 0.0;
+                for x in lo..hi {
+                    let v = lanczos((x as f64 - center) / fscale);
+                    if v != 0.0 {
+                        taps.push((x, v));
+                        sum += v;
+                    }
+                }
+                if sum != 0.0 {
+                    for t in taps.iter_mut() {
+                        t.1 /= sum;
+                    }
+                }
+                table.push(taps);
+            }
+            table
+        }
+        // 横向一遍
+        let hx = axis_weights(sw, side);
+        let mut tmp = vec![0f64; (side * sh * 4) as usize];
+        for y in 0..sh {
+            for (i, taps) in hx.iter().enumerate() {
+                let mut acc = [0f64; 4];
+                for &(sx, w) in taps {
+                    let si = ((y * sw + sx) * 4) as usize;
+                    for c in 0..4 {
+                        acc[c] += px[si + c] as f64 * w;
+                    }
+                }
+                let di = ((y * side + i as u32) * 4) as usize;
+                tmp[di..di + 4].copy_from_slice(&acc);
+            }
+        }
+        // 纵向一遍
+        let vy = axis_weights(sh, side);
+        for (j, taps) in vy.iter().enumerate() {
+            for i in 0..side {
+                let mut acc = [0f64; 4];
+                for &(sy, w) in taps {
+                    let si = ((sy * side + i) * 4) as usize;
+                    for c in 0..4 {
+                        acc[c] += tmp[si + c] as f64 * w;
+                    }
+                }
+                let di = ((j as u32 * side + i) * 4) as usize;
+                for c in 0..4 {
+                    out[di + c] = acc[c].clamp(0.0, 255.0).round() as u8;
+                }
+            }
+        }
+    }
+
+    /// ⭐ **轻锐化**（unsharp mask）：`out += k · (out − blur(out))`。
+    ///
+    /// ⚠️ **只在封面这条路径上用**。缩小必然低通——Lanczos3 已经接近理论最优，
+    ///   但「最优」≠「看起来够锐」：拿真机封面实测（256→40，中间 8 行的
+    ///   相邻像素差分和，越大越锐）：
+    ///   ```text
+    ///   Nearest 22071 │ Lanczos3 18036 │ Cubic 16929 │ Mitchell 15502
+    ///   Lanczos3 + 轻锐化 24827
+    ///   ```
+    ///   ⇒ Lanczos3 之后还差约 **27%** 的锐度。`Nearest` 虽然最锐，但它是
+    ///   **点采样**（斜边锯齿、细纹理断续），照片上更难看，所以不取。
+    ///
+    /// ⭐ 用 **[1,2,1]/4** 而不是高斯：小半径、便宜，而且我们要的只是把
+    ///   低通造成的高频损失**补回一点**，不是做艺术化锐化。
+    /// ⛔ `k` 不能大：>0.8 会在平坦色块上产生**振铃**（白边/黑边），
+    ///   对封面这种大面积渐变尤其明显。实测 0.5 安全。
+    fn unsharp_mask_premul(buf: &mut [u8], w: u32, h: u32, k: f64) {
+        if k <= 0.0 {
+            return;
+        }
+        // ⭐ **overshoot 钳制**：锐化结果限制在**原图 3×3 邻域的极值**内。
+        //   没有这一步，unsharp 在**理想阶跃边**上必然振铃（实测 k=0.5 就能把
+        //   一个完美阶跃的边沿冲出「先越过 90% 再跌回去」的波形 ⇒ 出现白边）。
+        //   钳制后**结构上不可能**产生新极值，k 可以放心给到 0.5。
+        let orig = buf.to_vec();
+        let mut blur = vec![0f64; (w * h * 4) as usize];
+        // 水平 [1,2,1]/4
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = [0f64; 4];
+                for (dx, ww) in [(x as i64 - 1, 1.0), (x as i64, 2.0), (x as i64 + 1, 1.0)] {
+                    if dx < 0 || dx >= w as i64 {
+                        continue;
+                    }
+                    let si = ((y * w + dx as u32) * 4) as usize;
+                    for c in 0..4 {
+                        acc[c] += buf[si + c] as f64 * ww;
+                    }
+                }
+                let di = ((y * w + x) * 4) as usize;
+                for c in 0..4 {
+                    blur[di + c] = acc[c] / 4.0;
+                }
+            }
+        }
+        // 竖直 + 相减
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = [0f64; 4];
+                for (dy, ww) in [(y as i64 - 1, 1.0), (y as i64, 2.0), (y as i64 + 1, 1.0)] {
+                    if dy < 0 || dy >= h as i64 {
+                        continue;
+                    }
+                    let si = ((dy as u32 * w + x) * 4) as usize;
+                    for c in 0..4 {
+                        acc[c] += blur[si + c] * ww;
+                    }
+                }
+                let di = ((y * w + x) * 4) as usize;
+                // 原图 3×3 邻域的逐通道极值（钳制用）
+                let mut nmin = [255f64; 4];
+                let mut nmax = [0f64; 4];
+                for ny in y.saturating_sub(1)..(y + 1).min(h) {
+                    for nx in x.saturating_sub(1)..(x + 1).min(w) {
+                        let ni = ((ny * w + nx) * 4) as usize;
+                        for c in 0..4 {
+                            let v = orig[ni + c] as f64;
+                            if v < nmin[c] {
+                                nmin[c] = v;
+                            }
+                            if v > nmax[c] {
+                                nmax[c] = v;
+                            }
+                        }
+                    }
+                }
+                for c in 0..4 {
+                    let b = acc[c] / 4.0;
+                    let o = orig[di + c] as f64;
+                    let v = (o + k * (o - b)).clamp(nmin[c], nmax[c]).clamp(0.0, 255.0);
+                    buf[di + c] = v.round() as u8;
+                }
+            }
+        }
+    }
+
+    /// 测试可见别名（同文件 `mod tests` 用；生产路径走 `box_accumulate`）。
+    #[cfg(test)]
+    pub(super) fn box_accumulate_for_test(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8]) {
+        box_accumulate(px, sw, sh, side, out, true)
+    }
+
+    /// 测试可见别名（同文件 `mod tests` 用）。
+    #[cfg(test)]
+    pub(super) fn lanczos3_for_test(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8]) {
+        lanczos3_downscale_premul(px, sw, sh, side, out)
+    }
+
+    /// 测试可见别名（同文件 `mod tests` 用）。
+    #[cfg(test)]
+    pub(super) fn unsharp_for_test(buf: &mut [u8], w: u32, h: u32, k: f64) {
+        unsharp_mask_premul(buf, w, h, k)
+    }
+
+    /// 面积平均的**公共内核**：`premul_in` 为真表示输入已是预乘（不再预乘、
+    /// 也不反预乘，直接写回）；否则走「预乘 → 平均 → 反预乘」。
+    fn box_accumulate(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8], premul_in: bool) {
+        for y in 0..side {
+            let sy0 = y as f64 * sh as f64 / side as f64;
+            let sy1 = (y + 1) as f64 * sh as f64 / side as f64;
+            for x in 0..side {
+                let sx0 = x as f64 * sw as f64 / side as f64;
+                let sx1 = (x + 1) as f64 * sw as f64 / side as f64;
+                let mut acc = [0f64; 4];
+                let mut wsum = 0f64;
+                let y_lo = sy0.floor() as u32;
+                let y_hi = ((sy1.ceil() as u32).min(sh)).max(y_lo + 1);
+                let x_lo = sx0.floor() as u32;
+                let x_hi = ((sx1.ceil() as u32).min(sw)).max(x_lo + 1);
+                for yy in y_lo..y_hi.min(sh) {
+                    let wy = sy1.min(yy as f64 + 1.0) - sy0.max(yy as f64);
+                    if wy <= 0.0 {
+                        continue;
+                    }
+                    for xx in x_lo..x_hi.min(sw) {
+                        let wx = sx1.min(xx as f64 + 1.0) - sx0.max(xx as f64);
+                        if wx <= 0.0 {
+                            continue;
+                        }
+                        let w = wx * wy;
+                        let si = ((yy * sw + xx) * 4) as usize;
+                        let a = px[si + 3] as f64;
+                        if premul_in {
+                            acc[0] += px[si] as f64 * w;
+                            acc[1] += px[si + 1] as f64 * w;
+                            acc[2] += px[si + 2] as f64 * w;
+                        } else {
+                            acc[0] += px[si] as f64 * a / 255.0 * w;
+                            acc[1] += px[si + 1] as f64 * a / 255.0 * w;
+                            acc[2] += px[si + 2] as f64 * a / 255.0 * w;
+                        }
+                        acc[3] += a * w;
+                        wsum += w;
+                    }
+                }
+                store_pixel_ex(out, ((y * side + x) * 4) as usize, &acc, wsum, premul_in);
+            }
+        }
+    }
+
+    /// **Catmull-Rom 双三次**放大（母图小于目标时才会走到）。
+    ///
+    /// ⚠️ 母图换成 256 之后**正常设备上走不到这条路**（任何现实 DPI 都 ≤128px），
+    ///   保留它只为兜底：那 3 张没有矢量源的设备图标仍是 32px 母图，
+    ///   双三次比双线性**锐利得多**（负瓣带来的边缘对比度），是退而求其次的改善。
+    fn catmull_rom_upscale(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8]) {
+        catmull_rom_upscale_ex(px, sw, sh, side, out, false)
+    }
+
+    fn catmull_rom_upscale_premul(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8]) {
+        catmull_rom_upscale_ex(px, sw, sh, side, out, true)
+    }
+
+    fn catmull_rom_upscale_ex(
+        px: &[u8],
+        sw: u32,
+        sh: u32,
+        side: u32,
+        out: &mut [u8],
+        premul_in: bool,
+    ) {
+        // 标准 Catmull-Rom 权重（t ∈ [0,1)）。⚠️ **第 i 个权重对应偏移 i-1**
+        //   （即 -1, 0, +1, +2）—— 索引时必须写 `x0 - 1 + i`。
+        //   ⛔ 我第一版写成 `x0 + i`，**整体偏移了一个像素**：t=0 时权重 [0,1,0,0]
+        //   落在 `x0+1` 上，于是「放大 2×1 的黑白」得到 [255,255,255,255]
+        //   （全白）而不是 [0, ~52, ~203, 255]。判据 `scale_up_interpolates` 抓到。
+        let weights = |t: f64| -> [f64; 4] {
+            let t2 = t * t;
+            let t3 = t2 * t;
+            [
+                -0.5 * t3 + t2 - 0.5 * t,
+                1.5 * t3 - 2.5 * t2 + 1.0,
+                -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+                0.5 * t3 - 0.5 * t2,
+            ]
+        };
+        for y in 0..side {
+            let fy = ((y as f64 + 0.5) * sh as f64 / side as f64 - 0.5).max(0.0);
+            let wy = weights(fy - fy.floor());
+            let y0 = fy.floor() as i64;
+            for x in 0..side {
+                let fx = ((x as f64 + 0.5) * sw as f64 / side as f64 - 0.5).max(0.0);
+                let wx = weights(fx - fx.floor());
+                let x0 = fx.floor() as i64;
+                let mut acc = [0f64; 4];
+                let mut wsum = 0f64;
+                for (j, wyj) in wy.iter().enumerate() {
+                    let yy = (y0 - 1 + j as i64).clamp(0, sh as i64 - 1) as u32;
+                    for (i, wxi) in wx.iter().enumerate() {
+                        let xx = (x0 - 1 + i as i64).clamp(0, sw as i64 - 1) as u32;
+                        let w = wxi * wyj;
+                        let si = ((yy * sw + xx) * 4) as usize;
+                        let a = px[si + 3] as f64;
+                        if premul_in {
+                            acc[0] += px[si] as f64 * w;
+                            acc[1] += px[si + 1] as f64 * w;
+                            acc[2] += px[si + 2] as f64 * w;
+                        } else {
+                            acc[0] += px[si] as f64 * a / 255.0 * w;
+                            acc[1] += px[si + 1] as f64 * a / 255.0 * w;
+                            acc[2] += px[si + 2] as f64 * a / 255.0 * w;
+                        }
+                        acc[3] += a * w;
+                        wsum += w;
+                    }
+                }
+                store_pixel_ex(out, ((y * side + x) * 4) as usize, &acc, wsum, premul_in);
+            }
+        }
+    }
+
+    /// 把**预乘**累加值写成 straight RGBA（`A == 0` 时 RGB 无意义，置 0）。
+    fn store_pixel_ex(out: &mut [u8], di: usize, acc: &[f64; 4], wsum: f64, premul_in: bool) {
+        if wsum <= 0.0 {
+            return;
+        }
+        let a = (acc[3] / wsum).clamp(0.0, 255.0);
+        out[di + 3] = a.round() as u8;
+        if a <= 0.0 {
+            out[di] = 0;
+            out[di + 1] = 0;
+            out[di + 2] = 0;
+            return;
+        }
+        for c in 0..3 {
+            if premul_in {
+                // 预乘直通：Σ(c·w) / Σw（预乘空间对平均封闭）
+                out[di + c] = (acc[c] / wsum).clamp(0.0, 255.0).round() as u8;
+            } else {
+                // 反预乘：Σ(c·a/255·w) / Σ(a·w) · 255
+                out[di + c] = (acc[c] / acc[3].max(1e-9) * 255.0)
+                    .clamp(0.0, 255.0)
+                    .round() as u8;
+            }
+        }
+    }
+}
+
+/// 解码后的 RGBA 位图（`(像素, 宽, 高)`）。像素顺序 = RGBA（`image` crate 约定）。
+#[cfg(target_os = "windows")]
+type RgbaAlias = (Vec<u8>, u32, u32);
+
 mod icons {
     use crate::device_identity::AudioKind;
     use std::sync::OnceLock;
@@ -1740,62 +2960,130 @@ mod icons {
     ///   **黑晕/白边**。插完再反预乘回 straight（`A == 0` 时 RGB 无意义，置 0）。
     ///
     /// ⭐ 返回预乘前的 straight RGBA —— 合成到 DIB 时由调用方按需预乘。
-    pub fn scale_to(src: &Rgba, side: u32) -> Option<Rgba> {
-        let (px, sw, sh) = src;
-        let (sw, sh) = (*sw, *sh);
-        if sw == 0 || sh == 0 || side == 0 {
-            return None;
-        }
-        if sw == side && sh == side {
-            return Some((px.clone(), side, side)); // 恒等：零重采样
-        }
-        let mut out = vec![0u8; (side * side * 4) as usize];
-        let upscale = side > sw || side > sh;
-        for y in 0..side {
-            for x in 0..side {
-                let di = ((y * side + x) * 4) as usize;
-                if !upscale {
-                    // 最近邻：源坐标 = 目标坐标 × 源边长 / 目标边长
-                    let sy = (y as u64 * sh as u64 / side as u64) as u32;
-                    let sx = (x as u64 * sw as u64 / side as u64) as u32;
-                    let si = ((sy * sw + sx) * 4) as usize;
-                    out[di..di + 4].copy_from_slice(&px[si..si + 4]);
-                    continue;
-                }
-                // 双线性：目标像素**中心**映射回源坐标，取四邻域加权。
-                // `max(0.0)` 把左/上边缘的外推夹回 0（否则 `floor` 会得到 -1）。
-                let fx = ((x as f32 + 0.5) * sw as f32 / side as f32 - 0.5).max(0.0);
-                let fy = ((y as f32 + 0.5) * sh as f32 / side as f32 - 0.5).max(0.0);
-                let (x0f, y0f) = (fx.floor(), fy.floor());
-                let (x0, y0) = (x0f as u32, y0f as u32);
-                let (tx, ty) = (fx - x0f, fy - y0f);
-                let x1 = (x0 + 1).min(sw - 1);
-                let y1 = (y0 + 1).min(sh - 1);
-                let mut acc = [0.0f32; 4];
-                for (xx, wx) in [(x0, 1.0 - tx), (x1, tx)] {
-                    for (yy, wy) in [(y0, 1.0 - ty), (y1, ty)] {
-                        let si = ((yy * sw + xx) * 4) as usize;
-                        let a = px[si + 3] as f32;
-                        let w = wx * wy;
-                        // 预乘：R·A/255（A 通道本身不预乘）
-                        acc[0] += px[si] as f32 * a / 255.0 * w;
-                        acc[1] += px[si + 1] as f32 * a / 255.0 * w;
-                        acc[2] += px[si + 2] as f32 * a / 255.0 * w;
-                        acc[3] += a * w;
-                    }
-                }
-                let a = acc[3].clamp(0.0, 255.0);
-                out[di + 3] = a.round() as u8;
-                for (c, v) in acc[..3].iter().enumerate() {
-                    out[di + c] = if a <= 0.0 {
-                        0 // 全透明 ⇒ RGB 无意义，置 0（避免留下假色）
-                    } else {
-                        (v * 255.0 / a).round().clamp(0.0, 255.0) as u8
-                    };
-                }
+    /// 设备图标的**缓存槽位**（`NS_DEVICE` 命名空间内唯一，与 [`AudioKind`] 一一对应）。
+    pub fn slot_of(kind: AudioKind) -> u32 {
+        super::resample::NS_DEVICE
+            + match kind {
+                AudioKind::Pointer => 0,
+                AudioKind::Keyboard => 1,
+                AudioKind::Gamepad => 2,
+                AudioKind::Speaker => 3,
+                AudioKind::Headphones => 4,
             }
+    }
+
+    /// 缩放到 `side × side`（**带缓存**，见 [`resample`]）。
+    ///
+    /// ⚠️ `slot` 必须**按图标内容唯一**（设备图标用 `NS_DEVICE + 序号`、
+    ///   音乐图标用 `NS_MUSIC + 序号`、封面用 `NS_COVER | hash`）——它是缓存键，
+    ///   撞车会让一个图标**显示成另一个**。⛔ 不要用 `AudioKind as u32` 直接当槽：
+    ///   那只是碰巧不撞，没有语义保护。
+    /// ⚠️⚠️ **这不是假设，本仓库已经踩过**：两个单测各用 `900_002/4` 缩**不同**的
+    ///   合成图，并行跑时谁先谁污染 ⇒ 另一个拿到**别人的像素**
+    ///   （表现为 `scale_up_interpolates` 偶发失败、单跑却通过）。
+    ///   ⇒ **每个调用点都要独占一个槽位**；测试里用互不相交的大数字。
+    pub fn scale_to(slot: u32, src: &Rgba, side: u32) -> Option<Rgba> {
+        super::resample::scale_cached(slot, side, src)
+    }
+}
+
+/// 音乐控制组件的图标（**独立键空间**）。
+///
+/// ⛔ **不复用 `AudioKind`**：设备图标的 `icons::get` 对 `AudioKind` 做**穷尽 match**
+///   （`icons::get` 内部 + `main.rs::format_item_debug`），往里加变体会同时打断两处
+///   编译点。音乐图标与设备类别无关，用自己的枚举更干净。
+///
+/// ⭐ **线宽基准 51/1024**：播放控制 4 图标的外框标称 51.2（生成脚本实测 51.0），
+///   切换图标由生成脚本从 80 腐蚀到 51.2 ⇒ 与现有设备图标**同量级**。
+///   生成脚本 `generate_music_icons.mjs`（一次性、不入库）在 **1024 分辨率**下
+///   实测描边厚度 —— 32px 下量会被像素量化主导（1.6px 的描边量出来只有 1px，
+///   无论真实线宽多少都量出 32.0）。这个坑我踩过一次。
+#[cfg(target_os = "windows")]
+mod music_icons {
+    use std::sync::OnceLock;
+
+    static PLAY_LIGHT: &[u8] = include_bytes!("../icons/tray-music-play-icon.png");
+    static PLAY_DARK: &[u8] = include_bytes!("../icons/tray-music-play-icon-dark.png");
+    static PAUSE_LIGHT: &[u8] = include_bytes!("../icons/tray-music-pause-icon.png");
+    static PAUSE_DARK: &[u8] = include_bytes!("../icons/tray-music-pause-icon-dark.png");
+    static PREV_LIGHT: &[u8] = include_bytes!("../icons/tray-music-prev-icon.png");
+    static PREV_DARK: &[u8] = include_bytes!("../icons/tray-music-prev-icon-dark.png");
+    static NEXT_LIGHT: &[u8] = include_bytes!("../icons/tray-music-next-icon.png");
+    static NEXT_DARK: &[u8] = include_bytes!("../icons/tray-music-next-icon-dark.png");
+    static SWITCH_LIGHT: &[u8] = include_bytes!("../icons/tray-music-switch-icon.png");
+    static SWITCH_DARK: &[u8] = include_bytes!("../icons/tray-music-switch-icon-dark.png");
+
+    pub type Rgba = (Vec<u8>, u32, u32);
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Icon {
+        Play,
+        Pause,
+        Prev,
+        Next,
+        Switch,
+    }
+
+    impl Icon {
+        /// 本图标的**缓存槽位**（`NS_MUSIC` 命名空间内唯一）。
+        ///
+        /// ⛔ 槽位是重采样缓存的键，**必须与图标一一对应**；改枚举顺序时这里要同步。
+        pub fn slot(self) -> u32 {
+            super::resample::NS_MUSIC
+                + match self {
+                    Icon::Play => 0,
+                    Icon::Pause => 1,
+                    Icon::Prev => 2,
+                    Icon::Next => 3,
+                    Icon::Switch => 4,
+                }
         }
-        Some((out, side, side))
+    }
+
+    macro_rules! cache {
+        ($name:ident) => {
+            static $name: OnceLock<Option<Rgba>> = OnceLock::new();
+        };
+    }
+    cache!(CACHE_PLAY_LIGHT);
+    cache!(CACHE_PLAY_DARK);
+    cache!(CACHE_PAUSE_LIGHT);
+    cache!(CACHE_PAUSE_DARK);
+    cache!(CACHE_PREV_LIGHT);
+    cache!(CACHE_PREV_DARK);
+    cache!(CACHE_NEXT_LIGHT);
+    cache!(CACHE_NEXT_DARK);
+    cache!(CACHE_SWITCH_LIGHT);
+    cache!(CACHE_SWITCH_DARK);
+
+    fn decode(bytes: &[u8]) -> Option<Rgba> {
+        let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        Some((img.into_raw(), w, h))
+    }
+
+    pub fn get(icon: Icon, dark: bool) -> Option<&'static Rgba> {
+        let (cell, bytes): (&OnceLock<Option<Rgba>>, &[u8]) = match (icon, dark) {
+            (Icon::Play, false) => (&CACHE_PLAY_LIGHT, PLAY_LIGHT),
+            (Icon::Play, true) => (&CACHE_PLAY_DARK, PLAY_DARK),
+            (Icon::Pause, false) => (&CACHE_PAUSE_LIGHT, PAUSE_LIGHT),
+            (Icon::Pause, true) => (&CACHE_PAUSE_DARK, PAUSE_DARK),
+            (Icon::Prev, false) => (&CACHE_PREV_LIGHT, PREV_LIGHT),
+            (Icon::Prev, true) => (&CACHE_PREV_DARK, PREV_DARK),
+            (Icon::Next, false) => (&CACHE_NEXT_LIGHT, NEXT_LIGHT),
+            (Icon::Next, true) => (&CACHE_NEXT_DARK, NEXT_DARK),
+            (Icon::Switch, false) => (&CACHE_SWITCH_LIGHT, SWITCH_LIGHT),
+            (Icon::Switch, true) => (&CACHE_SWITCH_DARK, SWITCH_DARK),
+        };
+        cell.get_or_init(|| decode(bytes)).as_ref()
+    }
+
+    /// 本图标的**缓存槽位**（`NS_MUSIC` 命名空间内唯一）。
+    ///
+    /// ⛔ 槽位是重采样缓存的键，**必须与图标一一对应**；改枚举顺序时这里要同步。
+    /// 带槽位的缩放（调用方已知是哪个图标）。
+    pub fn scale_to_slot(icon: Icon, src: &Rgba, side: u32) -> Option<Rgba> {
+        super::icons::scale_to(icon.slot(), src, side)
     }
 }
 
@@ -2518,7 +3806,28 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     //   **第二个布局来源**，分叉后提示会挂到错误的设备上且不报错
     //   （与 AGENTS.md「绘制与测宽必须同源」是同一类纪律）。
     let item_rects = item_rects(&per_item, &m, m.h);
-    let content_w: i32 = per_item.iter().sum::<i32>() + m.item_gap * (items.len() as i32 - 1);
+    // ⭐ 设备面板的「切换」按钮**恒在最右**（与音乐面板同一套几何/图标）。
+    //   判据只看「两个开关都开」——`switch_visible(Devices)` 里那半是多会话项，
+    //   而多会话是音乐面板自己的事，与设备面板无关。
+    let show_switch = switch_visible(crate::config::TaskbarPanel::Devices);
+    let switch_px = m.icon;
+    let switch_rect = show_switch.then(|| {
+        let x = item_rects[item_rects.len() - 1].right + m.item_gap;
+        let sy = (m.h - switch_px) / 2;
+        windows_sys::Win32::Foundation::RECT {
+            left: x,
+            top: sy,
+            right: x + switch_px,
+            bottom: sy + switch_px,
+        }
+    });
+    let switch_extra = if show_switch {
+        m.item_gap + switch_px
+    } else {
+        0
+    };
+    let content_w: i32 =
+        per_item.iter().sum::<i32>() + m.item_gap * (items.len() as i32 - 1) + switch_extra;
     let desired_w = content_w + m.pad_x * 2;
     // ⛔ GetPixel 扫描必须在后台线程完成（WMI 之外也不能阻塞窗口线程）。
     // 后台快照任务已将估算宽度传给 `find_widget_slot`，这里仅读取原子坐标。
@@ -2577,8 +3886,12 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     if crate::config::verbose_log_enabled() {
         append_log(&format!(
             "[widget] 定位: pos={position} locked={locked} area=({slot_rel_x},w={slot_w}) \
-             content_w={total_w} 余量={} → rel_x={rel_x}",
+             content_w={total_w} 余量={} → rel_x={rel_x} 切换={}",
             slot_w - total_w,
+            switch_rect.map_or("无".to_string(), |r| format!(
+                "{}px@({},{})",
+                switch_px, r.left, r.top
+            )),
         ));
     }
     unsafe { ffi::show(hwnd as _) };
@@ -2623,8 +3936,8 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
             let alpha_scale: f32 = if should_dim_item(it) { 0.45 } else { 1.0 };
 
             // ① 图标：解码（带缓存）→ 最近邻缩放到 `m.icon` → 预乘合成
-            if let Some(scaled) =
-                icons::get(it.icon, dark).and_then(|rgba| icons::scale_to(rgba, m.icon as u32))
+            if let Some(scaled) = icons::get(it.icon, dark)
+                .and_then(|rgba| icons::scale_to(icons::slot_of(it.icon), rgba, m.icon as u32))
             {
                 let (ipx, iw, ih) = scaled;
                 for yy in 0..(ih as i32).min(h - icon_y) {
@@ -2689,6 +4002,34 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
                 }
             }
         }
+
+        // ── 最右的「切换」按钮（几何与音乐面板同款：图标边长 + 垂直居中）──
+        if let Some(sb) = switch_rect {
+            if let Some(scaled) = music_icons::get(music_icons::Icon::Switch, dark).and_then(|r| {
+                music_icons::scale_to_slot(music_icons::Icon::Switch, r, switch_px as u32)
+            }) {
+                let (ipx, iw, ih) = scaled;
+                for yy in 0..(ih as i32).min(h - sb.top) {
+                    for xx in 0..(iw as i32).min(total_w - sb.left) {
+                        let si = ((yy * iw as i32 + xx) * 4) as usize;
+                        let a = ipx[si + 3] as u32;
+                        if a == 0 {
+                            continue;
+                        }
+                        let di = ((sb.top + yy) * total_w + sb.left + xx) as usize;
+                        if di < px.len() {
+                            px[di] = blend_over(
+                                px[di],
+                                a,
+                                ipx[si] as u32 * a / 255,
+                                ipx[si + 1] as u32 * a / 255,
+                                ipx[si + 2] as u32 * a / 255,
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // widget 已是 `Shell_TrayWnd` 的子窗：`UpdateLayeredWindow` 的位置必须是
@@ -2710,6 +4051,9 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     //   **不可能分叉**。传 `items` 的名字 + rect，两者由本函数一次算出。
     {
         publish_item_rects(&item_rects);
+        // ⭐ 与「先落位再发布」同处：命中矩形必须**晚于** commit 发布，
+        //   否则首帧点击区与实际位置对不上（真机踩过一次：位置对、命中区还是旧的）。
+        publish_dev_switch(switch_rect);
         // ⭐ 滚轮触发区**就是** tooltip 用的这份 `item_rects`（同一块、同一时刻发布），
         //   因此「图标上滚」与「tooltip 弹出的范围」不可能对不上。
         //   详细级记屏幕坐标：滚轮报障时这是唯一能回答「触发区在哪」的信息。
@@ -2793,8 +4137,32 @@ fn draw_blank(hwnd: *mut core::ffi::c_void, w: i32) -> bool {
 /// **主线程**重绘入口：读快照 → 绘制。由 `wnd_proc` 收到 `WM_APP_REFRESH` 时调用。
 #[cfg(target_os = "windows")]
 fn repaint_from_snapshot(hwnd: *mut core::ffi::c_void) {
-    let items = snapshot::load().unwrap_or_default();
-    let ok = draw_items(hwnd, &items);
+    // ⭐ **按面板分派**：音乐面板的数据来自 SMTC 快照（不是设备快照），
+    //   两者形状完全不同（`WidgetItem` 是「一台设备」，音乐面板是「一块面板」）。
+    //   ⛔ 分派必须与 `should_show` / `advance_switch_target` 用**同一个** `current_panel()`
+    //   ——三处分叉就会出现「判据说显示音乐、画的却是设备内容」且不报错。
+    // ⭐ 记一条**面板判据**日志：出问题时第一件要确认的就是「此刻到底显示的是哪一块」。
+    //   回落链有三态（音乐/设备/不显示），没有这行就无法区分
+    //   「正确回落到设备」与「音乐判据没生效」——两者外观**几乎一样**。
+    let panel_now = current_panel();
+    if crate::config::verbose_log_enabled() {
+        let snap = crate::taskbar_music::snapshot();
+        let music_on = crate::config::with_config(|c| c.taskbar_music_enabled);
+        append_log(&format!(
+            "[widget] 面板判据: 显示={panel_now:?} 音乐开关={music_on} 会话数={} 记住={:?}",
+            snap.sessions.len(),
+            crate::config::with_config(|c| c.taskbar_panel)
+        ));
+    }
+    let ok = match panel_now {
+        Some(crate::config::TaskbarPanel::Music) => draw_music(hwnd),
+        Some(crate::config::TaskbarPanel::Devices) => {
+            let items = snapshot::load().unwrap_or_default();
+            draw_items(hwnd, &items)
+        }
+        // 判据说「不显示」却走到了重绘（竞态：会话刚消失）⇒ 退成设备面板的空白帧
+        None => draw_blank(hwnd, Metrics::current_content().pad_x * 2),
+    };
     if ok {
         REFRESH_COUNT.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -3027,10 +4395,6 @@ fn build_items_with_opt_labels(
 ///   用户重新打开时设备全没了，与「关闭但保留设备信息」的口径直接冲突。
 ///   ⇒ 现在是显式开关 `taskbar_widget_enabled`，且关闭**不碰**列表。
 #[cfg(target_os = "windows")]
-fn wants_widget(c: &crate::config::Config) -> bool {
-    crate::config::taskbar_widget_visible(c)
-}
-
 /// 窗口是否**应该存在**。
 ///
 /// ⭐ 判据 = **已选设备非空**（用户口径 2026-09-24：默认关闭，只有用户选了设备才显示）。
@@ -3039,8 +4403,13 @@ fn wants_widget(c: &crate::config::Config) -> bool {
 ///
 /// ⛔ 与「当前可见」区分：`pinned` 是「强制显示」语义（读不出数据也保留，见 `3dcbdc7`），
 ///   所以「非空」不等于「一定有内容」—— 但那正是用户要的：pin 了就该看到（哪怕是 `--`）。
+/// ⛔ **2026-09-28 起判据升为三态**（引入音乐组件）：旧口径只是
+///   `taskbar_widget_enabled && !pinned_taskbar_devices.is_empty()`，
+///   而音乐模式**没有钉设备** ⇒ 会被判成「不显示」⇒ 开关开了也没反应。
+///   现在改问 [`current_panel`]（回落链见 `config::taskbar_panel_for`）。
+///   设备侧的判据本身**没变**，仍在 `config::taskbar_devices_available`。
 pub fn should_show() -> bool {
-    crate::config::with_config(wants_widget)
+    current_panel().is_some()
 }
 
 /// 按当前配置把 widget 调整到应有的状态：**挂载 / 拆除 / 重定位**。
@@ -3618,6 +4987,350 @@ pub fn destroy_widget() {}
 //   绘制路径依赖真实窗口与 GDI，无法在这些单测里覆盖，改由真机截图验收。
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
+    /// ⭐⭐⭐ **缩放不许把图标放大**（用户 2026-09-29：「跟随系统缩放后图标变糊，且越大越糊」）。
+    ///
+    /// 根因：母图只有 32×32，而 `m.icon = 32 × content_dpi/96`。100% 时 32→32 走
+    /// **恒等分支、零重采样** ⇒ 锐利；一旦 >100% 就变成**放大**，而放大造不出细节
+    /// ——双线性把 1px 笔画摊成渐变块，缩放越大糊得越厉害。
+    ///
+    /// 判据一：母图边长必须**大于** 100% 时的目标边长（否则退化回放大）。
+    /// 删掉修复本身（母图改回 32）即转红。
+    #[test]
+    fn icon_masters_exceed_largest_target() {
+        for (name, dark) in [
+            ("play", false),
+            ("pause", false),
+            ("prev", false),
+            ("next", false),
+            ("switch", false),
+        ] {
+            let _ = (name, dark);
+        }
+        // 母图边长（PNG 头 IHDR 宽高，编译期嵌入的那几份）
+        let masters: [(&str, &[u8]); 4] = [
+            ("play", include_bytes!("../icons/tray-music-play-icon.png")),
+            (
+                "pause",
+                include_bytes!("../icons/tray-music-pause-icon.png"),
+            ),
+            ("prev", include_bytes!("../icons/tray-music-prev-icon.png")),
+            (
+                "switch",
+                include_bytes!("../icons/tray-music-switch-icon.png"),
+            ),
+        ];
+        for (name, bytes) in masters {
+            let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+            // 400% 缩放 ⇒ 128px；留一档余量取 192
+            assert!(
+                w >= 192,
+                "{name} 母图只有 {w}px，≥192 才能保证任何现实 DPI 都走**缩小**"
+            );
+        }
+    }
+
+    /// ⭐⭐ **面积平均缩小要足够锐利**（同一修复的另一半：光换母图不够）。
+    ///
+    /// 判据：竖直扫过播放图标外框的一条边，量 alpha 从 10% 升到 90% 走了几个像素。
+    ///   · 锐利（缩小 / 面积平均）⇒ **1 个像素**左右
+    ///   · 糊（放大 / 双线性）  ⇒ 3 个像素以上
+    /// 与母图边长那条判据**互为独立**：母图够大但滤波器选错（最近邻）一样会花。
+    #[test]
+    fn box_downscale_keeps_icon_edge_sharp() {
+        use super::resample;
+        let master = super::music_icons::get(super::music_icons::Icon::Play, false)
+            .expect("播放图标应可解码");
+        let side = 48u32;
+        let scaled = resample::scale_cached(9_999, side, master).expect("缩放应成功");
+
+        // 取穿过外框左边框的那一行：找 alpha 上升最陡的一段，量 10%→90% 的宽度
+        let mut worst = 0.0f64;
+        for y in 0..side {
+            let prof: Vec<f64> = (0..side)
+                .map(|x| scaled.0[((y * side + x) * 4 + 3) as usize] as f64 / 255.0)
+                .collect();
+            for x1 in 1..side as usize {
+                // 找一对相邻点跨过 0.1→0.9（上升沿）
+                let (a, b) = (prof[x1 - 1], prof[x1]);
+                if a <= 0.1 && b >= 0.9 {
+                    let w = (b - a).max(1e-6);
+                    // 线性插值求 0.1 与 0.9 的落点
+                    let t10 = (0.1 - a) / w;
+                    let t90 = (0.9 - a) / w;
+                    worst = worst.max(t90 - t10);
+                }
+            }
+        }
+        assert!(
+            worst <= 1.5,
+            "边缘 10%→90% 用了 {worst:.2}px ⇒ 缩放滤波太软（>1.5px 即为糊）"
+        );
+    }
+
+    /// ⭐⭐⭐ **封面缩小后必须补回锐度**（用户 2026-09-29：「还是有点糊」）。
+    ///
+    /// 缩小必然低通，Lanczos3 已接近理论最优，但「最优」≠「看起来够锐」——
+    /// 真机封面实测（256→40，相邻像素差分和，越大越锐）：
+    /// ```text
+    /// Nearest 22071 │ Lanczos3 18036 │ Cubic 16929 │ Mitchell 15502
+    /// Lanczos3 + 轻锐化 24827
+    /// ```
+    /// ⇒ Lanczos3 之后还差约 **27%**。
+    ///
+    /// ⚠️⚠️ 判据图案必须是**多尺度细节**（几个不同频率叠加），不能是：
+    ///   · 纯渐变 —— 锐化在那里本就加不出多少（我第一版只放渐变，只涨 3.7%）；
+    ///   · 纯阶跃硬边 —— 它的 10%→90% 过渡宽度**本来就是理论极限**，
+    ///     加了 overshoot 钳制后更不可能变窄（第二版就栽在这）。
+    /// 照片的主体正是多尺度细节，所以这样才对应用户的实际观感。
+    #[test]
+    fn cover_sharpen_boosts_fine_detail() {
+        use super::resample;
+        const S: u32 = 256;
+        const D: u32 = 40;
+        let mut src = vec![0u8; (S * S * 4) as usize];
+        for y in 0..S {
+            for x in 0..S {
+                let (xf, yf) = (x as f64, y as f64);
+                // 三个尺度：低频块面 + 中频纹理 + 接近输出奈奎斯特的细节
+                let v = 128.0
+                    + 70.0 * (xf * 0.13).sin() * (yf * 0.11).cos()
+                    + 40.0 * ((xf * 0.31 + 0.7).sin() * (yf * 0.27).cos())
+                    + 22.0 * (xf * 0.45).sin();
+                let g = v.clamp(0.0, 255.0) as u8;
+                let i = ((y * S + x) * 4) as usize;
+                src[i..i + 4].copy_from_slice(&[g, g, g, 255]);
+            }
+        }
+        let energy = |buf: &[u8]| -> u64 {
+            let mut s = 0u64;
+            for y in 0..D as usize {
+                for x in 1..D as usize {
+                    let i = (y * D as usize + x) * 4;
+                    let j = (y * D as usize + x - 1) * 4;
+                    s += (buf[i] as i64 - buf[j] as i64).unsigned_abs();
+                }
+            }
+            s
+        };
+        let mut plain = vec![0u8; (D * D * 4) as usize];
+        resample::lanczos3_for_test(&src, S, S, D, &mut plain);
+        let mut sharp = plain.clone();
+        resample::unsharp_for_test(&mut sharp, D, D, 1.0);
+
+        let (e0, e1) = (energy(&plain), energy(&sharp));
+        assert!(
+            e1 > e0 * 11 / 10,
+            "锐化后细节能量 {e1} 应比未锐化的 {e0} 高至少 10%（实测 k=0.8 约 +12%）"
+        );
+        // ⛔ 反向约束：overshoot 钳制必须生效 ⇒ 锐化**不得**造出新极值
+        let peak = |b: &[u8]| -> u8 { (0..(D * D) as usize).map(|i| b[i * 4]).max().unwrap() };
+        assert!(
+            peak(&sharp) <= peak(&plain),
+            "锐化后峰值 {} 超过未锐化的 {} ⇒ 钳制失效（振铃）",
+            peak(&sharp),
+            peak(&plain)
+        );
+    }
+
+    /// ⭐⭐⭐ **缩小必须覆盖**整幅**源图**（2026-09-29 实测踩到：封面变成纯色块）。
+    ///
+    /// ⛔⛔ 判据的图案**不能有周期性**：我第一版用「2px 黑白条」，结果**采错区域也照样通过**
+    ///   —— 条纹每 4px 重复，采到源图哪一段都是满对比度。
+    ///   ⇒ 改用**单调渐变**：它对「采样位置」敏感，采错区域立刻现形
+    ///   （输出会挤在梯度的一小段里，min/max 明显不到位）。
+    #[test]
+    fn downscale_covers_the_whole_source() {
+        use super::resample;
+        const S: u32 = 256;
+        const D: u32 = 40;
+        let mut src = vec![0u8; (S * S * 4) as usize];
+        for y in 0..S {
+            for x in 0..S {
+                let i = ((y * S + x) * 4) as usize;
+                let v = (x * 255 / S) as u8;
+                src[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let mut out = vec![0u8; (D * D * 4) as usize];
+        resample::lanczos3_for_test(&src, S, S, D, &mut out);
+        let row: Vec<u8> = (0..D)
+            .map(|x| out[(((D / 2) * D + x) * 4) as usize])
+            .collect();
+        let mn = *row.iter().min().unwrap();
+        let mx = *row.iter().max().unwrap();
+        assert!(
+            mx >= 240 && mn <= 15,
+            "输出只覆盖 {mn}..{mx}，期望 ~0..255 ⇒ 采样区域错了（源→目标映射算反）"
+        );
+        // 单调性：中间行必须一路递增（采错区域时会出现台阶/回折）
+        for w in row.windows(2) {
+            assert!(w[1] > w[0], "输出行非单调：{row:?}");
+        }
+    }
+
+    /// ⭐⭐ **封面缩小必须比面积平均更锐**（用户 2026-09-29：「封面仍然有点糊」）。
+    ///
+    /// 照片上面积平均（box）的模糊半径约等于缩放比的一半，3.2:1 时在**输出**尺度上
+    /// 约糊 1.6px —— 边缘与细节糊成一片。Lanczos3 支撑只有 3 个源像素、带锐化旁瓣，
+    /// 观感明显更实（这也是另外两个组件的做法）。
+    ///
+    /// 判据：拿 **2px 周期的黑白竖条**（在 4:1 缩小下是「刚好不被平均掉」的极限频率）
+    /// 缩到 1/4，量输出中线那一行的**峰谷差**。面积平均会把条纹抹平，Lanczos3 保留得住。
+    #[test]
+    fn cover_downscale_is_sharper_than_box_average() {
+        use super::resample;
+        const SRC: u32 = 64;
+        const DST: u32 = 16;
+        let mut src = vec![0u8; (SRC * SRC * 4) as usize];
+        for y in 0..SRC {
+            for x in 0..SRC {
+                let v = if (x / 2) % 2 == 0 { 255u8 } else { 0u8 };
+                let i = ((y * SRC + x) * 4) as usize;
+                src[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let mut boxed = vec![0u8; (DST * DST * 4) as usize];
+        resample::box_accumulate_for_test(&src, SRC, SRC, DST, &mut boxed);
+        let mut lanczos = vec![0u8; (DST * DST * 4) as usize];
+        resample::lanczos3_for_test(&src, SRC, SRC, DST, &mut lanczos);
+
+        let spread = |buf: &[u8]| -> i64 {
+            let row: Vec<u8> = (0..DST)
+                .map(|x| buf[(((DST / 2) * DST + x) * 4) as usize])
+                .collect();
+            *row.iter().max().unwrap() as i64 - *row.iter().min().unwrap() as i64
+        };
+        let (s_box, s_lanczos) = (spread(&boxed), spread(&lanczos));
+        // 实测（64→16，2px 周期条纹）：面积平均 **0**（完全抹平）、
+        // Lanczos3 **43**（锐化旁瓣保住了对比度）⇒ 判据取「明显高于 box」。
+        assert!(
+            s_lanczos > s_box,
+            "Lanczos3 峰谷差 {s_lanczos} 不应低于面积平均的 {s_box}"
+        );
+        assert!(
+            s_lanczos >= 20,
+            "Lanczos3 峰谷差只有 {s_lanczos}，条纹已被抹平（= 糊；面积平均为 {s_box}）"
+        );
+    }
+
+    /// ⭐⭐ **面积平均的结果必须与一份独立写的朴素实现逐像素一致**。
+    ///
+    /// ⚠️ **不要拿 `image` crate 的 `Triangle` 当参考**：那是**帐篷核**（两端渐缩），
+    ///   对 5.33:1 的缩小会**系统性偏锐**——实测 alpha MAD 4.46/255（≈1.7%）。
+    ///   那不是 bug，是**核的选取不同**；面积平均（box）才是缩小的正确核
+    ///   （它精确等于「把源区域高分辨率渲染后降采样」）。
+    ///   ⇒ 与其和「另一个核」比，不如和**朴素实现**比：那是同一算法的两次独立实现，
+    ///   一致才能说明我的优化（增量式边界裁剪）没算错。
+    #[test]
+    fn box_downscale_matches_naive_reference() {
+        let master = super::music_icons::get(super::music_icons::Icon::Play, false)
+            .expect("播放图标应可解码");
+        let (mpx, msw, msh) = master;
+        let (msw, msh) = (*msw, *msh);
+        let side = 48usize;
+        let got = super::resample::scale_cached(9_997, side as u32, master).expect("缩放应成功");
+
+        // ── 朴素参考：逐输出像素，把覆盖到的每个源像素按「重叠面积」加权 ──
+        let mut worst = 0f64;
+        for y in 0..side {
+            let sy0 = y as f64 * msh as f64 / side as f64;
+            let sy1 = (y + 1) as f64 * msh as f64 / side as f64;
+            for x in 0..side {
+                let sx0 = x as f64 * msw as f64 / side as f64;
+                let sx1 = (x + 1) as f64 * msw as f64 / side as f64;
+                let mut acc = 0f64;
+                let mut wsum = 0f64;
+                for yy in 0..msh {
+                    let wy = sy1.min(yy as f64 + 1.0) - sy0.max(yy as f64);
+                    if wy <= 0.0 {
+                        continue;
+                    }
+                    for xx in 0..msw {
+                        let wx = sx1.min(xx as f64 + 1.0) - sx0.max(xx as f64);
+                        if wx <= 0.0 {
+                            continue;
+                        }
+                        let a = mpx[((yy * msw + xx) * 4 + 3) as usize] as f64;
+                        acc += a * wx * wy;
+                        wsum += wx * wy;
+                    }
+                }
+                let want = (acc / wsum).round();
+                let have = got.0[(y * side + x) * 4 + 3] as f64;
+                worst = worst.max((want - have).abs());
+            }
+        }
+        assert!(
+            worst <= 1.0,
+            "alpha 最大偏差 {worst}（阈值 1.0）⇒ 面积平均算错了"
+        );
+    }
+
+    /// ⭐ **缩放不许产生黑晕**（预乘纪律的回归防线）。
+    ///
+    /// 判据：alpha 近乎为 0 的像素，其 RGB 必须也近乎为 0。
+    /// ⛔ 若忘了「先预乘再插值」，透明像素里那个 RGB（PNG 里常是 0 或 255）
+    ///   会被插值进半透明边缘 ⇒ 图标外圈出现**黑晕/白边**。
+    #[test]
+    fn rescale_produces_no_alpha_halo() {
+        let master = super::music_icons::get(super::music_icons::Icon::Play, false)
+            .expect("播放图标应可解码");
+        for side in [40u32, 48, 64] {
+            let out =
+                super::resample::scale_cached(9_990 + side, side, master).expect("缩放应成功");
+            let bad = (0..(side * side) as usize)
+                .filter(|k| {
+                    let p = &out.0[*k * 4..][..4];
+                    p[3] < 8 && (p[0] > 16 || p[1] > 16 || p[2] > 16)
+                })
+                .count();
+            assert_eq!(
+                bad, 0,
+                "{side}px 结果里出现 {bad} 个带 RGB 的近透明像素（黑晕）"
+            );
+        }
+    }
+    /// ⭐⭐⭐ **音乐开关开着时，记住的选择仍必须说了算**（2026-09-28 用户报「点切换没反应」）。
+    ///
+    /// ⛔ 判据曾写成 `music_available && (music_enabled || panel == Music)`：
+    /// 音乐开关一开，这行**恒为真** ⇒ `taskbar_panel` 从没被读到 ⇒ 点切换写了字段、
+    /// 日志也打了「切换组件 → Devices」，显示层下一帧又判回 Music ⇒ 屏幕纹丝不动。
+    ///
+    /// 判据：两个开关都开、记住=Devices ⇒ 必须显示 **Devices**。
+    /// 删掉修复本身（改回旧判据）这一条即转红。
+    #[test]
+    fn remembered_panel_wins_over_switch_when_both_enabled() {
+        use crate::config::{taskbar_panel_for, Config, TaskbarPanel};
+
+        let mut c = Config {
+            taskbar_widget_enabled: true,
+            taskbar_music_enabled: true,
+            taskbar_panel: TaskbarPanel::Devices,
+            ..Default::default()
+        };
+        c.pinned_taskbar_devices = vec![crate::config::PinnedDevice {
+            key: "c:x".into(),
+            fallback: None,
+            alias: None,
+        }];
+        assert_eq!(
+            taskbar_panel_for(&c, true),
+            Some(TaskbarPanel::Devices),
+            "两个开关都开时，**记住的选择**必须胜出（否则切换按钮形同虚设）"
+        );
+
+        // 切到音乐 ⇒ 显示音乐（环的这一半）
+        c.taskbar_panel = TaskbarPanel::Music;
+        assert_eq!(taskbar_panel_for(&c, true), Some(TaskbarPanel::Music));
+
+        // ⭐ 记住的音乐**不可用**（无会话）⇒ 回落设备，但**不改写选择**
+        assert_eq!(taskbar_panel_for(&c, false), Some(TaskbarPanel::Devices));
+        assert_eq!(
+            c.taskbar_panel,
+            TaskbarPanel::Music,
+            "回落不得改写用户的选择"
+        );
+    }
     use super::*;
     use crate::config::TaskbarContentScale;
     use crate::device_identity::{AudioKind, PhysicalDevice};
@@ -4176,49 +5889,81 @@ mod tests {
     ///   （即让底衬跟着内容缩放）⇒ 本条立刻转红。
     #[test]
     fn content_scale_changes_content_but_never_backdrop() {
-        let follow = Metrics::for_scales(120, TaskbarContentScale::FollowSystem);
-        let def = Metrics::for_scales(120, TaskbarContentScale::Default);
+        let big = Metrics::for_scales(120, TaskbarContentScale::Default);
+        let small = Metrics::for_scales(120, TaskbarContentScale::Smaller);
 
         // ── 底衬：两档必须逐字相同（恒按系统 DPI = 120）──
-        assert_eq!(def.h, follow.h, "底衬高度不得随内容档位改变");
-        assert_eq!(def.radius, follow.radius, "底衬圆角不得随内容档位改变");
-        assert_eq!(def.dpi, follow.dpi, "底衬 DPI 恒为系统 DPI");
-        assert_eq!(def.h, 50, "125% 下底衬高 50（40 DIP × 1.25）");
-        assert_eq!(def.radius, 8, "125% 下圆角 8（6 DIP × 1.25）");
+        assert_eq!(small.h, big.h, "底衬高度不得随内容档位改变");
+        assert_eq!(small.radius, big.radius, "底衬圆角不得随内容档位改变");
+        assert_eq!(small.dpi, big.dpi, "底衬 DPI 恒为系统 DPI");
+        assert_eq!(big.h, 50, "125% 下底衬高 50（40 DIP × 1.25）");
+        assert_eq!(big.radius, 8, "125% 下底衬圆角 8（6 DIP × 1.25）");
 
-        // ── 内容：默认档恒按 96（不随系统放大）──
-        assert_eq!(def.content_dpi, 96, "默认档内容 DPI 恒 96");
-        assert_eq!((def.icon, def.font, def.text_row_h), (32, 11, 16));
+        // ── 内容：「默认」= 与底衬同口径（120）──
+        assert_eq!(big.content_dpi, 120);
+        assert_eq!((big.icon, big.font, big.text_row_h), (40, 14, 20));
 
-        // ── 内容：跟随系统档按 120 ──
-        assert_eq!(follow.content_dpi, 120);
-        assert_eq!((follow.icon, follow.font, follow.text_row_h), (40, 14, 20));
+        // ── 内容：「偏小」= **降一档** ⇒ 125% 系统下用 100%（用户 2026-09-29 的原话）──
+        assert_eq!(
+            small.content_dpi, 96,
+            "系统 125% 时「偏小」必须降到 100%（不是 93.75%）"
+        );
+        assert_eq!((small.icon, small.font, small.text_row_h), (32, 11, 16));
 
-        // ── 区分力：两档必须在**内容**上真的不同，否则本条证明不了任何事 ──
+        // ── 区分力：两档必须在**内容**上真的不同，否则本条证明不了任何事
         for (name, a, b) in [
-            ("icon", def.icon, follow.icon),
-            ("font", def.font, follow.font),
-            ("pad_x", def.pad_x, follow.pad_x),
-            ("icon_text_gap", def.icon_text_gap, follow.icon_text_gap),
-            ("item_gap", def.item_gap, follow.item_gap),
-            ("item_max_w", def.item_max_w, follow.item_max_w),
-            ("text_row_h", def.text_row_h, follow.text_row_h),
+            ("icon", small.icon, big.icon),
+            ("font", small.font, big.font),
+            ("pad_x", small.pad_x, big.pad_x),
+            ("icon_text_gap", small.icon_text_gap, big.icon_text_gap),
+            ("item_gap", small.item_gap, big.item_gap),
+            ("item_max_w", small.item_max_w, big.item_max_w),
+            ("text_row_h", small.text_row_h, big.text_row_h),
         ] {
             assert_ne!(a, b, "内容量 `{name}` 两档必须不同，否则用例无区分力");
         }
     }
 
-    /// `for_dpi` 保留「底衬与内容同口径」的旧语义（= `FollowSystem` 档）——
+    /// ⭐⭐ **「偏小」= 沿 Windows 标准缩放阶梯降一档**（用户 2026-09-29 定义）。
+    ///
+    /// 判据把用户的原话逐条钉住：`125% ⇒ 100%`、`150% ⇒ 125%`、`200% ⇒ 175%`。
+    /// ⛔ **不是「乘 0.75」**：那在 125% 上会得到 93.75%，不是任何一档。
+    /// ⛔ **已在 100% 时不再降**（否则会掉到 75%，小于设计基准）。
+    #[test]
+    fn smaller_scale_steps_down_one_ladder_rung() {
+        use super::Metrics;
+        for (system, want) in [
+            (96u32, 96u32), // 100% → 已在最小档，保持
+            (120, 96),      // 125% → 100%
+            (144, 120),     // 150% → 125%
+            (168, 144),     // 175% → 150%
+            (192, 168),     // 200% → 175%
+            (240, 216),     // 250% → 225%
+        ] {
+            assert_eq!(
+                Metrics::step_down_dpi(system),
+                want,
+                "系统 {system} DPI 时「偏小」应降到 {want}"
+            );
+            // 端到端：走 for_scales 也必须一致（判据要锚在真正生效的那条路径上）
+            assert_eq!(
+                Metrics::for_scales(system, TaskbarContentScale::Smaller).content_dpi,
+                want
+            );
+        }
+    }
+
+    /// `for_dpi` 保留「底衬与内容同口径」的旧语义（= `Default` 档）——
     /// 只消费底衬量的调用点（建窗 / 垂直居中 / 空帧）依赖它。
     ///
     /// 可证伪：把 `for_dpi` 改成 `Self::for_dpis(dpi, 96)` ⇒ 本条转红。
     #[test]
-    fn for_dpi_equals_follow_system_scale() {
+    fn for_dpi_equals_default_scale() {
         for dpi in [0u32, 96, 120, 144] {
             assert_eq!(
                 Metrics::for_dpi(dpi),
-                Metrics::for_scales(dpi, TaskbarContentScale::FollowSystem),
-                "for_dpi 必须等价于 FollowSystem 档（dpi={dpi}）"
+                Metrics::for_scales(dpi, TaskbarContentScale::Default),
+                "for_dpi 必须等价于 Default 档（dpi={dpi}）"
             );
         }
     }
@@ -4232,26 +5977,26 @@ mod tests {
         let eight: Vec<WidgetItem> = (0..WIDGET_MAX_ITEMS)
             .map(|i| item(Some(50 + i as i32), Some(0.5), true, Some(false)))
             .collect();
-        let follow = estimate_widget_width(
-            &eight,
-            &Metrics::for_scales(120, TaskbarContentScale::FollowSystem),
-            false,
-        );
-        let def = estimate_widget_width(
+        let big = estimate_widget_width(
             &eight,
             &Metrics::for_scales(120, TaskbarContentScale::Default),
             false,
         );
+        let small = estimate_widget_width(
+            &eight,
+            &Metrics::for_scales(120, TaskbarContentScale::Smaller),
+            false,
+        );
         assert!(
-            def < follow,
-            "默认档内容更小 ⇒ 估算宽度必须更窄（{def} vs {follow}）"
+            small < big,
+            "「偏小」档内容更小 ⇒ 估算宽度必须更窄（{small} vs {big}）"
         );
         // ⭐ 默认档在**任意**系统缩放下都必须与 100% 同宽 —— 这正是本档位的语义：
         //   内容不随系统缩放（底衬仍会变，但底衬不参与测宽）。
         assert_eq!(
-            def,
+            small,
             estimate_widget_width(&eight, &Metrics::for_dpi(96), false),
-            "默认档的测宽必须与 100% 系统缩放下完全一致"
+            "「偏小」档在 125% 系统下的测宽，必须与 100% 系统缩放下完全一致"
         );
     }
 
@@ -4540,7 +6285,8 @@ mod tests {
                 let src = icons::get(kind, dark)
                     .unwrap_or_else(|| panic!("图标解码失败: {kind:?} dark={dark}"));
                 assert!(src.1 > 0 && src.2 > 0, "解码出的尺寸不能为 0");
-                let scaled = icons::scale_to(src, 16).expect("缩放到 16px 不应失败");
+                let scaled =
+                    icons::scale_to(icons::slot_of(kind), src, 16).expect("缩放到 16px 不应失败");
                 assert_eq!((scaled.1, scaled.2), (16, 16));
                 assert_eq!(scaled.0.len(), 16 * 16 * 4, "RGBA 缓冲长度必须是 w*h*4");
             }
@@ -4551,7 +6297,7 @@ mod tests {
     #[test]
     fn scaled_icon_has_visible_pixels() {
         let src = icons::get(AudioKind::Speaker, false).expect("扬声器图标应解码成功");
-        let (px, ..) = icons::scale_to(src, 16).unwrap();
+        let (px, ..) = icons::scale_to(icons::slot_of(AudioKind::Speaker), src, 16).unwrap();
         let opaque = px.chunks(4).filter(|c| c[3] > 0).count();
         assert!(
             opaque > 16,
@@ -4559,32 +6305,43 @@ mod tests {
         );
     }
 
-    /// ⛔ **缩小**必须仍是最近邻：线稿的 1–2px 笔画被双线性糊掉会变成灰带。
+    /// ⭐ **缩小**必须是**面积平均**（不是最近邻）。
     ///
-    /// 可证伪：把 `scale_to` 里的 `upscale` 判据改成恒 `true` ⇒ 本条转红（出现中间值）。
+    /// ⛔⛔ **本条钉的契约在 2026-09-29 被有意改掉了**（旧契约 = 最近邻，理由是
+    ///   「1–2px 笔画被双线性糊成灰带」）。改契约的依据不是口味，而是**母图换了**：
+    ///   母图从 32 提到 256 之后，缩小时源里**根本不存在 1px 笔画**——最小笔画是
+    ///   51/1024 × 256 ≈ **12.8px**，缩到 48px 仍有 2.4px。此时最近邻会
+    ///   **按点抽样丢像素**（5.33:1 ⇒ 每 5~6 个源像素只取 1 个）⇒ 斜边出现台阶、
+    ///   细笔画断裂；面积平均则是「高分辨率渲染后降采样」，**没有混叠**。
+    ///   ⇒ 旧契约的前提（笔画细到 1px）已随母图一起消失，契约必须跟着改。
+    ///
+    /// 判据：1×2 源（上黑下白）缩到 1×1，面积平均给**中值**（≈128）而不是端点。
+    /// 可证伪：把 `resample` 的 `side <= sw` 分支改回最近邻 ⇒ 本条转红。
     #[test]
-    fn scale_down_stays_nearest_neighbor() {
-        // 1×2 源：上纯黑不透明、下纯白不透明。缩到 1×1 只能取其中一个 ——
-        // 出现 0/255 之外的**中间值**就是双线性的产物。
+    fn scale_down_averages_source_area() {
         let src = (vec![0, 0, 0, 255, 255, 255, 255, 255], 1u32, 2u32);
-        let (px, w, h) = icons::scale_to(&src, 1).expect("缩放不应失败");
+        let (px, w, h) = icons::scale_to(900_001, &src, 1).expect("缩放不应失败");
         assert_eq!((w, h), (1, 1));
+        // ⚠️ 断言的是 **RGB** 不是 alpha：两个源像素的 alpha 都是 255，
+        //    平均后仍是 255（若断言 alpha，任何实现都会「通过」⇒ 假判据）。
+        let lum = px[0] as i32;
         assert!(
-            px[0] == 0 || px[0] == 255,
-            "缩小时不得出现中间值: {}",
-            px[0]
+            (110..=145).contains(&lum),
+            "缩小必须取源区域的**平均**（黑白各半 ⇒ 灰 ≈128），最近邻会得到 0 或 255: {lum}"
         );
     }
 
-    /// ⭐ **放大**必须平滑：最近邻会让 1px 笔画忽宽忽窄、曲线出现台阶
-    ///   （真机 8 倍放大图确认过）。
+    /// ⭐ **放大**必须平滑且单调：最近邻会让 1px 笔画忽宽忽窄、曲线出现台阶。
     ///
-    /// 可证伪：把 `upscale` 判据改成恒 `false` ⇒ 本条转红（相邻像素完全相同）。
+    /// ⚠️ 母图 256 之后**正常设备上走不到放大这条路**（任何现实 DPI ≤ 128px），
+    ///   它只为兜底那 3 张仍是 32px 母图的设备图标；双三次比双线性锐利。
+    ///
+    /// 可证伪：把放大分支改回最近邻 ⇒ 本条转红。
     #[test]
     fn scale_up_interpolates() {
         // 2×1 的黑白源放大到 4×1 ⇒ 中间两列必须是**渐变**而不是非黑即白
         let src = (vec![0, 0, 0, 255, 255, 255, 255, 255], 2u32, 1u32);
-        let (px, w, _) = icons::scale_to(&src, 4).expect("缩放不应失败");
+        let (px, w, _) = icons::scale_to(900_002, &src, 4).expect("缩放不应失败");
         assert_eq!(w, 4);
         let lum: Vec<u8> = (0..4).map(|i| px[i * 4]).collect(); // 灰度图 R=G=B
         assert!(
@@ -4604,7 +6361,7 @@ mod tests {
     #[test]
     fn scale_up_does_not_darken_transparent_edges() {
         let src = (vec![0, 0, 0, 255, 255, 255, 255, 0], 2u32, 1u32);
-        let (px, _, _) = icons::scale_to(&src, 4).expect("缩放不应失败");
+        let (px, _, _) = icons::scale_to(900_003, &src, 4).expect("缩放不应失败");
         for i in 0..4 {
             let (r, a) = (px[i * 4], px[i * 4 + 3]);
             assert!(
@@ -5089,19 +6846,22 @@ mod tests {
 
         // ① 默认关闭：新装（无设备 + 开关默认关）⇒ 不显示
         assert!(
-            !wants_widget(&Config::default()),
+            !crate::config::taskbar_devices_available(&Config::default()),
             "默认（无设备、开关默认关）⇒ 窗口不应存在"
         );
 
         // ② 开关开 + 有设备 ⇒ 显示
         assert!(
-            wants_widget(&one_pin(true)),
+            crate::config::taskbar_devices_available(&one_pin(true)),
             "开关开且已钉设备 ⇒ 窗口应存在"
         );
 
         // ③ ⭐ 开关关 + **仍保留设备** ⇒ 不显示，但**列表一个字都没少**
         let off = one_pin(false);
-        assert!(!wants_widget(&off), "开关关 ⇒ 窗口不应存在");
+        assert!(
+            !crate::config::taskbar_devices_available(&off),
+            "开关关 ⇒ 窗口不应存在"
+        );
         assert_eq!(
             off.pinned_taskbar_devices.len(),
             1,
@@ -5117,7 +6877,74 @@ mod tests {
             taskbar_widget_enabled: true,
             ..Default::default()
         };
-        assert!(!wants_widget(&c), "开关开但无设备 ⇒ 不得显示空窗");
+        assert!(
+            !crate::config::taskbar_devices_available(&c),
+            "开关开但无设备 ⇒ 不得显示空窗"
+        );
+    }
+
+    /// ⭐ **三态回落链**（用户 2026-09-28 指定的降级规则）——本批新增的核心判据。
+    ///
+    /// ```text
+    /// 音乐可用 ∧ (音乐开关开 ∨ 记住的是音乐) → Music
+    /// 否则若设备可用                          → Devices
+    /// 否则                                     → None
+    /// ```
+    #[test]
+    fn panel_falls_back_when_music_unavailable() {
+        use crate::config::{taskbar_devices_available, taskbar_panel_for, Config, TaskbarPanel};
+
+        // ① 只有设备可用、音乐不可用 ⇒ 恒显示设备面板（**与记住的选择无关**）
+        let dev_only = Config {
+            taskbar_widget_enabled: true,
+            taskbar_panel: TaskbarPanel::Music, // 记住的是音乐
+            pinned_taskbar_devices: vec![crate::config::PinnedDevice {
+                key: "c:x".into(),
+                fallback: None,
+                alias: None,
+            }],
+            ..Default::default()
+        };
+        assert!(taskbar_devices_available(&dev_only));
+        assert_eq!(
+            taskbar_panel_for(&dev_only, false),
+            Some(TaskbarPanel::Devices),
+            "⭐ 无媒体会话时必须**回落设备面板**（哪怕用户上次选的是音乐）"
+        );
+
+        // ② 音乐可用 ∧ 开关开 ⇒ Music
+        let both = Config {
+            taskbar_music_enabled: true,
+            ..dev_only.clone()
+        };
+        assert_eq!(taskbar_panel_for(&both, true), Some(TaskbarPanel::Music));
+
+        // ③ 音乐可用 ∧ 开关关但**记住的是音乐** ⇒ 仍是 Music（选择被记住）
+        let remembered = Config {
+            taskbar_music_enabled: false,
+            ..both.clone()
+        };
+        assert_eq!(
+            taskbar_panel_for(&remembered, true),
+            Some(TaskbarPanel::Music),
+            "记住的选择在**可用时**必须生效"
+        );
+
+        // ④ 两边都不可用 ⇒ 整个组件不显示
+        let none = Config::default();
+        assert_eq!(taskbar_panel_for(&none, false), None);
+        assert_eq!(
+            taskbar_panel_for(&none, true),
+            None,
+            "音乐开关默认关 ⇒ 仍不显示"
+        );
+
+        // ⑤ ⭐ **回落不改写用户的选择**：回落是「显示层」的事，不是「选择」的事
+        assert_eq!(
+            dev_only.taskbar_panel,
+            TaskbarPanel::Music,
+            "回落只影响显示，配置里记住的选择必须原样保留"
+        );
     }
 
     // ── 中毒（poison）后的可证伪验证 ──────────────────────────────────

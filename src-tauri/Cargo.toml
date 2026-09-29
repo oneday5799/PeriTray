@@ -22,6 +22,11 @@ base64 = "0.23"
 ntapi = "0.4"
 hidapi = "2"
 windows-core = "0.62"
+# SMTC 的异步操作与集合类型：windows crate **不 re-export** 这两个 crate
+# （实测 `grep 'pub use windows_future' windows-0.62.2/src/lib.rs` 零命中），
+# 必须显式声明，版本要与 windows 0.62.2 内部依赖的 0.3.2 对齐。
+windows-future = "0.3.2"
+windows-collections = "0.3.2"
 # WebView2 类型安全基座：sys 0.38 绑定在 windows-core 0.61 上（与 audio_notify
 # 的 implement 宏所需 0.62 不同版本，rename 共存，勿合并）
 windows-core-061 = { package = "windows-core", version = "0.61" }
@@ -61,6 +66,9 @@ features = [
     "ApplicationModel",
     "Data_Xml_Dom",
     "Foundation_Collections",
+    # SMTC（音乐控制组件）：GlobalSystemMediaTransportControlsSessionManager。
+    # ⚠️ 少了它 = 整个 taskbar_music 模块编译不过（类型不存在）。
+    "Media_Control",
     "Management_Deployment",
     "Services_Store",
     "Storage_Streams",

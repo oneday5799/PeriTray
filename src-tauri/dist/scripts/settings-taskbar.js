@@ -1,23 +1,30 @@
-/* settings-taskbar.js — 设置页·任务栏 tab：任务栏组件总开关 + 已添加设备管理 + 窗口位置固定
+/* settings-taskbar.js — 设置页·任务栏 tab：设备信息组件 + 音乐控制组件（两个独立开关）
  * 加载序 6/8 · 提供：initTaskbarTab()
  * 依赖：common.js / settings.js(config/bindToggle/initComboBox/createExpandableCard/saveConfig)
  *
  * ⭐ 本页控件全部接线真实数据：
- *    · 「任务栏组件」开关       → `config.taskbar_widget_enabled`（默认关）
+ *    · 「显示设备信息组件」开关 → `config.taskbar_widget_enabled`（默认关）
+ *    · 「显示音乐控制组件」开关 → `config.taskbar_music_enabled`（默认关，**独立**）
  *    · 已添加设备清单 + 「移除」 → `get_pinned_taskbar_list` / `toggle_pinned_taskbar_device`
  *    · 「固定任务栏窗口位置」开关 → `config.taskbar_position_locked`
  *    · 「任务栏窗口位置」下拉     → `config.taskbar_position`（left/center/right）
  *    · 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default/follow_system）
  *
+ * ⭐ 两个组件开关**互相独立**（用户 2026-09-28）：关掉「显示设备信息组件」**不会**
+ *    关掉「显示音乐控制组件」，反之亦然。两个都开时，任务栏组件最右侧出现
+ *    「切换」按钮（由后端 `taskbar_widget` 处理，本页不参与）。
+ *
  * ⛔ 设备**添加**入口已从本页移除（用户 2026-09-28）：改到**弹出窗口**的设备卡片
  *    右键菜单「钉到任务栏」，与托盘的「添加到托盘」同一范式。本页只保留
  *    「查看已添加 + 移除」，且清单**必须含已断开设备**。
  *
- * ⛔ 落盘**不是可选的**：后端 `taskbar_widget::should_show()` 的判据是
- *    「开关开 **且** 已钉设备非空」，窗口挂载/拆除/重绘全由 `config-changed`
- *    驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
+ * ⛔ 落盘**不是可选的**：后端 `config::taskbar_panel_for()` 直接读本页写的字段
+ *    决定组件显示哪一块（2026-09-28 起判据由「设备开关 ∧ 已钉设备」升为**三态**：
+ *    音乐可用→音乐面板、否则设备可用→设备面板、否则不显示），窗口挂载/拆除/重绘
+ *    全由 `config-changed` 驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
 function initTaskbarTab() {
   initTaskbarWidgetCard();
+  initTaskbarMusicCard();
   initTaskbarPinCard();
   initTaskbarContentScale();
 }
@@ -145,6 +152,26 @@ function initTaskbarWidgetCard() {
 }
 
 
+/** 「显示音乐控制组件」单开关卡（用户 2026-09-28 新增）。 */
+function initTaskbarMusicCard() {
+  const card = document.getElementById("taskbar-music-card");
+  const toggle = document.getElementById("toggle-taskbar-music");
+  if (!card || !toggle) return;
+
+  // ⚠️ 判据写 `=== true` 而不是 `!!get()`：`!!undefined`（老配置缺键）会得到 false，
+  //    而 false 恰是本项默认值 —— 结果对，但**读法有歧义**（分不清「显式关」与「没这个键」）。
+  //    与上面那个开关的 `!== false` 写法**不同是有意的**：那边默认 true、本项默认 false，
+  //    两边都得按「字段缺键时的默认值」选方向，别互相照抄。
+  // ⚠️ 落盘是**必须的**：后端 `config::taskbar_panel_for` 直接读本字段，
+  //    不落盘 = 开关点了没反应。
+  bindToggle("toggle-taskbar-music", {
+    get: () => config.taskbar_music_enabled === true,
+    set: (v) => { config.taskbar_music_enabled = !!v; },
+  });
+
+  // ⛔ **刻意不加展开区**：音乐组件没有「已添加清单」这类内容。
+}
+
 function initTaskbarPinCard() {
   const card = document.getElementById("taskbar-pin-card");
   const toggle = document.getElementById("toggle-taskbar-pin");
@@ -190,7 +217,7 @@ function initTaskbarPinCard() {
   });
 }
 
-// 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default / follow_system）。
+// 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default / smaller）。
 //
 // ⛔ **作用域**（用户 2026-09-25 指定）：只改**内容**（图标边长 / 信息文字字号 /
 //    随内容缩放的间距与项宽上限），**底衬恒按系统 DPI**（窗口高度、圆角不受本项影响）。
@@ -199,7 +226,7 @@ function initTaskbarPinCard() {
 // ⭐ 为什么单列一张卡而不是塞进上面的折叠卡：本项与「固定位置」开关**无关**，
 //    放进折叠卡会在开关关闭时被一起收起 —— 用户会以为这个设置消失了。
 function initTaskbarContentScale() {
-  // ⭐ 初始值取 config（覆盖 HTML 里写死的「默认大小」文案）；变更即落盘。
+  // ⭐ 初始值取 config（覆盖 HTML 里写死的「默认」文案）；变更即落盘。
   //    ⚠️ 落盘后由后端 `config-changed` → `apply_from_config` → `FORCE_REPAINT` +
   //       `refresh_async` 重算宽度并重绘 ⇒ **本项不需要重启即生效**（不是「下次启动才变」）。
   //    ⚠️ 缺键时回落 "default"：后端默认档也是它，两侧口径一致（旧配置文件无此键）。

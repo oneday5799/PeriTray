@@ -334,6 +334,14 @@ fn wrap_lines(
         if c == 0 {
             continue;
         }
+        // 换行符 = **硬换行**（用户 2026-09-28：音乐面板 tooltip 要「上排歌名 / 下排歌手」）。
+        // 此前这里只跳 NUL、按宽度折行，把两行文本当成一行里夹了个换行符，
+        // DrawText 画出来是方框或空白。设备名不含换行符 ⇒ 对既有条目零影响。
+        if c == 10 {
+            lines.push(std::mem::take(&mut cur));
+            cur_w = 0;
+            continue;
+        }
         let w = unsafe { measure_one(memdc, font, &[c]) };
         if cur.is_empty() {
             cur.push(c);

@@ -318,7 +318,7 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 | 目录 | 是否入库 | 是什么 / 为什么这样 |
 |---|---|---|
 | `ck/` | ⛔ `.gitignore` 排除 | 任务栏自绘 spike 阶段参考的 **6 个第三方开源项目源码**（40 MB / 625 文件）。结论已提炼进 Wiki 15 §7.6；仓库需要的是那份「怎么查」的指针，不需要 40 MB 别人的代码 |
-| `tools/local/` | ✅ 入库 | 45 个自包含验收脚本（`probe_*` / `verify-*` / `inject-*` / `shot-*` / `measure-*` / `diag-*`）。⛔ **全是本机口径**（写死 DPI 125%、任务栏 2560 宽、具体设备名）⇒ 换机器必须重跑并复核期望值。截图产物落 `_out/`，已忽略 |
+| `tools/local/` | ✅ 入库 | 48 个自包含验收脚本（`probe_*` / `verify-*` / `inject-*` / `shot-*` / `measure-*` / `diag-*`）。⛔ **全是本机口径**（写死 DPI 125%、任务栏 2560 宽、具体设备名）⇒ 换机器必须重跑并复核期望值。截图产物落 `_out/`，已忽略。⚠️ `verify-wheel-volume.py` 曾长期 0/6（**盲选第 0 项，而排序把「有电量无音频端点」的设备排在最前**），已修；两个音乐判据 `verify-music-wheel-gate.py` / `verify-music-panels.py` 的**期望值必须跟着「当次会话数」走**（回落链的第一条就是「音乐会话存在」） |
 | `tools/skills/peri-tray-release.md` | ✅ 入库 | 发版 playbook（原在 AI 工作目录里，目录退役前迁入） |
 
 ⚠️ `tools/local/` 有一批脚本写死 `C:\Users\Oneday\...` 的 WorkBuddy 运行时路径——那是
@@ -465,6 +465,48 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
   ⛔⛔ **与音量页对齐有两处必抄**：页面滑块值域是 `0..100` 百分点（COM 给的是分数）、
   且**先把初值取整**（`Math.round(v*100)`）；漏掉任一条 ⇒ 一格变 100% 或**每格少 1%**。
   ⛔ **已知缺陷**：重绘瞬间窗口可能短暂隐藏，alpha=0 处收不到滚轮消息 ⇒ 快速滚动偶尔丢格。
+- ⛔⛔ **组件有两块内容时，命中下标空间必须与数据源原子切换**（2026-09-28 引入音乐组件时踩到）：
+  设备面板把命中下标拿去 `snapshot::load()`（**设备**快照）取设备；音乐面板发布的矩形
+  （封面+三键，可能还有切换按钮）下标空间**完全不同** ⇒ 不设闸就会
+  **「在音乐面板上滚滚轮，把别的设备的音量改了」且不报错、日志正常**。
+  ⇒ `wheel_adjust_volume` 开头必须 `if 当前面板 != Devices { return false }`。
+  判据：`tools/local/verify-music-wheel-gate.py`（反向对照实测：移除该闸立刻转红）。
+- ⛔⛔ **面板是三态的，不是布尔**（`config::taskbar_panel_for`）：
+  `音乐可用 ∧ (音乐开关开 ∨ 记住的是音乐) → Music` / 否则设备可用 `→ Devices` / 否则 `→ 不显示`。
+  ⚠️ **回落只影响「显示」，不改写「用户的选择」**（`taskbar_panel` 字段）——
+  一次「临时没播歌」就把选择抹掉，用户下次开机看到的是另一块面板。
+  ⚠️ 反向同样要成立：**「记住的选择」在它可用时必须是权威的**，否则「切换」按钮
+  形同虚设。判据曾写成 `music_available && (music_enabled || panel == Music)`
+  ⇒ 音乐开关一开这行**恒为真**、`taskbar_panel` **从没被读到** ⇒ 点切换写了字段、
+  日志也照打「切换组件 → Devices」，显示层下一帧又判回 Music ⇒ **屏幕纹丝不动、
+  日志完全正常**（最难归因的形态）。正确次序：① 记住的那块可用就它说了算 →
+  ② 不可用才按「开关开着的那块」回落、**且不改写选择**。
+  ⇒ **两个开关**与**当前显示哪块**是两个维度，后者须由前者 + 记住的选择共同决定，
+  **不能让开关单独决定**。判据
+  `taskbar_widget::tests::remembered_panel_wins_over_switch_when_both_enabled`。
+
+- ⛔ **音乐控制组件（SMTC）**：数据层 `taskbar_music.rs` 全部在**单后台线程 + MTA**。
+  `RequestAsync` / `TryGetMediaPropertiesAsync` / `TryXxxAsync` **全部要 `join()`**
+  （真阻塞）⇒ 放主线程即界面冻结。⛔ 事件回调**只单向投递**给 widget，
+  绝**不** `Dispatcher.Invoke` 式反等 UI（FluentFlyout 的反面教材）。
+  ⚠️ 会话增删靠 `SessionsChanged` diff：**消失的会话必须退订并 drop 闭包**，
+  否则闭包持有的强引用让会话**永不释放**。
+  ⛔⛔ **后台线程的循环退出条件只能是「通道断开」**，绝不能是「收到了一条消息」
+  （2026-09-28 实踩：`pending = rx.recv_timeout(..).is_err()` ⇒ 超时会继续、**收到消息反而退出**
+  ⇒ 线程死在第一条 SMTC 事件上，实测约 90 秒后音乐组件消失）。
+  ⚠️ 这个 bug 特别贵的地方：**日志里没有任何异常**（线程正常返回、无 panic），唯一线索是
+  快照被清空。判据 `taskbar_music::tests::worker_loop_survives_incoming_message`。
+  ⛔ **别把「限制处理量」写成「裁剪画面」**：封面解码曾写 `w.min(h).min(128)`
+  ⇒ 把 400×400 封面**裁成中心 128×128**（用户报「只显示了一部分」）。
+  正确做法是**先整体缩后取正方形**。判据 `cover_decodes_whole_image_not_center_crop`。
+  ⛔ **控制键与「切换」图标的尺寸要分别定**：控制键是「边框 + 内容」的线稿，
+  与封面同尺寸时其内部元素（暂停双竖 25.6/1024）只有 0.8px ⇒ 看不见；
+  而实心/长条形图标同尺寸会显得过大。⇒ 控制键占满高度、切换按 3/4 缩。
+  ⭐ `windows` crate 的坑（全部实测，勿凭直觉改）：方法名 **PascalCase**；
+  `IAsyncOperation::join()` 是**固有方法**（`Async` trait 是私有的，import 会编译失败）；
+  `Thumbnail()` 返回 `Result<..>`（**不是 Option**）；**不能把流 cast 成 `DataReader`**
+  （正解 `DataReader::CreateDataReader`）；`windows` **不 re-export**
+  `windows-future` / `windows-collections`，须在 `Cargo.toml` 显式声明。
 - ⛔⛔ **验收专属坑**：分层窗**不能靠「下方颜色透出来」判「被遮住」**（alpha=0 处本就透）；
   任务栏上**有别人的像素**（托盘/时钟/按钮）会污染内容掩膜 ⇒ 用**隐藏态差分**；
   **判据里出现「绝对亮度差」先问「这是背景的函数吗」**；

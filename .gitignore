@@ -8,6 +8,9 @@
 *.pdb
 generate_icons.mjs
 generate_widget_icons.mjs
+# 音乐控制图标生成脚本（2026-09-28）—— 同样是「一次性、本机口径」的生成器，
+# 产物（src-tauri/icons/tray-music-*.png）入库，脚本本身不入库。
+generate_music_icons.mjs
 
 # Logs
 *.log
@@ -43,6 +46,7 @@ Thumbs.db
 # tools/local 里截图/临时产物的默认落盘目录（脚本按 OUT/OUT_DIR 变量写这里）。
 /tools/local/_out/
 /tools/local/*.png
+__pycache__/
 
 # 验收脚本写进 dist/ 的临时探针页（frontendDist 编译期嵌入二进制，残留会被打进包里）。
 /src-tauri/dist/__probe_*.html

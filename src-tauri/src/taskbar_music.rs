@@ -1,0 +1,892 @@
+//! 任务栏「音乐控制组件」的数据层（SMTC / `Windows::Media::Control`）。
+//!
+//! ## 职责边界
+//!
+//! 本模块**只管取数与控制**，不碰任何绘制。绘制在 `taskbar_widget::draw_music`
+//! 那边，本模块通过 [`snapshot`] 把「一个音乐面板的静态快照」交出去。
+//!
+//! ## 为什么全部放后台线程
+//!
+//! ⛔ SMTC 的取数**全是阻塞等待**：`RequestAsync()` / `TryGetMediaPropertiesAsync()`
+//!   返回的 `IAsyncOperation` 必须 `.join()`（内部 = `Waiter` +
+//!   `WaitForSingleObject(INFINITE)` + `get_results`）。
+//!   主线程同时持有 Tauri 事件循环与任务栏 widget 窗口 ⇒ 在其上 `join()`
+//!   就是**界面冻结**，且违反 AGENTS.md「主线程不得阻塞等自己」。
+//! ⇒ 单后台线程 + **MTA**（`CoInitializeEx(COINIT_MULTITHREADED)`）：
+//!   WinRT 异步在线程池回调，MTA 线程不需要自己的消息泵就能等到完成。
+//!
+//! ⛔ **回调只单向投递**。SMTC 事件（`Revents`）在**任意线程**触发，一律
+//!   `post_message` 给 widget 窗口线程，**绝不**反过去等它处理完。
+//!   （FluentFlyout 用 `Dispatcher.Invoke` 同步等 UI 线程，那是本仓明令禁用的反模式。）
+//!
+//! ## 会话增删的订阅维护
+//!
+//! `SessionsChanged` 到来时 diff `GetSessions()`：
+//! · 新增会话 → 给它挂 4 个事件回调（媒体属性 / 播放信息 / 播放状态 / 时间线）
+//! · 消失会话 → 退订并 **drop 闭包**
+//! ⛔ 闭包持有 `Session` 强引用 ⇒ 不 drop 就等于**会话永不释放**（泄漏）。
+//!   这一层在 FluentFlyout 里是第三方库替它做的，我们得自己做。
+//!
+//! ## SMTC API 的几个坑（全部由 2026-09-28 的探针实测确认，勿凭直觉改）
+//!
+//! 1. 方法名是 **PascalCase**（`RequestAsync` / `GetSessions` / `TryPlayAsync`），
+//!    不是 snake_case。
+//! 2. `IAsyncOperation::join()` 是**固有方法**（`windows-future` 的 `Async` trait
+//!    默认方法），**不需要** `use ...::Async`（那个 trait 是私有的，import 会编译失败）。
+//! 3. `Thumbnail()` 返回 `Result<IRandomAccessStreamReference>`，**不是 Option**。
+//! 4. **不能把流 `cast` 成 `DataReader`**（DataReader 是独立对象、不是流的接口）
+//!    ⇒ 直接 `E_NOINTERFACE(0x80004002)`。正解 `DataReader::CreateDataReader(stream)`。
+//! 5. `DataReaderLoadOperation::join()` 返回**已读字节数 `u32`**，不是操作对象。
+//! 6. `IVectorView` 的入口是 `Size()` / `GetAt(u32)`（同样 PascalCase）。
+//! 7. `windows` crate **不 re-export** `windows_future` / `windows_collections`，
+//!    `Cargo.toml` 里必须显式声明这两个依赖。
+
+#![cfg(target_os = "windows")]
+
+use crate::state::lock_unpoisoned;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+use windows::Media::Control::{
+    GlobalSystemMediaTransportControlsSession, GlobalSystemMediaTransportControlsSessionManager,
+    GlobalSystemMediaTransportControlsSessionPlaybackStatus,
+};
+use windows::Win32::System::Com::CoInitializeEx;
+use windows::Win32::System::Com::COINIT_MULTITHREADED;
+
+/// 单个媒体会话的展示信息（**不含封面字节**，封面单独走 LRU）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SessionInfo {
+    /// 会话 id（= 源应用的 AUMID），用作**稳定身份**。
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub playing: bool,
+    pub can_prev: bool,
+    pub can_play_pause: bool,
+    pub can_next: bool,
+}
+
+/// 音乐面板的完整快照（绘制层唯一输入）。
+#[derive(Debug, Clone, Default)]
+pub struct MusicSnapshot {
+    pub sessions: Vec<SessionInfo>,
+    /// 当前选中的会话下标。`sessions` 为空时恒为 0。
+    pub current: usize,
+    /// 封面缓存键（封面字节的 FNV-1a hash）。0 = 无封面。
+    pub cover_hash: u64,
+    pub cover_size: u32,
+}
+
+impl MusicSnapshot {
+    pub fn current_session(&self) -> Option<&SessionInfo> {
+        self.sessions.get(self.current)
+    }
+    /// 是否有任何媒体会话（决定「音乐面板可不可用」）。
+    pub fn available(&self) -> bool {
+        !self.sessions.is_empty()
+    }
+}
+
+/// 封面缓存：hash → 已解码缩放到 `COVER_PX` 的 RGBA。
+///
+/// ⭐ 容量小是有意的：任务栏只显示一枚小封面，解一张 400×400 JPEG 要几毫秒，
+///   没必要留一堆。淘汰用最简单的「插队式」——满了就丢掉最早插入的那个。
+static COVER_CACHE: OnceLock<Mutex<CoverCache>> = OnceLock::new();
+
+/// 封面在缓存里的**画布边长**（不是显示边长！显示边长是 `taskbar_widget` 的
+/// `m.icon`，随 DPI/缩放档位变）。
+///
+/// ⛔⛔ **这里曾经是 32，封面因此非常模糊**（用户 2026-09-29 实测报）。
+///   根因与设备图标当初那个问题**同源**：32px 的缓存画布在「跟随系统缩放」下
+///   要被**放大**到 `m.icon`（125% ⇒ 40）——放大造不出细节，双三次/双线性只能把
+///   每个源像素摊成渐变块，照片类内容尤其明显（大片柔和色带）。
+///   ⇒ 与图标的修法一致：**缓存画布必须大于任何目标尺寸**，让运行时永远走**缩小**
+///   （面积平均 = 超采样渲染，锐利）。
+///   128 覆盖到 200% 缩放（`m.icon` 64）仍有 2:1 余量。
+///   代价：单张 128×128×4 = 64KB，缓存 4 张共 256KB —— 可接受。
+///
+/// ⭐ 提到 **256** 是因为「两次重采样」本身也是损失来源（用户 2026-09-29 反馈
+///   128 仍偏糊）。实测（400×400 源 → 40px，对照「单步 lanczos3」）：
+///   ```text
+///   128→40 lanczos3  MAD 1.80   400→40 单步 cubic MAD 0.65
+///   ```
+///   400→128 是 3.1:1、128→40 又是 3.2:1，**两遍滤波各糊一次**；
+///   缓存留 256 只剩一次温和的 1.56:1 预处理，接近单步效果。
+///   代价：单张 256×256×4 = 256KB，缓存 4 张共 1MB —— 可接受。
+pub const COVER_PX: u32 = 256;
+const COVER_CACHE_CAP: usize = 4;
+
+/// 已解码的封面：预乘 alpha 的 RGBA8（画布 `COVER_PX × COVER_PX`）。
+pub struct CoverImage {
+    pub px: u32,
+    /// 预乘后的 RGBA，逐像素 4 字节。
+    pub data: Vec<u8>,
+}
+
+struct CoverCache {
+    entries: Vec<(u64, CoverImage)>,
+}
+
+impl CoverCache {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+    fn get(&self, hash: u64) -> Option<&CoverImage> {
+        self.entries
+            .iter()
+            .find(|(h, _)| *h == hash)
+            .map(|(_, v)| v)
+    }
+    fn put(&mut self, hash: u64, img: CoverImage) {
+        if self.entries.iter().any(|(h, _)| *h == hash) {
+            return;
+        }
+        if self.entries.len() >= COVER_CACHE_CAP {
+            self.entries.remove(0);
+        }
+        self.entries.push((hash, img));
+    }
+}
+
+fn cover_cache() -> &'static Mutex<CoverCache> {
+    COVER_CACHE.get_or_init(|| Mutex::new(CoverCache::new()))
+}
+
+/// 读当前会话的封面（已解码、已缩放、已预乘）。
+pub fn cover(hash: u64) -> Option<CoverImage> {
+    if hash == 0 {
+        return None;
+    }
+    lock_unpoisoned(cover_cache())
+        .get(hash)
+        .map(|i| CoverImage {
+            px: i.px,
+            data: i.data.clone(),
+        })
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 快照 + 唤醒通道
+// ═══════════════════════════════════════════════════════════════════
+
+static SNAPSHOT: Mutex<MusicSnapshot> = Mutex::new(MusicSnapshot {
+    sessions: Vec::new(),
+    current: 0,
+    cover_hash: 0,
+    cover_size: 0,
+});
+
+/// 后台线程是否已起来（避免重复起线程）。
+static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
+/// 会话集合的版本号：每读到一次新的会话集合就 +1（去重判据之一）。
+static SESSION_EPOCH: AtomicUsize = AtomicUsize::new(0);
+/// 读当前快照（绘制层入口）。
+pub fn snapshot() -> MusicSnapshot {
+    lock_unpoisoned(&SNAPSHOT).clone()
+}
+
+/// 请求后台线程重取一次（SMTC 事件、会话切换后调用）。
+pub fn request_refresh() {
+    send_cmd(Cmd::Refresh);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 后台线程
+// ═══════════════════════════════════════════════════════════════════
+
+/// `AppHandle` 句柄：后台线程要靠它把「该重估挂载了」投递回主线程。
+static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// 取 `AppHandle`（未启动时为 `None`）。
+pub fn app() -> Option<tauri::AppHandle> {
+    APP.get().cloned()
+}
+
+/// 切到第 `idx` 个会话（用户点「切换」时调用；只改内存选中态，**不改配置**）。
+pub fn select_session(idx: usize) {
+    let mut s = lock_unpoisoned(&SNAPSHOT);
+    if idx < s.sessions.len() {
+        s.current = idx;
+    }
+    drop(s);
+    request_refresh();
+}
+
+/// 启动后台线程（幂等）。在**主线程**调用，但立刻返回——不在其上等任何东西。
+pub fn start(app: tauri::AppHandle) {
+    if WORKER_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let _ = APP.set(app);
+    let (tx, rx) = channel::<Cmd>();
+    let _ = CMD_TX.set(tx);
+    // ⭐ 命令通道**兼作唤醒源**（`recv_timeout` 本身就是「有活干或超时」的唯一信号），
+    //   故不再单开一条唤醒通道 —— 多一条通道就多一处「发了但没人收」的失联可能。
+    let spawned = std::thread::Builder::new()
+        .name("pm-music-smtc".to_string())
+        .spawn(move || music_worker_loop(rx));
+    match spawned {
+        Ok(_) => crate::process::append_log("[music] SMTC 后台线程已启动"),
+        Err(e) => {
+            // ⚠️ 启动失败必须复位，否则 `request_refresh` 会静默无动作
+            WORKER_STARTED.store(false, Ordering::Release);
+            crate::process::append_log(&format!("[music] SMTC 后台线程启动失败: {e}"));
+        }
+    }
+}
+
+fn music_worker_loop(rx: Receiver<Cmd>) {
+    // ⛔ MTA：WinRT 异步在线程池完成，MTA 线程无需消息泵即可 join。
+    //    失败（RPC_E_CHANGED_MODE）不致命——已有 apartment 也能用，只是不能改。
+    let co = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if co.is_err() {
+        crate::process::append_verbose_log(&format!(
+            "[music] CoInitializeEx(MTA) 返回 {co:?}（继续，可能已有 apartment）"
+        ));
+    }
+
+    let mgr = match request_manager() {
+        Ok(m) => m,
+        Err(e) => {
+            crate::process::append_log(&format!("[music] 取 SMTC 会话管理器失败: {e}"));
+            return; // 线程退出：音乐面板永远不可用，但设备面板不受影响
+        }
+    };
+
+    // ⭐ **manager 层的两个事件必须订**（FluentFlyout 恰好漏了这俩 ⇒ 换 app 播放时
+    //   要等下一次媒体属性变化才反应过来，慢一拍）：
+    //   · `SessionsChanged`      → 有会话出现/消失（决定「音乐面板可不可用」）
+    //   · `CurrentSessionChanged`→ 播放焦点转移（决定「当前是哪个会话」）
+    subscribe_manager(&mgr);
+
+    // 会话集合变化 ⇒ 需要重新订阅
+    let mut watched: Vec<(String, Subscription)> = Vec::new();
+
+    // ⛔⛔ 循环退出条件只能是「通道断开」，**绝不是「收到了一条消息」**。
+    //   我第一版写的是 `pending = rx.recv_timeout(..).is_err()` ——
+    //   超时(is_err=true)会继续、**收到消息(is_err=false)反而退出** ⇒
+    //   线程在**第一条消息**上死掉。而 `request_refresh()` 会被**每个 SMTC 事件**调用
+    //   ⇒ 实测启动约 90 秒后（用户报「音乐组件消失了」）后台线程就没了：
+    //   订阅被 drop、快照被清空（会话数=0）⇒ 面板按回落链退成设备组件。
+    //   ⭐ 这类「跑一会儿就消失」的 bug，日志里**看不出异常**（线程正常返回），
+    //   唯一线索是快照被清空 —— 教训：**「静默失效」又见一处**。
+    loop {
+        // 先把积压的命令**全部**执行掉（它们比取数更即时）
+        while let Ok(cmd) = rx.try_recv() {
+            run_cmd(&mgr, cmd);
+        }
+        // 阻塞等待下一条：收到就处理、**继续循环**；超时则退化成 1.5s 一次的兜底取数；
+        // **只有通道断开（所有 Sender 都drop 了）才退出**。
+        match rx.recv_timeout(Duration::from_millis(1500)) {
+            Ok(cmd) => run_cmd(&mgr, cmd),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                crate::process::append_log("[music] 命令通道断开，后台线程退出");
+                break;
+            }
+        }
+        // 重取会话集合并 diff
+        match list_sessions(&mgr) {
+            Ok(list) => {
+                let ids: Vec<String> = list.iter().map(|(_, i)| i.id.clone()).collect();
+                let changed = {
+                    let cur: Vec<&String> = watched.iter().map(|(id, _)| id).collect();
+                    cur != ids.iter().collect::<Vec<&String>>()
+                };
+                if changed {
+                    // 退订消失的（drop 闭包 = 解引用 = 不泄漏）
+                    // ⛔ `retain` 给的是 `&T` 拿不走所有权 ⇒ 先 `std::mem::take`
+                    //   把要退订的那些**移出来**，再统一退订（退订会 drop 闭包与 session）。
+                    let gone: Vec<Subscription> = std::mem::take(&mut watched)
+                        .into_iter()
+                        .filter(|(id, _)| !ids.contains(id))
+                        .map(|(_, sub)| sub)
+                        .collect();
+                    watched.retain(|(id, _)| ids.contains(id));
+                    for sub in gone {
+                        sub.unsubscribe();
+                    }
+                    // 订阅新增的
+                    for (session, info) in &list {
+                        if watched.iter().any(|(id, _)| id == &info.id) {
+                            continue;
+                        }
+                        if let Some(sub) = subscribe(session) {
+                            watched.push((info.id.clone(), sub));
+                        }
+                    }
+                    SESSION_EPOCH.fetch_add(1, Ordering::AcqRel);
+                }
+            }
+            Err(e) => crate::process::append_verbose_log(&format!("[music] GetSessions 失败: {e}")),
+        }
+        refresh_snapshot(&mgr);
+    }
+    // 线程退出前把快照清空：否则音乐面板会永远停在最后一帧的旧数据上
+    {
+        let mut s = lock_unpoisoned(&SNAPSHOT);
+        s.sessions.clear();
+        s.cover_hash = 0;
+    }
+    notify_widget();
+}
+
+/// 取会话管理器（**阻塞等待**，只能在后台线程调）。
+fn request_manager() -> windows::core::Result<GlobalSystemMediaTransportControlsSessionManager> {
+    let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
+    op.join()
+}
+
+/// 列出全部会话的基础信息（不含封面 —— 封面只在选中那个会话上取）。
+fn list_sessions(
+    mgr: &GlobalSystemMediaTransportControlsSessionManager,
+) -> windows::core::Result<Vec<(GlobalSystemMediaTransportControlsSession, SessionInfo)>> {
+    let view = mgr.GetSessions()?;
+    let n = view.Size().unwrap_or(0);
+    let mut out = Vec::new();
+    for i in 0..n {
+        let Ok(session) = view.GetAt(i) else { continue };
+        if let Some(info) = read_session_info(&session) {
+            out.push((session, info));
+        }
+    }
+    Ok(out)
+}
+
+fn read_session_info(s: &GlobalSystemMediaTransportControlsSession) -> Option<SessionInfo> {
+    let id = s.SourceAppUserModelId().ok()?.to_string();
+    let (playing, can_prev, can_play_pause, can_next) = match s.GetPlaybackInfo() {
+        Ok(info) => {
+            let playing = matches!(
+                info.PlaybackStatus(),
+                Ok(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing)
+            );
+            let (p, n) = match info.Controls() {
+                Ok(c) => (
+                    c.IsPreviousEnabled().unwrap_or(false),
+                    c.IsNextEnabled().unwrap_or(false),
+                ),
+                Err(_) => (false, false),
+            };
+            let (play, pause) = match info.Controls() {
+                Ok(c) => (
+                    c.IsPlayEnabled().unwrap_or(false),
+                    c.IsPauseEnabled().unwrap_or(false),
+                ),
+                Err(_) => (false, false),
+            };
+            (playing, p, play || pause, n)
+        }
+        Err(_) => (false, false, false, false),
+    };
+    Some(SessionInfo {
+        id,
+        title: String::new(),
+        artist: String::new(),
+        playing,
+        can_prev,
+        can_play_pause,
+        can_next,
+    })
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 会话订阅
+// ═══════════════════════════════════════════════════════════════════
+
+/// 一个会话上的 4 个事件订阅句柄。
+///
+/// ⛔ `Drop` 时必须退订：闭包持有 `Session` 强引用，不退订 = 闭包永远不释放
+///   = 会话对象泄漏。这正是「失败/退出路径必须清理」那条纪律的适用场景。
+struct Subscription {
+    media_props: i64,
+    playback_info: i64,
+    timeline: i64,
+    session: GlobalSystemMediaTransportControlsSession,
+}
+
+impl Subscription {
+    fn unsubscribe(self) {
+        let s = &self.session;
+        let _ = s.RemoveMediaPropertiesChanged(self.media_props);
+        let _ = s.RemovePlaybackInfoChanged(self.playback_info);
+        let _ = s.RemoveTimelinePropertiesChanged(self.timeline);
+        crate::process::append_verbose_log("[music] 已退订会话事件");
+    }
+}
+
+fn subscribe(session: &GlobalSystemMediaTransportControlsSession) -> Option<Subscription> {
+    use windows::Foundation::TypedEventHandler;
+    use windows::Media::Control::{
+        MediaPropertiesChangedEventArgs, PlaybackInfoChangedEventArgs,
+        TimelinePropertiesChangedEventArgs,
+    };
+    type Handler<A> = TypedEventHandler<GlobalSystemMediaTransportControlsSession, A>;
+
+    // ⭐ **闭包不捕获 `session`**：`TypedEventHandler` 的回调签名本身就带
+    //   `sender: Option<&Session>` ⇒ 不需要 clone 进去。
+    //   这不是风格问题：闭包若捕获 `Session` 就是一条**强引用**，
+    //   而 WinRT 事件是**长生命**的（退订前一直挂着）⇒ 会话对象永远不释放 = 泄漏。
+    //   会话由 `Subscription.session` 字段持有，`unsubscribe` 时随 self 一起 drop。
+    let fire = |tag: &str| {
+        SESSION_EPOCH.fetch_add(1, Ordering::AcqRel);
+        if crate::config::verbose_log_enabled() {
+            crate::process::append_verbose_log(&format!("[music] 事件 {tag}"));
+        }
+        request_refresh();
+    };
+
+    let media_props = session
+        .MediaPropertiesChanged(&Handler::<MediaPropertiesChangedEventArgs>::new(
+            move |_, _| {
+                fire("media_props");
+                // ⚠️ `TypedEventHandler` 的闭包返回 `Result<()>`，不是 `()`
+                Ok(())
+            },
+        ))
+        .ok()?;
+
+    // ⚠️ **本版本没有独立的 `PlaybackStateChanged` 事件**（实测：该 crate 的 session
+    //   只有 Timeline/PlaybackInfo/MediaProperties 三个）⇒ 播放状态变化由
+    //   `PlaybackInfoChanged` 一并覆盖。**别照抄 FluentFlyout 的四事件列表**
+    //   （它用的第三方库有独立事件，本仓直连 WinRT 没有）。
+    let playback_info = session
+        .PlaybackInfoChanged(&Handler::<PlaybackInfoChangedEventArgs>::new(
+            move |_, _| {
+                fire("playback_info");
+                Ok(())
+            },
+        ))
+        .ok()?;
+
+    let timeline = session
+        .TimelinePropertiesChanged(&Handler::<TimelinePropertiesChangedEventArgs>::new(
+            move |_, _| {
+                fire("timeline");
+                Ok(())
+            },
+        ))
+        .ok()?;
+
+    Some(Subscription {
+        media_props,
+        playback_info,
+        timeline,
+        session: session.clone(),
+    })
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 快照刷新
+// ═══════════════════════════════════════════════════════════════════
+
+fn refresh_snapshot(mgr: &GlobalSystemMediaTransportControlsSessionManager) {
+    let Ok(list) = list_sessions(mgr) else { return };
+    let mut sessions: Vec<SessionInfo> = list.iter().map(|(_, i)| i.clone()).collect();
+
+    // 当前会话：优先系统给的 `GetCurrentSession`，否则第一个
+    let mut current = 0usize;
+    if let Ok(cur) = mgr.GetCurrentSession() {
+        if let Some(cid) = cur.SourceAppUserModelId().ok().map(|h| h.to_string()) {
+            if let Some(pos) = sessions.iter().position(|s| s.id == cid) {
+                current = pos;
+            }
+        }
+    }
+
+    // ⭐ 标题/艺人/封面只对**当前会话**取（每次都取所有会话的封面纯属浪费）
+    let mut cover_hash = 0u64;
+    let mut cover_size = 0u32;
+    if let Some((session, info)) = list.get(current) {
+        if let Ok(props) = session
+            .TryGetMediaPropertiesAsync()
+            .and_then(|op| op.join())
+        {
+            if let Ok(t) = props.Title() {
+                sessions[current].title = t.to_string();
+            }
+            if let Ok(a) = props.Artist() {
+                sessions[current].artist = a.to_string();
+            }
+            if let Ok(Some(bytes)) = read_thumbnail(&props) {
+                cover_hash = fnv1a(&bytes);
+                cover_size = COVER_PX;
+                if cover(cover_hash).is_none() {
+                    if let Some(img) = decode_cover(&bytes) {
+                        lock_unpoisoned(cover_cache()).put(cover_hash, img);
+                    }
+                }
+            }
+        }
+        let _ = info;
+    }
+
+    // ⭐ 去重：内容与下标都没变就不发通知（SMTC 事件会**重复**触发，
+    //   不去重会让封面被反复重解码 —— 这是 FluentFlyout 踩过并修掉的）。
+    {
+        let mut snap = lock_unpoisoned(&SNAPSHOT);
+        let same =
+            snap.sessions == sessions && snap.current == current && snap.cover_hash == cover_hash;
+        if same {
+            return;
+        }
+        snap.sessions = sessions;
+        snap.current = current;
+        snap.cover_hash = cover_hash;
+        snap.cover_size = cover_size;
+    }
+    notify_widget();
+}
+
+/// 单向通知 widget 重绘 / 重估挂载。
+fn notify_widget() {
+    crate::taskbar_widget::on_music_changed();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 封面读取与解码
+// ═══════════════════════════════════════════════════════════════════
+
+/// 读封面的原始字节。
+///
+/// ⛔ 四个坑见模块文档：不能 cast 成 DataReader、要 `CreateDataReader`、
+///    `LoadAsync().join()` 返回 u32、`Thumbnail()` 不是 Option。
+fn read_thumbnail(
+    props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
+) -> windows::core::Result<Option<Vec<u8>>> {
+    use windows::core::Interface;
+    use windows::Storage::Streams::{DataReader, IInputStream};
+
+    let thumb = props.Thumbnail()?;
+    let stream = thumb.OpenReadAsync()?.join()?;
+    let size = stream.Size().unwrap_or(0);
+    if size == 0 {
+        return Ok(None);
+    }
+    let input: IInputStream = stream.cast()?;
+    let reader = DataReader::CreateDataReader(&input)?;
+    let loaded = reader.LoadAsync(size as u32)?.join()?;
+    let mut buf = vec![0u8; loaded as usize];
+    reader.ReadBytes(&mut buf)?;
+    Ok(Some(buf))
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 解码 + 缩放到 `COVER_PX` + **预乘 alpha**。
+///
+/// ⭐ 缩放滤波显式指定（放大双线性 / 缩小最近邻），理由与设备图标完全同源：
+///   本仓纪律「放大双线性 / 缩小最近邻，且**必须**在预乘空间插值」——
+///   直接在直通 alpha 上插值会让透明像素的 RGB 混进边缘 ⇒ 黑晕。
+fn decode_cover(bytes: &[u8]) -> Option<CoverImage> {
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let side = COVER_PX;
+    let (w, h) = (img.width(), img.height());
+    // ⛔⛔ **这里曾经写成 `w.min(h).min(COVER_PX * 4)`** —— 那个 `.min(128)` 是想
+    //   「限制处理量」，但它**把图裁成了中心 128×128**（400×400 封面的正中 32%）
+    //   ⇒ 屏幕上表现为「封面只显示了一部分」（用户 2026-09-28 实测报出）。
+    //   ⭐ 正确做法：**取整张图的正方形部分**再缩放。`MAX_DECODE_PX` 只用来
+    //   防止超大图吃掉内存，命中它时**先缩后裁**而不是**先裁后缩**。
+    const MAX_DECODE_PX: u32 = 512;
+    // 详细级记**源图分辨率**：封面糊有两个完全不同的成因（源图小 / 重采样差），
+    // 不量出来就没法区分——而两者的修法互不相干。
+    if crate::config::verbose_log_enabled() {
+        crate::process::append_log(&format!(
+            "[music] 封面源图 {w}x{h} → 缓存 {COVER_PX}x{COVER_PX}"
+        ));
+    }
+    let (img, w, h) = if w.max(h) > MAX_DECODE_PX {
+        // 超大图：先整体缩到上限内（**保持完整画面**），再取正方形
+        let k = MAX_DECODE_PX as f32 / w.max(h) as f32;
+        let nw = ((w as f32 * k).round() as u32).max(1);
+        let nh = ((h as f32 * k).round() as u32).max(1);
+        let small = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+        (small, nw, nh)
+    } else {
+        (img, w, h)
+    };
+    let side_px = w.min(h);
+    let src_x = (w - side_px) / 2;
+    let src_y = (h - side_px) / 2;
+
+    // 先做「正方形裁剪 + 预乘」，再缩放
+    let crop = image::imageops::crop_imm(&img, src_x, src_y, side_px, side_px).to_image();
+    let mut pre = image::RgbaImage::new(side_px, side_px);
+    for y in 0..side_px {
+        for x in 0..side_px {
+            let p = crop.get_pixel(x, y).0;
+            let a = p[3] as u32;
+            pre.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    ((p[0] as u32 * a) / 255) as u8,
+                    ((p[1] as u32 * a) / 255) as u8,
+                    ((p[2] as u32 * a) / 255) as u8,
+                    p[3],
+                ]),
+            );
+        }
+    }
+    // ⛔ 缩小**不用 Nearest**：照片类内容缩小时按点抽样会把细密纹理抽成噪点。
+    //   两侧都用 Triangle（= 面积平均的近似），只有放大才另说。
+    let filter = image::imageops::FilterType::Triangle;
+    let small = image::imageops::resize(&pre, side, side, filter);
+    Some(CoverImage {
+        px: side,
+        data: small.into_raw(),
+    })
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 控制命令（由 UI 线程调用 ⇒ 立刻投递给后台线程，绝不在调用方阻塞）
+// ═══════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⭐⭐⭐ **后台线程不能在「收到消息」时退出**（2026-09-28 用户报「音乐组件消失了」）。
+    ///
+    /// 根因：循环退出条件写成 `pending = rx.recv_timeout(..).is_err()`
+    /// ⇒ 超时(is_err=true)继续、**收到消息(is_err=false)反而退出**。
+    /// 而 `request_refresh()` 会被**每个 SMTC 事件**调用 ⇒ 线程在第一条事件上死掉
+    /// （实测约 90 秒后），订阅被 drop、快照被清空 ⇒ 面板按回落链退成设备组件。
+    ///
+    /// ⚠️ 这个 bug 特别贵的地方在于**日志里看不出异常**（线程正常返回、无 panic）。
+    ///
+    /// 判据：向通道发一条消息，接收端**必须继续等**（只有 `Disconnected` 才退出）。
+    /// 旧写法在这里会让第二次 `recv` 直接返回 `Disconnected`（因为 sender 已 drop）。
+    #[test]
+    fn worker_loop_survives_incoming_message() {
+        let (tx, rx) = std::sync::mpsc::channel::<Cmd>();
+        // 模拟后台循环的等待逻辑
+        // 只走**前 2 轮**：第 3 轮会阻塞在 `recv_timeout` 上，而 sender 仍活着
+        // ⇒ 那里拿不到消息，断言不到任何东西（实测旧写法在这里白等 150ms）。
+        for _ in 0..2 {
+            while let Ok(cmd) = rx.try_recv() {
+                let _ = cmd;
+            }
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(cmd) => {
+                    let _ = cmd;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        // 发 3 条，每条都应该被处理
+        for _ in 0..3 {
+            tx.send(Cmd::Refresh).unwrap();
+        }
+        // 关键：sender 还在（未 drop）⇒ 不该收到 Disconnected
+        let mut processed = 0usize;
+        for _ in 0..3 {
+            while let Ok(cmd) = rx.try_recv() {
+                let _ = cmd;
+                processed += 1;
+            }
+            if processed >= 3 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(processed, 3, "三条消息都应被处理（循环不能提前退出）");
+        drop(tx);
+        assert!(
+            rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "sender 全 drop 后才该收到 Disconnected"
+        );
+    }
+
+    /// ⭐⭐⭐ **封面缓存画布必须大于任何目标尺寸**（用户 2026-09-29 实测报「封面非常模糊」）。
+    ///
+    /// 根因与设备图标当初同源：`COVER_PX` 曾是 **32**，而绘制时目标边长是
+    /// `taskbar_widget` 的 `m.icon`（随 DPI 与缩放档位变，125% ⇒ 40）。
+    /// 32 → 40 是**放大** ⇒ 照片类内容被摊成柔和色带。
+    ///
+    /// 判据一（尺寸）：`COVER_PX` 至少要能覆盖 200% 缩放的 `m.icon`（64px）。
+    /// 可证伪：把 `COVER_PX` 改回 32 ⇒ 转红。
+    #[test]
+    fn cover_cache_outlives_every_display_size() {
+        // 200% 系统缩放 ⇒ m.icon = 32 × 200/96 ≈ 67，取 64 作上界
+        let max_display = 64u32;
+        assert!(
+            COVER_PX >= max_display * 2,
+            "COVER_PX={COVER_PX} 太小：目标最大 {max_display}px 时只剩 {:.1}x 余量，             缩放会退化成**放大**（= 糊）",
+            COVER_PX as f32 / max_display as f32
+        );
+    }
+
+    /// ⭐⭐ **封面必须取整张图，不是中心裁剪**（2026-09-28 用户实测报「只显示了一部分」）。
+    ///
+    /// 根因：解码时写了 `w.min(h).min(COVER_PX * 4)`，那个 `.min(128)` 本意是
+    /// 「限制处理量」，实际把 400×400 的封面**裁成了中心 128×128**（正中 32%）。
+    ///
+    /// 判据构造：中心 40×40 纯红、其余纯蓝的 400×400 图
+    /// → 若仍裁剪，32×32 输出**几乎全红**
+    /// → 若取整张，输出**以蓝为主**（红只占 (40/400)² ≈ 1%）。
+    #[test]
+    fn cover_decodes_whole_image_not_center_crop() {
+        const N: u32 = 400;
+        let mut img = image::RgbaImage::new(N, N);
+        for y in 0..N {
+            for x in 0..N {
+                let center = (180..220).contains(&x) && (180..220).contains(&y);
+                img.put_pixel(
+                    x,
+                    y,
+                    if center {
+                        image::Rgba([255, 0, 0, 255])
+                    } else {
+                        image::Rgba([0, 0, 255, 255])
+                    },
+                );
+            }
+        }
+        let mut cur = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut cur, image::ImageFormat::Png)
+            .expect("encode");
+        let bytes = cur.into_inner();
+
+        let Some(out) = decode_cover(&bytes) else {
+            panic!("构造的 PNG 应当能解码");
+        };
+        let side = COVER_PX as usize;
+        let mut red = 0usize;
+        for i in 0..(side * side) {
+            let px = &out.data[i * 4..i * 4 + 4];
+            if px[0] > 150 && px[2] < 100 {
+                red += 1;
+            }
+        }
+        let total = side * side;
+        assert!(
+            red < total / 20,
+            "红色占 {:.1}% ⇒ 仍在做**中心裁剪**（不是整张图）",
+            red as f64 * 100.0 / total as f64
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// 控制命令
+// ═══════════════════════════════════════════════════════════════════
+
+/// 控制命令（作用于「快照里的当前会话」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cmd {
+    Prev,
+    PlayPause,
+    Next,
+    /// 纯唤醒：不执行任何 SMTC 调用，只让 worker 立刻重取一次快照。
+    ///
+    /// ⭐ 单列一个变体而不是「发个空命令」：`send_cmd` 的语义是**执行**，
+    ///   拿它当唤醒会在 worker 里走进 `TryXxxAsync` —— 那是真的会去按播放键。
+    Refresh,
+}
+
+/// 命令通道：`UI 线程 → 后台线程`。⛔ **只入队不阻塞**（UI 线程绝不能等 SMTC）。
+static CMD_TX: OnceLock<Sender<Cmd>> = OnceLock::new();
+
+/// 投递一条控制命令（**fire-and-forget**，UI 线程零等待）。
+pub fn send_cmd(cmd: Cmd) {
+    if let Some(tx) = CMD_TX.get() {
+        if tx.send(cmd).is_err() {
+            crate::process::append_log("[music] 命令通道已断开（后台线程已退出？）");
+        }
+    }
+}
+
+pub fn cmd_previous() {
+    send_cmd(Cmd::Prev);
+}
+pub fn cmd_play_pause() {
+    send_cmd(Cmd::PlayPause);
+}
+pub fn cmd_next() {
+    send_cmd(Cmd::Next);
+}
+
+/// 在后台线程上执行一条命令。
+///
+/// ⛔ `TryXxxAsync()` 也要 `join()`（同 `RequestAsync`）⇒ 只能在这条后台线程上跑。
+fn run_cmd(mgr: &GlobalSystemMediaTransportControlsSessionManager, cmd: Cmd) {
+    if cmd == Cmd::Refresh {
+        return; // 纯唤醒：worker 循环接着就会重取快照
+    }
+    let Ok(view) = mgr.GetSessions() else { return };
+    let n = view.Size().unwrap_or(0);
+    let cur = lock_unpoisoned(&SNAPSHOT).current as u32;
+    if n == 0 || cur >= n {
+        return;
+    }
+    let Ok(session) = view.GetAt(cur) else { return };
+    let (label, res) = match cmd {
+        // 纯唤醒：直接返回，不碰 SMTC 控制接口
+        Cmd::Refresh => return,
+        Cmd::Prev => ("上一首", session.TrySkipPreviousAsync()),
+        Cmd::PlayPause => ("播放/暂停", session.TryTogglePlayPauseAsync()),
+        Cmd::Next => ("下一首", session.TrySkipNextAsync()),
+    };
+    match res {
+        Ok(op) => match op.join() {
+            Ok(ok) => {
+                if crate::config::verbose_log_enabled() {
+                    crate::process::append_verbose_log(&format!("[music] {label} -> {ok}"));
+                }
+            }
+            Err(e) => crate::process::append_log(&format!("[music] {label} 失败: {e}")),
+        },
+        Err(e) => crate::process::append_log(&format!("[music] {label} 调用失败: {e}")),
+    }
+}
+
+/// 订阅 manager 层的两个事件（**只做一次**，与具体会话无关）。
+///
+/// ⛔ 闭包不能捕获 `mgr` 的引用（要 `'static`）⇒ 这里不捕获任何东西，
+///    只发唤醒信号；真正的重取在 worker 循环里做。
+fn subscribe_manager(mgr: &GlobalSystemMediaTransportControlsSessionManager) {
+    use windows::Foundation::TypedEventHandler;
+    use windows::Media::Control::{CurrentSessionChangedEventArgs, SessionsChangedEventArgs};
+
+    let ok = mgr.SessionsChanged(&TypedEventHandler::<
+        GlobalSystemMediaTransportControlsSessionManager,
+        SessionsChangedEventArgs,
+    >::new(|_, _| {
+        SESSION_EPOCH.fetch_add(1, Ordering::AcqRel);
+        request_refresh();
+        Ok(())
+    }));
+    match ok {
+        Ok(_) => crate::process::append_verbose_log("[music] 已订阅 SessionsChanged"),
+        Err(e) => crate::process::append_log(&format!("[music] 订阅 SessionsChanged 失败: {e}")),
+    }
+
+    let ok = mgr.CurrentSessionChanged(&TypedEventHandler::<
+        GlobalSystemMediaTransportControlsSessionManager,
+        CurrentSessionChangedEventArgs,
+    >::new(|_, _| {
+        SESSION_EPOCH.fetch_add(1, Ordering::AcqRel);
+        request_refresh();
+        Ok(())
+    }));
+    match ok {
+        Ok(_) => crate::process::append_verbose_log("[music] 已订阅 CurrentSessionChanged"),
+        Err(e) => {
+            crate::process::append_log(&format!("[music] 订阅 CurrentSessionChanged 失败: {e}"))
+        }
+    }
+}

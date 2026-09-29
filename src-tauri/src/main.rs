@@ -21,6 +21,8 @@ mod process;
 mod shortcut;
 mod state;
 #[cfg(target_os = "windows")]
+mod taskbar_music;
+#[cfg(target_os = "windows")]
 mod taskbar_tooltip;
 mod taskbar_widget;
 #[cfg(target_os = "windows")]
@@ -351,6 +353,11 @@ fn spawn_taskbar_widget_dev(app: &tauri::AppHandle) {
     //    用户勾选设备的那一刻窗口**还不存在**，若等挂载成功才装监听，就永远收不到
     //    那次 `config-changed`（先有鸡还是先有蛋）。未挂载时这些监听的成本仅为
     //    「事件到来后一次立即返回的早退」，可以忽略。
+    // ⭐ 音乐后台线程**无条件**启动（与设备面板的监听同款理由）：
+    //    「有没有会话」是**运行时**才知道的事，且会话出现/消失要能触发挂载/卸载
+    //    ⇒ 晚启动就永远收不到那次变化。启动本身极轻（一条线程 + 一次
+    //    `RequestAsync().join()`）。
+    crate::taskbar_widget::start_music(app);
     crate::taskbar_widget::install_event_listeners(app);
     crate::taskbar_widget::start_refresh_loop(app);
 
