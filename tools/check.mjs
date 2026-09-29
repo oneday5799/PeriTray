@@ -13,6 +13,9 @@
  *    package.json / settings.html 五处须为同一版本
  * 7. Toast 契约（P1-6 的两半，必须成对）：`showToast` 实参不含 HTML 标签
  *    + `.toast` 的层叠 `white-space` 为 `pre-line`
+ * 8. ⭐ **GDI 文本入口必须有空串闸**（Rust 侧唯一一条）：凡把 `&[u16]`
+ *    交给 `DrawTextW` 的地方，都必须先判 `text.is_empty()`
+ *    ——`Vec::new().as_ptr()` 是**悬垂的对齐哨兵**，空串会让进程**访问违例**闪退
  *
  * ── 已知无法覆盖的类别（P3-8，务必知情）─────────────────────
  * 本脚本只做**静态结构**检查。下面这些它一律看不见，改动后**必须人工回归**：
@@ -22,8 +25,12 @@
  *   改选择器结构仍可能绕过）。只能靠渲染验证（无头 Edge 截图 / 真机）。
  * - **运行时逻辑**：合法语法下的逻辑 bug、状态机错误、事件时序问题
  *   （例：P3-11 的「先读取后注册」窗口期丢事件，语法与结构全对）。
- * - **Rust 侧完全不扫**：锁纪律（持锁调用会同步等主线程的 API，P0-4）、
- *   异步上下文里的阻塞 sleep（P2-10）、锁序死锁、RAII 守卫未释放……一概拦不住。
+ * - **Rust 侧只扫第 8 类**（GDI 文本入口的空串闸），其余一概拦不住：
+ *   锁纪律（持锁调用会同步等主线程的 API，P0-4）、异步上下文里的阻塞 sleep
+ *   （P2-10）、锁序死锁、RAII 守卫未释放、异步上下文 `thread::sleep`……都看不见。
+ *   ⛔ 第 8 类是**文本级**判据（按「函数」切块后数 `DrawTextW` 与 `is_empty` 的个数），
+ *   **不认识语义**：它保证「有闸」，不保证「闸写对了位置」——
+ *   闸若放错分支（如只判了 `w <= 0`）仍会通过。
  * - **未加守卫的 API 访问**：未判空的 `window.__TAURI__` 使用、未 `.catch()` 的
  *   Promise、`try/catch` 漏网（P2-3 那类「运行时未注入即整文件停摆」）。
  * - **跨文件加载序**：第 2 类审计的声明池由 `pageJs` **按页汇总**，是个**无序集合**
@@ -461,6 +468,62 @@ for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
       .map(([k, v]) => `${k}=${v ?? "?"}`)
       .join(", ");
     errors.push(`版本号不一致（五处需同步）: ${detail}`);
+  }
+}
+
+// ── 第 8 类：GDI 文本入口必须有空串闸 ────────────────────────
+// `Vec::<u16>::new().as_ptr()` 是**悬垂的对齐哨兵指针**（u16 对齐 = 2），
+// 而 `DrawTextW` 即使 `cch = 0` 也会解引用它 ⇒ **访问违例**：
+// 进程直接消失，**无 panic、无 WER、看门狗不触发**。
+// 2026-09-29 真机实测：某个会话上报 `artist = ""` ⇒ 同一首歌画得好好的，
+// 「切换媒体会话」后崩 ⇒ 看起来像会话切换的 bug，实际是**空串**。
+//
+// ⭐ **为什么要有这条静态规则**：那三处闸是**逐个查出来、逐个补的**
+// （`measure_text` / `render_text_mask` / `taskbar_tooltip::draw_text`），
+// 而「凡是 `&[u16]` 进 GDI 的入口都要有闸」这条**没有机械检查** ⇒
+// 新增第四处时没有任何东西会拦。
+{
+  // 只认「把切片交给 GDI」的那种调用：`DrawTextW(.., X.as_ptr(), ..)`
+  const CALL = /DrawTextW\s*\(([^;]*?)as_ptr\(\)/gs;
+  // 空串闸的两种写法都认：`if text.is_empty() { return }` 与 `if !text.is_empty() { … }`
+  const GUARD = /!?\w*text\w*\.is_empty\(\)/g;
+  // 按「函数」切块：Rust 的文本级判据只能到这里，再细就得真解析语法了。
+  //
+  // ⚠️⚠️ 行首缩进**只能用 [ \t]、绝不能用 \s**：\s 含 \n，`^\s*` 会把前一个空行
+  //   一并吃掉 ⇒ match 的 index 落到**上一行** ⇒ 函数边界整体错位一行
+  //   ⇒ 函数**开头**的空串闸被切到块外
+  //   ⇒ **假阳性**（实测踩过：blit_text_opaque 报「0 处闸」，实际有 2 道）。
+  const FN_START =
+    /^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:unsafe[ \t]+)?(?:extern[ \t]+"system"[ \t]+)?fn[ \t]+\w+/gm;
+
+  // 扫 `src-tauri/src/` 下**全部** `.rs`，不维护文件白名单 ——
+  // 白名单本身就是「有人新写了一个文件却忘了登记」这类漏检的来源，
+  // 而那正是这条规则要消灭的那类缺陷（闸靠人记得加）。
+  const SRC_DIR = path.join(ROOT, "src-tauri", "src");
+  for (const rel of fs.readdirSync(SRC_DIR).filter((f) => f.endsWith(".rs")).sort()) {
+    const p = path.join(SRC_DIR, rel);
+    if (!fs.statSync(p).isFile()) continue;
+    const src = read(p);
+    const starts = [...src.matchAll(FN_START)].map((m) => m.index);
+    if (!starts.length) continue;
+    const bounds = [...starts, src.length];
+    for (let i = 0; i < starts.length; i++) {
+      const body = src.slice(bounds[i], bounds[i + 1]);
+      const nl = body.indexOf("\n");
+      const name = body.slice(0, nl < 0 ? body.length : nl).trim().replace(/\s*\{$/, "");
+      const sites = [...body.matchAll(CALL)].length;
+      if (!sites) continue;
+      const guards = [...body.matchAll(GUARD)].length;
+      if (guards < sites) {
+        errors.push(
+          `${rel}: 函数 \`${name}\` 有 ${sites} 处 \`DrawTextW(.., ..as_ptr(), ..)\`` +
+            `但只有 ${guards} 处空串闸。\n` +
+            `    GDI 会解引用空切片的悬垂哨兵指针 ⇒ 访问违例闪退（无 panic / 无 WER）。\n` +
+            `    加闸：入口处 \`if text.is_empty() { return …; }\`，` +
+            `或把调用包进 \`if !text.is_empty() { … }\`。`,
+        );
+      }
+    }
   }
 }
 
