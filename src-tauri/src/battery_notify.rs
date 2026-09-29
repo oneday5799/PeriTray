@@ -238,10 +238,12 @@ pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> 
 /// 不再依赖读代码的人是否细心；`emit_notifications` 同时降为**私有**，
 /// 仓内不再存在「持锁调用发送」的第二处入口。
 /// 该性质由 `tests::cache_lock_is_released_before_emit` 直接证伪。
-pub fn notify_low_battery(cache: &Mutex<Vec<Device>>) {
+pub fn notify_low_battery(cache: &Mutex<crate::state::DeviceCache>) {
     let pending = {
         let guard = crate::state::lock_unpoisoned(cache);
-        collect_pending_notices(&guard)
+        // ⚠️ 只取 `devices` 字段：`at_ms` 与本函数无关，锁的持有范围不变
+        //   （判据 `cache_lock_is_released_before_emit` 依赖这个花括号的位置）
+        collect_pending_notices(&guard.devices)
     }; // ← 设备缓存锁在此释放，下面一行不得挪进上面的花括号
     emit_notifications(&pending);
 }

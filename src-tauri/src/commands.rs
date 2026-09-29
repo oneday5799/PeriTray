@@ -70,8 +70,7 @@ pub async fn get_devices_fresh() -> Result<Vec<device::Device>, String> {
 /// 缓存为空时返回空 vec，调用方应 fallback 到 get_devices。
 #[tauri::command]
 pub fn get_cached_devices() -> Vec<device::Device> {
-    let cache = crate::state::get_devices_cache();
-    crate::state::lock_unpoisoned(cache).clone()
+    crate::state::devices_cache_snapshot().0
 }
 
 /// 任务栏设备侧的取数决策：**优先用缓存，缓存为空则现查一次**。
@@ -81,15 +80,25 @@ pub fn get_cached_devices() -> Vec<device::Device> {
 /// （漏了会**静默**丢掉全部电量），必须能被单测直接钉住。
 fn devices_for_taskbar_with<F>(
     cached: Vec<device::Device>,
+    age_ms: Option<u64>,
+    max_age_ms: Option<u64>,
     query: F,
 ) -> Result<Vec<device::Device>, String>
 where
     F: FnOnce() -> Result<Vec<device::Device>, String>,
 {
-    if cached.is_empty() {
-        query()
-    } else {
+    // 三条判据，任一不成立即现查：
+    //  ① 缓存为空（`age_ms` 为 `None` 恰好覆盖「空」与「从未写过」两种）
+    //  ② `max_age_ms == None` ⇒ 调用方要求**强制**现查（设置页等用户触发路径）
+    //  ③ 缓存年龄超过上限 ⇒ 陈旧
+    let hit = match (max_age_ms, age_ms) {
+        (Some(max), Some(age)) => !cached.is_empty() && age <= max,
+        _ => false,
+    };
+    if hit {
         Ok(cached)
+    } else {
+        query()
     }
 }
 
@@ -101,14 +110,44 @@ where
 /// 故「缓存为空就回落」**不能留给调用方**：前端漏写这一句既不报错也不告警，
 /// 只会让任务栏的电量整片变空（且「有电量无音频端点」的鼠标/键盘/手柄整条不出现）。
 fn devices_for_taskbar() -> Result<Vec<device::Device>, String> {
-    let cached = {
-        let cache = crate::state::get_devices_cache();
-        crate::state::lock_unpoisoned(cache).clone()
-    };
-    if cached.is_empty() {
-        standard_log!("[cmd] get_taskbar_devices: 设备缓存为空，回落现查一次");
+    // ⛔ 用户触发的路径（设置页、选择器）**强制现查**：那是「用户刚点了刷新」，
+    //   拿一份可能已经 10 秒前的数据去回话是错的。
+    devices_for_taskbar_within(None)
+}
+
+/// 取任务栏设备侧数据。`max_age_ms`：
+/// `None` = 强制现查；`Some(ms)` = 缓存年龄不超过 `ms` 就直接用（**不跑 WMI**）。
+pub(crate) fn devices_for_taskbar_within(
+    max_age_ms: Option<u64>,
+) -> Result<Vec<device::Device>, String> {
+    let (cached, age) = crate::state::devices_cache_snapshot();
+    let out = devices_for_taskbar_with(cached, age, max_age_ms, || query_devices(false));
+    if let Ok(devices) = &out {
+        // ⭐⭐ **写回是这次改动的关键一行**（2026-09-29）。
+        //   此前**只有** `tray::refresh_devices_cache` 写缓存，而它在默认配置下
+        //   整个循环体被 `if !has_tray && !has_battery_notify { continue; }` 跳过
+        //   ⇒ **共享缓存**恒空 ⇒「缓存优先」从未生效，每轮都白付一次
+        //   517~684ms 的 `query_devices`。
+        //   谁现查谁写回，缓存才会真的热起来。
+        //
+        // ⛔⛔ **别把这句读成「电量每次都现查」—— 那是个已证伪的说法。**
+        //   `query_devices()` 是四步，**电量值早就在复用后台缓存**：
+        //   ① `Win32_PnPEntity` 设备清单（❌ 无缓存，**贵的就是这一步**）
+        //     ② 蓝牙设备+电量（✅ `bluetooth::BT_BATTERY` + 单飞守卫）
+        //     ③ `Win32_Battery`（❌）
+        //     ④ 2.4G 接收器电量（✅ `wireless_24g::CACHE`）
+        //   ⇒ 死的不是电量，是**设备清单**。详见 Wiki 15 §8.6.9。
+        //   ⚠️ 无条件写（含「强制现查」路径）：`store_devices_cache` 每次都会盖时间戳，
+        //   这正是 TTL 判据要的量（「距上次问过 WMI 多久」）。
+        if max_age_ms.is_none() {
+            standard_log!(
+                "[cmd] devices_for_taskbar: 强制现查并回写缓存（{} 台）",
+                devices.len()
+            );
+        }
+        crate::state::store_devices_cache(devices.clone());
     }
-    devices_for_taskbar_with(cached, || query_devices(false))
+    out
 }
 
 /// 任务栏信息窗的数据源：把「电量」与「音量」按**物理设备身份**聚合到同一台设备上。
@@ -143,8 +182,15 @@ pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::Physica
 ///
 /// ⚠️ 返回 `Option`：任一环节失败（WMI / 音频枚举）都返回 `None`，让调用方
 ///   **保留旧快照** —— 一次取数失败不该把任务栏内容清空（那比显示旧数据更糟）。
-pub(crate) fn taskbar_devices_snapshot() -> Option<Vec<crate::device_identity::PhysicalDevice>> {
-    let devices = devices_for_taskbar().ok()?;
+/// 任务栏设备快照（`max_age_ms` 语义见下）。
+///
+/// `max_age_ms`：`None` = 强制现查；`Some(ms)` = 设备列表这一半可复用 TTL 内的缓存。
+/// ⚠️ **只作用于设备列表这一半**：音量走 `enumerate_output_devices`，
+///   那一条**本来就是实时的**（实测 13~15ms），不受此参数影响。
+pub(crate) fn taskbar_devices_snapshot_within(
+    max_age_ms: Option<u64>,
+) -> Option<Vec<crate::device_identity::PhysicalDevice>> {
+    let devices = devices_for_taskbar_within(max_age_ms).ok()?;
     let audio = crate::audio::enumerate_output_devices().ok()?;
     let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
     Some(crate::device_identity::group_taskbar_devices(
@@ -1695,7 +1741,7 @@ mod tests {
     #[test]
     fn empty_device_cache_falls_back_to_live_query() {
         let mut queried = false;
-        let out = devices_for_taskbar_with(Vec::new(), || {
+        let out = devices_for_taskbar_with(Vec::new(), None, Some(10_000), || {
             queried = true;
             Ok(vec![dev("现查到的设备")])
         })
@@ -1714,14 +1760,86 @@ mod tests {
     #[test]
     fn non_empty_device_cache_does_not_requery() {
         let mut queried = false;
-        let out = devices_for_taskbar_with(vec![dev("缓存里的设备")], || {
-            queried = true;
-            Ok(Vec::new())
-        })
+        let out = devices_for_taskbar_with(
+            vec![dev("缓存里的设备")],
+            Some(500),
+            Some(10_000),
+            || {
+                queried = true;
+                Ok(Vec::new())
+            },
+        )
         .expect("缓存命中路径不得失败");
         assert!(!queried, "缓存非空时不得重跑 WMI");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "缓存里的设备");
+    }
+
+    /// ⭐⭐ **TTL 判据的核心**：同一个非空缓存，按年龄决定走缓存还是现查。
+    ///
+    /// 可证伪：把判据里 `age <= max` 改成恒真或恒假 ⇒ 必然有一侧转红。
+    #[test]
+    fn ttl_decides_between_cache_and_live_query() {
+        // ① 够新 ⇒ 命中缓存
+        let mut queried = false;
+        let out = devices_for_taskbar_with(vec![dev("缓存")], Some(9_999), Some(10_000), || {
+            queried = true;
+            Ok(Vec::new())
+        })
+        .expect("命中路径不得失败");
+        assert!(!queried, "年龄 9999ms 在 10s 上限内 ⇒ 不得现查");
+        assert_eq!(out[0].name, "缓存");
+
+        // ② 刚好等于上限 ⇒ 仍算命中（`<=` 而不是 `<`，边界必须钉住）
+        let mut queried = false;
+        devices_for_taskbar_with(vec![dev("缓存")], Some(10_000), Some(10_000), || {
+            queried = true;
+            Ok(Vec::new())
+        })
+        .expect("边界路径不得失败");
+        assert!(!queried, "年龄恰好等于上限应算命中（判据是 `<=`）");
+
+        // ③ 超出一毫秒 ⇒ 必须现查
+        let mut queried = false;
+        let out = devices_for_taskbar_with(vec![dev("缓存")], Some(10_001), Some(10_000), || {
+            queried = true;
+            Ok(vec![dev("现查")])
+        })
+        .expect("过期路径不得失败");
+        assert!(queried, "年龄超过上限 ⇒ 必须现查（否则电量永远不更新）");
+        assert_eq!(out[0].name, "现查");
+    }
+
+    /// ⭐ **`force` 必须压过 TTL**：`max_age_ms = None` 时**无论缓存多新**都现查。
+    ///
+    /// 这条是「设备列表变化 / 蓝牙电量推送 / 30s 心跳」三条路径的正确性前提：
+    /// 它们携带的是**新信息**，读一份 1 秒前的缓存就等于丢掉这次推送。
+    #[test]
+    fn forced_refresh_ignores_a_perfectly_fresh_cache() {
+        let mut queried = false;
+        let out = devices_for_taskbar_with(vec![dev("缓存")], Some(0), None, || {
+            queried = true;
+            Ok(vec![dev("现查")])
+        })
+        .expect("强制路径不得失败");
+        assert!(queried, "max_age=None ⇒ 必须现查（否则新信息被缓存吃掉）");
+        assert_eq!(out[0].name, "现查");
+    }
+
+    /// ⛔ **「有时刻但内容为空」不算命中**。
+    ///
+    /// 这是刻意的：设备可能被用户全部取消固定，此时「查过、确实一台都没有」与
+    /// 「还没查过」必须分开。若把空内容也算命中，TTL 会让后者永远成立
+    /// ⇒ 表现为「刚装好的设备一直不出现，且没有任何报错」。
+    #[test]
+    fn empty_content_is_never_a_cache_hit_even_with_a_timestamp() {
+        let mut queried = false;
+        devices_for_taskbar_with(Vec::new(), Some(0), Some(10_000), || {
+            queried = true;
+            Ok(vec![dev("现查")])
+        })
+        .expect("空内容路径不得失败");
+        assert!(queried, "空内容必须现查（哪怕带时刻）");
     }
 
     /// 反控：现查失败必须**原样上报 Err**，不得静默降级成空列表。
@@ -1730,8 +1848,10 @@ mod tests {
     /// 与本次要修的「静默丢数据」是同一类故障，只是换了个位置。
     #[test]
     fn live_query_failure_is_propagated_not_swallowed() {
-        let err = devices_for_taskbar_with(Vec::new(), || Err("WMI 不可信".to_string()))
-            .expect_err("现查失败必须返回 Err");
+        let err = devices_for_taskbar_with(Vec::new(), None, Some(10_000), || {
+            Err("WMI 不可信".to_string())
+        })
+        .expect_err("现查失败必须返回 Err");
         assert_eq!(err, "WMI 不可信");
     }
 }

@@ -64,16 +64,14 @@ fn apply_menu(tray: &TrayIcon<tauri::Wry>, menu: Menu<tauri::Wry>) {
 
 /// 将查询结果写回设备缓存，返回是否发生变化（新旧列表比较）。
 fn apply_devices_cache(new_devices: Vec<crate::device::Device>) -> bool {
-    let cache = get_devices_cache();
     // P2-11：中毒时不再静默返回 false —— 那会让调用方认为「设备列表没变」，
     // 于是 tooltip 与弹窗卡片此后再也不刷新（无日志的哑故障）。
-    let mut guard = crate::state::lock_unpoisoned(cache);
-    if *guard != new_devices {
-        *guard = new_devices;
-        true
-    } else {
-        false
-    }
+    //
+    // ⭐ 2026-09-29：写入统一走 `state::store_devices_cache`，因为**只有它会盖时间戳**。
+    //   在这里直接 `*guard = …` 的话，列表被更新而 `at_ms` 仍是 `None`
+    //   ⇒ 任务栏侧的 TTL 判据永远判成「没有可用缓存」⇒ 每轮都全量现查 WMI
+    //   （现象与改之前**完全一样**，且更难发现：代码看着是对的）。
+    crate::state::store_devices_cache(new_devices)
 }
 
 /// 刷新设备缓存，返回是否发生变化。
@@ -90,8 +88,9 @@ fn refresh_devices_cache() -> bool {
 
 /// 根据缓存的设备信息构建 tooltip 文本
 fn build_tooltip_text() -> String {
-    let cache = get_devices_cache();
-    let devices = crate::state::lock_unpoisoned(cache);
+    // 只借 `devices` 字段（`at_ms` 与 tooltip 无关），guard 仍覆盖整个闭包
+    let devices = crate::state::lock_unpoisoned(get_devices_cache());
+    let devices = &devices.devices;
 
     let mut lines = Vec::new();
     config::with_config(|c| {

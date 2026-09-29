@@ -5283,7 +5283,9 @@ pub fn apply_from_config(app: &tauri::AppHandle) {
                         report.hwnd
                     ));
                     // 挂载后立刻首刷：此刻 `WIDGET_HWND` 已就绪，`refresh_async` 不会早退。
-                    refresh_async();
+                    // ⚠️ **强制**现查：首帧是该窗口唯一一次「用户刚打开它」，
+                    //   拿一份可能 10 秒前的数据当首帧没有道理。
+                    refresh_async_force();
                 });
                 if let Err(e) = queued {
                     append_log(&format!("[widget] 投递挂载任务失败（事件循环已退出）: {e}"));
@@ -5325,12 +5327,21 @@ pub fn apply_from_config(app: &tauri::AppHandle) {
 ///
 /// ⛔ **绝不能在主线程调用**（内部跑 WMI 实测 600ms+，且视觉扫描要 BitBlt）。所有调用点都在后台线程。
 #[cfg(target_os = "windows")]
-fn fetch_into_snapshot() -> bool {
+fn fetch_into_snapshot(force: bool) -> bool {
     let started = std::time::Instant::now();
     // 与 `get_taskbar_devices` 命令**同源**：设备走缓存优先 + 空则自愈现查。
     // ⚠️ 这里直接复用 `commands::devices_for_taskbar`（非 pub 时改用同路径的公开入口），
     //    避免 widget 自带一套「缓存该怎么回落」的规则（分叉会静默显示错数据）。
-    let devices = match crate::commands::taskbar_devices_snapshot() {
+    //
+    // ⭐ `force` 只决定「**设备列表**这一半」能否复用 TTL 缓存；音量那一半
+    //   走 `enumerate_output_devices`（实测 13~15ms）**本来就是实时的**，两者无关。
+    let max_age = if force {
+        None
+    } else {
+        Some(DEVICE_CACHE_TTL_MS)
+    };
+    let (__d, __age) = crate::state::devices_cache_snapshot();
+    let devices = match crate::commands::taskbar_devices_snapshot_within(max_age) {
         Some(d) => d,
         None => {
             append_log("[widget] 取数失败（taskbar_devices_snapshot 返回 None），保留旧快照");
@@ -5393,6 +5404,35 @@ fn fetch_into_snapshot() -> bool {
 ///   ⇒ `volume-changed` 拖动期间的几十次请求会合并成「当前一次 + 结束后一次」，
 ///     既不会雪崩，也保证**最后的状态一定被画出来**。
 pub fn refresh_async() {
+    refresh_async_with(false)
+}
+
+/// 设备数据缓存的 TTL（毫秒）：事件驱动刷新**可以**复用缓存的上限。
+///
+/// 取 **10s** 的理由：`volume-changed` 拖滑块时每秒几十次，10s 足以把一整次拖动
+/// 合并成「一次现查 + 期间若干次读缓存」；而电量本身另有 30s 的强制心跳，
+/// 10s 也不会让显示明显滞后。
+const DEVICE_CACHE_TTL_MS: u64 = 10_000;
+
+/// **强制**绕过 TTL 缓存重新取数（电量新鲜度的心跳 / 设备列表变化 / 蓝牙电量推送）。
+///
+/// ⛔ 别把它当默认：`query_devices` 实测 **517~684ms**，而 `volume-changed` 在
+///   拖滑块时每秒触发几十次 ⇒ 那一类**必须**走 [`refresh_async`]（可用缓存，~20ms）。
+pub fn refresh_async_force() {
+    refresh_async_with(true)
+}
+
+/// 本轮刷新是否**强制**绕过 TTL 缓存。
+///
+/// ⚠️ 是个**或累加器**，且必须在**实际干活的那一刻**（`spawn_blocking` 闭包开头）
+///   读并清，**不能**在入口读：合并窗口内到达的 force 请求必须被**下一次补跑**捡走，
+///   在入口读会把它连同本次非强制刷新一起吞掉 ⇒ 表现为「偶尔有次电量不更新」。
+static REFRESH_FORCE: AtomicBool = AtomicBool::new(false);
+
+fn refresh_async_with(force: bool) {
+    if force {
+        REFRESH_FORCE.store(true, Ordering::SeqCst);
+    }
     #[cfg(target_os = "windows")]
     {
         use std::sync::atomic::Ordering as O;
@@ -5417,7 +5457,9 @@ pub fn refresh_async() {
             // 用 spawn_blocking 包住阻塞的取数（WMI 是同步阻塞调用，
             // 直接放在 async 任务里会占住运行时的工作线程）
             let _ = tauri::async_runtime::spawn_blocking(move || {
-                let changed = fetch_into_snapshot();
+                // ⛔ 在**闭包开头**读并清：合并窗口内到达的 force 由下一次补跑捡走
+                let force = REFRESH_FORCE.swap(false, O::SeqCst);
+                let changed = fetch_into_snapshot(force);
                 if changed {
                     // ⛔ 跨线程投递：**不能**在后台线程直接 `UpdateLayeredWindow`
                     //    （窗口属于主线程；ULW 更新窗口表面，跨线程调用行为未定义）。
@@ -5663,7 +5705,11 @@ pub fn start_refresh_loop(app: &tauri::AppHandle) {
                     }
                 }
                 if plan.refresh {
-                    refresh_async();
+                    // ⭐ 这一拍是**电量新鲜度的唯一心跳**（30s 一次）⇒ 必须强制现查。
+                    //   若改成可用缓存，缓存每 30s 才由这条路径自己写一次
+                    //   ⇒ 判据会在「刚写完」与「即将过期」之间反复命中缓存，
+                    //   电量最长可能滞后 30s。
+                    refresh_async_force();
                 }
                 if plan.remount {
                     // ── 自愈分支：窗口不在（或句柄已失效）──────────────────────
@@ -5758,20 +5804,38 @@ pub fn install_event_listeners(app: &tauri::AppHandle) {
         // ── ① 数据类事件：只请求一次刷新（未挂载时 `refresh_async` 自己早退）──
         // ⚠️ 事件名必须与 `emit` 处**逐字一致**（大小写/连字符），否则 `listen` 静默
         //    不生效（不报错、不触发）—— 改名前先 grep `emit(` 核对。
-        const DATA_EVENTS: [&str; 5] = [
-            "volume-changed",        // ⭐ 用户改音量（`audio_notify.rs` 回调）
-            "tray-devices-changed",  // 托盘设备列表变化（含 WMI 重新枚举）
-            "devices-changed",       // 设备列表变化
-            "audio-devices-changed", // 音频端点增删 / 默认设备切换
-            "bt-battery-updated",    // 蓝牙电量推送
+        // ⭐⭐ 第二位 = 是否**强制**绕过 TTL 缓存（`true` = 强制现查 WMI）。
+        //   判据只有一条：**这个事件是否携带「设备列表 / 电量」的新信息**。
+        //   · 携带**设备列表**变化 ⇒ 强制：`tray-devices-changed` /
+        //     `devices-changed`（读一份 10 秒前的缓存就等于漏掉刚插上的设备）。
+        //   · 其余 ⇒ 允许读缓存。逐条理由：
+        //     - `volume-changed`：音量走**另一条**实时通道
+        //       （`enumerate_output_devices`，实测 13~15ms），设备列表没动。
+        //     - `audio-devices-changed`：同上，端点本身是实时枚举的。
+        //     - `bt-battery-updated`：**电量新鲜度归 30s 心跳所有**。
+        //       ⛔ 曾把它标成「强制」，实测证明那是错的：该推送在启动 1 秒内
+        //       **连发 5 次**（蓝牙栈在连上 / 恢复时集中补推），每次强制 ⇒
+        //       连续 4 轮 517~684ms 的 WMI，widget 首帧被拖到 2.5 秒。
+        //       而且它**只携带蓝牙那一台**的电量 —— 2.4G 接收器没有任何推送，
+        //       所以「靠推送即时刷新 widget」从一开始就不成立。
+        //       widget 的电量新鲜度历来由 30s 心跳给（本次改动前后一致），
+        //       改成读缓存**不是回归**。
+        //   ⚠️ 判成「一律强制」也能跑，只是把事件合并窗口又变回
+        //     「每次 517~684ms」——而那正是本项要修的卡顿。
+        const DATA_EVENTS: [(&str, bool); 5] = [
+            ("volume-changed", false),      // ⭐ 用户改音量（每秒几十次 ⇒ 必须走缓存）
+            ("tray-devices-changed", true), // 托盘设备列表变化（含 WMI 重新枚举）
+            ("devices-changed", true),      // 设备列表变化
+            ("audio-devices-changed", false), // 音频端点增删（端点本身是实时枚举的）
+            ("bt-battery-updated", false),  // 蓝牙电量推送（电量归 30s 心跳，理由见上）
         ];
-        for ev in DATA_EVENTS {
+        for (ev, force) in DATA_EVENTS {
             // 忽略返回值（EventId）：本应用不取消订阅，见函数注释
             let _ = app.listen(ev, move |_| {
                 // ⚠️ `volume-changed` 在**拖动音量条时会连续触发**（实测几十次/秒）
                 //    ⇒ 这里**必须**走 `refresh_async()` 的合并窗口，绝不能直接取数，
                 //    否则会把 WMI（实测 600ms+）打爆、拖滑块直接卡顿。
-                refresh_async();
+                refresh_async_with(force);
             });
         }
         // ── ② 配置类事件：**不能只刷新** ────────────────────────────────────

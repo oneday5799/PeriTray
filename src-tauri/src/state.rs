@@ -38,7 +38,7 @@
 //! | 符号 | 定义处 | 说明 |
 //! |---|---|---|
 //! | `CONFIG` | `config.rs` | 配置。**临界区内只允许纯内存操作**（P1-3 / B11 已把落盘全部外移） |
-//! | `DEVICES_CACHE` | 本文件 | 设备列表缓存（托盘 tooltip 与弹窗卡片的数据源） |
+//! | `DEVICES_CACHE` | 本文件 | 设备列表缓存 + 写入时刻（托盘 tooltip、低电量通知、**任务栏信息窗**三处共用；2026-09-29 起携带时间戳） |
 //! | `TRAY_ICON` | `tray.rs` | 托盘句柄。锁内只取句柄/换菜单，**调用 API 前必须先释放**（`set_icon` / `set_tooltip` / `set_menu` 会同步等主线程） |
 //! | `AUTO_MENU_ITEM` | 本文件 | 自启菜单项，同 `TRAY_ICON`（`set_text` 同步等主线程） |
 //! | `DEVICE_REGISTERED_KEYS` | `shortcut.rs` | 已注册快捷键集合。锁内只算差集，插件 API 调用在锁外 |
@@ -387,17 +387,187 @@ pub(crate) fn run_coalesced(
     }
 }
 
-/// 设备缓存，用于托盘 tooltip 显示，避免重复 WMI 查询。
+/// 设备缓存的内容 **+ 写入时刻**（`monotonic_ms` 刻度）。
+///
+/// ⚠️⚠️ **时间戳必须与列表放在同一把锁里**（2026-09-29）：
+///   另起一把 `Mutex<Instant>` 就等于**新增一把锁**，而本文件头的锁序白名单
+///   只登记了 `DEVICES_CACHE` ⇒ 新锁要么重新登记、要么引入一条**未登记的嵌套边**。
+///   放在同一个结构里则白名单原样有效，零新增锁、零新增边。
+pub struct DeviceCache {
+    pub devices: Vec<Device>,
+    /// 最近一次**真实查询**的时刻；`None` = 从未写过。
+    pub at_ms: Option<u64>,
+}
+
+/// 设备缓存，避免重复 WMI 查询（实测单轮 **517~684ms**）。
+///
+/// 消费者：托盘 tooltip、低电量通知、**任务栏信息窗**（2026-09-29 起）。
 ///
 /// 锁序：本锁是**顶层锁**，白名单允许它 → `CONFIG`（唯一实例在
 /// `tray.rs::build_tooltip_text`）。完整登记见本文件头的模块文档。
-static DEVICES_CACHE: OnceLock<Mutex<Vec<Device>>> = OnceLock::new();
+static DEVICES_CACHE: OnceLock<Mutex<DeviceCache>> = OnceLock::new();
 
-/// 获取设备缓存的引用
-pub fn get_devices_cache() -> &'static Mutex<Vec<Device>> {
-    DEVICES_CACHE.get_or_init(|| Mutex::new(Vec::new()))
+/// 获取设备缓存的引用。
+pub fn get_devices_cache() -> &'static Mutex<DeviceCache> {
+    DEVICES_CACHE.get_or_init(|| {
+        Mutex::new(DeviceCache {
+            devices: Vec::new(),
+            at_ms: None,
+        })
+    })
 }
 
+/// 读一份缓存**副本**及其年龄（毫秒）。
+///
+/// `age = None` 表示「**没有可用缓存**」——两种情形都归到这里：
+/// 从未写过，或上次写的是空列表。⚠️ 空列表**不算**可用缓存：
+/// 「查过、确实一台都没有」与「还没查过」在 TTL 判据里必须分开，
+/// 否则前者会让后者永远成立（表现为「永远不现查」）。
+pub fn devices_cache_snapshot() -> (Vec<Device>, Option<u64>) {
+    let g = lock_unpoisoned(get_devices_cache());
+    match g.at_ms {
+        Some(at) if !g.devices.is_empty() => {
+            (g.devices.clone(), Some(monotonic_ms().saturating_sub(at)))
+        }
+        _ => (Vec::new(), None),
+    }
+}
+
+/// 写回设备列表并盖上时间戳。返回「**内容**是否变化」。
+///
+/// ⚠️ 时间戳**每次真实查询都盖**，即便内容逐字没变：
+/// TTL 判据问的是「距上次**问过 WMI** 多久」，而返回值的「变没变」是
+/// 托盘事件（tooltip / `devices-changed`）关心的量 —— **两个问题不同**。
+/// 只在「变了」时盖戳会让 TTL 永久不成立（缓存每次都判成陈旧 ⇒ 退回全量现查）。
+pub fn store_devices_cache(devices: Vec<Device>) -> bool {
+    let mut g = lock_unpoisoned(get_devices_cache());
+    let changed = g.devices != devices;
+    if changed {
+        g.devices = devices;
+    }
+    g.at_ms = Some(monotonic_ms());
+    changed
+}
+
+/// ⚠️ 三条设备缓存判据共享**同一个 global**，而 `cargo test` 默认**并行**
+///   ⇒ 不加这把锁时它们会互相踩：A 断言「首次写入变了」时 B 可能刚把缓存
+///   写成别的内容 ⇒ A 的第二次写入就判成「变了」⇒ 假红。
+///   （实测踩到：连跑 3 次有 2 次红，失败信息是「内容相同应报告没变」，
+///   与被测逻辑无关，纯粹是竞态。）
+#[cfg(test)]
+static DEVICES_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// ⭐⭐ **写回必须每次都盖时间戳，哪怕内容逐字没变**。
+///
+/// TTL 判据问的是「距上次**问过 WMI** 多久」，而「内容变没变」是托盘事件
+/// 关心的量 —— 两个问题不同。若只在「变了」时盖戳：内容长期不变时
+/// `at_ms` 永远停在旧值 ⇒ 缓存每次都判成陈旧 ⇒ **退回全量现查**，
+/// 也就是「改了等于没改」，而且从代码上完全看不出问题。
+#[test]
+fn storing_unchanged_content_still_refreshes_the_timestamp() {
+    let _serial = lock_unpoisoned(&DEVICES_CACHE_TEST_LOCK);
+    // 保存现场（这是 static 缓存，测试间共享）
+    let saved = {
+        let g = lock_unpoisoned(get_devices_cache());
+        g.devices.clone()
+    };
+    let saved_at = lock_unpoisoned(get_devices_cache()).at_ms;
+
+    let d = vec![Device {
+        name: "缓存判据用设备".to_string(),
+        dt: crate::device::DevType::Other,
+        status: "OK".to_string(),
+        battery: Some(50),
+        device_id: None,
+        device_key: None,
+        is_bluetooth: false,
+        is_wireless_24g: false,
+        wireless_24g_kind: None,
+        is_connected: true,
+        is_ble: false,
+    }];
+    assert!(store_devices_cache(d.clone()), "首次写入应报告「内容变了」");
+    let first = lock_unpoisoned(get_devices_cache()).at_ms;
+    assert!(first.is_some(), "写入后必须有时间戳");
+
+    // ⚠️ 必须跨过一个毫秒 tick：`monotonic_ms()` 是**毫秒**分辨率，两次写入
+    //   落在同一毫秒里时刻本就相同。这不是缺陷（TTL 的尺度是 10s，
+    //   1ms 抖动无关），但判据要能测出「有没有盖」就得先让时间走一格。
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    // 逐字相同再写一次
+    assert!(
+        !store_devices_cache(d.clone()),
+        "内容相同应报告「没变」（供托盘决定要不要发事件）"
+    );
+    let second = lock_unpoisoned(get_devices_cache()).at_ms;
+    assert!(
+        second > first,
+        "内容相同也**必须**盖新时间戳（否则 TTL 永不成立 ⇒ 永远现查）"
+    );
+
+    lock_unpoisoned(get_devices_cache()).devices = saved;
+    lock_unpoisoned(get_devices_cache()).at_ms = saved_at;
+}
+
+/// ⛔ **空内容不算「可用缓存」** —— 即使带着新鲜的时间戳。
+///
+/// 「查过、确实一台都没有」与「还没查过」在 TTL 判据里必须分开：
+/// 若空内容也算命中，`devices_for_taskbar_with` 里的
+/// `age <= max` 会在装好设备后仍命中空缓存 ⇒ **新设备永远不出现，且零报错**。
+#[test]
+fn empty_cache_reports_no_age_even_when_just_written() {
+    let _serial = lock_unpoisoned(&DEVICES_CACHE_TEST_LOCK);
+    let saved = {
+        let g = lock_unpoisoned(get_devices_cache());
+        g.devices.clone()
+    };
+    let saved_at = lock_unpoisoned(get_devices_cache()).at_ms;
+
+    store_devices_cache(Vec::new());
+    let (devices, age) = devices_cache_snapshot();
+    assert!(devices.is_empty());
+    assert!(
+        age.is_none(),
+        "空内容不得报告年龄（否则 TTL 会让「还没查过」永远成立）"
+    );
+
+    lock_unpoisoned(get_devices_cache()).devices = saved;
+    lock_unpoisoned(get_devices_cache()).at_ms = saved_at;
+}
+
+/// 非空缓存必须**带年龄**返回，且年龄单调不减。
+#[test]
+fn non_empty_cache_reports_a_monotonic_age() {
+    let _serial = lock_unpoisoned(&DEVICES_CACHE_TEST_LOCK);
+    let saved = {
+        let g = lock_unpoisoned(get_devices_cache());
+        g.devices.clone()
+    };
+    let saved_at = lock_unpoisoned(get_devices_cache()).at_ms;
+
+    store_devices_cache(vec![Device {
+        name: "年龄判据用设备".to_string(),
+        dt: crate::device::DevType::Other,
+        status: "OK".to_string(),
+        battery: Some(50),
+        device_id: None,
+        device_key: None,
+        is_bluetooth: false,
+        is_wireless_24g: false,
+        wireless_24g_kind: None,
+        is_connected: true,
+        is_ble: false,
+    }]);
+    let (_, a1) = devices_cache_snapshot();
+    let a1 = a1.expect("非空缓存必须报告年龄");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let (_, a2) = devices_cache_snapshot();
+    let a2 = a2.expect("非空缓存必须仍报告年龄");
+    assert!(a2 >= a1, "年龄必须单调不减: {a1} → {a2}");
+
+    lock_unpoisoned(get_devices_cache()).devices = saved;
+    lock_unpoisoned(get_devices_cache()).at_ms = saved_at;
+}
 #[cfg(test)]
 mod tests {
     use super::*;
