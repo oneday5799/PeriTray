@@ -213,19 +213,45 @@ pub(crate) fn try_begin_animation() -> Option<SingleFlightGuard<'static>> {
 /// [`try_begin_animation`] 的实际实现。`timeout_ms` 作为参数是为了让「超时夺回」
 /// 这条分支能被**确定性地**单测（不必真的等 2 秒）。
 fn try_begin_animation_with_timeout(timeout_ms: u64) -> Option<SingleFlightGuard<'static>> {
-    if let Some(guard) = SingleFlightGuard::new(&ANIMATING) {
-        ANIMATION_STARTED.store(monotonic_ms(), Ordering::SeqCst);
+    try_begin_animation_on(&ANIMATING, &ANIMATION_STARTED, timeout_ms, "[popup]")
+}
+
+/// 通用的「取动画单飞守卫」（2026-09-29 为任务栏面板切换动画抽出）。
+///
+/// ⭐ 抽出它的原因：任务栏的切换动画**不能**复用弹窗那对 `ANIMATING` /
+///   `ANIMATION_STARTED`。二者共用会引入两条真实故障：
+///   · 反向——弹窗开合动画（250ms）期间用户点了任务栏切换 ⇒ 守卫取不到
+///     ⇒ **那一次点击被整个吞掉**（面板不换，且无任何日志）。
+///   · 正向——任务栏动画期间弹窗要开 ⇒ 被 `animation_blocks()` 挡 150ms。
+///   守卫**类型**仍是共用的 [`SingleFlightGuard`]（AGENTS.md：不新建语义相同的类型），
+///   这里只是把「占哪个标志」开放给调用方。
+///
+/// ⚠️⚠️ `flag` 与 `started` **必须成对**传入，且 `started` 必须是**该 flag 专属**的：
+///   守卫的 `Drop` 只复位 `flag`；而 release 是 `panic = "abort"` ⇒ 栈不展开、
+///   `Drop` 根本不执行 ⇒ 复位只能靠 `started` 的单调时钟超时自愈。
+///   两者配错（flag 属于 A、时钟属于 B）时，超时判据读到的是别处的时钟，
+///   「自愈」会立刻失效或永不生效 —— 而这两种都**不报编译错**。
+///   `tag` 只进日志（AGENTS.md：日志带 `[模块]` 前缀）。
+pub(crate) fn try_begin_animation_on(
+    flag: &'static AtomicBool,
+    started: &'static AtomicU64,
+    timeout_ms: u64,
+    tag: &str,
+) -> Option<SingleFlightGuard<'static>> {
+    if let Some(guard) = SingleFlightGuard::new(flag) {
+        started.store(monotonic_ms(), Ordering::SeqCst);
         return Some(guard);
     }
     // 已被占用：仅当判定超时才夺回
-    let elapsed = monotonic_ms().saturating_sub(ANIMATION_STARTED.load(Ordering::SeqCst));
+    let elapsed = monotonic_ms().saturating_sub(started.load(Ordering::SeqCst));
     if !(elapsed < timeout_ms) {
         // 先复位再重新抢占：直接 CAS 抢占会失败（标志仍为 true）
-        let _ = ANIMATING.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst);
-        if let Some(guard) = SingleFlightGuard::new(&ANIMATING) {
-            ANIMATION_STARTED.store(monotonic_ms(), Ordering::SeqCst);
+        let _ = flag.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst);
+        if let Some(guard) = SingleFlightGuard::new(flag) {
+            started.store(monotonic_ms(), Ordering::SeqCst);
             crate::standard_log!(
-                "[popup] ANIMATING 超时自愈：动画线程疑似已死（已过 {}ms，上限 {}ms），强制放行",
+                "{} ANIMATING 超时自愈：动画线程疑似已死（已过 {}ms，上限 {}ms），强制放行",
+                tag,
                 elapsed,
                 timeout_ms
             );

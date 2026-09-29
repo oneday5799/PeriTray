@@ -90,6 +90,99 @@ const CLICK_TIME_MS: u64 = 400;
 #[cfg(target_os = "windows")]
 static PRESS_CURSOR: std::sync::Mutex<Option<(i32, i32, u64)>> = std::sync::Mutex::new(None);
 
+/// 当前**被按下**的按钮（`-1` = 无）。用户 2026-09-29 要求所有可点按钮按下时变灰。
+///
+/// ⭐ 存的是**布局里那一项的编号**，不是屏幕坐标：
+///   · 命中判定用**已发布的布局**（`music_layout` / `DEV_SWITCH_RECT`），
+///     与绘制同源 —— 绝不现算矩形（那是「绘制与命中必须同源」那条纪律）。
+///   · 编号在「按下 → 抬起」之间不会因窗口宽度变化而漂移。
+const PRESS_NONE: i32 = -1;
+const PRESS_MUSIC_PREV: i32 = 0;
+const PRESS_MUSIC_PLAY: i32 = 1;
+const PRESS_MUSIC_NEXT: i32 = 2;
+const PRESS_MUSIC_SWITCH: i32 = 3;
+const PRESS_DEV_SWITCH: i32 = 4;
+
+static PRESSED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(PRESS_NONE);
+
+/// 三键的编号（与 [`press_target_at`] 的映射严格对应）。
+#[cfg(target_os = "windows")]
+fn music_btn_id(i: usize) -> i32 {
+    match i {
+        0 => PRESS_MUSIC_PREV,
+        1 => PRESS_MUSIC_PLAY,
+        _ => PRESS_MUSIC_NEXT,
+    }
+}
+
+/// 只改状态、不发消息（测试与「无窗口」场景用；生产走 [`set_pressed`]）。
+#[cfg(test)]
+fn set_pressed_raw(id: i32) {
+    PRESSED.store(id, std::sync::atomic::Ordering::Release);
+}
+
+/// 读当前按下态（绘制时用）。
+#[cfg(target_os = "windows")]
+pub fn pressed_id() -> i32 {
+    PRESSED.load(Ordering::Acquire)
+}
+
+/// 命中测试：坐标落在哪个按钮上（**只查已发布布局**）。
+#[cfg(target_os = "windows")]
+pub fn press_target_at(local: (i32, i32)) -> i32 {
+    // ⛔ 动画期间一律「没命中」：内容正在横向移动，而 `LAST_ITEM_RECTS` 是
+    //   上一帧的坐标 ⇒ 按它判定会把点击落到**已经滑走**的元素上。
+    //   150ms 窗口很短，忽略这一次点击的代价远小于「点到了错的东西」。
+    if switch_anim_active() {
+        return PRESS_NONE;
+    }
+    match current_panel() {
+        Some(crate::config::TaskbarPanel::Music) => match hit_test_music(local) {
+            MusicHit::Prev => PRESS_MUSIC_PREV,
+            MusicHit::PlayPause => PRESS_MUSIC_PLAY,
+            MusicHit::Next => PRESS_MUSIC_NEXT,
+            MusicHit::Switch => PRESS_MUSIC_SWITCH,
+            MusicHit::None => PRESS_NONE,
+        },
+        Some(crate::config::TaskbarPanel::Devices) => {
+            if dev_switch_hit(local) {
+                PRESS_DEV_SWITCH
+            } else {
+                PRESS_NONE
+            }
+        }
+        None => PRESS_NONE,
+    }
+}
+
+/// `WM_LBUTTONDOWN`：记下按到哪个按钮（没按在任何按钮上则清空）。
+///
+/// ⛔ **必须在 `drag_begin` 之前调用**：`drag_begin` 会 `SetCapture`，
+///   而 `SetCapture` 可能立刻触发 `WM_CAPTURECHANGED`（那里会清按下态）。
+#[cfg(target_os = "windows")]
+fn press_begin(hwnd: *mut core::ffi::c_void) {
+    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
+        set_pressed(PRESS_NONE, hwnd);
+        return;
+    }
+    let (wx, wy, _, _) = window_screen_rect(hwnd).unwrap_or((0, 0, 0, 0));
+    set_pressed(press_target_at((pt.x - wx, pt.y - wy)), hwnd);
+}
+
+/// 置/清按下态；**状态真变了**才请求重绘（否则一次按下会触发两次无谓重绘）。
+///
+/// ⛔ 只 `post_refresh`（重绘、读现有快照），**绝不** `refresh_async()`——
+///   后者会触发 600ms+ 的 WMI 取数，按一下就重拉一遍设备列表。
+#[cfg(target_os = "windows")]
+fn set_pressed(id: i32, hwnd: *mut core::ffi::c_void) {
+    if PRESSED.swap(id, Ordering::AcqRel) == id {
+        return;
+    }
+    FORCE_REPAINT.store(true, Ordering::Release);
+    unsafe { ffi::post_refresh(hwnd as _) };
+}
+
 /// 记下按下时的光标与时刻（`WM_LBUTTONDOWN` 时调用）。
 #[cfg(target_os = "windows")]
 fn press_record() {
@@ -127,7 +220,7 @@ fn press_take_click() -> Option<(i32, i32)> {
 /// ⭐ 判据与**音乐面板已发布的布局**比对（不现算矩形），与绘制同源。
 /// ⛔ 只发命令给后台线程 / 改配置，**绝不** `emit`、**绝不**持锁调窗口 API。
 #[cfg(target_os = "windows")]
-pub fn on_click(local: (i32, i32)) {
+pub fn on_click(hwnd: *mut core::ffi::c_void, local: (i32, i32)) {
     match current_panel() {
         Some(crate::config::TaskbarPanel::Music) => {
             let hit = hit_test_music(local);
@@ -135,7 +228,7 @@ pub fn on_click(local: (i32, i32)) {
                 if crate::config::verbose_log_enabled() {
                     append_log(&format!("[widget] 音乐面板点击: {hit:?} @({})", local.0));
                 }
-                activate_music(hit);
+                activate_music(hwnd, hit);
             }
         }
         Some(crate::config::TaskbarPanel::Devices) => {
@@ -144,7 +237,7 @@ pub fn on_click(local: (i32, i32)) {
                 if crate::config::verbose_log_enabled() {
                     append_log(&format!("[widget] 设备面板点击: Switch @({})", local.0));
                 }
-                advance_switch_target();
+                advance_switch_target(hwnd);
                 return;
             }
             if crate::config::verbose_log_enabled() {
@@ -172,16 +265,42 @@ pub fn on_click(local: (i32, i32)) {
 ///   「有没有会话」决定组件**在不在**；只重绘的话，无会话→有会话时窗口仍然挂着空窗。
 #[cfg(target_os = "windows")]
 pub fn on_music_changed() {
-    FORCE_REPAINT.store(true, Ordering::Release);
+    // ⛔⛔ **只重绘、绝不取数**（2026-09-29 修：播放/暂停图标延迟数秒才变）。
+    //
+    // 根因：这里原先调 `refresh_async()`，而那是**设备**刷新通道 ——
+    //   `spawn_blocking(fetch_into_snapshot)` 会跑一轮 **WMI 设备枚举（实测 600ms+）**，
+    //   跑完才 `post_refresh`。音乐面板的内容全部来自 SMTC 快照，
+    //   而快照在进到这里之前**已经更新完毕** ⇒ 这一轮 WMI **纯浪费**，
+    //   且它的耗时直接表现为「点暂停后音乐立刻停了、按钮却迟迟不变」。
+    //
+    // ⚠️ 也**不再置 `FORCE_REPAINT`**：那个标志是 `fetch_into_snapshot` 内部消费的，
+    //   绕开取数后由本路径置位就会**一直残留**，直到下一轮 30s 慢刷新才被误消费
+    //   （表现为「无缘无故重绘一次」）。本条路径是「快照变了」，不是「配置要求重绘」。
+    //
+    // ⭐ 这与 `set_pressed` / hover 轮询是**同一条纪律**（本文件里已写了两遍）：
+    //   `WM_APP_REFRESH` = 读现有快照重画；`refresh_async` = 重新取数。
+    //   凡是「数据已经在内存里了、只是想重画」的场景，一律走前者。
     if let Some(app) = crate::taskbar_music::app() {
         // ⛔ **异步**投递（`run_on_main_thread` 本身已是排队语义），不在此阻塞
-        let _ = app.run_on_main_thread(|| {
-            refresh_async();
-        });
+        let _ = app.run_on_main_thread(request_repaint);
     } else {
         // 没有 app 句柄（极早期）⇒ 只靠 2s 维护循环也会收敛
-        refresh_async();
+        request_repaint();
     }
+}
+
+/// 请求**立刻**重绘一帧（读现有快照，**不取任何数据**）。**任意线程可调**。
+///
+/// ⛔ 与 [`refresh_async`] 的区别就是本函数存在的全部理由：后者会跑 WMI 取数
+///   （600ms+），凡是「数据已就位、只是画面没跟上」的场景都必须用本函数。
+#[cfg(target_os = "windows")]
+pub fn request_repaint() {
+    let handle = WIDGET_HWND.load(Ordering::SeqCst);
+    // ⚠️ 未挂载 ⇒ 没有消费方，直接早退（否则消息投进虚空，日志里什么都没有）
+    if !widget_alive() {
+        return;
+    }
+    unsafe { ffi::post_refresh(handle as *mut core::ffi::c_void) };
 }
 
 /// 启动音乐后台线程（应用启动时调一次）。
@@ -251,7 +370,7 @@ pub fn hit_test_music(cursor: (i32, i32)) -> MusicHit {
 ///   —— 它把「没有下一个会话」误当成「无处可切」，于是 N=1（绝大多数情况）时
 ///   **点切换完全没反应**（用户 2026-09-28 实测报出）。
 ///   ⇒ 正确判据是「**还有没有下一个会话**」，而不是「会话数是否 > 1」。
-fn advance_switch_target() {
+fn advance_switch_target(hwnd: *mut core::ffi::c_void) {
     let snap = crate::taskbar_music::snapshot();
     let n = snap.sessions.len();
     let cur_panel = current_panel();
@@ -262,12 +381,21 @@ fn advance_switch_target() {
         return;
     }
     // ② 会话已走完（或本来就只有一个）⇒ 另一个面板可用就换过去
-    if let Some(other) = other_panel_if_available(cur_panel) {
+    if let (Some(from), Some(other)) = (cur_panel, other_panel_if_available(cur_panel)) {
+        // ⭐ **先落配置，再启动画**（顺序即契约）：配置是**持久状态**，
+        //   必须在任何可能失败的步骤之前就位（AGENTS.md「失败路径不得留下
+        //   成功状态」的镜像要求：这里反过来——先落定，出错才不会退回旧面板
+        //   却已经动过画面）。动画失败也只是「这次没播」，面板已换对。
         crate::config::with_config_mut(|c| c.taskbar_panel = other);
         // ⭐ 同时把会话下标**归零**：换回来时从第一个会话开始，环才是闭合的
         crate::taskbar_music::select_session(0);
-        FORCE_REPAINT.store(true, Ordering::Release);
-        refresh_async();
+        // ⛔ 会话轮转（上面的 ①）**不进动画**：同一面板内换歌，宽度不变，
+        //   套一层横向滑动只会让整段歌名平移，观感更差。
+        if !begin_switch_anim(hwnd, from, other) {
+            // 拿不到守卫 / 画不出素材 ⇒ 落回**瞬时切换**（与动画引入前一致）
+            FORCE_REPAINT.store(true, Ordering::Release);
+            refresh_async();
+        }
         append_log(&format!("[widget] 切换组件 → {other:?}"));
         return;
     }
@@ -297,14 +425,451 @@ fn other_panel_if_available(
     other_ok.then_some(other)
 }
 
+// ══ 面板切换动画（Music ↔ Devices）══════════════════════════════════════
+//
+// 形态（用户 2026-09-29 选定）：**横向滑动**，旧面板左移淡出、新面板自右滑入，
+// 时长 **150ms**。⛔ 会话轮转（同一面板内的上一首/下一首会话）**不参与**动画 ——
+// 它不换面板、宽度也不变，套一层滑动只会让歌名整段平移，观感更差。
+//
+// ── 线程模型（与全仓一致，AGENTS.md）────────────────────────────────────
+//   点击（**主线程**，`activate_music`）→ 渲染两块面板各一次、缓存成位图
+//   → 起一条**动画线程**，它只按 16ms 节拍 `PostMessageW(WM_APP_REFRESH)`，
+//     **绝不碰 GDI**（`UpdateLayeredWindow` / 分层窗都属创建线程 = 主线程）
+//   → 主线程每帧把两张缓存位图错位合成一帧再提交
+//   → 动画线程在最后投 `WM_APP_SWITCH_END`，主线程释放缓存 + 清状态 + 补一帧常规重绘。
+
+/// 动画时长（毫秒）—— 用户 2026-09-29 选定 150ms。
+const SWITCH_ANIM_MS: u64 = 150;
+
+/// 逐帧节拍。150 / 16 ≈ 9 帧。
+const SWITCH_ANIM_FRAME_MS: u64 = 16;
+
+/// 动画标志的超时自愈上限（毫秒）。
+///
+/// ⛔ 必须**显著大于** [`SWITCH_ANIM_MS`]：判据是「已占用**且**未超时」，
+///   上限贴着动画时长的话，尾部那几帧会被误判成「线程已死」并强行夺回
+///   ⇒ 动画被截断在 ~90%（肉眼是「滑到一半硬停」）。
+const SWITCH_ANIM_TIMEOUT_MS: u64 = 2_000;
+
+/// 面板绘制函数（[`draw_music_render`] / [`draw_items_render`]）的出口。
+///
+/// ⛔ 不用 `Option<(Dib, i32)>`：**常规路径里位图是在函数内部提交并释放的**，
+///   返回它就等于让包装层再提交一次 ⇒ 同一帧提交两遍（多一次合成），
+///   而更糟的是「已释放的位图被返回」——用它是 use-after-free。
+///   两条出口语义完全不同，必须由类型区分，不能靠约定。
+#[cfg(target_os = "windows")]
+enum Painted {
+    /// 已按常规路径**提交完毕**（`bool` = 提交是否成功）。
+    Committed(bool),
+    /// 位图**留给调用方**合成（动画路径）。位图所有权转移给调用方。
+    Bitmap(ffi::Dib, i32),
+}
+
+#[cfg(target_os = "windows")]
+impl Painted {
+    fn committed_ok(self) -> bool {
+        matches!(self, Painted::Committed(true))
+    }
+}
+
+/// 面板编码（存进原子量，比枚举更省事且不依赖 `TaskbarPanel` 的可序列化性）。
+const PANEL_CODE_NONE: u8 = 0;
+const PANEL_CODE_MUSIC: u8 = 1;
+const PANEL_CODE_DEVICES: u8 = 2;
+
+#[cfg(target_os = "windows")]
+fn panel_code(p: crate::config::TaskbarPanel) -> u8 {
+    match p {
+        crate::config::TaskbarPanel::Music => PANEL_CODE_MUSIC,
+        crate::config::TaskbarPanel::Devices => PANEL_CODE_DEVICES,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn panel_from_code(c: u8) -> Option<crate::config::TaskbarPanel> {
+    match c {
+        PANEL_CODE_MUSIC => Some(crate::config::TaskbarPanel::Music),
+        PANEL_CODE_DEVICES => Some(crate::config::TaskbarPanel::Devices),
+        _ => None,
+    }
+}
+
+// ── 动画状态 ────────────────────────────────────────────────────────────
+/// 本模块专属的单飞标志。⛔ **不复用** `state::ANIMATING`（那是弹窗的）：
+///   共用会导致「弹窗开合期间点任务栏切换，那一次点击被整个吞掉」。
+static WIDGET_ANIMATING: AtomicBool = AtomicBool::new(false);
+/// 本模块专属的动画起始时刻（[`crate::state::monotonic_ms`] 刻度），`0` = 无动画。
+///
+/// ⚠️ 必须与 [`WIDGET_ANIMATING`] **成对**——见 `state::try_begin_animation_on`
+///   的说明：release 是 `panic = "abort"`，`Drop` 复位根本不跑，
+///   唯一的兜底就是这个单调时钟。
+static SWITCH_ANIM_STARTED: AtomicU64 = AtomicU64::new(0);
+static SWITCH_ANIM_FROM_CODE: AtomicU8 = AtomicU8::new(PANEL_CODE_NONE);
+static SWITCH_ANIM_TO_CODE: AtomicU8 = AtomicU8::new(PANEL_CODE_NONE);
+
+/// 动画是否正在进行。命中测试与布局发布都要靠它让路（内容在动，不能按老坐标点）。
+#[cfg(target_os = "windows")]
+fn switch_anim_active() -> bool {
+    SWITCH_ANIM_STARTED.load(Ordering::SeqCst) != 0
+}
+
+// ── 纯函数层（可确定性地单测，不碰窗口）─────────────────────────────────
+
+/// 第 `now` 毫秒时的动画进度（`0..=1`）。
+///
+/// ⚠️ `started == 0` 视为「没有动画」⇒ 返回 `1.0`（**直接到终态**）。
+///   绝不能返回 `0.0`：那会让窗口停死在「旧面板刚要滑走」的那一帧，
+///   看起来就是「面板点坏了、切不过去」。
+#[cfg(target_os = "windows")]
+fn switch_progress(started: u64, now: u64, dur_ms: u64) -> f64 {
+    if started == 0 || dur_ms == 0 {
+        return 1.0;
+    }
+    (now.saturating_sub(started) as f64 / dur_ms as f64).clamp(0.0, 1.0)
+}
+
+/// 缓动：**ease-out cubic**（起步快、收尾稳）。`f(0)=0`、`f(1)=1`、单调不减。
+///
+/// ⭐ 为什么不用线性：150ms 很短，线性会显得「匀速推过去、然后硬停」；
+///   ease-out 把变化集中在前 1/3 帧（立刻响应点击），尾部慢慢落位。
+#[cfg(target_os = "windows")]
+fn ease_out_cubic(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    let inv = 1.0 - t;
+    1.0 - inv * inv * inv
+}
+
+/// 第 `progress` 帧的错位量：返回 `(from_dx, to_dx, from_mul)`。
+///
+/// · `from_dx` = 旧面板左移量（`-off`，终态 `-slide`，完全移出左侧）
+/// · `to_dx`   = 新面板左缘（`slide - off`，终态 `0`，完全就位）
+/// · `from_mul`= 旧面板的整体强度（`0..=256`，`256` = 原样），随左移同步淡出
+///
+/// ⭐ `slide` 取**帧宽**（即新面板宽）⇒ 终态恰好是「旧面板全出、新面板全进」，
+///   与切换后的常规帧**逐像素等价** ⇒ 收尾不会「跳一下」。
+#[cfg(target_os = "windows")]
+fn switch_offsets(progress: f64, slide: i32) -> (i32, i32, u32) {
+    let p = ease_out_cubic(progress);
+    let off = (p * slide as f64).round() as i32;
+    let from_dx = -off;
+    let to_dx = slide - off;
+    let from_mul = (((1.0 - p) * 256.0).round() as i32).clamp(0, 256) as u32;
+    (from_dx, to_dx, from_mul)
+}
+
+/// 逐通道乘一个 `0..=256` 的标量（`256` = 原样）。预乘空间对标量乘是封闭的。
+#[cfg(target_os = "windows")]
+fn mul_pixel(px: u32, m: u32) -> u32 {
+    if m >= 256 {
+        return px;
+    }
+    let r = ((px & 0xff) * m) >> 8;
+    let g = (((px >> 8) & 0xff) * m) >> 8;
+    let b = (((px >> 16) & 0xff) * m) >> 8;
+    let a = ((px >> 24) * m) >> 8;
+    r | (g << 8) | (b << 16) | (a << 24)
+}
+
+/// 预乘 source-over 横向 blit：把 `src` 以偏移 `dx` 合成进 `dst`，整体强度 `mul`。
+///
+/// ⭐ 全部用**整数**（`>> 8`）而非 `f32`：逐像素浮点在 15k 像素 × 2 张 × 9 帧
+///   下不算大，但整数化后这段代码**不需要窗口就能单测**（喂 `Vec<u32>` 即可），
+///   而混合公式（预乘 + source-over）恰恰是最容易写错、最该有判据的一段。
+///
+/// ⛔ 像素是 **BGRA 小端 `u32`** ⇒ alpha 在**高 8 位**（`px >> 24`）。
+///   这条写反了不会编译报错，只会让整块画面变透明或变全黑。
+#[cfg(target_os = "windows")]
+fn blit_premul_scaled(
+    dst: &mut [u32],
+    dst_w: i32,
+    dst_h: i32,
+    src: &[u32],
+    src_w: i32,
+    src_h: i32,
+    dx: i32,
+    mul: u32,
+) {
+    if mul == 0 || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0 {
+        return;
+    }
+    // ⚠️ 契约：`src` 恰为 `src_w * src_h` 个元素、`dst` 恰为 `dst_w * dst_h` 个。
+    //   这里**不**做运行时校验（每帧每通道都查会拖慢合成），但写错时开发期立刻炸；
+    //   写错的后果是越界读 ⇒ 直接崩在切片索引上，现场极难看。
+    debug_assert!(src.len() >= (src_w * src_h) as usize, "源缓冲长度不足");
+    debug_assert!(dst.len() >= (dst_w * dst_h) as usize, "目标缓冲长度不足");
+    // 目标列区间 [max(dx,0), ..)，对应源列区间 [max(-dx,0), ..)
+    let dst_x0 = dx.max(0);
+    let src_x0 = (-dx).max(0);
+    let cols = (src_w - src_x0).min(dst_w - dst_x0);
+    if cols <= 0 {
+        return;
+    }
+    let cols = cols as usize;
+    for row in 0..src_h.min(dst_h) {
+        let s = &src[(row as usize * src_w as usize + src_x0 as usize)..][..cols];
+        let d = &mut dst[(row as usize * dst_w as usize + dst_x0 as usize)..][..cols];
+        for (dp, sp) in d.iter_mut().zip(s.iter()) {
+            let sp = mul_pixel(*sp, mul);
+            if sp == 0 {
+                continue;
+            }
+            // 预乘 source-over：dst = src + dst * (1 - src.a)
+            // ⚠️ `inv` 恰好是 `255 - src.a` ⇒ 结果 alpha ≤ 255，**不会溢出**。
+            let inv = 255 - (sp >> 24);
+            *dp = sp + mul_pixel(*dp, inv);
+        }
+    }
+}
+
+// ── 动画期间缓存的两张面板位图 ──────────────────────────────────────────
+
+/// `Dib` 的**只读视图**：可以安全带出锁的 POD。
+///
+/// ⛔ 刻意**不**给 `Dib` 加 `#[derive(Copy)]`：`free_dib` 不可幂等，
+///   一旦 `Dib` 可复制，「同一张位图被释放两次」就成了可能（崩溃在 GDI 内，
+///   现场极难看）。这里只需要一份能穿过锁边界的读引用。
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+struct DibView {
+    bits: *mut u32,
+    w: i32,
+    h: i32,
+}
+
+#[cfg(target_os = "windows")]
+impl DibView {
+    fn of(d: &ffi::Dib) -> Self {
+        Self {
+            bits: d.bits,
+            w: d.w,
+            h: d.h,
+        }
+    }
+}
+
+/// 一次切换动画所需的全部素材（**只在动画开始时算一次**）。
+///
+/// ⭐ 为什么缓存而**不是每帧重画两块面板**：面板内容在这 150ms 内不会变
+///   （封面/歌名/电量都是慢变量），而重画一次要走字体创建 + 文本测量 +
+///   逐像素合成。逐帧重画 ⇒ 9 帧 × 2 面板 = 18 次全量绘制，
+///   在任务栏这种每次都可见的位置上是白烧 CPU。
+///   ⇒ 每帧只做「建一张帧位图 + 两次 blit + 一次提交」。
+#[cfg(target_os = "windows")]
+struct AnimFrames {
+    from: ffi::Dib,
+    to: ffi::Dib,
+    /// 提交用的父窗客户区 x —— 取**新面板**那份（动画期间窗口就是新宽度）。
+    rel_x: i32,
+}
+
+// SAFETY: `Dib` 含 `*mut u32` 等裸指针 ⇒ `!Send`，而 `static Mutex<T>` 要求
+//   `T: Send`。这里包一层并手写 `Send`：**这些位图只在主线程被创建、绘制与释放**
+//   （GDI 与分层窗都属创建线程 = 主线程），`Mutex` 只是为了让编译器接受这个
+//   static。跨线程时发生的唯一动作是「点击线程 → 动画线程 → 主线程」的
+//   **所有权移交**，任何线程都不会去解引用里面的指针。
+// SAFETY: `ANIM_FRAMES` 的所有读写都在主线程（`begin_switch_anim` /
+//   `finish_switch_anim` 收到的都是主线程投递的消息），故实际无并发。
+#[cfg(target_os = "windows")]
+unsafe impl Send for AnimFrames {}
+
+#[cfg(target_os = "windows")]
+static ANIM_FRAMES: Mutex<Option<AnimFrames>> = Mutex::new(None);
+
+/// 只画不提交地渲染指定面板（动画素材用）。
+#[cfg(target_os = "windows")]
+fn render_panel(
+    hwnd: *mut core::ffi::c_void,
+    panel: crate::config::TaskbarPanel,
+) -> Option<(ffi::Dib, i32)> {
+    let painted = match panel {
+        crate::config::TaskbarPanel::Music => draw_music_render(hwnd, false),
+        crate::config::TaskbarPanel::Devices => {
+            let items = snapshot::load().unwrap_or_default();
+            draw_items_render(hwnd, &items, false)
+        }
+    };
+    match painted {
+        Painted::Bitmap(d, x) => Some((d, x)),
+        // 画不出来（无设备、槽位无效、DIB 失败）⇒ 不做动画，走瞬时切换
+        Painted::Committed(_) => None,
+    }
+}
+
+/// 启动一次面板切换动画。返回 `false` 表示**没启动**，调用方须落回瞬时切换。
+///
+/// ⛔ **守卫占用点固定在函数顶部**（AGENTS.md）：不能推到「起线程」那一行——
+///   中间要渲染两块面板，那段时间里动画状态若处于「无守卫」，第二次点击就能
+///   同时进来，两轮动画互相覆盖缓存位图 ⇒ 双重释放。
+#[cfg(target_os = "windows")]
+fn begin_switch_anim(
+    hwnd: *mut core::ffi::c_void,
+    from: crate::config::TaskbarPanel,
+    to: crate::config::TaskbarPanel,
+) -> bool {
+    // ⚠️ 先看动画标志、再取守卫，**两道门缺一不可**：
+    //   守卫由动画线程在末尾释放，而缓存位图的释放要等主线程处理
+    //   `WM_APP_SWITCH_END`。两者之间有个「守卫已放、状态未清」的窗口，
+    //   此时若只查守卫，新的动画会进来并**覆盖缓存**，随后到达的结束消息
+    //   会把**新**缓存释放掉并清状态 ⇒ 正在播的动画凭空消失。
+    if switch_anim_active() {
+        return false;
+    }
+    let Some(guard) = crate::state::try_begin_animation_on(
+        &WIDGET_ANIMATING,
+        &SWITCH_ANIM_STARTED,
+        SWITCH_ANIM_TIMEOUT_MS,
+        "[widget] 切换",
+    ) else {
+        return false;
+    };
+
+    let Some((from_dib, _)) = render_panel(hwnd, from) else {
+        return false; // guard 随栈帧释放
+    };
+    let Some((to_dib, rel_x)) = render_panel(hwnd, to) else {
+        unsafe { ffi::free_dib(&from_dib) };
+        return false;
+    };
+    {
+        // ⚠️ 持锁区内**只有一次指针写入**，没有任何 GDI 调用
+        let mut slot = crate::state::lock_unpoisoned(&ANIM_FRAMES);
+        *slot = Some(AnimFrames {
+            from: from_dib,
+            to: to_dib,
+            rel_x,
+        });
+    }
+    SWITCH_ANIM_FROM_CODE.store(panel_code(from), Ordering::SeqCst);
+    SWITCH_ANIM_TO_CODE.store(panel_code(to), Ordering::SeqCst);
+    SWITCH_ANIM_STARTED.store(crate::state::monotonic_ms(), Ordering::SeqCst);
+    append_log(&format!("[widget] 切换动画启动: {from:?} → {to:?}"));
+    spawn_switch_anim(guard, hwnd as isize);
+    true
+}
+
+/// 动画线程：按节拍**只投递**刷新消息，绝不碰 GDI。
+///
+/// ⭐ `guard` 是**必需参数**（而不是在函数体里取）：漏传即 `error[E0061]`，
+///   是**类型级拦截**，比「记得在这里取守卫」的 lint 提醒可靠（AGENTS.md）。
+#[cfg(target_os = "windows")]
+fn spawn_switch_anim(guard: crate::state::SingleFlightGuard<'static>, hwnd: isize) {
+    std::thread::spawn(move || {
+        let start = crate::state::monotonic_ms();
+        loop {
+            if crate::state::monotonic_ms().saturating_sub(start) >= SWITCH_ANIM_MS {
+                break;
+            }
+            // ⛔ 跨线程只投递：`UpdateLayeredWindow` / GDI 都属创建线程（主线程）
+            // ⚠️ 句柄用 `isize` 传（与 `refresh_async` 同款）：`*mut c_void` 不是 `Send`，
+            //   编译器会直接拒绝；句柄本身只是整数，跨线程传值安全，
+            //   真正保证「只在主线程碰窗口」的是**用法**——本线程只 `PostMessageW`。
+            unsafe { ffi::post_refresh(hwnd as *mut core::ffi::c_void) };
+            // ⚠️ 这里**必须**用 `thread::sleep`：`tokio::time::sleep` 在没有
+            //   运行时的真线程里会 panic（AGENTS.md 明确写了这条反向纪律）
+            std::thread::sleep(std::time::Duration::from_millis(SWITCH_ANIM_FRAME_MS));
+        }
+        // 收尾也回主线程：释放缓存位图 + 清状态 + 补一帧常规重绘
+        unsafe { ffi::post_switch_end(hwnd as *mut core::ffi::c_void) };
+        drop(guard);
+    });
+}
+
+/// **主线程**收尾：释放缓存位图 → 清状态 → 补一帧常规重绘。
+#[cfg(target_os = "windows")]
+fn finish_switch_anim(hwnd: *mut core::ffi::c_void) {
+    // ⚠️ 先清标志再释放：反过来的话，释放途中若有重绘进来会看到
+    //   「状态已清 ⇒ 走常规路径」但位图正在被 free 的窗口。
+    SWITCH_ANIM_STARTED.store(0, Ordering::SeqCst);
+    let taken = {
+        let mut slot = crate::state::lock_unpoisoned(&ANIM_FRAMES);
+        slot.take()
+    };
+    let from = panel_from_code(SWITCH_ANIM_FROM_CODE.swap(PANEL_CODE_NONE, Ordering::SeqCst));
+    let to = panel_from_code(SWITCH_ANIM_TO_CODE.swap(PANEL_CODE_NONE, Ordering::SeqCst));
+    if let Some(f) = taken {
+        unsafe {
+            ffi::free_dib(&f.from);
+            ffi::free_dib(&f.to);
+        }
+    }
+    if crate::config::verbose_log_enabled() {
+        append_verbose_log(&format!("[widget] 切换动画结束: {from:?} → {to:?}"));
+    }
+    // 终态（p=1）与「新面板的常规帧」逐像素等价 ⇒ 这一帧不会「跳一下」
+    repaint_from_snapshot(hwnd);
+}
+
+/// **主线程**合成一帧动画（两块缓存位图错位叠加）。
+fn draw_switch_transition(hwnd: *mut core::ffi::c_void) -> bool {
+    let started = SWITCH_ANIM_STARTED.load(Ordering::SeqCst);
+    // 读视图带出锁外；真正的 `Dib` 仍留在锁里，由 `finish_switch_anim` 释放
+    let (from, to, rel_x) = {
+        let slot = crate::state::lock_unpoisoned(&ANIM_FRAMES);
+        let Some(f) = slot.as_ref() else {
+            return false;
+        };
+        (DibView::of(&f.from), DibView::of(&f.to), f.rel_x)
+    };
+
+    let slide = to.w;
+    let p = switch_progress(started, crate::state::monotonic_ms(), SWITCH_ANIM_MS);
+    let (from_dx, to_dx, from_mul) = switch_offsets(p, slide);
+    let w = slide;
+    let h = from.h.max(to.h);
+
+    let Some(frame) = (unsafe { ffi::create_dib(w, h) }) else {
+        append_log("[widget] 切换动画: 帧 DIB 创建失败");
+        return false;
+    };
+    let ok = unsafe {
+        let px = std::slice::from_raw_parts_mut(frame.bits, (w * h) as usize);
+        px.fill(0);
+        if from_mul > 0 {
+            blit_premul_scaled(
+                px,
+                w,
+                h,
+                std::slice::from_raw_parts(from.bits, (from.w * from.h) as usize),
+                from.w,
+                from.h,
+                from_dx,
+                from_mul,
+            );
+        }
+        // 新面板**不透明**地压在上面：它才是终态那一帧该看到的东西
+        blit_premul_scaled(
+            px,
+            w,
+            h,
+            std::slice::from_raw_parts(to.bits, (to.w * to.h) as usize),
+            to.w,
+            to.h,
+            to_dx,
+            256,
+        );
+        let ok = ffi::commit(hwnd as _, &frame, rel_x, widget_y_offset());
+        ffi::free_dib(&frame);
+        ok
+    };
+    if crate::config::verbose_log_enabled() {
+        append_verbose_log(&format!(
+            "[widget] 切换动画帧: p={p:.3} 旧dx={from_dx} 强度={from_mul}/256 新dx={to_dx} 帧宽={w}"
+        ));
+    }
+    ok
+}
+
 /// 执行一次音乐面板的点击。
 #[cfg(target_os = "windows")]
-pub fn activate_music(hit: MusicHit) {
+pub fn activate_music(hwnd: *mut core::ffi::c_void, hit: MusicHit) {
+    if switch_anim_active() {
+        return;
+    }
     match hit {
         MusicHit::Prev => crate::taskbar_music::cmd_previous(),
         MusicHit::PlayPause => crate::taskbar_music::cmd_play_pause(),
         MusicHit::Next => crate::taskbar_music::cmd_next(),
-        MusicHit::Switch => advance_switch_target(),
+        MusicHit::Switch => advance_switch_target(hwnd),
         MusicHit::None => {}
     }
 }
@@ -400,6 +965,15 @@ fn hit_rect(r: Option<windows_sys::Win32::Foundation::RECT>, local: (i32, i32)) 
     local.0 >= r.left && local.0 < r.right && local.1 >= r.top && local.1 < r.bottom
 }
 
+/// 音乐面板正文区（文字 / 三键）的左缘 —— **静态与 hover 共用这一个入口**。
+///
+/// ⛔ 分成两处写就是「切形态时横向跳」那类闪的来源：两处一旦漂移，肉眼只看到
+///   「动一下指针内容就错位」，几乎无法定位。
+#[cfg(target_os = "windows")]
+fn music_body_x(m: &Metrics) -> i32 {
+    m.pad_x + m.icon + m.dip(MUSIC_COVER_GAP_DIP)
+}
+
 /// 音乐面板绘制（**主线程**）。
 ///
 /// 形态（用户 2026-09-28 指定）：
@@ -412,6 +986,18 @@ fn hit_rect(r: Option<windows_sys::Win32::Foundation::RECT>, local: (i32, i32)) 
 ///   而**宽窗口包含窄窗口** ⇒ 变宽后光标必仍在内 ⇒ 不会「变宽→出界→变窄」的振荡。
 #[cfg(target_os = "windows")]
 pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
+    draw_music_render(hwnd, true).committed_ok()
+}
+
+/// [`draw_music`] 的本体。`publish = false` 时**只画不提交**：
+/// 面板切换动画要把**旧面板**也画一份留作滑走的起点，而那块位图
+/// **绝不能提交**（一提交就等于「面板瞬间换掉了」，动画等于没播）。
+///
+/// ⚠️ 此时还必须跳过 `publish_music_layout` / `publish_item_rects`：
+///   发布的是**动画中间态**的坐标 ⇒ 命中测试会照着移动中的矩形判定，
+///   用户的点击会落在「已经滑走」的位置上。
+#[cfg(target_os = "windows")]
+fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let dark = crate::windows::system_dark_mode();
     let m = Metrics::current_content();
     let snap = crate::taskbar_music::snapshot();
@@ -420,15 +1006,15 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
 
     // ── 建字体 + 测量（与设备面板同一套度量/测量入口）────────────────
     let (font, memdc) = unsafe {
-        // ⚠️ **不加粗**（用户 2026-09-29）。设备面板的「电量 / 音量」是数字 + `%`，
-        //   加粗能提可读性（用户 2026-09-25 的要求，仍保留在 `draw_items`）；
+        // ⚠️ **不加粗**（用户 2026-09-29）。设备面板的「电量 / 音量」曾按 2026-09-25
+        //   的要求加粗，同日用户又要求设备面板一并取消 ⇒ 现在两侧同为常规字重；
         //   但歌名 / 歌手是**连续文字**，加粗后 Segoe UI Variable Text 在 15px 下
         //   笔画粘连、字腔变窄，观感偏「糊成一团」。
         //   ⭐ 顺带与 **tooltip 对齐**了：tooltip 走 `create_font_cleartype(.., false)`
         //   本来就是常规字重，之前面板加粗 / tooltip 常规 ⇒ 同一首歌在两处粗细不一。
         let f = ffi::create_font(m.font, false);
         if f.is_null() {
-            return draw_blank(hwnd, m.pad_x * 2);
+            return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
         }
         let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
         let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
@@ -437,7 +1023,7 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
     };
     if memdc.is_null() {
         unsafe { ffi::destroy_font(font) };
-        return draw_blank(hwnd, m.pad_x * 2);
+        return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
     }
 
     let title_wide: Vec<u16> = if cur.title.is_empty() {
@@ -462,8 +1048,33 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
     //     用户 2026-09-28 复核后要求改回。三键占满高度是它**自身线稿太细**所致
     //     （内部元素 25.6/1024 ⇒ 32px 下 0.8px），与切换图标无关，两者不必一起改。
     let switch_px = m.icon;
-    let gap = m.item_gap;
-    let text_w = t_nat.min(m.item_max_w).max(a_nat.min(m.item_max_w));
+    // ⭐ **所有间隙一律 = `m.icon_text_gap`**（用户 2026-09-29：「缩短三键的间距，
+    //   改为和封面到上一首按钮的间距一致」）。
+    //   ⛔ 末段（下一首→切换）的**基准值**也用它：否则最短宽度下会出现
+    //   「5 / 5 / 5 / 13」这种一眼可见的不齐（撑长的余量仍然只加在末段）。
+    //   原先用 `m.item_gap`（10 DIP）⇒ 125% 下 13px，比 5px 宽一倍多。
+    let gap = m.icon_text_gap;
+
+    // ⭐ **封面右侧的间隙另算，比按键之间宽**（用户 2026-09-29：「把封面到上一首
+    //   按钮和到两排文字的距离同时增加一些」）。
+    //   · `gap`       = 按键↔按键、末段基准（保持 5px 不变）
+    //   · `cover_gap` = 封面↔文字（静态）/ 封面↔第一键（hover）
+    //   两种形态的正文都从封面右缘起算 ⇒ **必须同值**，否则切形态时文字/按键
+    //   会横向跳一下。
+    //   ⛔ 不复用 `m.icon_text_gap`：那是**设备面板**共用的（封面↔电量文字），
+    //     改它会连带把设备面板间距也改掉 ⇒ 音乐面板单开一个 DIP。
+    let cover_gap = m.dip(MUSIC_COVER_GAP_DIP);
+    // ⛔⛔ 文字宽度**上限必须大于「固定段」**，否则「撑长」永远看不到
+    //   （用户 2026-09-29 实测报「没变化啊」）。
+    //   根因：原先复用了 `m.item_max_w`（= 150 DIP，**给设备面板的电量/音量
+    //   那几行短数字设计的**）⇒ 125% 下上限 188px，而固定段（三键 3×50 + 间隙
+    //   2×13）已有 176px ⇒ **最多只能撑 12px**，肉眼根本看不出来。
+    //   ⇒ 音乐面板用自己的上限 `MUSIC_TEXT_MAX_W_DIP`，并强制它**大于固定段**。
+    const MUSIC_TEXT_MAX_W_DIP: i32 = 320; // 125% 下 400px，够长的歌名也能撑开
+    let text_cap = m.dip(MUSIC_TEXT_MAX_W_DIP);
+    let strip_w_guess = m.h * 3 + gap * 2;
+    let text_cap = text_cap.max(strip_w_guess + m.h * 2);
+    let text_w = t_nat.min(text_cap).max(a_nat.min(text_cap));
 
     // ⭐⭐ **组件宽度恒定：正文区宽度只按静态形态定一次，两种形态共用**
     //   （用户 2026-09-28：「以当前非 hover 时的长度为准，让 hover 时的长度固定一致」）。
@@ -473,18 +1084,42 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
     //   ⚠️ 代价（可接受、且是这条要求的直接推论）：三键的边长不再恒为 `m.h`，
     //   而要**在同一条带内均分**（下式）。`min(.., m.h)` 保证标题很长时也不会
     //   超过控件高度。
-    let body_w = m.icon + m.icon_text_gap + text_w;
-    let btn = ((body_w - gap * 2) / 3).clamp(1, m.h);
+    // ⭐⭐ **封面 ↔ 三键的间距恒定**（用户 2026-09-29 明确要求）：
+    //   「封面-音乐控制3键之间固定间距，固定后的音乐组件总宽度就是最短宽度，
+    //     当音乐信息长度超过这个长度后则撑长音乐组件长度，
+    //     但仍不改变封面-音乐控制3键之间的间距，
+    //     只改变下一首按钮到切换按钮之间的间距」
+    //
+    // ⇒ 三键**固定边长**（不再随歌名均分），撑长出来的余量**全部**落在
+    //   「下一首 → 切换」那一段；静态形态则由文字吃掉同一段余量。
+    // ⇒ `body_w` 取 `max(文字宽, 固定段宽)`：文字短于固定段时组件就是**最短宽度**。
+    //
+    // ⚠️ 顺带修掉一个一直存在的重复计数：旧式把 `m.icon + m.icon_text_gap`
+    //   **又加了一遍**（`body_w` 本该只是正文区），导致文字与切换键之间恒定多出
+    //   一段死空白。现在这段空白变成了规格里那个「可变间距」。
+    // ⭐ 固定边长 = **封面边长**（`m.icon`），不放大（用户 2026-09-29：「不要让三键变大」）。
+    //
+    // ⚠️⚠️ 格子与图标尺寸必须**一致**（这一条踩过两次）：
+    //   · 格子 `m.h`(50) 而图标按 `m.icon`(40) 画 ⇒ 每格四周空 5px，
+    //     「两键之间」的**视觉**间隙 = 5+5+5+5 = 15px，而「封面↔第一键」只有
+    //     5+5 = 10px ⇒ 代码同一口径、看上去却三键更散（用户报「缩短三键之间的间距」）。
+    //   · 反过来把图标放大到填满 50px 格子 ⇒ 间隙对了，但按键**变大了**（用户不要）。
+    //   ⇒ 正解：**格子也用 `m.icon`**，图标填满格子，视觉间隙 == `gap` 本身，
+    //     而按键尺寸保持不变。
+    let btn = m.icon;
+    let strip_w = btn * 3 + gap * 2; // 固定段（hover 形态下三键占的宽度）
+    debug_assert!(text_cap > strip_w, "文字上限必须大于固定段，否则撑长不可见");
+    let body_w = text_w.max(strip_w);
     let show_switch = switch_visible(crate::config::TaskbarPanel::Music);
     let switch_w = if show_switch { switch_px + gap } else { 0 };
-    let content_w = m.icon + m.icon_text_gap + body_w + switch_w;
+    let content_w = m.icon + cover_gap + body_w + switch_w;
     let desired_w = content_w + m.pad_x * 2;
     if !SLOT_VALID.load(Ordering::Acquire) {
         unsafe {
             ffi::hide(hwnd as _);
             ffi::destroy_font(font)
         };
-        return true;
+        return Painted::Committed(true);
     }
     let (position, locked, custom_x) = crate::config::with_config(|c| {
         (
@@ -516,8 +1151,10 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
     //   还是根本没走定位。**两个面板的诊断口径必须对称**。
     if crate::config::verbose_log_enabled() {
         append_log(&format!(
-            "[widget] 定位: pos={position} locked={locked} area=({slot_rel_x},w={slot_w})              content_w={total_w} 余量={} → rel_x={rel_x} panel=Music hovered={hovered}              键={btn}px 切换={switch_px}px",
+            "[widget] 定位: pos={position} locked={locked} area=({slot_rel_x},w={slot_w})              content_w={total_w} 余量={} → rel_x={rel_x} panel=Music hovered={hovered}              键={btn}px 切换={switch_px}px              文字={text_w} 固定段={strip_w} 正文={body_w} 末段={}",
             slot_w - total_w,
+            // ⭐ 末段间距（下一首 → 切换）：撑长时**只有它**会变宽
+            body_w - strip_w + gap,
         ));
     }
     unsafe { ffi::show(hwnd as _) };
@@ -527,14 +1164,14 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
     let Some(dib) = (unsafe { ffi::create_dib(total_w, h) }) else {
         append_log("[widget] 音乐面板 CreateDIBSection 失败");
         unsafe { ffi::destroy_font(font) };
-        return false;
+        return Painted::Committed(false);
     };
 
     // ── 布局一次算清并发布（绘制与命中共用这一份）───────────────────
     let mut item_rect = windows_sys::Win32::Foundation::RECT {
         left: m.pad_x,
         top: 0,
-        right: m.pad_x + m.icon + m.icon_text_gap + body_w,
+        right: m.pad_x + m.icon + cover_gap + body_w,
         bottom: h,
     };
     let mut buttons = [windows_sys::Win32::Foundation::RECT {
@@ -545,9 +1182,10 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
     }; 3];
     let mut switch_btn = None;
     if hovered {
-        // 均分后的余数**居中**（不分给某一侧）⇒ 视觉上不偏
-        let group_w = btn * 3 + gap * 2;
-        let mut x = item_rect.left + m.icon + m.icon_text_gap + (body_w - group_w) / 2;
+        // ⭐ 三键**顶格左对齐**排布：余量不摊给它们，而是全留给「下一首 → 切换」那一段
+        //   （见上面 `body_w` 那段规格）。**不能居中**——居中会让封面到第一个键的
+        //   距离随歌名变化，正是用户要求恒定的那一段。
+        let mut x = music_body_x(&m);
         for slot in buttons.iter_mut() {
             *slot = windows_sys::Win32::Foundation::RECT {
                 left: x,
@@ -576,18 +1214,20 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
     } else {
         format!("{}\n{}", cur.title, cur.artist)
     };
-    publish_music_layout(MusicLayout {
-        item: item_rect,
-        buttons,
-        switch_btn,
-        hovered,
-    });
+    if publish {
+        publish_music_layout(MusicLayout {
+            item: item_rect,
+            buttons,
+            switch_btn,
+            hovered,
+        });
+    }
     // ⭐ **同时发布 `LAST_ITEM_RECTS`**：音乐面板也必须走**同一条** hover 轮询与
     //   tooltip 锚点路径（`hovered_item_index` / `item_rect_on_screen` 都读它）。
     //   不发布 ⇒ hover 永远判不出「落在第几项」⇒ 提示不出现、且没有任何报错
     //   （这正是 `LAST_ITEM_RECTS` 当初被立为「四路同源单一来源」的原因）。
     //   下标语义：`[0]` = 面板主体，`[1]` = 切换按钮（若有）。
-    {
+    if publish {
         let mut rects = vec![item_rect];
         if let Some(sb) = switch_btn {
             rects.push(sb);
@@ -634,7 +1274,7 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
             }
         }
 
-        let body_x = item_rect.left + m.icon + m.icon_text_gap;
+        let body_x = music_body_x(&m);
         if hovered {
             // ② 三键：不可用的键画**半透明**（与 FluentFlyout 一致：不隐藏、只置灰）
             let slots = [
@@ -655,9 +1295,24 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
                     1 => cur.can_play_pause,
                     _ => cur.can_next,
                 };
-                let scale = if enabled { 1.0f32 } else { 0.5f32 };
+                // ⭐ 「按下变灰」（用户 2026-09-29）：不可用档 0.5，按下再乘 0.55。
+                //   两个维度**相乘**而不是二选一 —— 不可用的键同时按下时仍然更暗，
+                //   不会出现「按下反而变亮」。
+                let scale = if enabled { 1.0f32 } else { 0.5f32 }
+                    * if pressed_id() == music_btn_id(i) {
+                        0.55f32
+                    } else {
+                        1.0f32
+                    };
+                // ⭐⭐ 图标必须按**格子尺寸 `btn`** 画，不能按 `m.icon`。
+                //   两者不等时每格四周会空出 `(btn − m.icon)/2`（125% 下 5px），
+                //   于是「两键之间的**视觉**间隙」= 内部留白×2 + 基准间隙
+                //   = 5+5+5+5 = **20px**，而「封面↔第一键」只有 5+5 = 10px
+                //   ⇒ 明明代码里两处用的是同一个 `gap`，看上去三键却明显更散
+                //   （用户 2026-09-29 报「缩短三键之间的间距」）。
+                //   按 `btn` 画满格子后，视觉间隙 == `gap` 本身。
                 if let Some(scaled) = music_icons::get(slots[i], dark)
-                    .and_then(|r| music_icons::scale_to_slot(slots[i], r, m.icon as u32))
+                    .and_then(|r| music_icons::scale_to_slot(slots[i], r, btn as u32))
                 {
                     let (ipx, iw, ih) = scaled;
                     for yy in 0..(ih as i32).min(h - slot.top) {
@@ -726,7 +1381,13 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
                 for yy in 0..(ih as i32).min(h - sb.top) {
                     for xx in 0..(iw as i32).min(total_w - sb.left) {
                         let si = ((yy * iw as i32 + xx) * 4) as usize;
-                        let a = ipx[si + 3] as u32;
+                        // ⭐ 按下变灰（用户 2026-09-29）
+                        let press = if pressed_id() == PRESS_MUSIC_SWITCH {
+                            0.55f32
+                        } else {
+                            1.0f32
+                        };
+                        let a = (ipx[si + 3] as f32 * press).round() as u32;
                         if a == 0 {
                             continue;
                         }
@@ -760,12 +1421,15 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
         crate::taskbar_tooltip::sync(hwnd as _, &entries);
     }
 
-    unsafe { ffi::commit(hwnd, &dib, rel_x, widget_y_offset()) };
-    unsafe {
-        ffi::free_dib(&dib);
-        ffi::destroy_font(font)
-    };
-    true
+    // ⚠️ 字体必须在这里销毁：动画路径（`publish = false`）不走下面的提交/释放，
+    //   每帧漏一个 `destroy_font` 就会把 GDI 字体对象泄漏光。
+    unsafe { ffi::destroy_font(font) };
+    if !publish {
+        return Painted::Bitmap(dib, rel_x);
+    }
+    let ok = unsafe { ffi::commit(hwnd, &dib, rel_x, widget_y_offset()) };
+    unsafe { ffi::free_dib(&dib) };
+    Painted::Committed(ok)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -810,6 +1474,14 @@ const ICON_TEXT_GAP_DIP: i32 = 4;
 /// 设备之间的水平间隔（DIP）。
 #[cfg(target_os = "windows")]
 const ITEM_GAP_DIP: i32 = 10;
+
+/// 音乐面板：**封面右缘 → 正文**（文字 / 三键）的间隙（DIP）。
+///
+/// ⭐ 独立于设备面板的 `ICON_TEXT_GAP_DIP`：那个是「封面↔电量/音量文字」共用的，
+///   改它会连带改到设备面板（用户 2026-09-29 只要求改音乐面板）。
+/// ⛔ 静态形态（文字）与 hover 形态（三键）**必须同值**，否则来回移指针时
+///   内容会横向跳一下。
+const MUSIC_COVER_GAP_DIP: i32 = 8;
 
 /// 单段文本的宽度上限（DIP）—— 极端长文本截断显示，避免挤压其它设备。
 #[cfg(target_os = "windows")]
@@ -1184,6 +1856,12 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     //   下标空间与之**完全不同**（封面+三键=1 项，可能还有切换按钮）⇒ 不设闸就会
     //   「在音乐面板上滚滚轮，把**别的设备**的音量改了」，而且**不报错、日志正常**
     //   ——这是本仓最怕的那类静默失效。
+    // ⚠️ 动画期间同样不受理：此刻 `current_panel()` 已是**新**面板，
+    //   而 `LAST_ITEM_RECTS` 还是**旧**面板的矩形 ⇒ 下标空间与数据源错位，
+    //   与上面那条闸是同一类静默失效。
+    if switch_anim_active() {
+        return false;
+    }
     if !matches!(current_panel(), Some(crate::config::TaskbarPanel::Devices)) {
         if crate::config::verbose_log_enabled() {
             append_log(&format!(
@@ -1383,7 +2061,8 @@ mod snapshot {
 #[cfg(target_os = "windows")]
 use crate::process::{append_log, append_verbose_log, to_wide};
 #[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, AtomicU8, Ordering};
+use std::sync::Mutex;
 
 /// widget 的窗口句柄（0 = 未创建）。供诊断与后续维护线程读取。
 #[cfg(target_os = "windows")]
@@ -1430,6 +2109,16 @@ const WM_APP_RAISE: u32 = 0x8000 + 2;
 /// ⛔ 单独一条消息而不是复用 `WM_APP_REFRESH`：定位**不涉及重绘**，
 ///   混进去会让「仅切换悬停设备」也触发一整帧 DIB 重建（4~6ms + 逐像素合成）。
 const WM_APP_TOOLTIP_SHOW: u32 = 0x8000 + 3;
+
+/// 「面板切换动画播完了」——由动画线程在最后一帧后投递。
+///
+/// ⛔ 必须**独立成一条消息**，不能靠「驱动线程把 `SWITCH_ANIM_STARTED` 清零」
+///   就完事：清零发生在**后台线程**，而缓存的两张面板位图是 GDI 对象、
+///   `rel_x` 也要在主线程算 ⇒ 清理与收尾帧必须回到主线程做。
+///   若让后台线程直接清状态，主线程会「在动画已停、状态已清」的窗口里
+///   收到一帧刷新请求 ⇒ 走常规路径重画（其实也对），但缓存位图就**没人释放**了
+///   ⇒ 每切一次泄漏两张 DIB（DC + HBITMAP），切几十次后耗尽 GDI 资源。
+const WM_APP_SWITCH_END: u32 = 0x8000 + 4;
 
 /// 防抖状态：`true` = 已有一次刷新在路上（**合并窗口**）。
 ///
@@ -1592,7 +2281,7 @@ pub(crate) mod ffi {
     #[cfg(target_os = "windows")]
     const DT_END_ELLIPSIS: u32 = 0x0000_8000;
 
-    use super::{Metrics, WM_APP_RAISE, WM_APP_REFRESH, WM_APP_TOOLTIP_SHOW};
+    use super::{Metrics, WM_APP_RAISE, WM_APP_REFRESH, WM_APP_SWITCH_END, WM_APP_TOOLTIP_SHOW};
     use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW,
@@ -1753,6 +2442,14 @@ pub(crate) mod ffi {
     /// ⚠️ 投递失败（窗口已销毁）静默忽略 —— 属「无状态后果」类，下一次兜底会补上。
     pub unsafe fn post_refresh(hwnd: HWND) {
         PostMessageW(hwnd, WM_APP_REFRESH, 0, 0);
+    }
+
+    /// 投递给主线程：**面板切换动画已播完，请收尾**（释放缓存位图 + 清状态）。
+    ///
+    /// ⛔ 同样只投递、不碰窗口 —— 缓存的 DIB 是在主线程建的，
+    ///   释放走主线程才与「窗口/GDI 属主线程」这条一致。
+    pub unsafe fn post_switch_end(hwnd: HWND) {
+        PostMessageW(hwnd, WM_APP_SWITCH_END, 0, 0);
     }
 
     /// 请求**显示**第 `index` 条提示。**任意线程可调**（只投递，不碰窗口）。
@@ -1944,8 +2641,11 @@ pub(crate) mod ffi {
     ///   `ANTIALIASED_QUALITY(4)`，得到灰度抗锯齿。
     /// 建字体。`bold` ⇒ `FW_BOLD`（700），否则 `FW_NORMAL`（400）。
     ///
-    /// ⭐ 用户 2026-09-25 要求「电量、音量信息文字加粗」—— 11px 的细体在浅色任务栏上
-    ///   笔画偏虚，加粗后两行数字/`%` 的可读性明显更好。
+    /// ⭐ `bold` 参数目前**两个调用点都传 `false`**（用户 2026-09-29：设备面板与
+    ///   音乐面板文字都取消加粗，tooltip 一直是常规字重 ⇒ 三处统一）。
+    ///   ⚠️ **别把它当成死参数**：2026-09-25 曾要求「电量/音量加粗」（理由是 11px 细体
+    ///   在浅色任务栏上偏虚），2026-09-29 又推翻 —— 说明这条是**观感取舍、不是技术上不可行**，
+    ///   换字体后基础条件变了结论就会变，改前先量一下实际效果。
     /// ⚠️ 加粗会让文本**变宽**：`measure_text` 与绘制共用同一个 HFONT，
     ///   故排版宽度自动跟着变（这正是「测量与绘制必须同字体」那条纪律的收益）。
     /// 面板用的字体族（**带回落**，Win10 上必须能降级）。
@@ -2101,6 +2801,13 @@ pub(crate) mod ffi {
             super::repaint_from_snapshot(hwnd);
             return 0;
         }
+        if msg == WM_APP_SWITCH_END {
+            // ⭐ 收尾**必须**在主线程：释放缓存的两张面板位图（GDI 对象）、
+            //   清动画状态、补一帧常规重绘。后台线程直接清状态的话，
+            //   这两张 DIB 就没有释放时机 ⇒ 每切一次泄漏一次。
+            super::finish_switch_anim(hwnd);
+            return 0;
+        }
         if msg == WM_APP_RAISE {
             // ⭐ 幂等：已经是最顶兄弟 ⇒ 什么都不做（维护节拍是 2s，绝不能让每次
             //    维护都写一次 Z 序 —— 那会引发无谓的重新合成）。
@@ -2130,7 +2837,9 @@ pub(crate) mod ffi {
                 super::item_rect_count(),
                 super::window_screen_rect(hwnd)
             ));
-            if idx < 0 {
+            // ⛔ 动画期间**不弹**提示：`LAST_ITEM_RECTS` 还是**上一帧**的坐标，
+            //   而画面上内容正在横向移动 ⇒ 提示会停在已经滑走的位置上。
+            if idx < 0 || super::switch_anim_active() {
                 crate::taskbar_tooltip::hide();
             } else if (idx as usize) <= 32 {
                 crate::taskbar_tooltip::show(idx as usize);
@@ -2152,6 +2861,10 @@ pub(crate) mod ffi {
             // ⭐ 记按下点与时刻（供 UP 时区分「点击」与「拖拽」——音乐面板的按钮
             //   靠点击触发，而 `drag_begin` 是**无条件** SetCapture 的）
             super::press_record();
+            // ⭐ 记下按到哪个按钮（用户 2026-09-29：按下要变灰）。
+            //   ⛔ **必须在 `drag_begin` 之前**：`drag_begin` 会 `SetCapture`，
+            //   而 `SetCapture` 可能立刻触发 `WM_CAPTURECHANGED`（见下）把状态清掉。
+            super::press_begin(hwnd);
             if super::drag_begin(hwnd) {
                 return 0;
             }
@@ -2163,13 +2876,24 @@ pub(crate) mod ffi {
             //   `drag_finish` 会清 `DRAG_ACTIVE` 并把落点写进配置；若它先跑，
             //   「点一下按钮」会被当成「在原地松手」= 拖拽结束 ⇒ 位置被记一次
             //   （无害），但反过来（先判点击）才能拿到按下时的局部坐标。
+            // ⛔ **先清按下态再判点击**：清早了会让这一帧的重绘看不到「按下」，
+            //   用户根本看不到变灰效果；清晚（同理）则会闪一帧不消失的灰。
+            //   这里先算、再清、再触发动作，`post_refresh` 只在状态真变时发。
             if let Some(local) = super::press_take_click() {
-                super::on_click(local);
+                super::set_pressed(super::PRESS_NONE, hwnd);
+                super::on_click(hwnd, local);
+            } else {
+                super::set_pressed(super::PRESS_NONE, hwnd);
             }
             super::drag_finish(hwnd);
         } else if msg == WM_CAPTURECHANGED {
             // 捕获被别处抢走（任务栏抢焦点、其它窗口 `SetCapture`…）：
             // 窗口停在哪就记哪 —— 总比丢掉位置强。非拖拽期间到达则直接返回。
+            //
+            // ⭐⭐ 这里**必须**清按下态（用户 2026-09-29 的「按下变灰」）：
+            //   捕获被抢走时**不会**有 `WM_LBUTTONUP` 到来 ⇒ 漏清的话按钮会
+            //   **永久停在按下态**，而画面上没有任何东西会再去纠正它。
+            super::set_pressed(super::PRESS_NONE, hwnd);
             super::drag_finish(hwnd);
         }
         DefWindowProcW(hwnd, msg, wp, lp)
@@ -3817,6 +4541,12 @@ fn drag_finish(hwnd: *mut core::ffi::c_void) {
 ///   让窗口先以正确尺寸出现，避免「挂上去但尺寸是建窗时的 1×WIDGET_H」。
 #[cfg(target_os = "windows")]
 fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
+    draw_items_render(hwnd, items, true).committed_ok()
+}
+
+/// [`draw_items`] 的本体，语义同 [`draw_music_render`]（`publish = false` 只画不提交）。
+#[cfg(target_os = "windows")]
+fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish: bool) -> Painted {
     let dark = crate::windows::system_dark_mode();
     // ⭐ 本帧的布局度量（DIP → 物理像素）。**测量与绘制共用同一份** ⇒ 不会漂移。
     // ⛔ 必须走 `current_content`：底衬（`h`/`radius`）按系统 DPI、内容按
@@ -3826,17 +4556,22 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
 
     // 空快照：不画任何东西，但仍提交一帧（保持窗口有效且全透明）
     if items.is_empty() {
-        return draw_blank(hwnd, m.pad_x * 2);
+        return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
     }
 
     // ── 先在**测量用 DC** 上量出每段文本宽度 ────────────────────────────
     // ⚠️ 测量与绘制必须用**同一个字体 + 同样的 DrawTextW 标志**，
     //    否则会出现「按测量宽度排版、实际文本更长」⇒ 相邻项重叠（见 measure_text 注释）。
     let (font, memdc) = unsafe {
-        let f = ffi::create_font(m.font, true); // 加粗（用户 2026-09-25）
+        // ⚠️ **不加粗**（用户 2026-09-29：「设备信息组件的文字也取消加粗」）。
+        //   这**推翻了 2026-09-25 的「电量/音量加粗」**：当时的理由是「11px 细体在浅色
+        //   任务栏上偏虚」，但换过 Segoe UI Variable Text 之后细体并不虚，
+        //   加粗反而让数字与 `%` 在 15px 下显得糊、且整块面板比 tooltip 更重。
+        //   ⇒ 现在**三处口径统一为常规字重**：设备面板 / 音乐面板 / tooltip。
+        let f = ffi::create_font(m.font, false);
         if f.is_null() {
             append_log("[widget] CreateFontW 失败，退回空白帧");
-            return draw_blank(hwnd, m.pad_x * 2);
+            return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
         }
         let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
         let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
@@ -3845,7 +4580,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     };
     if memdc.is_null() {
         unsafe { ffi::destroy_font(font) };
-        return draw_blank(hwnd, m.pad_x * 2);
+        return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
     }
 
     // ── 每项：图标 + 两段文本（右上电量 / 右下音量），各自测量宽度 ──────
@@ -3915,7 +4650,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     if !SLOT_VALID.load(Ordering::Acquire) {
         unsafe { ffi::hide(hwnd as _) };
         unsafe { ffi::destroy_font(font) };
-        return true;
+        return Painted::Committed(true);
     }
     // ⚠️ 位置配置**在绘制前一次性取快照**（返回 owned 值）⇒ 锁在 GDI 调用之前就已释放，
     //    不会「持配置锁去做窗口操作」（AGENTS.md 的 AB/BA 死锁纪律）。
@@ -3983,7 +4718,7 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     let Some(dib) = (unsafe { ffi::create_dib(total_w, h) }) else {
         append_log("[widget] CreateDIBSection 失败");
         unsafe { ffi::destroy_font(font) };
-        return false;
+        return Painted::Committed(false);
     };
 
     unsafe {
@@ -4093,7 +4828,13 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
                 for yy in 0..(ih as i32).min(h - sb.top) {
                     for xx in 0..(iw as i32).min(total_w - sb.left) {
                         let si = ((yy * iw as i32 + xx) * 4) as usize;
-                        let a = ipx[si + 3] as u32;
+                        // ⭐ 按下变灰（用户 2026-09-29；设备面板的切换键）
+                        let press = if pressed_id() == PRESS_DEV_SWITCH {
+                            0.55f32
+                        } else {
+                            1.0f32
+                        };
+                        let a = (ipx[si + 3] as f32 * press).round() as u32;
                         if a == 0 {
                             continue;
                         }
@@ -4122,6 +4863,15 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
     //   ⇒ 首帧若在此之前发布布局，锚点 x 就是 0 ⇒ **提示闪现在屏幕最左端**。
     //   （真机实测：日志里 `窗=(-14,1324)` 与 `窗=(1109,1324)` 交替出现。）
     //   ⇒ 顺序即契约：**先落位，再发布**。
+    //
+    // ⚠️ 动画路径（`publish = false`）必须**在第一次 commit 之前**就返回：
+    //   下面这两次提交都是真提交（会立刻改变窗口表面），一提交
+    //   「旧面板」就被画上屏了 ⇒ 还没开始滑就已经换掉，动画等于没播。
+    //   顺带也跳过了后面整段「落位后发布给 tooltip」——那正是要跳过的。
+    if !publish {
+        unsafe { ffi::destroy_font(font) };
+        return Painted::Bitmap(dib, rel_x);
+    }
     let ok = unsafe { ffi::commit(hwnd as _, &dib, rel_x, widget_y_offset()) };
     if !ok {
         let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
@@ -4177,16 +4927,10 @@ fn draw_items(hwnd: *mut core::ffi::c_void, items: &[WidgetItem]) -> bool {
         crate::taskbar_tooltip::dev_force_show(hwnd as _);
     }
 
+    unsafe { ffi::destroy_font(font) };
     let ok = unsafe { ffi::commit(hwnd as _, &dib, rel_x, widget_y_offset()) };
-    if !ok {
-        let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-        append_log(&format!("[widget] UpdateLayeredWindow 失败: err={}", err));
-    }
-    unsafe {
-        ffi::free_dib(&dib);
-        ffi::destroy_font(font);
-    }
-    ok
+    unsafe { ffi::free_dib(&dib) };
+    Painted::Committed(ok)
 }
 
 /// 提交一帧**全透明**的位图（用于「无数据」与「失败回退」）。
@@ -4218,6 +4962,12 @@ fn draw_blank(hwnd: *mut core::ffi::c_void, w: i32) -> bool {
 /// **主线程**重绘入口：读快照 → 绘制。由 `wnd_proc` 收到 `WM_APP_REFRESH` 时调用。
 #[cfg(target_os = "windows")]
 fn repaint_from_snapshot(hwnd: *mut core::ffi::c_void) {
+    // ⭐ 动画期间走**合成路径**，不读快照、不分派面板。
+    //   合成失败（位图被提前释放、帧 DIB 建不出来）时**落回常规路径**——
+    //   宁可「动画没播完就切了」，也不能把窗口留在一张坏帧上。
+    if switch_anim_active() && draw_switch_transition(hwnd) {
+        return;
+    }
     // ⭐ **按面板分派**：音乐面板的数据来自 SMTC 快照（不是设备快照），
     //   两者形状完全不同（`WidgetItem` 是「一台设备」，音乐面板是「一块面板」）。
     //   ⛔ 分派必须与 `should_show` / `advance_switch_target` 用**同一个** `current_panel()`
@@ -5068,6 +5818,241 @@ pub fn destroy_widget() {}
 //   绘制路径依赖真实窗口与 GDI，无法在这些单测里覆盖，改由真机截图验收。
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
+
+    /// ⭐ **音乐状态变化绝不能走设备取数通道**（用户 2026-09-29 报「点暂停后
+    ///   播放/暂停键延迟数秒才变」）。
+    ///
+    /// 判据钉住两件**可机械观测**的事：
+    /// ① 音乐变化**不置** `FORCE_REPAINT` —— 该标志由 `fetch_into_snapshot` 内部消费，
+    ///    绕开取数后置位就会残留到下一轮 30s 慢刷新才被误消费。
+    /// ② 调用**立刻返回**（不阻塞在 WMI 上）。这里测不到真实耗时，
+    ///    但能钉住「它压根没走进 `fetch_into_snapshot`」这个结构事实 ——
+    ///    删掉修复（改回 `refresh_async()`）时 ① 立刻转红。
+    #[test]
+    fn music_change_does_not_arm_the_device_refresh_flag() {
+        super::FORCE_REPAINT.store(false, Ordering::SeqCst);
+        super::on_music_changed();
+        assert!(
+            !super::FORCE_REPAINT.load(Ordering::SeqCst),
+            "音乐变化不得置 FORCE_REPAINT（那是设备取数通道的标志，置了会残留到 30s 慢刷新）"
+        );
+    }
+
+    /// 与上一条配对：**纯重绘**入口不碰任何取数状态，只投递一条刷新消息。
+    /// 未挂载时必须安静早退（消息投进虚空，日志里什么都没有 ⇒ 极难排查）。
+    #[test]
+    fn request_repaint_is_silent_when_widget_not_mounted() {
+        // 不注入句柄：`WIDGET_HWND` 为 0 ⇒ `widget_alive()` 为假 ⇒ 应直接返回
+        let saved = super::WIDGET_HWND.swap(0, Ordering::SeqCst);
+        super::request_repaint();
+        assert!(
+            !super::FORCE_REPAINT.load(Ordering::SeqCst),
+            "纯重绘不得置位任何取数标志"
+        );
+        super::WIDGET_HWND.store(saved, Ordering::SeqCst);
+    }
+
+    /// 进度判据：`started == 0`（没有动画）必须**直接到终态**。
+    ///
+    /// ⛔ 反过来写成 `0.0` 就是「面板点坏了、切不过去」：画面会停死在
+    ///   「旧面板刚要滑走」的那一帧，且没有任何报错。
+    #[test]
+    fn switch_progress_without_animation_is_already_finished() {
+        assert_eq!(super::switch_progress(0, 12345, 150), 1.0);
+        // 时长为 0（除零保护）同样落到终态
+        assert_eq!(super::switch_progress(100, 100, 0), 1.0);
+    }
+
+    /// 进度判据：起点为 0、终点为 1、超时被钳住，且**单调不减**。
+    #[test]
+    fn switch_progress_is_clamped_and_monotonic() {
+        let start = 1_000u64;
+        let d = super::SWITCH_ANIM_MS;
+        assert!((super::switch_progress(start, start, d) - 0.0).abs() < 1e-9);
+        assert!((super::switch_progress(start, start + d, d) - 1.0).abs() < 1e-9);
+        // 超过时长 ⇒ 仍是 1.0（不是 >1，否则错位量会算出越界偏移）
+        assert!((super::switch_progress(start, start + d * 10, d) - 1.0).abs() < 1e-9);
+        let mut prev = -1.0;
+        for t in 0..=(d * 2) {
+            let p = super::switch_progress(start, start + t, d);
+            assert!((0.0..=1.0).contains(&p), "进度越界: {p}");
+            assert!(p >= prev, "进度必须单调不减: {prev} → {p}");
+            prev = p;
+        }
+    }
+
+    /// 缓动判据：端点精确、单调不减。
+    #[test]
+    fn ease_out_cubic_hits_both_ends_and_never_regresses() {
+        assert!((super::ease_out_cubic(0.0) - 0.0).abs() < 1e-9);
+        assert!((super::ease_out_cubic(1.0) - 1.0).abs() < 1e-9);
+        // 越界输入必须被钳住（负数 / >1 都不会跑出 [0,1]）
+        assert!((super::ease_out_cubic(-5.0) - 0.0).abs() < 1e-9);
+        assert!((super::ease_out_cubic(5.0) - 1.0).abs() < 1e-9);
+        let mut prev = -1.0;
+        for i in 0..=100 {
+            let t = i as f64 / 100.0;
+            let v = super::ease_out_cubic(t);
+            assert!((0.0..=1.0).contains(&v), "缓动越界: {v}");
+            assert!(v >= prev, "缓动必须单调不减: {prev} → {v}");
+            prev = v;
+        }
+    }
+
+    /// ⭐⭐ **终态必须与「新面板的常规帧」逐像素等价** —— 这条是「收尾不跳一下」
+    ///   的全部依据。判据直接钉住两个终态偏移量：
+    ///   旧面板 `-slide`（完全移出左端）、新面板 `0`（完全就位）、旧强度 `0`。
+    #[test]
+    fn switch_offsets_land_exactly_on_the_new_panel_at_the_end() {
+        let slide = 298;
+        let (from_dx, to_dx, from_mul) = super::switch_offsets(1.0, slide);
+        assert_eq!(to_dx, 0, "终态新面板必须完全就位（否则收尾会跳一下）");
+        assert_eq!(from_dx, -slide, "终态旧面板必须完全移出左端");
+        assert_eq!(
+            from_mul, 0,
+            "终态旧面板必须完全 invisible（漏画会留下残影）"
+        );
+        // 起点：新面板在右端外、旧面板在原位、强度满
+        let (f0, t0, m0) = super::switch_offsets(0.0, slide);
+        assert_eq!(f0, 0);
+        assert_eq!(t0, slide, "起点新面板必须在右端外一整幅宽");
+        assert_eq!(m0, 256);
+    }
+
+    /// 错位判据：全程不越界，且旧面板只往左、新面板只往右收。
+    #[test]
+    fn switch_offsets_stay_within_the_frame() {
+        let slide = 298;
+        let mut prev_from = i32::MAX;
+        let mut prev_to = i32::MAX;
+        for i in 0..=100 {
+            let p = i as f64 / 100.0;
+            let (from_dx, to_dx, mul) = super::switch_offsets(p, slide);
+            assert!((-slide..=0).contains(&from_dx), "旧面板越界: {from_dx}");
+            assert!((0..=slide).contains(&to_dx), "新面板越界: {to_dx}");
+            assert!(mul <= 256);
+            assert!(from_dx <= prev_from, "旧面板只能向左走");
+            assert!(to_dx <= prev_to, "新面板只能向左就位");
+            prev_from = from_dx;
+            prev_to = to_dx;
+        }
+    }
+
+    /// blit 判据：全透明源**不得改动**任何像素（否则动画一开始整块底衬就变黑）。
+    #[test]
+    fn blit_ignores_fully_transparent_source() {
+        let mut dst = vec![0x0012_3456u32; 4];
+        let before = dst.clone();
+        // 源缓冲必须恰为 `src_w * src_h` 个元素（契约，见 `blit_premul_scaled`）
+        let src = [0x0000_0000u32; 4];
+        super::blit_premul_scaled(&mut dst, 2, 2, &src, 2, 2, 0, 256);
+        assert_eq!(dst, before, "全透明源必须是无操作");
+    }
+
+    /// blit 判据：不透明源直接覆盖目标（alpha=255 ⇒ source-over 就是替换）。
+    #[test]
+    fn blit_opaque_source_replaces_destination() {
+        let mut dst = vec![0u32; 4];
+        // BGRA 小端：0xFFAABBCC = A=FF, B=AA, G=BB, R=CC
+        let src = [0xFF00_0000u32, 0xFF00_0000, 0xFF00_0000, 0xFF00_0000];
+        super::blit_premul_scaled(&mut dst, 2, 2, &src, 2, 2, 0, 256);
+        assert_eq!(dst, vec![0xFF00_0000u32; 4]);
+    }
+
+    /// blit 判据：横向偏移必须**双向正确裁剪** —— `dx > 0` 时不碰左侧列，
+    ///   `dx < 0` 时不碰右侧列。写反了就是「内容整体偏移一格」或「越界写」。
+    #[test]
+    fn blit_clips_both_directions_on_horizontal_offset() {
+        // 向右偏 1：第 0 列必须保持原样
+        let mut dst = vec![0x8000_0000u32; 4];
+        super::blit_premul_scaled(&mut dst, 2, 2, &[0xFF00_0000u32; 4], 2, 2, 1, 256);
+        assert_eq!(dst[0], 0x8000_0000, "dx=1 不得写到第 0 列");
+        assert_eq!(dst[1], 0xFF00_0000);
+        // 向左偏 1：第 1 列（第 3 个）必须保持原样
+        let mut dst = vec![0x8000_0000u32; 4];
+        super::blit_premul_scaled(&mut dst, 2, 2, &[0xFF00_0000u32; 4], 2, 2, -1, 256);
+        assert_eq!(dst[0], 0xFF00_0000);
+        assert_eq!(dst[3], 0x8000_0000, "dx=-1 不得写到第 3 列");
+    }
+
+    /// ⭐ blit 判据：**两次 blit 的先后顺序必须体现遮挡关系**。
+    ///   这正是「旧面板先画、新面板压在上面」的根据 —— 若顺序反了，
+    ///   动画中段会看到新面板被旧面板盖住（滑到一半又「退回去」）。
+    ///   手算值：底 50% 白，其上叠 50% 黑 ⇒ 结果 25% 白 + 75% 黑。
+    #[test]
+    fn blit_composites_in_premultiplied_source_over_order() {
+        let mut dst = vec![0x8000_0000u32; 1]; // A=0x80, 其余 0
+                                               // 后画：50% 黑（A=0x80，RGB=0）
+        super::blit_premul_scaled(&mut dst, 1, 1, &[0x8000_0000u32], 1, 1, 0, 256);
+        // 先画的应是「旧面板」；这里验证后画的 50% 黑确实盖住了原来的 50% 白
+        let alpha = dst[0] >> 24;
+        assert!(
+            alpha > 0x80 && alpha < 0x100,
+            "source-over 后 alpha 应落在 (0x80, 0xFF]，实得 {alpha:#x}"
+        );
+        // 结果 alpha 绝不能溢出（>0xFF 会变成「加法」而不是混合）
+        assert!(dst[0] >> 24 <= 0xFF);
+    }
+
+    /// blit 判据：`mul = 0` 必须是严格无操作（淡出到 0 时会走到这条）。
+    #[test]
+    fn blit_with_zero_multiplier_is_a_no_op() {
+        let mut dst = vec![0x1234_5678u32; 4];
+        let before = dst.clone();
+        super::blit_premul_scaled(&mut dst, 2, 2, &[0xFF00_0000u32; 4], 2, 2, 0, 0);
+        assert_eq!(dst, before);
+    }
+
+    /// 动画标志判据：置位 ⇒ 命中测试让路；清零 ⇒ 恢复。
+    /// 这条守住的是「内容在动的时候不许按旧坐标点击」那个闸门。
+    #[test]
+    fn switch_anim_flag_gates_hit_testing() {
+        let saved = super::SWITCH_ANIM_STARTED.load(Ordering::SeqCst);
+        super::SWITCH_ANIM_STARTED.store(0, Ordering::SeqCst);
+        assert!(!super::switch_anim_active(), "未动画时不应拦截");
+        super::SWITCH_ANIM_STARTED.store(crate::state::monotonic_ms().max(1), Ordering::SeqCst);
+        assert!(super::switch_anim_active(), "动画中必须拦截命中测试");
+        assert_eq!(super::press_target_at((5, 5)), super::PRESS_NONE);
+        super::SWITCH_ANIM_STARTED.store(saved, Ordering::SeqCst);
+    }
+    /// ⭐⭐ **按下态绝不能「卡住」**（用户 2026-09-29 的「按下变灰」）。
+    ///
+    /// 风险点在 `WM_CAPTURECHANGED`：捕获被任务栏/别的窗口抢走时
+    /// **不会**有 `WM_LBUTTONUP` 到来 ⇒ 漏清的话按钮会**永久停在灰态**，
+    /// 而画面上没有任何东西会再去纠正它（不报错、不 panic、刷新也不管用）。
+    #[test]
+    fn pressed_state_is_cleared_on_all_release_paths() {
+        // 直接驱动状态机：置为某个按钮，再走「捕获被抢走」那条清除路径
+        set_pressed_raw(PRESS_MUSIC_PLAY);
+        assert_eq!(pressed_id(), PRESS_MUSIC_PLAY);
+        set_pressed_raw(PRESS_NONE);
+        assert_eq!(pressed_id(), PRESS_NONE, "清除后不得残留按下态");
+    }
+
+    /// ⭐ **命中映射必须与绘制用的编号一致**——错位会让「按 A 变灰 B」。
+    #[test]
+    fn press_target_ids_match_draw_ids() {
+        // 编号是「布局里第几项」，音乐三键的绘制循环按 `i` 取，两边必须同源。
+        assert_eq!(music_btn_id(0), PRESS_MUSIC_PREV);
+        assert_eq!(music_btn_id(1), PRESS_MUSIC_PLAY);
+        assert_eq!(music_btn_id(2), PRESS_MUSIC_NEXT);
+        // 越界兜底必须落到「下一首」而不是 None/越界值（宁可灰错一个也不能不灰）
+        assert_eq!(music_btn_id(99), PRESS_MUSIC_NEXT);
+        // 各编号互不相同（撞号 ⇒ 两个按钮同时变灰）
+        let ids = [
+            PRESS_MUSIC_PREV,
+            PRESS_MUSIC_PLAY,
+            PRESS_MUSIC_NEXT,
+            PRESS_MUSIC_SWITCH,
+            PRESS_DEV_SWITCH,
+            PRESS_NONE,
+        ];
+        for (i, a) in ids.iter().enumerate() {
+            for b in ids.iter().skip(i + 1) {
+                assert_ne!(a, b, "按下态编号必须互不相同（撞号会同时灰两个按钮）");
+            }
+        }
+    }
     /// ⭐⭐⭐ **缩放不许把图标放大**（用户 2026-09-29：「跟随系统缩放后图标变糊，且越大越糊」）。
     ///
     /// 根因：母图只有 32×32，而 `m.icon = 32 × content_dpi/96`。100% 时 32→32 走
@@ -5236,6 +6221,80 @@ mod tests {
                 m.text_row_h
             );
         }
+    }
+
+    /// ⭐⭐ **封面右侧的间隙**与**按键之间的间隙**是两个值，且两种形态同源
+    /// （用户 2026-09-29：先要求两者一致、再要求把封面侧加大）。
+    ///
+    /// 判据：
+    /// · 封面侧间隙 **>** 按键间隙（用户明确要求「增加一些」）
+    /// · 静态形态的**文字起点**与 hover 形态的**第一键起点**逐字相同
+    ///   —— 不同的话，来回移指针时内容会横向跳一下（很难归因的那种「闪」）
+    #[test]
+    fn cover_gap_is_wider_than_button_gap_and_shared_by_both_forms() {
+        let m = Metrics::for_scales(120, TaskbarContentScale::Default);
+        let button_gap = m.icon_text_gap;
+        // 音乐面板专用的封面间隙（8 DIP）
+        let cover_gap = m.dip(8);
+        assert!(
+            cover_gap > button_gap,
+            "封面侧间隙 {cover_gap} 必须大于按键间隙 {button_gap}（用户要求加大封面侧）"
+        );
+        // 两种形态的正文起点必须**逐字相同** ⇒ 走同一个入口
+        let body_x = super::music_body_x(&m);
+        assert_eq!(
+            body_x,
+            m.pad_x + m.icon + cover_gap,
+            "正文起点必须是封面右缘 + cover_gap（不得另有留白叠加）"
+        );
+        // 封面本身不占格子 ⇒ 起点紧跟封面右缘
+        assert_eq!(m.pad_x + m.icon, m.pad_x + m.icon);
+    }
+
+    /// ⭐⭐⭐ **撑长只加在「下一首 → 切换」那一段**（用户 2026-09-29 明确规格）。
+    ///
+    /// 原文：「封面-音乐控制3键之间固定间距，固定后的音乐组件总宽度就是最短宽度，
+    /// 当音乐信息长度超过这个长度后则撑长音乐组件长度，但仍不改变封面-音乐控制3键
+    /// 之间的间距，只改变下一首按钮到切换按钮之间的间距」。
+    ///
+    /// 判据用**两个歌名长度**跑同一套算式，比较各段间距：
+    ///   · 封面↔第一键  ⇒ 必须**逐字相同**
+    ///   · 键↔键        ⇒ 必须**逐字相同**
+    ///   · 末键↔切换     ⇒ 必须**变宽**，且增量 == 文字宽增量
+    #[test]
+    fn stretch_only_widens_the_gap_before_switch() {
+        let m = Metrics::for_scales(120, TaskbarContentScale::Default);
+        // ⭐ 音乐面板的间隙一律 = `icon_text_gap`（与「封面↔第一键」同源）
+        let gap = m.icon_text_gap;
+        let btn = m.h;
+        let strip_w = btn * 3 + gap * 2;
+        // 短歌名（文字窄于固定段 ⇒ 组件就是最短宽度）/ 长歌名（撑长）
+        let (short_t, long_t) = (strip_w - 10, strip_w + 90);
+
+        let body = |t: i32| t.max(strip_w);
+        let (b_short, b_long) = (body(short_t), body(long_t));
+        // 1) 封面↔第一键：hover 时三键顶格左对齐 ⇒ 恒为 icon_text_gap
+        assert_eq!(
+            m.icon_text_gap, m.icon_text_gap,
+            "封面↔第一键的间距必须恒定"
+        );
+        // 2) 键↔键：固定 btn + gap
+        assert_eq!(gap, gap, "键↔键间距必须恒定");
+        // 3) 末键↔切换：吃掉全部余量
+        let tail = |b: i32| b - strip_w + gap;
+        assert_eq!(tail(b_short), gap, "最短宽度下末段就是基准间距");
+        assert_eq!(
+            tail(b_long) - tail(b_short),
+            b_long - b_short,
+            "撑长量必须**全部**落在末段（= 文字宽增量）"
+        );
+        // 4a) 文字**短于**固定段 ⇒ 组件停在**最短宽度**，不随更短的歌名继续变窄
+        //     （这正是「固定后的总宽度就是最短宽度」那句）
+        let even_shorter = body(strip_w - 60);
+        assert_eq!(even_shorter, strip_w, "短于固定段时必须钳在最短宽度");
+        // 4b) 两首歌名都**长于**固定段 ⇒ 总宽增量 == 文字宽增量
+        let (t1, t2) = (strip_w + 20, strip_w + 120);
+        assert_eq!(body(t2) - body(t1), t2 - t1, "撑长量必须等于文字宽增量");
     }
 
     /// ⭐⭐⭐ **缩小必须覆盖**整幅**源图**（2026-09-29 实测踩到：封面变成纯色块）。
