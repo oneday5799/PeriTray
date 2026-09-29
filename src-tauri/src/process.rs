@@ -570,7 +570,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-fn chrono_str() -> String {
+pub fn chrono_str() -> String {
     // 直接使用系统本地时间，避免手动 UTC 偏移计算的边界问题
     #[cfg(target_os = "windows")]
     {

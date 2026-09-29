@@ -1056,6 +1056,8 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let gap = m.icon_text_gap;
 
     // ⭐ **封面右侧的间隙另算，比按键之间宽**（用户 2026-09-29：「把封面到上一首
+    // ⚠️ **标题有「未在播放」兜底、艺人没有** —— 艺人可能是空串（实测某播放器上报
+    //   `artist = ""`），这是 2026-09-29 闪退的根因所在（见 `measure_text` 的注释）。
     //   按钮和到两排文字的距离同时增加一些」）。
     //   · `gap`       = 按键↔按键、末段基准（保持 5px 不变）
     //   · `cover_gap` = 封面↔文字（静态）/ 封面↔第一键（hover）
@@ -2550,7 +2552,21 @@ pub(crate) mod ffi {
     /// ⛔⛔ **为什么不能直接把 GDI 文本画进主缓冲**（本模块最隐蔽的一个坑）：
     ///   GDI 的 `DrawTextW` **不理解 per-pixel alpha** —— 它在 32bpp DIB 上写的是
     ///   `0x00RRGGBB`（**alpha 字节恒为 0**）。直接画进主缓冲，这些文字像素
+    /// ⛔⛔ **空串必须在这里拦下**（2026-09-29 实测闪退，根因）：
+    ///
+    /// `Vec::<u16>::new().as_ptr()` 是**悬垂的对齐哨兵指针**（u16 对齐 = 2），
+    /// **不是有效内存**。而 `DrawTextW` 即使 `cch = 0` 也会去解引用它
+    /// ⇒ **访问违例**：进程直接消失，**无 panic、无 WER、panic 文件为空**
+    /// （这正是它此前被反复误判成「不是 panic、是访问违例之外的某种怪东西」的原因）。
+    ///
+    /// 触发条件很窄：**某个会话上报 `artist = ""`** ⇒ 同一首歌画得好好的，
+    /// 「切换媒体会话」后崩 ⇒ 看起来像会话切换的 bug，实际是**空串**。
+    /// ⚠️ 凡是「把 `&[u16]` 交给 GDI」的入口都要有这道闸
+    /// （本函数 / `render_text_mask` / `taskbar_tooltip::draw_text`），漏一处就还能崩。
     ///   `alpha=0` ⇒ 被 `ULW` 当作**全透明** ⇒ **文字完全不显示**。
+        if text.is_empty() {
+            return 0;
+        }
     ///   （与「没设背景刷」的失败表现**一模一样**，极易误判成同一个问题。）
     /// ⇒ 正确做法：**在白底黑字的掩码上画**，然后按「暗到什么程度」反推覆盖度
     ///   ⇒ `alpha = 255 - gray`。这样抗锯齿边缘的覆盖度是**精确**的。
@@ -2621,7 +2637,11 @@ pub(crate) mod ffi {
             // 装不下 ⇒ 用 `…` 而不是硬切半个字形（真机实测过差别）
             flags |= DT_END_ELLIPSIS;
         }
-        DrawTextW(memdc, text.as_ptr(), text.len() as i32, &mut rc, flags);
+        // ⚠️ 同样不能把**空切片**的悬垂指针交给 GDI（根因见 `measure_text` 的注释）。
+        //   跳过绘制、仍返回全白掩码 ⇒ 契约不变（调用方的合成照常走，只是没有笔画）。
+        if !text.is_empty() {
+            DrawTextW(memdc, text.as_ptr(), text.len() as i32, &mut rc, flags);
+        }
         SelectObject(memdc, old_font);
 
         let out = buf.to_vec();

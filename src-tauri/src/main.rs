@@ -122,6 +122,18 @@ fn make_panic_hook(
     Box::new(move |info| {
         let msg = panic_payload_message(info.payload());
         let location = format_location(info.location());
+        // ⛔⛔ **必须先同步落盘，再走异步日志队列**（2026-09-29 实测踩到）。
+        //
+        // 根因：`process::append_log` → `write_log` → `enqueue`，是**异步入队**，
+        // 由后台写线程消费。而 panic 常常紧跟 `abort()`（panic 穿过
+        // `extern "system"` 边界时 Rust 直接 abort；release 更是 `panic = "abort"`）
+        // ⇒ **队列里那行永远等不到 flush**。
+        // 后果实测：一次 `draw_music_render` 内的闪退，日志里**完全没有** `[panic]` 行，
+        // 于是被误判成「不是 panic、是访问违例」，把排查方向带偏了整整一轮。
+        //
+        // ⇒ panic 现场走**独立的同步文件**：不经队列、不受日志级别开关影响、
+        //   写完 `sync_all`。这是整个程序里**唯一**允许同步写日志的地方。
+        write_panic_sync(&msg, &location, std::thread::current().name());
         standard_log!("[panic] {} @ {}", msg.replace('\n', " | "), location);
         handle_panic(
             &msg,
@@ -162,6 +174,46 @@ fn install_panic_hook() {
         inner(info);
         default_hook(info);
     }));
+}
+
+/// panic 现场的**同步**落盘（不经异步队列，见 `make_panic_hook` 的注释）。
+///
+/// ⛔⛔ **同一个坑我这轮踩了两次**（2026-09-29 实测），记在这里免得再犯：
+///   ① 「日志里没有 `[panic]` 行」⇒ 我据此断定「**不是 panic**、是访问违例之外的某种东西」；
+///   ② 「崩溃定位标记停在 B」⇒ 我据此断定「崩在 B 与 C 之间」。
+///   而真相是**两者都走了异步队列**，进程硬崩时队列尾部整段丢失 ⇒
+///   **「最后落盘的那条」不等于「最后执行的那条」**。
+///   ⇒ **凡是要证明「某件事没发生」或「崩在哪」的判据，绝不能走可丢弃的通道。**
+///
+/// ⚠️ 任何一步失败都**静默忽略**：这里已经在 panic 路径上，
+///   再 panic / 再报错只会掩盖真正的现场。
+fn write_panic_sync(msg: &str, location: &str, thread: Option<&str>) {
+    use std::io::Write;
+    let dir = process::writable_root().join("logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let path = dir.join(format!("panic_{}.txt", std::process::id()));
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    let _ = writeln!(
+        f,
+        "[{}] thread={:?} @ {}
+  {}
+",
+        process::chrono_str(),
+        thread,
+        location,
+        msg
+    );
+    // ⚠️ `sync_all` 是这条路径存在的全部意义：不刷到 OS，
+    //   进程被 `TerminateProcess` 之后内容可能还停在页缓存里没落盘。
+    let _ = f.sync_all();
 }
 
 fn show_error_box(msg: &str) {

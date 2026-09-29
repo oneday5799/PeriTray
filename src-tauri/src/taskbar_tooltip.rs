@@ -807,13 +807,18 @@ unsafe fn blit_text_opaque(
     // ⚠️ 返回值**故意丢弃**：`DrawTextW` 返回非 0 只说明「文本被处理过」，
     //   **不保证像素变了**（真机实测：返回 19 而一个暗像素都没有）。
     //   真正的判据是贴回后主缓冲里的像素，由 `text_patch_alpha_must_be_opaque` 锚定。
-    let _drawn = DrawTextW(
-        tmp.memdc,
-        text.as_ptr(),
-        text.len() as i32,
-        &mut rc,
-        DT_LEFT | DT_SINGLELINE | DT_NOPREFIX,
-    );
+    // ⛔ 空串不能交给 GDI：`Vec::new().as_ptr()` 是悬垂哨兵指针，`DrawTextW` 即使
+    //   `cch = 0` 也会解引用它 ⇒ 访问违例（2026-09-29 在 widget 侧实测到闪退，
+    //   同一个洞在这里也开着 —— **所有**「`&[u16]` 进 GDI」的入口都要拦）。
+    if !text.is_empty() {
+        let _drawn = DrawTextW(
+            tmp.memdc,
+            text.as_ptr(),
+            text.len() as i32,
+            &mut rc,
+            DT_LEFT | DT_SINGLELINE | DT_NOPREFIX,
+        );
+    }
     windows_sys::Win32::Graphics::Gdi::SelectObject(tmp.memdc, old_font);
     // ⛔⛔ **贴回时必须补上 alpha 字节 = 0xFF**。
     //   `DrawTextW` 只写 RGB，**从不碰 alpha** ⇒ 刚画完的临时 DIB 里
