@@ -136,16 +136,23 @@ pub fn press_target_at(local: (i32, i32)) -> i32 {
     if switch_anim_active() {
         return PRESS_NONE;
     }
+    // ⭐⭐ 切换按钮**只在 hover 时可点**（用户 2026-09-29：「hover 时才显示」）。
+    //   ⚠️ 必须与绘制用**同一个判据**（`switch_icon_alpha`）：只改绘制不改这里，
+    //   就会留下一个「看不见但点得到」的按钮 —— 那比按钮常驻更糟，
+    //   因为用户点了有反应却**看不到自己点了什么**。
+    //   （`want_hover` 用窗口矩形判光标在内 ⇒ 能按到切换键时必然已 hover。）
+    let hovered_now = HOVERED.load(Ordering::Acquire) && switch_clickable(true);
     match current_panel() {
         Some(crate::config::TaskbarPanel::Music) => match hit_test_music(local) {
             MusicHit::Prev => PRESS_MUSIC_PREV,
             MusicHit::PlayPause => PRESS_MUSIC_PLAY,
             MusicHit::Next => PRESS_MUSIC_NEXT,
-            MusicHit::Switch => PRESS_MUSIC_SWITCH,
-            MusicHit::None => PRESS_NONE,
+            // 未 hover ⇒ 切换键不可点
+            MusicHit::Switch if hovered_now => PRESS_MUSIC_SWITCH,
+            MusicHit::Switch | MusicHit::None => PRESS_NONE,
         },
         Some(crate::config::TaskbarPanel::Devices) => {
-            if dev_switch_hit(local) {
+            if hovered_now && dev_switch_hit(local) {
                 PRESS_DEV_SWITCH
             } else {
                 PRESS_NONE
@@ -982,6 +989,53 @@ fn dev_switch_hit(local: (i32, i32)) -> bool {
     hit_rect(*crate::state::lock_unpoisoned(&DEV_SWITCH_RECT), local)
 }
 
+/// ⭐⭐ 「切换」按钮只在 **hover** 时显示（用户 2026-09-29）。
+///
+/// 抽成纯函数是为了让「显示」与「可点」**由同一判据驱动**——
+///
+/// ⛔ 两者若各写一份，迟早出现「看不见但点得到」的按钮：那比按钮常驻更糟，
+///   因为用户点了会有反应，却**看不到自己点了什么**。
+///   （本仓同类教训：「绘制与命中必须同源」，见 `press_target_at` 的注释。）
+///
+/// **宽度不跟着变**（用户 2026-09-28 明确要求 hover 前后长度一致）：
+/// `switch_w` 恒计入 `content_w`，未 hover 时那块是**全透明**的
+///（分层窗按像素 alpha）⇒ 看不见空洞，而 `want_hover` 用**窗口矩形**判
+/// 光标在内 ⇒ 那块 45px 正是 hover 区的一部分 ⇒ 鼠标移过去按钮就浮现，
+/// **没有「必须先 hover 到别处才冒出来」的死区**。
+#[cfg(target_os = "windows")]
+fn switch_icon_alpha(hovered: bool) -> f32 {
+    if hovered {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// 切换按钮此刻**是否可点**（= 是否显示）。
+#[cfg(target_os = "windows")]
+fn switch_clickable(hovered: bool) -> bool {
+    switch_icon_alpha(hovered) > 0.0
+}
+
+/// ⭐⭐ 音乐面板文字的**绘制框**：返回 `(绘制宽度, 是否需要省略号)`。
+///
+/// ⛔⛔ **上限必须与布局侧是同一个值**（2026-09-29 修「文字被截断、右侧却留大片空白」）。
+///
+///   当时**只改了布局侧**：面板宽度按音乐面板自己的 `MUSIC_TEXT_MAX_W_DIP`
+///   （320 DIP ⇒ 125% 下 400px）算，而**绘制侧仍在用 `m.item_max_w`**
+///   （150 DIP ⇒ 125% 下 188px —— 那个字段的注释里明写是
+///   「**给设备面板的**电量 / 音量那几行短数字设计的」）
+///   ⇒ 面板画到 400px 宽、文字只画到 188px 就打「…」
+///   ⇒ 右侧约 212px 空白（用户 2026-09-29 实测报出：hover 时能明显看到后面空着）。
+///
+///   ⇒ 抽成本函数，**布局与绘制都从这里取**，杜绝「两份上限」再次分叉
+///   （同源纪律，与「绘制与测宽必须同源」同源）。
+#[cfg(target_os = "windows")]
+fn music_text_box(natural: i32, cap: i32) -> (i32, bool) {
+    let w = natural.min(cap).max(0);
+    (w, natural > w)
+}
+
 /// 点是否落在矩形内。
 #[cfg(target_os = "windows")]
 fn hit_rect(r: Option<windows_sys::Win32::Foundation::RECT>, local: (i32, i32)) -> bool {
@@ -1108,7 +1162,10 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     //   ⇒ 音乐面板用自己的上限 `MUSIC_TEXT_MAX_W_DIP`，并强制它**大于固定段**。
     const MUSIC_TEXT_MAX_W_DIP: i32 = 320; // 125% 下 400px，够长的歌名也能撑开
     let text_cap = m.dip(MUSIC_TEXT_MAX_W_DIP);
-    let strip_w_guess = m.h * 3 + gap * 2;
+    // ⚠️ 用 `btn`（= `m.icon`）而不是 `m.h`：`m.h`(50) > `btn`(40) 会让这个
+    //   「固定段」估算偏大 ⇒ `text_cap` 与下面那条 `debug_assert` 都跟着放宽，
+    //   断言因此**比预期弱**（本批顺手改正，125% 下不影响最终值）。
+    let strip_w_guess = m.icon * 3 + gap * 2;
     let text_cap = text_cap.max(strip_w_guess + m.h * 2);
     let text_w = t_nat.min(text_cap).max(a_nat.min(text_cap));
 
@@ -1374,27 +1431,23 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
             }
         } else {
             // ③ 静态：上排标题 / 下排艺人（两行，与设备面板的电量/音量同款行高）
-            let t_clamped = t_nat.min(m.item_max_w);
-            let a_clamped = a_nat.min(m.item_max_w);
+            //
+            // ⛔⛔ 上限用 **`text_cap`**（音乐面板自己的），**不是** `m.item_max_w`
+            //   （那是设备面板的 150 DIP）。用错的后果：面板按 400px 画、
+            //   文字按 188px 画 ⇒ 右侧 212px 空白 + 无谓的「…」（2026-09-29 实测）。
+            let (t_clamped, t_ellipsis) = music_text_box(t_nat, text_cap);
+            let (a_clamped, a_ellipsis) = music_text_box(a_nat, text_cap);
             if t_clamped > 0 {
-                if let Some(mask) = ffi::render_text_mask(
-                    t_clamped,
-                    m.text_row_h,
-                    font,
-                    &title_wide,
-                    t_nat > t_clamped,
-                ) {
+                if let Some(mask) =
+                    ffi::render_text_mask(t_clamped, m.text_row_h, font, &title_wide, t_ellipsis)
+                {
                     blit_text_mask(px, total_w, &mask, body_x, icon_y, (cr, cg, cb), 1.0);
                 }
             }
             if a_clamped > 0 {
-                if let Some(mask) = ffi::render_text_mask(
-                    a_clamped,
-                    m.text_row_h,
-                    font,
-                    &artist_wide,
-                    a_nat > a_clamped,
-                ) {
+                if let Some(mask) =
+                    ffi::render_text_mask(a_clamped, m.text_row_h, font, &artist_wide, a_ellipsis)
+                {
                     blit_text_mask(
                         px,
                         total_w,
@@ -1423,7 +1476,10 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                         } else {
                             1.0f32
                         };
-                        let a = (ipx[si + 3] as f32 * press).round() as u32;
+                        // ⭐⭐ 未 hover ⇒ alpha 归零 ⇒ **切换按钮不显示**
+                        //   （用户 2026-09-29：「要求切换按钮在 hover 时才显示」）
+                        let a = (ipx[si + 3] as f32 * press * switch_icon_alpha(hovered)).round()
+                            as u32;
                         if a == 0 {
                             continue;
                         }
@@ -4888,7 +4944,10 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
                         } else {
                             1.0f32
                         };
-                        let a = (ipx[si + 3] as f32 * press).round() as u32;
+                        // ⭐⭐ 未 hover ⇒ alpha 归零（与音乐面板同一判据）
+                        let hovered = HOVERED.load(Ordering::Acquire);
+                        let a = (ipx[si + 3] as f32 * press * switch_icon_alpha(hovered)).round()
+                            as u32;
                         if a == 0 {
                             continue;
                         }
@@ -5936,6 +5995,107 @@ pub fn destroy_widget() {}
 //   绘制路径依赖真实窗口与 GDI，无法在这些单测里覆盖，改由真机截图验收。
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
+
+    /// ⭐⭐ **「文字被截断但右侧留大片空白」的判据**（用户 2026-09-29）。
+    ///
+    /// 缺陷形态：布局侧按音乐面板自己的上限（`MUSIC_TEXT_MAX_W_DIP` = 320 DIP ⇒
+    /// 125% 下 400px）算面板宽度，而**绘制侧仍在用 `m.item_max_w`**
+    /// （150 DIP ⇒ 188px）⇒ 面板 400px、文字 188px 就打「…」。
+    ///
+    /// 判据钉住**不变量**：绘制宽度必须等于布局为文字预留的宽度
+    /// （`text_w` = 两段自然宽各自封顶后取大者）。
+    /// 可证伪：把绘制侧改回 `m.item_max_w` ⇒ 本用例立刻转红。
+    #[test]
+    fn drawn_text_width_equals_the_width_the_layout_reserved() {
+        let cap = 400; // 125% 下的 MUSIC_TEXT_MAX_W_DIP
+                       // 长标题：两边都该吃满 cap，绘制宽度必须正好等于布局预留的 text_w
+        let (t_w, t_ell) = super::music_text_box(500, cap);
+        let (a_w, _a_ell) = super::music_text_box(120, cap);
+        let text_w = t_w.max(a_w); // ← 与 draw_music_render 里 `text_w` 同式
+        assert_eq!(t_w, cap, "超长文字必须画满 cap（否则右侧留白）");
+        assert!(t_ell, "自然宽 > 上限 ⇒ 需要省略号");
+        assert_eq!(
+            t_w, text_w,
+            "绘制宽度必须等于布局预留的 text_w（两份上限分叉时这里不相等）"
+        );
+
+        // 短标题：不该出现省略号
+        let (s_w, s_ell) = super::music_text_box(90, cap);
+        assert_eq!(s_w, 90);
+        assert!(!s_ell, "装得下就不该有省略号");
+
+        // 恰好等于上限：不算超（边界）
+        let (e_w, e_ell) = super::music_text_box(cap, cap);
+        assert_eq!(e_w, cap);
+        assert!(!e_ell, "自然宽恰好等于上限 ⇒ 不需要省略号");
+    }
+
+    /// ⭐ 音乐面板与设备面板的**文字上限本就不同**——所以「用错那个」是可检测的。
+    /// 判据把两者的差距钉死，防止有人以为它们是同一个值。
+    #[test]
+    fn music_and_device_text_caps_are_different_values() {
+        use super::Metrics;
+        let m = Metrics::for_scales(120, crate::config::TaskbarContentScale::Default);
+        let device_cap = m.item_max_w; // 150 DIP ⇒ 188px @125%
+                                       // 音乐面板自己的上限（与 draw_music_render 里 text_cap 同式）
+        let strip_w_guess = m.icon * 3 + m.icon_text_gap * 2;
+        let music_cap = m.dip(320).max(strip_w_guess + m.h * 2);
+        assert!(
+            music_cap > device_cap * 2,
+            "音乐面板上限应远大于设备面板（实测 {music_cap} vs {device_cap}）——             若哪天变得相等，本判据提醒你回头查两处定义是否又合并了"
+        );
+    }
+
+    /// ⭐⭐ **「切换按钮只在 hover 时显示」这条需求本身**（用户 2026-09-29）。
+    ///
+    /// 判据钉的是**显示与可点同源**这个性质：不可见 ⇒ 必定不可点。
+    /// ⛔ 两处若各写一份判据，迟早漂移成「看不见但点得到」——
+    ///   那比按钮常驻更糟：用户点了有反应，却看不到自己点了什么。
+    #[test]
+    fn switch_button_is_invisible_and_unclickable_when_not_hovered() {
+        assert_eq!(
+            super::switch_icon_alpha(false),
+            0.0,
+            "未 hover 必须完全透明"
+        );
+        assert_eq!(super::switch_icon_alpha(true), 1.0, "hover 时必须全不透明");
+        assert!(
+            !super::switch_clickable(false),
+            "未 hover ⇒ 不可点（否则留下「看不见但点得到」的按钮）"
+        );
+        assert!(super::switch_clickable(true), "hover ⇒ 可点");
+    }
+
+    /// ⭐ **宽度不因 hover 变**（用户 2026-09-28 明确要求）。
+    ///
+    /// 判据：`switch_w` 恒计入 `content_w`，与 `hovered` 无关 ⇒
+    /// 未 hover 时那块是**全透明**的（分层窗按像素 alpha，看不见空洞），
+    /// 而 `want_hover` 用**窗口矩形**判光标在内 ⇒ 那 45px 本身就在 hover 区内
+    /// ⇒ 鼠标移过去按钮就浮现，**没有「必须先 hover 到别处才冒出来」的死区**。
+    #[test]
+    fn switch_hover_zone_covers_the_reserved_width() {
+        use super::Metrics;
+        // ⚠️ 用纯构造的 `Metrics`，**不**用 `current_content()`：后者读配置，
+        //   而单测进程里 `Config` 未初始化（`Config not initialized` 直接 panic）。
+        let m = Metrics::for_scales(120, crate::config::TaskbarContentScale::Default);
+        let gap = m.icon_text_gap;
+        let switch_px = m.icon;
+        let switch_w = switch_px + gap;
+
+        // `want_hover` 用窗口矩形：光标落在「预留宽度」那一段也必须判为 hover，
+        // 否则会出现「按钮在右边、但要先 hover 到左边它才出现」的死区。
+        let total_w = m.icon + m.dip(8) + 100 + switch_w; // 任意正文宽
+        let hovered = super::want_hover(
+            Some((total_w - 1, 5)), // 光标在窗口最右缘内侧 1px
+            Some((0, 0, total_w, m.h)),
+            false,
+        );
+        assert!(
+            hovered,
+            "预留宽度那一段必须属于 hover 区（否则切换键有死区）"
+        );
+        assert!(switch_w > 0, "预留宽度必须为正（否则按钮无处可画）");
+    }
 
     /// ⭐⭐ **空串闸的机械判据**（2026-09-29）：之前我写过「无法用单测覆盖，
     /// 只能真机复现」——**那是错的**，测试进程里能建真实 DC。
