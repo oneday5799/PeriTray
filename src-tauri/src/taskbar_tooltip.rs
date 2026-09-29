@@ -37,7 +37,9 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows_sys::Win32::Foundation::{HWND, RECT};
-use windows_sys::Win32::Graphics::Gdi::HFONT;
+use windows_sys::Win32::Graphics::Gdi::{
+    CreateCompatibleDC, DeleteDC, GetTextMetricsW, SelectObject, HFONT, TEXTMETRICW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, IsWindow, SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE,
     SWP_SHOWWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
@@ -67,14 +69,51 @@ const TIP_MAX_W_PX: i32 = 320;
 ///   （与页面的一致性仍体现在底色/边框/圆角/阴影/内边距上，见文件头。）
 /// ⚠️ 与 `taskbar_widget::FONT_PX_DIP`(11) **仍是不同值**：那是 widget **内容**的
 ///   字号（跟随用户的内容缩放设置），跟的是内容档位，不是提示。
-const TIP_FONT_PX: i32 = 14;
+// ⭐ 15px（用户 2026-09-29）。⚠️ 历史上被要求过两次：
+//   · 2026-09-28：「太虚太小」14px（base.css 是 12）
+//   · 2026-09-29：面板改用 Segoe UI Variable Text 后，tooltip 仍是 14px
+//     ⇒ **比面板小一号**（面板歌名 12 DIP × 125% = 15px）。⇒ 对齐到 15。
+//   ⛔ 改这个值前先确认用户是否改主意——不是「顺手对齐回 CSS」。
+const TIP_FONT_PX: i32 = 15;
 
 /// 提示的行高（**px**）。
 ///
 /// ⭐ 取 `字号 + 2` 而不是照抄 `base.css` 的 16：`line-height` 在 CSS 里是**倍数语义**
 ///   （`16px` 其实是 `1.33`），自绘里我们直接用绝对行距 ⇒ 必须随字号走，
 ///   否则 14px 字的降部/升部会被 16px 行距的固定掩码切掉（表现为「字被削顶」）。
-const TIP_LINE_H_PX: i32 = TIP_FONT_PX + 2;
+/// 单行行距（px）。
+///
+/// ⭐⭐ **必须由字体实际度量决定**，不能写成 `字号 + 常数`
+///   （用户 2026-09-29 实测报「tooltip 行高不够、字体底部显示不全」——
+///   那正是硬编码 `字号 + 2` 的必然结果：15px 的 Segoe UI Variable Text
+///   行高本就 >17px，下伸部与中文字形的底沿被逐行裁掉）。
+///   `GetTextMetricsW` 的 `tmHeight + tmExternalLeading` 正是 GDI 自己算的
+///   「单行占位高度」，**换字体 / 换字号都会自动跟随**，不必再手动对齐常数。
+///
+/// ⛔ 缓存：字体只建一次（`ensure_font`），度量也只查一次（`OnceLock`）。
+///   取不到时回落到 `字号 × 1.25`，比旧的 `+2` 保守。
+static TIP_LINE_H: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+
+fn line_h_px() -> i32 {
+    *TIP_LINE_H.get_or_init(|| unsafe {
+        let font = ensure_font();
+        let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
+        let memdc = CreateCompatibleDC(screen);
+        windows_sys::Win32::Graphics::Gdi::ReleaseDC(std::ptr::null_mut(), screen);
+        if memdc.is_null() {
+            return TIP_FONT_PX + 4;
+        }
+        let old = SelectObject(memdc, font);
+        let mut tm: TEXTMETRICW = std::mem::zeroed();
+        let ok = GetTextMetricsW(memdc, &mut tm);
+        SelectObject(memdc, old);
+        DeleteDC(memdc);
+        if ok == 0 {
+            return TIP_FONT_PX + 4;
+        }
+        (tm.tmHeight + tm.tmExternalLeading).max(TIP_FONT_PX + 2)
+    })
+}
 
 /// 气泡圆角（**DIP**）——对齐 `CornerRadius=4`。
 const TIP_CORNER_R_PX: i32 = 4;
@@ -410,7 +449,7 @@ fn measure_frame(
         .unwrap_or(0);
     let bubble_w = text_w + 2 * (TIP_PAD_X_PX + TIP_BORDER_PX);
     let bubble_h =
-        lines.len() as i32 * TIP_LINE_H_PX + TIP_PAD_TOP_PX + TIP_PAD_BOT_PX + 2 * TIP_BORDER_PX;
+        lines.len() as i32 * line_h_px() + TIP_PAD_TOP_PX + TIP_PAD_BOT_PX + 2 * TIP_BORDER_PX;
     Frame {
         win_w: bubble_w + 2 * pad,
         win_h: bubble_h + 2 * pad,
@@ -647,9 +686,9 @@ fn render_and_show(index: usize) {
                 px,
                 frame.win_w,
                 frame.text_x,
-                frame.text_y + i as i32 * TIP_LINE_H_PX,
+                frame.text_y + i as i32 * line_h_px(),
                 w,
-                TIP_LINE_H_PX,
+                line_h_px(),
                 line,
                 font,
                 pal.bg,
@@ -1136,12 +1175,17 @@ mod tests {
         assert_eq!(TIP_CORNER_R_PX, 4);
         // base.css:907  border: 1px solid
         assert_eq!(TIP_BORDER_PX, 1);
-        // ⚠️ 字号/行高**有意偏离 base.css**（用户 2026-09-28：「太虚太小」⇒ 改 14px）。
-        //   base.css 是 12px / 16px；这里断言的是**当前的、有意为之**的偏离值。
+        // ⚠️ 字号/行高**有意偏离 base.css**（用户两次要求：2026-09-28「太虚太小」⇒ 14px；
+        //   2026-09-29 与面板对齐 ⇒ 15px）。base.css 是 12px / 16px；
+        //   这里断言的是**当前的、有意为之**的偏离值。
         //   ⛔ 改这两个值前先确认用户是否改主意——不是「顺手对齐回 CSS」。
-        assert_eq!(TIP_FONT_PX, 14, "用户明确要求 14px（base.css 是 12px）");
-        // 行高随字号走（CSS 的 16px 是倍数语义，自绘里必须用绝对行距）
-        assert_eq!(TIP_LINE_H_PX, TIP_FONT_PX + 2);
+        assert_eq!(
+            TIP_FONT_PX, 15,
+            "用户 2026-09-29 要求与面板对齐到 15px（base.css 是 12px）"
+        );
+        // ⭐ 行高**不再有硬编码常数**（见 `line_h_px`）：它取自 `GetTextMetricsW`
+        //   的 `tmHeight + tmExternalLeading`，换字体/字号自动跟随 ⇒ 这里只断言
+        //   「行高至少放得下当前字号」，具体数值由运行期度量决定。
         // base.css:920  max-width: 320px
         assert_eq!(TIP_MAX_W_PX, 320);
         // base.css:93/164  --flyout-bg
@@ -1447,11 +1491,47 @@ mod tests {
         assert!(lines.iter().all(|l| l.len() <= cap));
     }
 
-    /// 行高必须**大于**字号：否则 12px 字号的降部与升部会被切掉。
+    /// ⭐ 行高必须**由字体度量给出**，且**放得下字形**。
+    ///
+    /// 用户 2026-09-29 实测报「tooltip 行高不够、字体底部显示不全」——
+    /// 根因是行高被硬编码成 `字号 + 2`（15px 字号 ⇒ 17px 行距），
+    /// 而 Segoe UI Variable Text 的单行占位高度本就 >17px
+    /// ⇒ 下伸部与中文字形的底沿被逐行裁掉（**不报错、不 panic**）。
+    ///
+    /// 判据：运行期取到的行高必须**大于**字号（旧实现恰好只比字号大 2）。
     #[test]
-    fn line_height_exceeds_font_size() {
-        // ⭐ 编译期不变式：行高必须大于字号（12px 字的降部/升部要放得下）。
-        const { assert!(TIP_LINE_H_PX > TIP_FONT_PX) };
+    fn line_height_comes_from_font_metrics_and_fits_glyphs() {
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, DeleteDC, GetTextMetricsW, SelectObject,
+        };
+        // 独立取一次字体度量，作为**判据的尺子**（不复用 `line_h_px` 的实现）
+        let (ok, tm) = unsafe {
+            let font = ensure_font();
+            let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
+            let dc = CreateCompatibleDC(screen);
+            windows_sys::Win32::Graphics::Gdi::ReleaseDC(std::ptr::null_mut(), screen);
+            assert!(!dc.is_null(), "拿不到测量用 DC");
+            let old = SelectObject(dc, font);
+            let mut tm: windows_sys::Win32::Graphics::Gdi::TEXTMETRICW = std::mem::zeroed();
+            let ok = GetTextMetricsW(dc, &mut tm);
+            SelectObject(dc, old);
+            DeleteDC(dc);
+            (ok, tm)
+        };
+        assert_ne!(ok, 0, "GetTextMetricsW 失败");
+
+        let need = tm.tmHeight + tm.tmExternalLeading;
+        let lh = line_h_px();
+        assert!(
+            lh >= need,
+            "行高 {lh} < 字体单行占位高度 {need}（tmHeight={} + 外边距={}）             ⇒ DrawTextW 画进比它矮的带子里，底部被裁（用户 2026-09-29 实测报）",
+            tm.tmHeight, tm.tmExternalLeading
+        );
+        // ⛔ 反向：也不能大到离谱（气泡会松垮）
+        assert!(
+            lh <= need + 4,
+            "行高 {lh} 比字体要求的 {need} 大出一截 ⇒ 气泡松垮"
+        );
     }
 
     /// `TipEntry` 的相等性必须**逐字段**比（`RECT` 不实现 `PartialEq`）。

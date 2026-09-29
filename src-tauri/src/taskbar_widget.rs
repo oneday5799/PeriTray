@@ -420,7 +420,13 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
 
     // ── 建字体 + 测量（与设备面板同一套度量/测量入口）────────────────
     let (font, memdc) = unsafe {
-        let f = ffi::create_font(m.font, true);
+        // ⚠️ **不加粗**（用户 2026-09-29）。设备面板的「电量 / 音量」是数字 + `%`，
+        //   加粗能提可读性（用户 2026-09-25 的要求，仍保留在 `draw_items`）；
+        //   但歌名 / 歌手是**连续文字**，加粗后 Segoe UI Variable Text 在 15px 下
+        //   笔画粘连、字腔变窄，观感偏「糊成一团」。
+        //   ⭐ 顺带与 **tooltip 对齐**了：tooltip 走 `create_font_cleartype(.., false)`
+        //   本来就是常规字重，之前面板加粗 / tooltip 常规 ⇒ 同一首歌在两处粗细不一。
+        let f = ffi::create_font(m.font, false);
         if f.is_null() {
             return draw_blank(hwnd, m.pad_x * 2);
         }
@@ -788,7 +794,10 @@ const PAD_X_DIP: i32 = 6;
 
 /// 字体像素高度（DIP）—— 电量/音量两行共用。
 #[cfg(target_os = "windows")]
-const FONT_PX_DIP: i32 = 11;
+// ⭐ 12 DIP（用户 2026-09-29：「字体看起来很小」；原 11）。
+//   仍放得下：两行各占 `text_row_h = m.icon / 2`（125% 下 20px），
+//   12 DIP × 1.25 = 15px < 20px ✔（「偏小」档 12px < 16px ✔）。
+const FONT_PX_DIP: i32 = 12;
 
 /// 图标边长（DIP）。图标源 PNG 本身就是 32×32 ⇒ 100% 缩放下是**恒等拷贝**。
 #[cfg(target_os = "windows")]
@@ -1587,7 +1596,7 @@ pub(crate) mod ffi {
     use windows_sys::Win32::Foundation::{HWND, POINT, SIZE};
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW,
-        SelectObject, SetBkMode, SetTextColor, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        GetTextFaceW, SelectObject, SetBkMode, SetTextColor, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
         DIB_RGB_COLORS, HBITMAP, HDC, HFONT, HGDIOBJ, TRANSPARENT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -1939,8 +1948,68 @@ pub(crate) mod ffi {
     ///   笔画偏虚，加粗后两行数字/`%` 的可读性明显更好。
     /// ⚠️ 加粗会让文本**变宽**：`measure_text` 与绘制共用同一个 HFONT，
     ///   故排版宽度自动跟着变（这正是「测量与绘制必须同字体」那条纪律的收益）。
+    /// 面板用的字体族（**带回落**，Win10 上必须能降级）。
+    ///
+    /// ⚠️⚠️ **为什么不能直接写死 "Segoe UI Variable Text"**：
+    ///   `CreateFontW` 找不到请求的字体时**不报错**，而是**静默替换**成字体映射器
+    ///   挑的别的字体（不崩溃、不返回 NULL）⇒ 那样在 Windows 10 上会显示成某个
+    ///   随机字体，且**没有任何日志**。
+    ///   ⇒ 这里用 `GetTextFaceW` **验货**：把请求的族名和 GDI 实际选中的比对，
+    ///   对不上就换下一个候选。
+    ///
+    /// ⭐ 候选顺序 = Windows 11 系统字体优先：
+    ///   `Segoe UI Variable Text`（系统 UI 字体，字腔更开）→ `Segoe UI`（Win10）。
+    ///   只探测一次（`OnceLock`），之后每次建字体只读这个结果。
+    pub fn widget_face() -> &'static [u16] {
+        static FACE: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+        FACE.get_or_init(|| {
+            for cand in ["Segoe UI Variable Text", "Segoe UI"] {
+                let wide: Vec<u16> = format!("{cand}\0").encode_utf16().collect();
+                if unsafe { face_available(&wide) } {
+                    crate::process::append_log(&format!("[widget] 面板字体族 = {cand}"));
+                    return wide;
+                }
+                crate::process::append_log(&format!("[widget] 字体族 {cand} 不可用，尝试下一个"));
+            }
+            crate::process::append_log("[widget] 所有候选字体族都不可用，回落 GDI 默认字体");
+            "\0".encode_utf16().collect()
+        })
+    }
+
+    /// 请求 `want` 这个族，看 GDI 实际选中的到底是不是它。
+    unsafe fn face_available(want: &[u16]) -> bool {
+        let hfont = CreateFontW(-12, 0, 0, 0, 400, 0, 0, 0, 0x01, 0, 0, 0, 0, want.as_ptr());
+        if hfont.is_null() {
+            return false;
+        }
+        let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
+        let memdc = CreateCompatibleDC(screen);
+        windows_sys::Win32::Graphics::Gdi::ReleaseDC(std::ptr::null_mut(), screen);
+        if memdc.is_null() {
+            DeleteObject(hfont);
+            return false;
+        }
+        let old = SelectObject(memdc, hfont);
+        let mut buf = [0u16; 64];
+        let n = GetTextFaceW(memdc, buf.len() as i32, buf.as_mut_ptr());
+        SelectObject(memdc, old);
+        DeleteDC(memdc);
+        DeleteObject(hfont);
+        if n <= 0 {
+            return false;
+        }
+        let want_nz: Vec<u16> = want.iter().copied().take_while(|c| *c != 0).collect();
+        let got: Vec<u16> = buf[..n as usize]
+            .iter()
+            .copied()
+            .take_while(|c| *c != 0)
+            .collect();
+        // GDI 回显可能附带样式后缀（族名 + style），**前缀相同**即算命中
+        !want_nz.is_empty() && got.len() >= want_nz.len() && got[..want_nz.len()] == want_nz[..]
+    }
+
     pub unsafe fn create_font(px_height: i32, bold: bool) -> HFONT {
-        let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
+        let face: &[u16] = widget_face();
         CreateFontW(
             -px_height, // 负 = 字符高度（而非单元格高度）
             0,
@@ -1953,8 +2022,17 @@ pub(crate) mod ffi {
             0x01, // DEFAULT_CHARSET
             0,    // OUT_DEFAULT_PRECIS
             0,    // CLIP_DEFAULT_PRECIS
-            4,    // ANTIALIASED_QUALITY（灰度抗锯齿，**不要** CLEARTYPE）
-            0,    // DEFAULT_PITCH
+            // ⭐⭐ `DEFAULT_QUALITY`(0) 而非 `ANTIALIASED_QUALITY`(4)：
+            //   **差在 hinting**——4 会把字形轮廓平滑掉、**关掉网格对齐**，
+            //   14px 下笔画边缘被「摊平」成灰边（真机观感=「发虚」，
+            //   本函数上方 `create_font_cleartype` 的注释早就预言了这一点）。
+            //   0 保留灰度抗锯齿、但**打开 hinting**：竖干与横画吸附到像素网格，
+            //   小字号下明显更实、更清晰。
+            //   ⛔ 仍是**灰度**、不是 ClearType：面板底衬半透明，而 ClearType 的
+            //   彩色子像素边缘依赖「底色已知且不透明」，叠上去会脏（tooltip 能用
+            //   ClearType 是因为它那个气泡是实色的）。
+            0, // DEFAULT_QUALITY（灰度 AA + hinting）
+            0, // DEFAULT_PITCH
             face.as_ptr(),
         )
     }
@@ -1973,7 +2051,10 @@ pub(crate) mod ffi {
     /// ⛔ 前提是**必须实色背景**：ClearType 的彩色边缘依赖「底色已知且不透明」，
     ///   一旦叠到半透明底衬上就会脏（`taskbar_widget` 头部记着这条）。
     pub unsafe fn create_font_cleartype(px_height: i32, bold: bool) -> HFONT {
-        let face: Vec<u16> = "Segoe UI\0".encode_utf16().collect();
+        // ⭐ 与面板**同一个字体族**（用户 2026-09-29）：tooltip 是面板的延续，
+        // 族名若与面板不同，同一首歌在两处的字形/字距就不一样（此前是
+        // 面板 Segoe UI + tooltip 也 Segoe UI，但字重不同 ⇒ 观感仍不一致）。
+        let face: &[u16] = widget_face();
         CreateFontW(
             -px_height,
             0,
@@ -5132,6 +5213,31 @@ mod tests {
         );
     }
 
+    /// ⭐ **字号必须放得下每一行**（用户 2026-09-29 要求「字体看起来很小」⇒ 11→12 DIP）。
+    ///
+    /// 面板把空间切成上下两行（`text_row_h = m.icon / 2`），字号一旦超过行高，
+    /// 两行就会**互相压字**——而这既不报错也不 panic，只是「糊成一团」，极难归因。
+    #[test]
+    fn font_fits_inside_every_text_row() {
+        use super::Metrics;
+        for (dpi, scale) in [
+            (96u32, TaskbarContentScale::Default),
+            (120, TaskbarContentScale::Default),
+            (144, TaskbarContentScale::Default),
+            (192, TaskbarContentScale::Default),
+            (120, TaskbarContentScale::Smaller),
+            (192, TaskbarContentScale::Smaller),
+        ] {
+            let m = Metrics::for_scales(dpi, scale);
+            assert!(
+                m.font <= m.text_row_h,
+                "dpi={dpi} scale={scale:?}：字号 {} > 行高 {} ⇒ 两行压字",
+                m.font,
+                m.text_row_h
+            );
+        }
+    }
+
     /// ⭐⭐⭐ **缩小必须覆盖**整幅**源图**（2026-09-29 实测踩到：封面变成纯色块）。
     ///
     /// ⛔⛔ 判据的图案**不能有周期性**：我第一版用「2px 黑白条」，结果**采错区域也照样通过**
@@ -5863,7 +5969,7 @@ mod tests {
         let m = m96();
         assert_eq!(
             (m.h, m.icon, m.radius, m.font, m.text_row_h),
-            (40, 32, 6, 11, 16)
+            (40, 32, 6, 12, 16)
         );
 
         let m120 = Metrics::for_dpi(120); // 本机任务栏 DPI = 120（125%）
@@ -5873,7 +5979,7 @@ mod tests {
         );
         assert_eq!(m120.icon, 40);
         assert_eq!(m120.radius, 8, "6 DIP × 1.25 = 7.5 → 8");
-        assert_eq!(m120.font, 14, "11 DIP × 1.25 = 13.75 → 14");
+        assert_eq!(m120.font, 15, "12 DIP × 1.25 = 15");
         assert_eq!(m120.text_row_h, 20, "行高 = 图标高的一半");
 
         assert_eq!(Metrics::for_dpi(144).h, 60, "150%");
@@ -5901,14 +6007,14 @@ mod tests {
 
         // ── 内容：「默认」= 与底衬同口径（120）──
         assert_eq!(big.content_dpi, 120);
-        assert_eq!((big.icon, big.font, big.text_row_h), (40, 14, 20));
+        assert_eq!((big.icon, big.font, big.text_row_h), (40, 15, 20));
 
         // ── 内容：「偏小」= **降一档** ⇒ 125% 系统下用 100%（用户 2026-09-29 的原话）──
         assert_eq!(
             small.content_dpi, 96,
             "系统 125% 时「偏小」必须降到 100%（不是 93.75%）"
         );
-        assert_eq!((small.icon, small.font, small.text_row_h), (32, 11, 16));
+        assert_eq!((small.icon, small.font, small.text_row_h), (32, 12, 16));
 
         // ── 区分力：两档必须在**内容**上真的不同，否则本条证明不了任何事
         for (name, a, b) in [
