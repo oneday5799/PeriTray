@@ -185,9 +185,31 @@ jobs:
           set -uo pipefail
           TAG="${{ github.ref_name }}"
           out="$RUNNER_TEMP/release-notes.md"
-          # 写到 runner 临时目录，**不入库**（这是本方案的全部意义）
+          # ⛔⛔⛔ **必须先把 tag 对象显式取回来，否则下面那道守卫恒成立。**
+          #
+          # 2026-09-30 实测事故（v1.4.0-beta.2 发布失败）：远端 tag **确实是附注 tag**
+          # （`git cat-file -t` 与 GitHub API 的 `object.type` 双向确认均为 `tag`），
+          # 守卫却照样 `exit 1`。日志给出的原因是 checkout 的 refspec：
+          #
+          #     git -c protocol.version=2 fetch --no-tags --prune --depth=1 \
+          #         origin +b81f9d28d98c…:refs/tags/v1.4.0-beta.2
+          #                        ^^^^^^^^^^^^^^^^^^^^^^^^ **commit 的 SHA**，不是 tag ref
+          #
+          # `actions/checkout` 把 **commit 直接写进 `refs/tags/$TAG`** ⇒ runner 里的
+          # `refs/tags/$TAG` 是个**指向 commit 的轻量 tag** ⇒ `cat-file -t` 恒为
+          # `commit`，**与远端 tag 实际类型无关**。
+          # ⇒ 后果：这道「轻量 tag」守卫在默认浅克隆下**永远触发**，
+          #   **附注 tag 也发不出去**（2026-09-28 加守卫以来首个 Release 才撞上）。
+          #
+          # `--no-tags` 只抑制「自动跟随其它 tag」，显式 refspec 一个 tag ref 时
+          # git 仍会取回 tag 对象 ⇒ 这一行之后 `cat-file -t` 才是可信的。
+          # 本地逐步复现过：fetch 前 `commit` / fetch 后 `tag` 且 `%(contents)` 可读。
+          git fetch --force --no-tags --depth=1 origin \
+            "+refs/tags/$TAG:refs/tags/$TAG" || true
           if [ "$(git cat-file -t "$TAG" 2>/dev/null || true)" != "tag" ]; then
-            echo "::error::tag $TAG 是**轻量 tag**（ref 直接指向 commit），没有可读的附注正文。"
+            echo "::error::tag $TAG 取不到**附注对象**（本地 refs/tags/$TAG 指向 $(git cat-file -t "$TAG" 2>/dev/null || echo '不存在')）。"
+            echo "::error::两种成因：① 远端就是轻量 tag（ref 直接指向 commit）；"
+            echo "::error::② 上一行的显式 fetch 失败（网络）——checkout 的浅克隆只拿到 commit。"
             echo "::error::发布流程第 3 步要求附注 tag：git tag -a $TAG -F <notes文件>"
             echo "::error::（tag 尚未发布、删掉重来成本很低；一旦发出去，notes 写错只能补发新 tag）"
             exit 1
