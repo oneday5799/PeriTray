@@ -109,8 +109,42 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 // config-changed: 设置页切主题时，主窗口/设置页实时同步
-onTauriEvent("config-changed", () => {
+//
+// ⭐ **顺带同步「显示设备信息组件」开关**（用户 2026-09-30 实测报障）：
+//   弹出窗口是**隐藏而非销毁**，而开关值原先**只在加载时取一次**
+//   ⇒ 用户在设置页开关之后，popup 里那份**一直是陈旧的**，
+//   于是「第一次右键」仍按旧值显示「钉到任务栏」（下一次数据刷新才自愈）。
+//   ⇒ 该事件在**每个窗口**都会触发，且 payload 就是**完整 config 快照**
+//   ⇒ 在这个**共享** handler 里同步，是唯一需要改的地方（两页都覆盖，且
+//   **不新增监听器、不新增取数**）。
+//
+// ⚠️ `taskbarWidgetEnabled` 用 `let` 声明在下方（约 320 行），而这个监听器
+//   在上方注册 —— **函数声明会提升、`let` 不会**，但事件是异步的，
+//   派发时整个脚本早已执行完毕 ⇒ 不存在 TDZ。仅此一处依赖该事实，已注记。
+onTauriEvent("config-changed", (event) => {
   initTheme();
+  const cfg = event && event.payload;
+  // ⭐ 开关走 payload **同步**改（没有 await ⇒ 零陈旧窗口）
+  if (cfg && typeof cfg.taskbar_widget_enabled === "boolean") {
+    window.applyTaskbarWidgetEnabled(cfg);
+  }
+  // ⭐ 已钉名单：必须另发一次 invoke —— payload 里的 `pinned_taskbar_devices`
+  //   只有**身份键**（`DeviceKey`），**没有解析后的显示名**，构不出「钉到/移出」的文案。
+  //
+  //   触发形态（用户 2026-09-30 实测）：在**设置页**移除已钉设备 ⇒ popup 的名单
+  //   陈旧 ⇒ 右键文案与真实状态相反；而 popup **重新打开并不会刷新**
+  //   （只有刷新按钮 / 设备事件才重跑）⇒ 错文案会留到下一次设备事件。
+  //
+  // ⚠️⚠️ 上面那条同步的与这一条**不是冗余，别「优化」掉其中任何一条**：
+  //   · 开关走 payload ⇒ **同步**生效 ⇒ 切换后**第一次**右键就对
+  //   · 名单只能走 invoke ⇒ **最终一致**（且 payload 根本构不出它）
+  //   而 `refreshTaskbarPinnedNames()` 内部那次 `get_config` 也会顺手同步开关，
+  //   但它是 **await 回来的、晚一拍** ⇒ **替代不了**上面那条同步的。
+  //
+  // ⚠️ 代价：每次 `config-changed` 多一次 `get_pinned_taskbar_list`。
+  //   它是**内存读 + 小列表序列化**，且只在用户操作时触发（非紧循环）——
+  //   与本仓反复较真的 WMI 数百毫秒不在一个量级，**不值得为省它再加一层判据**。
+  window.refreshTaskbarPinnedNames();
 });
 
 // ── 窗口材质（共享：设置页 + 主窗口） ─────────────────
@@ -320,6 +354,14 @@ window.clampMenuPosition = function (menu, x, y) {
 //   判据本身仍全在后端：这里只用于**菜单文案**。
 let taskbarPinnedNameSet = new Set();
 let taskbarPinnedAudioIdSet = new Set();
+// ⭐ 「显示设备信息组件」开关（`config.taskbar_widget_enabled`）。
+//   设备卡片的右键菜单里「钉到任务栏/移出任务栏」**只在它开启时出现**
+//   （用户 2026-09-30 要求）——组件关着时那个入口没有意义。
+//
+// ⚠️ 初值 `false` 是**刻意 fail-closed**（取不到就当关）：这条规则的方向是
+//   「开启时才显示」，所以「未知」必须归到「不显示」，否则会在组件关闭时
+//   漏出一个点不动的菜单项。
+let taskbarWidgetEnabled = false;
 
 window.isTaskbarPinnedName = function (name) {
   return taskbarPinnedNameSet.has(name);
@@ -329,22 +371,53 @@ window.isTaskbarPinnedAudioId = function (id) {
   return taskbarPinnedAudioIdSet.has(id);
 };
 
+window.isTaskbarWidgetEnabled = function () {
+  return taskbarWidgetEnabled;
+};
+
+// ⭐ 用**已有的 config 对象**同步开关，供 `config-changed` handler 零取数调用。
+// ⛔ 只在字段**确实是布尔**时才写：`emit` 的 payload 理论上可能缺字段
+//   （旧版后端传空 payload），那时**保持上一份已知值**而不是回落 false。
+window.applyTaskbarWidgetEnabled = function (cfg) {
+  if (cfg && typeof cfg.taskbar_widget_enabled === "boolean") {
+    taskbarWidgetEnabled = cfg.taskbar_widget_enabled;
+  }
+};
+
 window.refreshTaskbarPinnedNames = async function () {
   const inv = window.getInvoke ? window.getInvoke() : null;
   if (!inv) return;
-  try {
-    const rows = (await inv("get_pinned_taskbar_list")) || [];
+  // ⭐ 顺带取「显示设备信息组件」开关 ⇒ 与共用名单**同一处、同一次刷新**。
+  //   两页都已在加载时调用本函数，菜单项的可见性因此与菜单文案**同源同新鲜**。
+  //
+  // ⛔⛔ 两个取数**各自兜底、互不牵连**：若直接 `Promise.all` 而不各自 catch，
+  //   任一 reject 会把另一个的结果一起丢掉 ⇒ 开关一次瞬时失败就会拖垮
+  //   **名单刷新**（那驱动菜单文案「钉到/移出」的翻转）。两者故障域不同，
+  //   必须独立成败。
+  const [rows, cfg] = await Promise.all([
+    inv("get_pinned_taskbar_list").catch((e) => {
+      console.warn("get_pinned_taskbar_list failed", e);
+      return null;
+    }),
+    inv("get_config").catch((e) => {
+      console.warn("get_config failed", e);
+      return null;
+    }),
+  ]);
+  // ⚠️ 失败（null）时**不清空**已有集合：菜单文案退到「钉到任务栏」比「全部显示已钉」更安全
+  //    （最坏是文案不准，点下去仍由后端按身份键翻转真实状态）。
+  if (rows) {
     taskbarPinnedNameSet = new Set(rows.map((r) => r.name));
     const ids = [];
     for (const r of rows) {
       for (const id of r.audio_ids || []) ids.push(id);
     }
     taskbarPinnedAudioIdSet = new Set(ids);
-  } catch (e) {
-    // ⚠️ 失败时**不清空**已有集合：菜单文案退到「钉到任务栏」比「全部显示已钉」更安全
-    //    （最坏是文案不准，点下去仍由后端按身份键翻转真实状态）。
-    console.warn("refreshTaskbarPinnedNames failed", e);
   }
+  // ⚠️ 同理：取失败时**保持上一份已知值**，而不是回落 `false`。
+  //   否则一次瞬时失败就会让「已钉到任务栏」暂时失去取消入口（设置页仍可移除，
+  //   但那是另一处、另一条路径）。只有真的读到配置才覆盖。
+  window.applyTaskbarWidgetEnabled(cfg);
 };
 
 window.hideAllContextMenus = function () {

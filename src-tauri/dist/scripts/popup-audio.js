@@ -396,7 +396,16 @@ async function showAudioContextMenu(x, y, device) {
     }
     hideAllContextMenus();
   });
-  menu.appendChild(pinItem);
+  // ⛔ **只在「显示设备信息组件」开启时才追加这一项**（用户 2026-09-30 要求）。
+  //   组件关着时，钉过去也不会显示 ⇒ 入口没有意义。
+  // ⚠️ 判据来自 `common.js` 的共用开关，与设备信息页**同一个函数**
+  //   （`isTaskbarWidgetEnabled`）⇒ 两页不会分叉。
+  // ⛔ fail-closed：开关取不到时初值为 false ⇒ 宁可不显示，不显示一个点不动的项。
+  // 📌 即便组件关闭时仍有已钉设备，**取消入口也没丢**：设置页「任务栏组件」
+  //   那张卡可以查看与移除。
+  if (window.isTaskbarWidgetEnabled()) {
+    menu.appendChild(pinItem);
+  }
 
   document.body.appendChild(menu);
   clampMenuPosition(menu, x, y);
