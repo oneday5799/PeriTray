@@ -599,6 +599,18 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
 - **本地运行**：仓库根目录 `npm run tauri dev`（首次需编译）；改 Rust 源会被
   dev 监听自动重建重启，改 dist 前端同样热生效
+- ⛔⛔ **但「直接跑 `target/debug/PeriTray.exe`」是另一套规则：改 `dist/` 前端
+  必须重新 `cargo build`，光重启进程无效。**
+  `tauri.conf.json` 的 `frontendDist = "dist"` 是**目录**⇒ `tauri-build` 在
+  **编译期**把资产（压缩）内嵌进二进制 ⇒ 磁盘上的新 JS 不会被运行时读到。
+  ⚠️ 资产是**压缩**的，所以 `grep` 二进制**查不到**新代码里的标识符
+  （实测：`isTaskbarWidgetEnabled` 在 exe 里 grep 不到，**不等于**没内嵌）——
+  **别用 grep 下结论**，要用 `node tools/cdp-eval.mjs` 直接问运行中的 webview。
+  **自查判据**：`node tools/cdp-eval.mjs popup "typeof window.<你刚加的顶层符号>"`
+  ⇒ 报 `undefined` 就是没重新构建。**本会话因此连续三次把未构建的代码交给用户复测**
+  （2026-10-04：tooltip 修复、pin 菜单项开关、两开关都关的判定），
+  三次都表现为「改了没效果」，而闸门全绿 ⇒ **闸门绿 ≠ 用户能看见**。
+  ⇒ **纪律：交付用户复测前，先用 cdp-eval 确认新符号在运行时确实存在。**
 - **调试开关**：环境变量 `PM_DEV_OPEN_SETTINGS=1` 启动时延迟 1.5s 自动打开
   设置窗口（main.rs），用于自动化验证设置页脚本加载与初始化
 - **日志**：写入 `<可写根>/logs/debug_YYYYMMDD.log`（保留策略设为「每次仅保留一次」时
