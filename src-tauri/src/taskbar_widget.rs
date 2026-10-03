@@ -8450,6 +8450,81 @@ mod tests {
         );
     }
 
+    /// ⭐⭐ **两个组件开关都关 ⇒ 整个组件不显示**（用户 2026-09-30 实测报障）。
+    ///
+    /// ⛔ **这一格此前从未被测过**，bug 就藏在那个空格里：
+    /// `panel_falls_back_when_music_unavailable` 的 ④ 用 `Config::default()`，
+    /// 而它的 `taskbar_panel` 默认是 **Devices** ⇒ 走的是「设备不可用 ⇒ None」
+    /// 那条路，**碰不到**「记住的是音乐」这一支。
+    /// ⇒ 「两个开关都关 + 记住=Music + 有会话」会**穿过** ① 的
+    /// `Music if music_available` ⇒ 组件仍然存在，且留下的**恰是本应最后关闭的那块**。
+    ///
+    /// ⚠️ 判据锚在**「组件存不存在」这个维度**上，与 `taskbar_panel` 无关：
+    ///   下面把 `taskbar_panel` 在 Music/Devices 之间**都试一遍**，
+    ///   两种都必须 `None` —— 只要有一种漏掉，闸门就有洞。
+    ///
+    /// 可证伪：删掉 `taskbar_panel_for` 里的 ⓪ 层（两个开关都关就返回 `None`），
+    /// 本测试立刻转红（Music 那一支会返回 `Some(Music)`）。
+    #[test]
+    fn widget_absent_when_both_component_switches_off() {
+        use crate::config::{taskbar_panel_for, Config, TaskbarPanel};
+
+        // 已钉了设备 —— 让「设备侧」尽可能可用，确保 None 不是因为「没钉设备」
+        let base = Config {
+            taskbar_widget_enabled: false,
+            taskbar_music_enabled: false,
+            pinned_taskbar_devices: vec![crate::config::PinnedDevice {
+                key: "c:x".into(),
+                fallback: None,
+                alias: None,
+            }],
+            ..Default::default()
+        };
+
+        for panel in [TaskbarPanel::Music, TaskbarPanel::Devices] {
+            let c = Config {
+                // ⚠️ `TaskbarPanel` 是 `Copy` ⇒ 这里**不能** `.clone()`
+                //    （`clippy::clone_on_copy` 在 `-D warnings` 下是硬失败）
+                taskbar_panel: panel,
+                ..base.clone()
+            };
+            // 有会话（true）与无会话（false）都要 None：
+            // 「音乐侧可用性只看有没有会话」⇒ 这一支曾经能靠 true 复活组件
+            assert_eq!(
+                taskbar_panel_for(&c, true),
+                None,
+                "两个开关都关 + 记住={panel:?} + 有会话 ⇒ 组件必须不存在"
+            );
+            assert_eq!(
+                taskbar_panel_for(&c, false),
+                None,
+                "两个开关都关 + 记住={panel:?} ⇒ 组件必须不存在"
+            );
+            // ⚠️ 存在性判据**与用户的选择无关**：不许改写
+            assert_eq!(c.taskbar_panel, panel, "关组件不得改写用户的选择");
+        }
+
+        // ── 反向对照：任意一个开关开着，就**不该**被这一层拦掉 ──────────
+        // （否则这一层就成了「无论开关如何都不显示」的恒真判据）
+        for (w, m, want) in [
+            (true, false, Some(TaskbarPanel::Devices)),
+            (false, true, Some(TaskbarPanel::Music)),
+            (true, true, Some(TaskbarPanel::Devices)),
+        ] {
+            let mut c = Config {
+                taskbar_widget_enabled: w,
+                taskbar_music_enabled: m,
+                ..base.clone()
+            };
+            c.taskbar_panel = TaskbarPanel::Devices;
+            assert_eq!(
+                taskbar_panel_for(&c, true),
+                want,
+                "设备开关={w} 音乐开关={m} ⇒ 必须显示 {want:?}（⓪ 层不许误伤）"
+            );
+        }
+    }
+
     // ── 中毒（poison）后的可证伪验证 ──────────────────────────────────
     //
     // ⛔ 为什么要有这组：`LAST_ITEM_RECTS` 原先的 6 处都是裸 `.lock()`，
