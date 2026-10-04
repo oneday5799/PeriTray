@@ -1047,9 +1047,39 @@ fn hit_rect(r: Option<windows_sys::Win32::Foundation::RECT>, local: (i32, i32)) 
 ///
 /// ⛔ 分成两处写就是「切形态时横向跳」那类闪的来源：两处一旦漂移，肉眼只看到
 ///   「动一下指针内容就错位」，几乎无法定位。
+///
+/// ⭐⭐ **`cover_gap` 由调用方传进来，不在这里重算**（2026-09-30）。
+/// 本函数原先自己算了一遍 `m.dip(MUSIC_COVER_GAP_DIP)`，而 `draw_music_render`
+/// 里也有一份 `cover_gap` ⇒ **同一口径写了两遍**。
+/// ⇒ 一旦「封面↔文字间距」的口径变了（用户 2026-09-30 就在反复调这一项），
+///   两处很容易只改一处 ⇒ **正文起点与封面右缘错位**，表现为
+///   「封面到双排信息的距离变了」（用户实测报的就是这个）。
+/// ⇒ 现在**只有 `draw_music_render` 那一处**算 `cover_gap`，本函数只做加法。
+///
+/// ⚠️ `pad_x` / `icon` 传的是**封面那一侧**的度量（当前是固定档 `m_art`）：
+///   两者必须**同源**，否则正文起点会跟着设置漂。
 #[cfg(target_os = "windows")]
-fn music_body_x(m: &Metrics) -> i32 {
-    m.pad_x + m.icon + m.dip(MUSIC_COVER_GAP_DIP)
+fn music_body_x(pad_x: i32, icon: i32, cover_gap: i32) -> i32 {
+    pad_x + icon + cover_gap
+}
+
+/// 把一个**控件**在 `h` 高的底衬里**按自己的尺寸**垂直居中（**纯函数**，可单测）。
+///
+/// ⭐⭐ 音乐面板的三个控件（封面 / 三键 / 切换键）**必须各走本函数、各按自己的尺寸**
+///   —— **不许借别人的坐标**。
+///
+/// ⚠️⚠️ 借坐标只在**尺寸相等**时恰好居中：都从 `y` 起画时，`[y, y + size]`
+///   的中心才是 `h / 2` —— 而这要求所有控件的 `size` 与 `y` 同源同值。
+///   用户 2026-09-30 要求「缩放设置只管三键与切换键、封面恒定」
+///   ⇒ 封面与三键**不再相等** ⇒ 复用 `icon_y` 会让三键**偏上**：
+///   125% 下 `h=50`、封面 40、三键 32 ⇒ 封面 `[5,45]` 中心 25，
+///   三键 `[5,37]` 中心 21 ⇒ **偏上 4px**（用户实测报「缩小的三键没垂直居中」）。
+///
+/// ⛔ 这正是「同一口径写了两份」的变种：此处若各写各的 `(h - size) / 2`，
+///   改一处就会重新漂。
+#[cfg(target_os = "windows")]
+fn center_y(h: i32, size: i32) -> i32 {
+    (h - size) / 2
 }
 
 /// 音乐面板绘制（**主线程**）。
@@ -1078,6 +1108,9 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
 fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let dark = crate::windows::system_dark_mode();
     let m = Metrics::current_content();
+    // ⭐ 封面 + 双排信息**恒定**（用户 2026-09-30：缩放设置对它们不生效）；
+    //   三键 / 切换键 / 各项间距 / 左右留白仍跟随 `m`（同轮逐条确认「都按 A」）。
+    let m_art = Metrics::art_fixed();
     let snap = crate::taskbar_music::snapshot();
     let hovered = HOVERED.load(Ordering::Acquire);
     let cur = snap.current_session().cloned().unwrap_or_default();
@@ -1090,9 +1123,10 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         //   笔画粘连、字腔变窄，观感偏「糊成一团」。
         //   ⭐ 顺带与 **tooltip 对齐**了：tooltip 走 `create_font_cleartype(.., false)`
         //   本来就是常规字重，之前面板加粗 / tooltip 常规 ⇒ 同一首歌在两处粗细不一。
-        let f = ffi::create_font(m.font, false);
+        // ⛔ 字号取 `m_art`（固定档）：双排信息不随缩放设置变
+        let f = ffi::create_font(m_art.font, false);
         if f.is_null() {
-            return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
+            return Painted::Committed(draw_blank(hwnd, m_art.pad_x * 2));
         }
         let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
         let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
@@ -1105,13 +1139,13 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         //   两条路径（设备 / 音乐）此前判据不一致，属于典型的分叉点。
         if dc.is_null() {
             windows_sys::Win32::Graphics::Gdi::DeleteObject(f);
-            return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
+            return Painted::Committed(draw_blank(hwnd, m_art.pad_x * 2));
         }
         (f, dc)
     };
     if memdc.is_null() {
         unsafe { ffi::destroy_font(font) };
-        return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
+        return Painted::Committed(draw_blank(hwnd, m_art.pad_x * 2));
     }
 
     let title_wide: Vec<u16> = if cur.title.is_empty() {
@@ -1143,7 +1177,8 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     //   ⛔ 末段（下一首→切换）的**基准值**也用它：否则最短宽度下会出现
     //   「5 / 5 / 5 / 13」这种一眼可见的不齐（撑长的余量仍然只加在末段）。
     //   原先用 `m.item_gap`（10 DIP）⇒ 125% 下 13px，比 5px 宽一倍多。
-    let gap = m.icon_text_gap;
+    // ⛔ 固定（用户 2026-09-30 选 BBB）：按键间距不随缩放设置变
+    let gap = m_art.icon_text_gap;
 
     // ⭐ **封面右侧的间隙另算，比按键之间宽**（用户 2026-09-29：「把封面到上一首
     //   按钮和到两排文字的距离同时增加一些」）。
@@ -1153,7 +1188,8 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     //   会横向跳一下。
     //   ⛔ 不复用 `m.icon_text_gap`：那是**设备面板**共用的（封面↔电量文字），
     //     改它会连带把设备面板间距也改掉 ⇒ 音乐面板单开一个 DIP。
-    let cover_gap = m.dip(MUSIC_COVER_GAP_DIP);
+    // ⛔ 固定（BBB）：封面↔文字 / 封面↔第一键 的间距不随设置变
+    let cover_gap = m_art.dip(MUSIC_COVER_GAP_DIP);
     // ⛔⛔ 文字宽度**上限必须大于「固定段」**，否则「撑长」永远看不到
     //   （用户 2026-09-29 实测报「没变化啊」）。
     //   根因：原先复用了 `m.item_max_w`（= 150 DIP，**给设备面板的电量/音量
@@ -1161,7 +1197,9 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     //   2×13）已有 176px ⇒ **最多只能撑 12px**，肉眼根本看不出来。
     //   ⇒ 音乐面板用自己的上限 `MUSIC_TEXT_MAX_W_DIP`，并强制它**大于固定段**。
     const MUSIC_TEXT_MAX_W_DIP: i32 = 320; // 125% 下 400px，够长的歌名也能撑开
-    let text_cap = m.dip(MUSIC_TEXT_MAX_W_DIP);
+                                           // ⚠️ 上限也用 `m_art`：否则设置变小 ⇒ 上限变小 ⇒ **歌名被更早截断**，
+                                           //   那等于设置仍在影响双排信息（与本条要求矛盾）。见 `art_fixed` 的说明。
+    let text_cap = m_art.dip(MUSIC_TEXT_MAX_W_DIP);
     // ⚠️ 用 `btn`（= `m.icon`）而不是 `m.h`：`m.h`(50) > `btn`(40) 会让这个
     //   「固定段」估算偏大 ⇒ `text_cap` 与下面那条 `debug_assert` 都跟着放宽，
     //   断言因此**比预期弱**（本批顺手改正，125% 下不影响最终值）。
@@ -1205,8 +1243,9 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let body_w = text_w.max(strip_w);
     let show_switch = switch_visible(crate::config::TaskbarPanel::Music);
     let switch_w = if show_switch { switch_px + gap } else { 0 };
-    let content_w = m.icon + cover_gap + body_w + switch_w;
-    let desired_w = content_w + m.pad_x * 2;
+    // ⭐ 首项是**封面**（固定）；间距 / 正文 / 切换键仍跟随
+    let content_w = m_art.icon + cover_gap + body_w + switch_w;
+    let desired_w = content_w + m_art.pad_x * 2;
     if !SLOT_VALID.load(Ordering::Acquire) {
         unsafe {
             ffi::hide(hwnd as _);
@@ -1228,7 +1267,8 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let slot_rel_x = SLOT_X.load(Ordering::Acquire) - tb_left;
     let slot_w = SLOT_W.load(Ordering::Acquire);
     let total_w = desired_w.min(tb_w.max(min_run_w(&m)));
-    let edge_margin = m.dip(EDGE_MARGIN_DIP);
+    // ⛔ 固定（BBB）：否则改设置会**移动整个面板**在任务栏上的落点
+    let edge_margin = m_art.dip(EDGE_MARGIN_DIP);
     let aligned = align_in_slot(slot_rel_x, slot_w, total_w, &position, edge_margin);
     let rel_x = resolve_rel_x(
         locked,
@@ -1253,7 +1293,21 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     unsafe { ffi::show(hwnd as _) };
 
     let h = m.h;
-    let icon_y = (h - m.icon) / 2;
+    // ⭐ 三个控件**各按自己的尺寸**居中，一律走 `center_y`（见其文档：
+    //   借别人的坐标只在尺寸相等时恰好居中，而封面与三键已不再相等）
+    let icon_y = center_y(h, m_art.icon); // 封面：固定边长
+                                          // ⭐⭐ 三键**按自己的尺寸**居中，**不**复用封面的 `icon_y`。
+                                          //
+                                          // ⚠️⚠️ 复用 `icon_y` 只有在 `btn == 封面边长` 时才恰好居中（两者都从
+                                          //   `icon_y` 起画，`[icon_y, icon_y + size]` 的中心才是 `h/2`）。
+                                          //   而用户 2026-09-30 要求「缩放设置只管三键与切换键」、封面恒定
+                                          //   ⇒ 两者**不再相等** ⇒ 复用会让三键整体偏上：
+                                          //   125% 下 h=50、封面 40、三键 32 ⇒ 封面 [5,45] 中心 25，
+                                          //   三键 [5,37] 中心 21 ⇒ **偏上 4px**（用户实测报「缩小的三键没垂直居中」）。
+                                          //
+                                          //   ⭐ 与「切换」键同款做法（`let sy = (h - switch_px) / 2`）：
+                                          //   **每个控件按自己的尺寸居中**，不借封面的位置。
+    let btn_y = center_y(h, btn); // 三键：跟随缩放设置
     let Some(dib) = (unsafe { ffi::create_dib(total_w, h) }) else {
         append_log("[widget] 音乐面板 CreateDIBSection 失败");
         unsafe { ffi::destroy_font(font) };
@@ -1262,9 +1316,9 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
 
     // ── 布局一次算清并发布（绘制与命中共用这一份）───────────────────
     let mut item_rect = windows_sys::Win32::Foundation::RECT {
-        left: m.pad_x,
+        left: m_art.pad_x,
         top: 0,
-        right: m.pad_x + m.icon + cover_gap + body_w,
+        right: m_art.pad_x + m_art.icon + cover_gap + body_w,
         bottom: h,
     };
     let mut buttons = [windows_sys::Win32::Foundation::RECT {
@@ -1278,13 +1332,13 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         // ⭐ 三键**顶格左对齐**排布：余量不摊给它们，而是全留给「下一首 → 切换」那一段
         //   （见上面 `body_w` 那段规格）。**不能居中**——居中会让封面到第一个键的
         //   距离随歌名变化，正是用户要求恒定的那一段。
-        let mut x = music_body_x(&m);
+        let mut x = music_body_x(m_art.pad_x, m_art.icon, cover_gap);
         for slot in buttons.iter_mut() {
             *slot = windows_sys::Win32::Foundation::RECT {
                 left: x,
-                top: icon_y,
+                top: btn_y,
                 right: x + btn,
-                bottom: icon_y + btn,
+                bottom: btn_y + btn,
             };
             x += btn + gap;
         }
@@ -1293,7 +1347,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         let x = item_rect.right + gap;
         // ⭐ 命中矩形用**切换图标自己的边长**（比三键小）⇒ 点空白不会误触发「切换」。
         //   垂直居中：图标比三键矮，要在三键的行内居中才视觉对齐。
-        let sy = (h - switch_px) / 2;
+        let sy = center_y(h, switch_px); // 切换键：跟随缩放设置
         switch_btn = Some(windows_sys::Win32::Foundation::RECT {
             left: x,
             top: sy,
@@ -1342,7 +1396,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
             // ⛔ 走**预乘直通**：封面缓存里存的就是预乘数据（见 taskbar_music::COVER_IMAGE）
             if let Some((cpx, cw, chh)) = resample::scale_cached_premul(
                 resample::NS_COVER | (snap.cover_hash as u32),
-                m.icon as u32,
+                m_art.icon as u32, // 封面边长固定
                 &(cov.data.clone(), cov.px, cov.px),
             ) {
                 for yy in 0..(chh as i32).min(h - icon_y) {
@@ -1367,7 +1421,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
             }
         }
 
-        let body_x = music_body_x(&m);
+        let body_x = music_body_x(m_art.pad_x, m_art.icon, cover_gap);
         if hovered {
             // ② 三键：不可用的键画**半透明**（与 FluentFlyout 一致：不隐藏、只置灰）
             let slots = [
@@ -1438,22 +1492,30 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
             let (t_clamped, t_ellipsis) = music_text_box(t_nat, text_cap);
             let (a_clamped, a_ellipsis) = music_text_box(a_nat, text_cap);
             if t_clamped > 0 {
-                if let Some(mask) =
-                    ffi::render_text_mask(t_clamped, m.text_row_h, font, &title_wide, t_ellipsis)
-                {
+                if let Some(mask) = ffi::render_text_mask(
+                    t_clamped,
+                    m_art.text_row_h,
+                    font,
+                    &title_wide,
+                    t_ellipsis,
+                ) {
                     blit_text_mask(px, total_w, &mask, body_x, icon_y, (cr, cg, cb), 1.0);
                 }
             }
             if a_clamped > 0 {
-                if let Some(mask) =
-                    ffi::render_text_mask(a_clamped, m.text_row_h, font, &artist_wide, a_ellipsis)
-                {
+                if let Some(mask) = ffi::render_text_mask(
+                    a_clamped,
+                    m_art.text_row_h,
+                    font,
+                    &artist_wide,
+                    a_ellipsis,
+                ) {
                     blit_text_mask(
                         px,
                         total_w,
                         &mask,
                         body_x,
-                        icon_y + m.text_row_h,
+                        icon_y + m_art.text_row_h, // 第二行随**字号**档，不随设置
                         (cr, cg, cb),
                         0.5,
                     );
@@ -1750,6 +1812,37 @@ impl Metrics {
         let scale = crate::config::with_config(|c| c.taskbar_content_scale);
         Self::for_scales(taskbar_dpi(), scale)
     }
+
+    /// 音乐组件的**封面 + 双排信息**专用度量：**恒为默认档**，不随
+    /// 「任务栏内容缩放大小」改变（用户 2026-09-30 明确要求）。
+    ///
+    /// ⭐ 只作用于音乐面板里的**这两样**；同一面板的**三键 / 切换键 / 各项间距 /
+    ///   左右留白**仍跟随设置（用户同轮逐条确认「都按 A」＝跟随）。
+    ///
+    /// ⚠️⚠️ **为什么这两样要钉住、其余跟随**（别再合并成一个档位）：
+    ///   封面是**正方形图片**、双排信息是**两行连续文字**，它们与设备面板那种
+    ///   「一串电量/音量数字」对尺寸缩放的敏感度完全不同 ⇒ 一起缩放会让
+    ///   **封面与文字的比例**失真（用户 2026-09-30 实测后要求拆开）。
+    ///   而按键是**图标控件**，与设备面板的图标同性质 ⇒ 跟着设备那档走才对。
+    ///
+    /// ⚛️ 连带一处必须一起钉住：**文字宽度上限** `MUSIC_TEXT_MAX_W_DIP` 的换算。
+    ///   它若跟着设置缩放，设置变小 ⇒ 上限变小 ⇒ **歌名被更早截断**
+    ///   ⇒ 那等于「设置仍然在影响双排信息」，与本条要求直接矛盾。
+    ///
+    /// ⛔ 由 `draw_music_render` 与 `content_px`（tooltip）**共用**：
+    ///   否则用户设「偏小」时**提示会比它描述的文字大**（`content_px` 的硬红线）。
+    pub fn art_fixed() -> Self {
+        Self::art_fixed_for(taskbar_dpi())
+    }
+
+    /// [`Self::art_fixed`] 的**纯函数**版本（给定底衬 DPI），便于单测。
+    ///
+    /// ⚠️ 为什么要单独抽一个：`art_fixed()` 内部读 `taskbar_dpi()`（真任务栏窗口），
+    ///   在 `#[test]` 里会回落 96 ⇒ **测不到任何非 96 的情形**，判据会退化成
+    ///   「只验证了一个像素值」。同 `for_scales` 的思路。
+    pub fn art_fixed_for(backdrop_dpi: u32) -> Self {
+        Self::for_scales(backdrop_dpi, crate::config::TaskbarContentScale::Default)
+    }
 }
 
 /// 任务栏所在显示器的 DPI（取不到回落 96）。
@@ -1770,13 +1863,23 @@ fn taskbar_dpi() -> u32 {
 /// 把一个 **DIP** 标称值换算成本机物理像素，**走「内容」口径**。///
 /// ⭐ 供 `taskbar_tooltip` 复用 ⇒ tooltip 的字号/宽度与 widget 的文字**同一尺度**。
 /// ⛔⛔ **必须是内容口径、不是系统 DPI**（早先误用了 `taskbar_dpi()`，125% 下得 14px）：
-/// widget 上的文字按 `taskbar_content_scale` 解析（**默认档 = 96 DPI 基准 ⇒ 11px**），
+/// widget 上的文字按**内容**口径解析（`Default` 档 = 96 DPI 基准 ⇒ 11px），
 /// 而底衬/任务栏按系统 DPI（125% ⇒ 50px）。两者是**故意**分开的（`E14` 的硬红线）。
 /// 误用系统 DPI ⇒ 125% 下 tooltip 文字 14px 而 widget 文字 11px
 /// ⇒ **提示比它所描述的内容还大**，与 FluentFlyout 实测「tooltip 与 widget 文字等大」相反。
+///
+/// ⭐ 走**当前显示的面板**对应的内容尺度，不是单一全局档位：
+///   · 音乐面板 ⇒ [`Metrics::art_fixed`]（封面 + 双排信息**固定档**）
+///   · 设备面板 / 无面板 ⇒ [`Metrics::current_content`]（跟随设置）
+///
+///   ⚠️ 若这里只读全局档位，用户设「偏小」时**音乐那块的提示会比它描述的文字大**
+///   —— 正是上面那条硬红线。音乐面板的文字档与封面档**恒定**，提示必须跟着恒定。
 #[cfg(target_os = "windows")]
 pub fn content_px(dip: i32) -> i32 {
-    Metrics::current_content().dip(dip)
+    match current_panel() {
+        Some(crate::config::TaskbarPanel::Music) => Metrics::art_fixed().dip(dip),
+        _ => Metrics::current_content().dip(dip),
+    }
 }
 
 /// 任务栏矩形 `(left, top, width, height)`（**屏幕坐标**，物理像素）。
@@ -4660,8 +4763,8 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     let dark = crate::windows::system_dark_mode();
     // ⭐ 本帧的布局度量（DIP → 物理像素）。**测量与绘制共用同一份** ⇒ 不会漂移。
     // ⛔ 必须走 `current_content`：底衬（`h`/`radius`）按系统 DPI、内容按
-    //    `taskbar_content_scale` 解析 —— 与 `fetch_into_snapshot` 的测宽**同一入口**，
-    //    否则窗口宽度按旧口径算、内容按新口径画（文字压到邻居上，且不报错）。
+    //    `taskbar_content_scale` 解析 —— 与测宽**同一入口**，否则窗口宽度按旧口径算、
+    //    内容按新口径画（文字压到邻居上，且不报错）。
     let m = Metrics::current_content();
 
     // 空快照：不画任何东西，但仍提交一帧（保持窗口有效且全透明）
@@ -6579,7 +6682,9 @@ mod tests {
             "封面侧间隙 {cover_gap} 必须大于按键间隙 {button_gap}（用户要求加大封面侧）"
         );
         // 两种形态的正文起点必须**逐字相同** ⇒ 走同一个入口
-        let body_x = super::music_body_x(&m);
+        // ⚠️ `cover_gap` 由调用方传入（与 `draw_music_render` **同一份**）⇒
+        //   本函数不再自己算一遍，杜绝「同一口径写两处、只改一处 ⇒ 正文错位」。
+        let body_x = super::music_body_x(m.pad_x, m.icon, cover_gap);
         assert_eq!(
             body_x,
             m.pad_x + m.icon + cover_gap,
@@ -7384,9 +7489,118 @@ mod tests {
         assert_eq!(Metrics::for_dpi(0).h, 40);
         assert_eq!(Metrics::for_dpi(0).dpi, 96);
     }
-
     /// ⛔⛔ 本设置的**作用域边界**（用户 2026-09-25 明确要求）：
     ///   内容随档位变，**底衬必须恒定**。
+    ///
+    /// ⭐⭐⭐ 音乐面板内部还要**再分一次**（用户 2026-09-30 逐条确认「都按 A」）：
+    /// ```text
+    /// 固定（不随本设置变）：封面边长 · 双排信息字号 · 文字宽度上限 · 第二行位置
+    /// 跟随本设置：播放三键 · 切换键 · 各项间距 · 左右留白
+    /// ```
+    ///
+    /// ⚠️⚠️⚠️ **本文件的单测抓不到这条要求** —— 注入实测：改错实现仍全绿。两条原因：
+    ///   ① `art_fixed_for(backdrop)` 的定义**就是** `for_scales(backdrop, Default)`
+    ///      ⇒ 断言「它等于 `for_scales(.., Default)`」是**同义反复**；
+    ///      把它改成读全局配置，单测里全局 config 恰好也是 Default ⇒ 照样通过。
+    ///   ② 「封面取 `m_art.icon` 而三键取 `m.icon`」属于**标识符选错**，
+    ///      而 `draw_music_render` 需要真实 HWND、无任何 `#[test]` 能调用它
+    ///      ⇒ `cargo test` **原理上**看不见这一类。
+    /// ⇒ 真正的判据是**结构判据**：逐处点名「恒定的必须取 `m_art`、
+    ///   跟随的必须取 `m`」，注入两种改法都必须转红。
+    ///
+    /// 下面这条单测只钉**换算性质**（有独立价值，不依赖上面的接线）。
+    #[test]
+    fn content_scale_really_changes_content_metrics() {
+        use crate::config::TaskbarContentScale;
+        // ⚠️ 底衬 DPI 必须挑「能降一档」的：100%（96）已是缩放阶梯**地板**，
+        //   「偏小」无法再降 ⇒ 两档必然相等（`step_down_dpi` 的既有约定）。
+        //   在 96 上断言「两档不同」会自己转红 —— 实测踩过（left 32 / right 32）。
+        for backdrop in [120u32, 144, 192] {
+            let def = Metrics::for_scales(backdrop, TaskbarContentScale::Default);
+            let small = Metrics::for_scales(backdrop, TaskbarContentScale::Smaller);
+            assert_ne!(def.icon, small.icon, "内容档必须真的改变图标边长");
+            assert_ne!(def.font, small.font, "内容档必须真的改变字号");
+            assert_eq!(
+                (def.h, def.radius, def.dpi),
+                (small.h, small.radius, small.dpi),
+                "底衬量必须恒按系统 DPI（与内容档无关）"
+            );
+        }
+        // ⭐ 把**地板**这条事实钉住：100% 系统缩放下「偏小」= 默认（不再更小）
+        assert_eq!(
+            Metrics::for_scales(96, TaskbarContentScale::Smaller).icon,
+            Metrics::for_scales(96, TaskbarContentScale::Default).icon,
+            "100% 已是缩放阶梯地板：「偏小」不得比默认更小"
+        );
+        // 125%（本机实测口径）：默认 40px/15px，偏小降到 32px/12px
+        assert_eq!(
+            Metrics::for_scales(120, TaskbarContentScale::Default).icon,
+            40
+        );
+        assert_eq!(
+            Metrics::for_scales(120, TaskbarContentScale::Smaller).icon,
+            32
+        );
+    }
+
+    /// ⭐⭐⭐ **缩小的三键必须按自己的尺寸垂直居中**（用户 2026-09-30 实测报障：
+    /// 「音乐组件中缩小的三键没有垂直居中」）。
+    ///
+    /// ## 根因
+    /// 三个控件原先都从**同一个** `icon_y`（= 封面的上边距）起画。
+    /// `[y, y + size]` 的中心是 `h/2` **只在所有控件 size 相等时**成立；
+    /// 而「缩放设置只管三键与切换键、封面恒定」⇒ **两者不再相等**
+    /// ⇒ 125% 下 `h=50`、封面 40、三键 32：封面 `[5,45]` 中心 25、
+    /// 三键 `[5,37]` 中心 21 ⇒ **偏上 4px**。
+    ///
+    /// ## 判据锚在真实函数上，但**只覆盖公式**
+    /// 走 `center_y`（生产代码用的那个），**不是**在此重推 `(h - size) / 2`。
+    ///
+    /// ⛔⛔ **但它抓不到「调用点写错」**（注入实测：把 `let btn_y = center_y(h, btn)`
+    ///   改成 `let btn_y = icon_y`（＝缺陷本身）⇒ 本条**仍全绿**）。
+    ///   因为本测试自己调 `center_y`，看不见 `draw_music_render` 里那一行。
+    ///   ⇒ 调用点接线由**结构判据**覆盖（`verify-split-scale`：
+    ///   「三键纵向位置必须写成 `center_y(h, btn)`、不得借 `icon_y`/`sy`」）。
+    ///
+    /// ⛔ 这是本会话**第三次**栽在同一处：**判据自己重算 ⇒ 对「算错」免疫、
+    ///   对「用错」完全失明**。前两次是 `art_fixed_for`（与 `for_scales(.., Default)`
+    ///   同义反复）与升级通道复现脚本（`compare_versions` 方向写反）。
+    ///   ⇒ 判据要么**调生产函数**、要么**钉调用点文本**，二选一，不能只重推公式。
+    ///
+    /// 可证伪：把 `center_y` 的公式改坏 ⇒ 本条转红（注入② 实测）。
+    #[test]
+    fn scaled_buttons_are_centered_on_their_own_size() {
+        // 125% 本机实测口径：底衬高 50、封面 40（固定档）、三键 32（偏小档）
+        for (h, cover, btn) in [(50, 40, 32), (40, 32, 26), (60, 48, 38)] {
+            let cover_y = center_y(h, cover);
+            let btn_y = center_y(h, btn);
+
+            // ① 真居中：上下留白对称
+            assert_eq!(
+                btn_y * 2 + btn,
+                h,
+                "h={h} btn={btn}：三键上下留白必须对称（上 {btn_y} / 下 {}）",
+                h - btn_y - btn
+            );
+            assert_eq!(
+                cover_y * 2 + cover,
+                h,
+                "h={h} cover={cover}：封面上下留白必须对称"
+            );
+
+            // ② ⭐ 这条才是缺陷本身：三键比封面小 ⇒ **上边距必须更大**。
+            //    复用封面坐标（`btn_y == cover_y`）⇒ 偏上，正是用户报的那个现象。
+            assert!(
+                btn_y > cover_y,
+                "h={h}：三键({btn})比封面({cover})小 ⇒ 上边距({btn_y})必须大于封面({cover_y})，\
+             否则三键偏上（用户 2026-09-30 实测）"
+            );
+        }
+        // ③ 反向：两者**相等**时两者坐标也相等（借坐标此时恰好没错，但不能推广）
+        assert_eq!(center_y(50, 40), center_y(50, 40));
+    }
+
+    /// 内容档位**只**改内容：底衬量（`h` / `radius`）**恒**按系统 DPI。
     ///
     /// 可证伪：把 `for_dpis` 里的 `h: b(WIDGET_H_DIP)` 改成 `c(WIDGET_H_DIP)`
     ///   （即让底衬跟着内容缩放）⇒ 本条立刻转红。
