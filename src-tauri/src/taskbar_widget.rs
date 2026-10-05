@@ -4503,6 +4503,32 @@ fn want_hover(
     cx >= left && cx < left + w && cy >= top && cy < top + h
 }
 
+/// 「光标是否还在 widget 内」⇒ 按下态该不该被清掉（**纯函数**，供单测钉住）。
+///
+/// ⛔⛔ **为什么必须有这条兜底**（用户 2026-10-05 报障）：
+///   按住按钮后把鼠标移出窗口，按钮**永久停在按下态（变灰）**，必须再点一下才恢复。
+///   根因链（每一环都必要）：
+///   ① 按下变灰由 `pressed_id()` 驱动（绘制处 ×0.55）；
+///   ② 清按下态只有两条路 —— `WM_LBUTTONUP` 与 `WM_CAPTURECHANGED`；
+///   ③ **位置锁定时 `drag_begin` 不接管、也就没有 `SetCapture`**
+///      （`WM_LBUTTONDOWN` 分支里 `drag_begin` 返回 false 就直接落到 `DefWindowProcW`）
+///      ⇒ 光标移出后本窗口**收不到**后续鼠标消息；
+///   ④ 于是松手时 `WM_LBUTTONUP` 发给了光标下的**别的窗口**，本窗口永不清；
+///   ⑤ `WM_CAPTURECHANGED` 也救不了 —— 捕获从未被取走，没有事件可等。
+///   ⇒ 画面上**再没有任何东西会纠正它**，按钮就一直灰着。
+/// ✅ 兜底：50ms 的 hover 轮询是此刻**唯一还在运行**的通道，由它清。
+///
+/// ⭐ 拖拽期间不受影响：`want_hover` 在 `dragging` 时恒为 `true`
+///   ⇒ `want == true` ⇒ 原样返回、不清（拖拽本就允许光标移出窗口）。
+#[cfg(target_os = "windows")]
+fn pressed_after_hover(want: bool, pressed: i32) -> i32 {
+    if want {
+        pressed
+    } else {
+        PRESS_NONE
+    }
+}
+
 /// 把**预乘**的源像素按 **source-over** 合成到目标像素上（两者都是预乘 `0xAARRGGBB`）。
 ///
 /// ⛔⛔ **为什么不能用「取最大 alpha」**（本函数引入前的写法）：底衬会先把整块区域写成
@@ -5791,6 +5817,11 @@ fn start_hover_watcher() {
         let rect = window_screen_rect(hwnd);
         let dragging = DRAG_ACTIVE.load(Ordering::Acquire);
         let want = want_hover(cursor, rect, dragging);
+        // ⛔⛔ 光标已移出 widget ⇒ **清按下态**（否则按钮永久变灰，见 `pressed_after_hover`）。
+        //   `set_pressed` 内部「状态真变了才重绘」⇒ 常态下零开销、零重绘。
+        //   ⚠️ 位置锁定时没有 `SetCapture`，松手事件不会回到本窗口
+        //     ⇒ 这条兜底是**唯一**的纠正途径，不是冗余保险。
+        set_pressed(pressed_after_hover(want, pressed_id()), hwnd);
         // ⭐ 只在**翻转**时动手：既避免每 50ms 一次无谓重绘，也让日志只在真正进出时出现。
         if want != HOVERED.load(Ordering::Acquire) {
             HOVERED.store(want, Ordering::Release);
@@ -8407,6 +8438,34 @@ mod tests {
         // ⛔ 底衬必须**比内容淡**：alpha 到 255 就成了实心白块，会把图标与文字压住。
         assert!(hover_backdrop_alpha_for(true) < 255);
         assert!(hover_backdrop_alpha_for(false) < hover_backdrop_alpha_for(true));
+    }
+
+    /// 用户 2026-10-05 报障的判据：光标移出 widget 后按下态必须被清掉。
+    ///
+    /// ⭐ 这是**可证伪**的：把 `pressed_after_hover` 的 `if want` 反过来（即「移出才保留」）
+    ///   本单测立刻转红；反过来把它改成恒返回 `PRESSED`（即没有兜底）也会转红。
+    #[test]
+    fn pressed_cleared_only_after_cursor_leaves_widget() {
+        assert_eq!(
+            pressed_after_hover(false, PRESS_MUSIC_PLAY),
+            PRESS_NONE,
+            "光标已移出 widget ⇒ 必须清按下态（否则按钮永久变灰）"
+        );
+        assert_eq!(
+            pressed_after_hover(false, PRESS_MUSIC_SWITCH),
+            PRESS_NONE,
+            "切换键同样适用"
+        );
+        assert_eq!(
+            pressed_after_hover(true, PRESS_MUSIC_PLAY),
+            PRESS_MUSIC_PLAY,
+            "光标仍在 widget 内 ⇒ 保留按下态（否则正常点击看不到按下效果）"
+        );
+        assert_eq!(
+            pressed_after_hover(true, PRESS_NONE),
+            PRESS_NONE,
+            "本来就没按 ⇒ 仍是空"
+        );
     }
 
     /// 光标落在窗口矩形内 ⇒ hover 成立（含左上角，与「右/下排他」合起来覆盖全矩形）。
