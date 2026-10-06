@@ -320,13 +320,15 @@ pub fn start_music(app: &tauri::AppHandle) {
 
 /// 音乐后台线程**是否需要启动**（纯函数，判据的唯一实现点）。
 ///
-/// ⛔ **判据不能只看「音乐开关开没开」**：面板的「音乐可用」只看**有没有会话**、
-///   不看开关（Wiki 15 §8.6.3 ①层）。所以「记住的面板是音乐」时也必须启动，
-///   否则音乐面板会**静默回落设备面板**——用户看到的是「音乐组件开关打开也没反应」。
-///   这条判据是本轮按需启动改造里最容易踩空的一格。
+/// ⛔ **判据就是「音乐开关开没开」**（2026-10-06 用户口径「关闭后就必须关闭」之后的简化）：
+///   音乐开关关着 ⇒ 音乐**永不是候选** ⇒ 显示层根本不需要知道有没有会话
+///   ⇒ 那条 SMTC 线程与全部 WinRT 会话对象没有存在的理由。
+///   ⚠️ 这条判据**曾经**写成「开关开 ∨ 记住的是音乐」，那是旧①层判据的尾巴：
+///   「记住音乐 + 开关关」时音乐仍会显示，所以必须知道会话。
+///   新口径把那种组合判成「音乐不是候选」⇒ 该尾巴已无意义。
 #[cfg(target_os = "windows")]
 fn music_worker_needed(c: &crate::config::Config) -> bool {
-    c.taskbar_music_enabled || c.taskbar_panel == crate::config::TaskbarPanel::Music
+    c.taskbar_music_enabled
 }
 
 /// 音乐后台线程**按需启动**（幂等：`taskbar_music::start` 自带 `WORKER_STARTED`）。
@@ -486,8 +488,13 @@ fn advance_switch_target(hwnd: *mut core::ffi::c_void) {
 fn other_panel_if_available(
     cur: Option<crate::config::TaskbarPanel>,
 ) -> Option<crate::config::TaskbarPanel> {
-    let music_ok = crate::taskbar_music::snapshot().available();
-    let dev_ok = crate::config::with_config(crate::config::taskbar_devices_available);
+    // ⭐ 与 `switch_visible` / `taskbar_panel_for` **同一份候选口径**。
+    // ⛔ 音乐侧**必须带开关**：否则音乐开关关着时点「切换」会把 `taskbar_panel`
+    //   写成 Music——那是**永不可能显示**的面板；等用户哪天再打开音乐开关，
+    //   就莫名其妙跳到了音乐面板（记忆被一个当时不可选的目标污染）。
+    let (dev_ok, music_ok) = crate::config::with_config(|c| {
+        crate::config::taskbar_panel_candidates(c, crate::taskbar_music::snapshot().available())
+    });
     let (other, other_ok) = match cur? {
         crate::config::TaskbarPanel::Music => (crate::config::TaskbarPanel::Devices, dev_ok),
         crate::config::TaskbarPanel::Devices => (crate::config::TaskbarPanel::Music, music_ok),
@@ -999,12 +1006,14 @@ pub fn current_panel() -> Option<crate::config::TaskbarPanel> {
 ///   · 只开一个开关且只有一个会话 ⇒ 无处可切 ⇒ **不显示**（占位也是噪音）
 #[cfg(target_os = "windows")]
 fn switch_visible(panel: crate::config::TaskbarPanel) -> bool {
-    let both_on = crate::config::with_config(|c| {
-        crate::config::taskbar_devices_available(c) && c.taskbar_music_enabled
+    // ⭐ 与 `config::taskbar_panel_for` **同一份候选口径**（不自研第二套）：
+    // 「切换」只在**真的有的切**时出现——两个候选都有（换面板）或音乐多会话（换会话）。
+    let (dev, music) = crate::config::with_config(|c| {
+        crate::config::taskbar_panel_candidates(c, crate::taskbar_music::snapshot().available())
     });
     let multi_session = matches!(panel, crate::config::TaskbarPanel::Music)
         && crate::taskbar_music::snapshot().sessions.len() > 1;
-    both_on || multi_session
+    (dev && music) || multi_session
 }
 
 /// 设备面板的「切换」按钮矩形（`None` = 本帧不显示）。
@@ -8672,85 +8681,129 @@ mod tests {
         );
     }
 
-    /// ⭐ **三态回落链**（指定的降级规则）——本批新增的核心判据。
+    /// ⭐⭐ **候选集口径**（2026-10-06 用户口径，取代旧「三态回落链」）。
     ///
     /// ```text
-    /// 音乐可用 ∧ (音乐开关开 ∨ 记住的是音乐) → Music
-    /// 否则若设备可用                          → Devices
-    /// 否则                                     → None
+    /// 两个候选都有 → 记忆说了算（**只有这一种情形下记忆才生效**）
+    /// 只有一个候选 → 就显示它（记忆无关：没得选）
+    /// 零个候选     → None（组件整体不存在）
     /// ```
+    /// 用户口径原文：「记忆仅在两组件同时打开且此时有音频会话时才生效；
+    /// 且不会影响到开关，即关闭后就必须关闭」。
+    ///
+    /// ⛔ 本组**改写了旧第 ③ 格**（「音乐可用 ∧ 开关关 ∧ 记住音乐 ⇒ Music」）。
+    ///   那条是旧判据「音乐侧可用只看有没有会话、不看开关」的后果，实测会让用户
+    ///   **关了音乐开关却仍显示音乐面板**，且「切换」按钮同时消失 ⇒ 回不去设备面板。
+    ///
+    /// 可证伪：把 `taskbar_panel_for` 的 `(false, true) => Some(Music)` 分支去掉，
+    /// 或把 `(true, music) => Some(c.taskbar_panel)` 改成 `Some(Devices)` ⇒ 下面 ① / ③ 转红。
     #[test]
-    fn panel_falls_back_when_music_unavailable() {
-        use crate::config::{taskbar_devices_available, taskbar_panel_for, Config, TaskbarPanel};
+    fn panel_follows_the_candidate_set_not_the_memory_alone() {
+        use crate::config::{taskbar_panel_for, Config, TaskbarPanel};
 
-        // ① 只有设备可用、音乐不可用 ⇒ 恒显示设备面板（**与记住的选择无关**）
-        let dev_only = Config {
+        let one_pin = || crate::config::PinnedDevice {
+            key: "c:x".into(),
+            fallback: None,
+            alias: None,
+        };
+
+        // ① ⛔⛔ **关闭后就必须关闭**：设备开关开 + 音乐开关**关** + 有会话 + 记住音乐
+        //   ⇒ 必须是设备面板。这是本次要修的那个现象（用户原话：
+        //   「开启『显示设备信息组件』后显示的是音乐控制组件」）。
+        let dev_on_music_off = Config {
             taskbar_widget_enabled: true,
-            taskbar_panel: TaskbarPanel::Music, // 记住的是音乐
-            pinned_taskbar_devices: vec![crate::config::PinnedDevice {
-                key: "c:x".into(),
-                fallback: None,
-                alias: None,
-            }],
+            taskbar_music_enabled: false,
+            taskbar_panel: TaskbarPanel::Music,
+            pinned_taskbar_devices: vec![one_pin()],
             ..Default::default()
         };
-        assert!(taskbar_devices_available(&dev_only));
         assert_eq!(
-            taskbar_panel_for(&dev_only, false),
+            taskbar_panel_for(&dev_on_music_off, true),
             Some(TaskbarPanel::Devices),
-            "⭐ 无媒体会话时必须**回落设备面板**（哪怕用户上次选的是音乐）"
+            "音乐开关已关 ⇒ 绝不能显示音乐面板（记忆只在两个候选都有时生效）"
         );
 
-        // ② 音乐可用 ∧ 开关开 ⇒ Music
-        let both = Config {
+        // ② 只有一个音乐候选（设备侧总开关关）⇒ Music，**记忆无关**
+        let music_only = Config {
+            taskbar_widget_enabled: false,
             taskbar_music_enabled: true,
-            ..dev_only.clone()
-        };
-        assert_eq!(taskbar_panel_for(&both, true), Some(TaskbarPanel::Music));
-
-        // ③ 音乐可用 ∧ 开关关但**记住的是音乐** ⇒ 仍是 Music（选择被记住）
-        let remembered = Config {
-            taskbar_music_enabled: false,
-            ..both.clone()
+            taskbar_panel: TaskbarPanel::Devices, // 记住的是设备，但设备没候选
+            ..Default::default()
         };
         assert_eq!(
-            taskbar_panel_for(&remembered, true),
+            taskbar_panel_for(&music_only, true),
             Some(TaskbarPanel::Music),
-            "记住的选择在**可用时**必须生效"
+            "只有一个候选时就显示它，不看记忆"
         );
 
-        // ④ 两边都不可用 ⇒ 整个组件不显示
+        // ③ 两个候选都有 ⇒ **记忆生效**（记住音乐 ⇒ 音乐）
+        let both_remember_music = Config {
+            taskbar_widget_enabled: true,
+            taskbar_music_enabled: true,
+            taskbar_panel: TaskbarPanel::Music,
+            pinned_taskbar_devices: vec![one_pin()],
+            ..Default::default()
+        };
+        assert_eq!(
+            taskbar_panel_for(&both_remember_music, true),
+            Some(TaskbarPanel::Music),
+            "两个候选都有 ⇒ 记住的选择说了算"
+        );
+
+        // ④ 两个候选都有 ∧ 记住设备 ⇒ 设备（记忆同样生效，两向都要钉）
+        let both_remember_devices = Config {
+            taskbar_panel: TaskbarPanel::Devices,
+            ..both_remember_music.clone()
+        };
+        assert_eq!(
+            taskbar_panel_for(&both_remember_devices, true),
+            Some(TaskbarPanel::Devices),
+            "两个候选都有时，记住设备同样必须生效"
+        );
+
+        // ⑤ 音乐开关开但**无会话** ⇒ 音乐不是候选 ⇒ 设备（记忆是音乐也不显示音乐）
+        assert_eq!(
+            taskbar_panel_for(&both_remember_music, false),
+            Some(TaskbarPanel::Devices),
+            "无会话 ⇒ 音乐不是候选"
+        );
+
+        // ⑥ 零候选 ⇒ 整个组件不显示
         let none = Config::default();
         assert_eq!(taskbar_panel_for(&none, false), None);
         assert_eq!(
             taskbar_panel_for(&none, true),
             None,
-            "音乐开关默认关 ⇒ 仍不显示"
+            "音乐开关默认关 ⇒ 零候选 ⇒ 不显示"
         );
 
-        // ⑤ ⭐ **回落不改写用户的选择**：回落是「显示层」的事，不是「选择」的事
+        // ⑦ ⭐ **回落不改写用户的选择**：以上全是显示层的事
         assert_eq!(
-            dev_only.taskbar_panel,
+            dev_on_music_off.taskbar_panel,
             TaskbarPanel::Music,
-            "回落只影响显示，配置里记住的选择必须原样保留"
+            "回落/关开关只影响显示，配置里记住的选择必须原样保留"
         );
+        assert_eq!(both_remember_music.taskbar_panel, TaskbarPanel::Music);
     }
-
-    /// ⭐⭐ **音乐后台线程的启动判据**：该起的时候起、不该起的时候**确实没起**。
+    /// ⭐⭐ **音乐后台线程的启动判据 = 音乐开关开没开**（2026-10-06）。
     ///
-    /// ⛔ 本判据最容易踩空的格是第 ③ 条：**音乐开关关着、但记住的面板是音乐**时
-    ///   **必须**启动。若按开关起，那一支永远拿不到会话 ⇒
-    ///   `should_show()` 判成「音乐不可用」⇒ **静默回落设备面板**，
-    ///   用户看到的是「音乐组件开关是开的、面板却不出来」。
-    ///   依据：面板的「音乐可用」只看有没有会话、不看开关（Wiki 15 §8.6.3 ①层）。
+    /// ⛔ **本判据在同一天被改过一次**：初版写「开关开 **∨** 记住的是音乐」，
+    ///   那是旧①层判据的尾巴——「记住音乐 + 开关关」时音乐仍会显示，所以得知道会话。
+    ///   用户口径「关闭后就必须关闭」落地后，音乐开关一关，音乐**永不是候选**
+    ///   ⇒ 显示层不再需要会话信息 ⇒ 线程没有存在理由 ⇒ 尾巴删掉。
     ///
-    /// 可证伪：把 `music_worker_needed` 改成只读 `taskbar_music_enabled` ⇒ ③ 转红。
+    /// ⭐ 与面板判据同源：`taskbar_panel_candidates` 里音乐候选
+    ///   = `音乐开关 ∧ 有会话`；本判据是它的**前半截**（还不知道有没有会话，
+    ///   所以只要开关开着就得先把线程起起来才能知道）。
+    ///
+    /// 可证伪：把判据改回 `开关开 ∨ 记住的是音乐` ⇒ ③ 转红（会为永不可能显示的
+    ///   面板白建线程与会话对象）。
     #[test]
-    fn music_worker_starts_whenever_music_panel_could_show() {
+    fn music_worker_starts_only_when_the_music_switch_is_on() {
         use super::music_worker_needed;
         use crate::config::{Config, TaskbarPanel};
 
-        // ① 两个开关都关、记住的是设备 ⇒ 不起（这才是「按需」省下的那一格）
+        // ① 两个开关都关 ⇒ 不起（这才是「按需」省下的那一格）
         let idle = Config {
             taskbar_widget_enabled: false,
             taskbar_music_enabled: false,
@@ -8759,10 +8812,11 @@ mod tests {
         };
         assert!(
             !music_worker_needed(&idle),
-            "两个组件都关且不打算显示音乐 ⇒ 不该起 SMTC 线程"
+            "两个组件都关 ⇒ 不该起 SMTC 线程"
         );
 
-        // ② 音乐开关开 ⇒ 起（哪怕记住的是设备面板）
+        // ② 音乐开关开 ⇒ 起（哪怕记住的是设备面板、哪怕此刻还没有会话：
+        //   「有没有会话」正是这条线程要回答的问题）
         let on = Config {
             taskbar_music_enabled: true,
             taskbar_panel: TaskbarPanel::Devices,
@@ -8770,20 +8824,22 @@ mod tests {
         };
         assert!(music_worker_needed(&on), "音乐开关开着 ⇒ 必须起");
 
-        // ③ ⛔⛔ **开关关 + 记住的是音乐** ⇒ 仍要起（本判据的核心格）
+        // ③ ⛔⛔ **开关关 + 记住的是音乐** ⇒ **不起**（本判据的核心格，
+        //   与初版结论**相反**，且是有意反转：那种组合下音乐永不是候选）
         let remembered_music = Config {
-            taskbar_widget_enabled: false,
+            taskbar_widget_enabled: true,
             taskbar_music_enabled: false,
             taskbar_panel: TaskbarPanel::Music,
             ..Default::default()
         };
         assert!(
-            music_worker_needed(&remembered_music),
-            "记住的面板是音乐 ⇒ 必须起，否则该支永远回落设备面板（静默失效）"
+            !music_worker_needed(&remembered_music),
+            "音乐开关已关 ⇒ 永不可能显示音乐 ⇒ 不该为它建线程与会话对象"
         );
 
-        // ④ 两个都开 + 记住音乐 ⇒ 起
+        // ④ 两个都开 ⇒ 起
         assert!(music_worker_needed(&Config {
+            taskbar_widget_enabled: true,
             taskbar_music_enabled: true,
             taskbar_panel: TaskbarPanel::Music,
             ..Default::default()
@@ -8793,7 +8849,7 @@ mod tests {
     /// ⭐⭐ **两个组件开关都关 ⇒ 整个组件不显示**（实测）。
     ///
     /// ⛔ **这一格此前从未被测过**，bug 就藏在那个空格里：
-    /// `panel_falls_back_when_music_unavailable` 的 ④ 用 `Config::default()`，
+    /// 旧用例（现名 `panel_follows_the_candidate_set_not_the_memory_alone`）的「零候选」那格用 `Config::default()`，
     /// 而它的 `taskbar_panel` 默认是 **Devices** ⇒ 走的是「设备不可用 ⇒ None」
     /// 那条路，**碰不到**「记住的是音乐」这一支。
     /// ⇒ 「两个开关都关 + 记住=Music + 有会话」会**穿过** ① 的

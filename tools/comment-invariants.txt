@@ -20,6 +20,9 @@
 # FLOOR	⛔+⭐ 总数下界	790
 # FLOOR	⛔+⭐ 总数下界	864
 # FLOOR	⛔+⭐ 总数下界	889
+# FLOOR	⛔+⭐ 总数下界	904
+# FLOOR	⛔+⭐ 总数下界	913
+# FLOOR	⛔+⭐ 总数下界	912
 
 src-tauri/src/audio_notify.rs	fn post_sync_callbacks	⛔	1
 src-tauri/src/audio.rs	<file>	⭐	1
@@ -99,9 +102,11 @@ src-tauri/src/config.rs	fn taskbar_content_scale_accepts_both_values_verbatim	�
 src-tauri/src/config.rs	fn taskbar_content_scale_defaults_to_not_following_system	⛔	1
 src-tauri/src/config.rs	fn taskbar_content_scale_defaults_to_not_following_system	⭐	1
 src-tauri/src/config.rs	fn taskbar_content_scale_unknown_falls_back_to_default	⭐	1
-src-tauri/src/config.rs	fn taskbar_devices_available	⛔	5
+src-tauri/src/config.rs	fn taskbar_devices_available	⛔	1
 src-tauri/src/config.rs	fn taskbar_devices_available	⭐	1
-src-tauri/src/config.rs	fn taskbar_panel_for	⭐	1
+src-tauri/src/config.rs	fn taskbar_panel_candidates	⛔	5
+src-tauri/src/config.rs	fn taskbar_panel_candidates	⭐	1
+src-tauri/src/config.rs	fn taskbar_panel_for	⭐	2
 src-tauri/src/config.rs	fn taskbar_position_accepts_all_three_values_verbatim	⭐	1
 src-tauri/src/device_identity.rs	const C	⛔	2
 src-tauri/src/device_identity.rs	const C	⭐	2
@@ -433,8 +438,8 @@ src-tauri/src/taskbar_widget.rs	fn music_body_x	⛔	1
 src-tauri/src/taskbar_widget.rs	fn music_body_x	⭐	1
 src-tauri/src/taskbar_widget.rs	fn music_worker_needed	⛔	2
 src-tauri/src/taskbar_widget.rs	fn music_worker_needed	⭐	1
-src-tauri/src/taskbar_widget.rs	fn music_worker_starts_whenever_music_panel_could_show	⛔	3
-src-tauri/src/taskbar_widget.rs	fn music_worker_starts_whenever_music_panel_could_show	⭐	1
+src-tauri/src/taskbar_widget.rs	fn music_worker_starts_only_when_the_music_switch_is_on	⛔	3
+src-tauri/src/taskbar_widget.rs	fn music_worker_starts_only_when_the_music_switch_is_on	⭐	1
 src-tauri/src/taskbar_widget.rs	fn muted_device_shows_muted_instead_of_percent	⛔	1
 src-tauri/src/taskbar_widget.rs	fn of	⭐	1
 src-tauri/src/taskbar_widget.rs	fn ok	⛔	1
@@ -443,9 +448,10 @@ src-tauri/src/taskbar_widget.rs	fn on_click	⛔	1
 src-tauri/src/taskbar_widget.rs	fn on_click	⭐	1
 src-tauri/src/taskbar_widget.rs	fn on_music_changed	⛔	4
 src-tauri/src/taskbar_widget.rs	fn on_music_changed	⭐	2
-src-tauri/src/taskbar_widget.rs	fn other_panel_if_available	⛔	1
-src-tauri/src/taskbar_widget.rs	fn panel_falls_back_when_music_unavailable	⛔	1
-src-tauri/src/taskbar_widget.rs	fn panel_falls_back_when_music_unavailable	⭐	2
+src-tauri/src/taskbar_widget.rs	fn other_panel_if_available	⛔	2
+src-tauri/src/taskbar_widget.rs	fn other_panel_if_available	⭐	1
+src-tauri/src/taskbar_widget.rs	fn panel_follows_the_candidate_set_not_the_memory_alone	⛔	2
+src-tauri/src/taskbar_widget.rs	fn panel_follows_the_candidate_set_not_the_memory_alone	⭐	3
 src-tauri/src/taskbar_widget.rs	fn panel_from_code	⛔	1
 src-tauri/src/taskbar_widget.rs	fn per_item_width_uses_the_wider_of_the_two_texts	⭐	1
 src-tauri/src/taskbar_widget.rs	fn pinned_dev	⛔	1
@@ -527,9 +533,11 @@ src-tauri/src/taskbar_widget.rs	fn switch_button_is_invisible_and_unclickable_wh
 src-tauri/src/taskbar_widget.rs	fn switch_clickable	⛔	1
 src-tauri/src/taskbar_widget.rs	fn switch_clickable	⭐	1
 src-tauri/src/taskbar_widget.rs	fn switch_hover_zone_covers_the_reserved_width	⭐	1
+src-tauri/src/taskbar_widget.rs	fn switch_on_without_devices_does_not_show_empty_window	⛔	1
 src-tauri/src/taskbar_widget.rs	fn switch_on_without_devices_does_not_show_empty_window	⭐	1
 src-tauri/src/taskbar_widget.rs	fn switch_progress	⭐	1
 src-tauri/src/taskbar_widget.rs	fn switch_visible	⛔	1
+src-tauri/src/taskbar_widget.rs	fn switch_visible	⭐	1
 src-tauri/src/taskbar_widget.rs	fn taskbar_dpi	⛔	2
 src-tauri/src/taskbar_widget.rs	fn taskbar_dpi	⭐	2
 src-tauri/src/taskbar_widget.rs	fn taskbar_hwnd	⛔	1
@@ -596,4 +604,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	904
+# FLOOR	⛔+⭐ 总数下界	913

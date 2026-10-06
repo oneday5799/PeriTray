@@ -206,50 +206,58 @@ pub fn taskbar_devices_available(c: &Config) -> bool {
     c.taskbar_widget_enabled && !c.pinned_taskbar_devices.is_empty()
 }
 
+/// 两个组件此刻各**是不是候选**（`(设备, 音乐)`）——面板判据的**唯一实现点**。
+///
+/// ⭐ 「候选」= **开关开着 ∧ 自己有内容**：
+/// · 设备候选 = [`taskbar_devices_available`]（总开关开 ∧ 已钉设备非空）
+/// · 音乐候选 = 音乐开关开 ∧ `music_available`（有会话）
+///
+/// ⛔ **音乐候选必须含开关**（2026-10-06 用户口径：「关闭后就必须关闭」）：
+///   旧判据里音乐侧的「可用」**只看有没有会话、不看开关** ⇒ 用户关了音乐组件，
+///   只要之前选的是音乐面板，任务栏就**继续显示音乐**——而「切换」按钮在音乐
+///   开关关着时不显示 ⇒ **既看不到开关的效果，也回不去设备面板**。
+///   ⚠️ 这与「回落只改显示、不改写选择」不冲突：那条讲的是**别改写配置**，
+///   而这里是**别显示**；「关掉就必须关掉」是更强的要求。
+pub fn taskbar_panel_candidates(c: &Config, music_available: bool) -> (bool, bool) {
+    (
+        taskbar_devices_available(c),
+        c.taskbar_music_enabled && music_available,
+    )
+}
+
 /// 任务栏组件**此刻该显示哪一块**（`None` = 整个组件不显示）。
 ///
-/// ⭐ 三态而不是布尔。三层判据（⓪ 组件存在性 / ① 记住的那块可用吗 / ② 回落）、
-/// 「恒真」反例、以及**三层维度为什么不能合并**，全文 → **Wiki 15 §8.6.3**。
-///
-/// ⛔⛔ **两个组件开关都关 ⇒ 整个组件不显示**（⓪ 层，用户口径）：
+/// ⭐ **候选集口径**（2026-10-06 用户口径，取代旧的三层判据）：
 /// ```text
-/// 记住=Music ∧ 音乐可用        → Music
-/// 记住=Devices ∧ 设备可用      → Devices
-/// 记住的那块不可用             → 按「开关开着的那块」回落，两块都不可用 → None
-/// 两个组件开关都关             → None（**组件整体不存在**）
+/// 两个候选都有   → 记忆说了算（**只有这一种情形下记忆才生效**）
+/// 只有一个候选   → 就显示它（记忆无关：没得选）
+/// 零个候选       → None（组件整体不存在）
 /// ```
+/// 用户口径原文：「记忆仅在两组件同时打开且此时有音频会话时才生效；
+/// 且不会影响到开关，即关闭后就必须关闭」。
 ///
-/// ⛔⛔ **⛔ 不得把本函数写成「一层」**——写错时的症状与决策史 → Wiki 15 §8.6.3：
+/// ⛔ **回落只改显示、不改写选择**：本函数是纯函数，绝不碰 `c.taskbar_panel`。
+///   「临时没播歌 ⇒ 这次显示设备面板」不该把用户的选择抹掉。
+///
+/// ⛔⛔ **⛔ 不得把本函数写成「一层」**——写错时的症状与决策史 → **Wiki 15 §8.6.3**：
 /// ```text
 /// ⛔ if music_available && (music_enabled || panel == Music) { return Music }   ← 恒真
 /// ```
-/// ⛔ 上行在**音乐开关开着**时恒为真 ⇒ `taskbar_panel` **从头到尾没被读到**：点切换把
-///   字段写成 `Devices`、日志照打「切换组件 → Devices」，显示层下一帧又判回 `Music`
-///   ⇒ **屏幕上纹丝不动，且日志完全正常**。
+/// ⛔ 上行在**音乐开关开着**时恒为真 ⇒ `taskbar_panel` **从头到尾没被读到**：
+///   点切换把字段写成 `Devices`、日志照打「切换组件 → Devices`，显示层下一帧
+///   又判回 `Music` ⇒ **屏幕上纹丝不动，且日志完全正常**。
 ///   ⛔ 两个 bug（开关压过记住的选择 / 组件存在性被面板盖住）都源于**维度被合并**。
 pub fn taskbar_panel_for(c: &Config, music_available: bool) -> Option<TaskbarPanel> {
-    // ⓪ 组件的**存在**判据：两个组件开关都关 ⇒ 什么都不显示。
-    //   这一层**先于**「记住的选择」——不然「记住的是音乐」会把已关闭的
-    //   音乐组件**复活**，让用户关不掉它。
-    if !c.taskbar_widget_enabled && !c.taskbar_music_enabled {
-        return None;
+    let (dev, music) = taskbar_panel_candidates(c, music_available);
+    match (dev, music) {
+        // 零候选 ⇒ 组件整体不存在（两个开关都关是其中一种）
+        (false, false) => None,
+        // 只有一个候选 ⇒ 就它，记忆无关（「关掉就必须关掉」在这里是结构性的）
+        (true, false) => Some(TaskbarPanel::Devices),
+        (false, true) => Some(TaskbarPanel::Music),
+        // ⭐ 两个候选都有 ⇒ 记忆生效（唯一需要读 `taskbar_panel` 的分支）
+        (true, true) => Some(c.taskbar_panel),
     }
-    // ① 记住的选择可用 ⇒ 它说了算（这才是「切换按钮」能生效的前提）
-    match c.taskbar_panel {
-        TaskbarPanel::Music if music_available => return Some(TaskbarPanel::Music),
-        TaskbarPanel::Devices if taskbar_devices_available(c) => {
-            return Some(TaskbarPanel::Devices);
-        }
-        _ => {}
-    }
-    // ② 记住的那块不可用 ⇒ 回落，但**不改写选择**（回落是显示层的事）
-    if music_available && c.taskbar_music_enabled {
-        return Some(TaskbarPanel::Music);
-    }
-    if taskbar_devices_available(c) {
-        return Some(TaskbarPanel::Devices);
-    }
-    None
 }
 
 /// ⭐ 升级兼容：老配置**没有** `taskbar_widget_enabled` 键（读出来是 `false`），
