@@ -282,6 +282,20 @@ pub fn on_music_changed() {
         // 没有 app 句柄（极早期）⇒ 只靠 2s 维护循环也会收敛
         request_repaint();
     }
+    // ⭐⭐ **未挂载时的补挂载**：按需启动引入的时序缺口在这里收口。
+    //   音乐组件从关变开时，`apply_from_config` 里线程刚起、快照还空 ⇒ 那一轮
+    //   `should_show()` 必然判成「音乐不可用」⇒ 不挂载。线程拿到第一份快照后
+    //   走的就是本函数，而此时窗口还不存在 ⇒ `request_repaint` 在
+    //   「未挂载早退」处返回，面板就得多等 2s 维护循环。
+    //   ⇒ 这里显式重算一次挂载决策，仍**只经 `apply_from_config` 这一个入口**
+    //   （两个触发点、一个入口，与 2s 维护循环的兜底同款结构）。
+    // ⛔ 判据用 `should_show()`：它含 ⓪/①/② 三层，不能简化成「音乐开关开没开」。
+    if !widget_alive() && should_show() {
+        if let Some(app) = crate::taskbar_music::app() {
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || apply_from_config(&app2));
+        }
+    }
 }
 
 /// 请求**立刻**重绘一帧（读现有快照，**不取任何数据**）。**任意线程可调**。
@@ -302,6 +316,43 @@ pub fn request_repaint() {
 #[cfg(target_os = "windows")]
 pub fn start_music(app: &tauri::AppHandle) {
     crate::taskbar_music::start(app.clone());
+}
+
+/// 音乐后台线程**是否需要启动**（纯函数，判据的唯一实现点）。
+///
+/// ⛔ **判据不能只看「音乐开关开没开」**：面板的「音乐可用」只看**有没有会话**、
+///   不看开关（Wiki 15 §8.6.3 ①层）。所以「记住的面板是音乐」时也必须启动，
+///   否则音乐面板会**静默回落设备面板**——用户看到的是「音乐组件开关打开也没反应」。
+///   这条判据是本轮按需启动改造里最容易踩空的一格。
+#[cfg(target_os = "windows")]
+fn music_worker_needed(c: &crate::config::Config) -> bool {
+    c.taskbar_music_enabled || c.taskbar_panel == crate::config::TaskbarPanel::Music
+}
+
+/// 音乐后台线程**按需启动**（幂等：`taskbar_music::start` 自带 `WORKER_STARTED`）。
+///
+/// ⭐ 为什么按需：实测两个组件都关时，进程驻留与开关开着**没有区别**
+///   （Private 16.0 vs 15.9 MB，落在噪声内）—— 但那条 SMTC 线程 + 全部 WinRT
+///   会话对象是**无条件**建立���，且**封面缓存上限 4 张 × 256×256×4 = 1 MB**。
+///   省不下多少，却是用户「装了却不用的功能」白付的常驻成本。
+///
+/// ⛔ **起来之后就不再停**（本函数只增不减）：会话出现 / 消失必须能触发
+///   面板可用性变化，否则「晚启动就永远收不到那次变化」。
+///   ⚠️ 由此带来的**时序事实**：刚启动时快照还空，`should_show()` 会判成「音乐不可用」，
+///   所以挂载决策要靠 `on_music_changed` 的补挂载收敛（见该函数），不能指望
+///   `apply_from_config` 这一次就挂上。
+///
+/// ⛔ 调用点必须在**不持配置锁**时：本函数自己要读配置。
+#[cfg(target_os = "windows")]
+pub fn ensure_music_worker(app: &tauri::AppHandle) {
+    if !crate::config::with_config(music_worker_needed) {
+        return;
+    }
+    let first = !crate::taskbar_music::worker_started();
+    start_music(app);
+    if first {
+        append_log("[widget] 音乐后台线程按需启动（音乐开关开 或 记住的面板是音乐）");
+    }
 }
 
 /// 音乐面板的命中结果（一次点击落在这张表的哪一格）。
@@ -5460,6 +5511,12 @@ pub fn should_show() -> bool {
 pub fn apply_from_config(app: &tauri::AppHandle) {
     #[cfg(target_os = "windows")]
     {
+        // ⭐⭐ **必须排在 `should_show()` 之前**：挂载决策问的是「音乐可用吗」，
+        //   而那取决于 SMTC 快照。音乐组件从关变开时，本函数是这条路径上**唯一**
+        //   能确保后台线程已起的地方；起晚了这一轮就判成「不可用」⇒ 面板挂不出来。
+        //   （补挂载由 `on_music_changed` 收敛，不靠 2s 维护循环兜。）
+        // ⛔ 调用点**不持配置锁**：它自己要读配置。
+        ensure_music_worker(app);
         // ⛔ 先清理**失效句柄**：Explorer 重建会把我们的子窗一起销毁，但原子量里
         //    还留着旧值 ⇒ 不清就会一直判成「已挂载」，永远不会重建（静默不显示）。
         // ⚠️ 这里只动原子量（`forget_widget`），真正的 `DestroyWindow` 由主线程的
@@ -8677,6 +8734,60 @@ mod tests {
             TaskbarPanel::Music,
             "回落只影响显示，配置里记住的选择必须原样保留"
         );
+    }
+
+    /// ⭐⭐ **音乐后台线程的启动判据**：该起的时候起、不该起的时候**确实没起**。
+    ///
+    /// ⛔ 本判据最容易踩空的格是第 ③ 条：**音乐开关关着、但记住的面板是音乐**时
+    ///   **必须**启动。若按开关起，那一支永远拿不到会话 ⇒
+    ///   `should_show()` 判成「音乐不可用」⇒ **静默回落设备面板**，
+    ///   用户看到的是「音乐组件开关是开的、面板却不出来」。
+    ///   依据：面板的「音乐可用」只看有没有会话、不看开关（Wiki 15 §8.6.3 ①层）。
+    ///
+    /// 可证伪：把 `music_worker_needed` 改成只读 `taskbar_music_enabled` ⇒ ③ 转红。
+    #[test]
+    fn music_worker_starts_whenever_music_panel_could_show() {
+        use super::music_worker_needed;
+        use crate::config::{Config, TaskbarPanel};
+
+        // ① 两个开关都关、记住的是设备 ⇒ 不起（这才是「按需」省下的那一格）
+        let idle = Config {
+            taskbar_widget_enabled: false,
+            taskbar_music_enabled: false,
+            taskbar_panel: TaskbarPanel::Devices,
+            ..Default::default()
+        };
+        assert!(
+            !music_worker_needed(&idle),
+            "两个组件都关且不打算显示音乐 ⇒ 不该起 SMTC 线程"
+        );
+
+        // ② 音乐开关开 ⇒ 起（哪怕记住的是设备面板）
+        let on = Config {
+            taskbar_music_enabled: true,
+            taskbar_panel: TaskbarPanel::Devices,
+            ..Default::default()
+        };
+        assert!(music_worker_needed(&on), "音乐开关开着 ⇒ 必须起");
+
+        // ③ ⛔⛔ **开关关 + 记住的是音乐** ⇒ 仍要起（本判据的核心格）
+        let remembered_music = Config {
+            taskbar_widget_enabled: false,
+            taskbar_music_enabled: false,
+            taskbar_panel: TaskbarPanel::Music,
+            ..Default::default()
+        };
+        assert!(
+            music_worker_needed(&remembered_music),
+            "记住的面板是音乐 ⇒ 必须起，否则该支永远回落设备面板（静默失效）"
+        );
+
+        // ④ 两个都开 + 记住音乐 ⇒ 起
+        assert!(music_worker_needed(&Config {
+            taskbar_music_enabled: true,
+            taskbar_panel: TaskbarPanel::Music,
+            ..Default::default()
+        }));
     }
 
     /// ⭐⭐ **两个组件开关都关 ⇒ 整个组件不显示**（实测）。

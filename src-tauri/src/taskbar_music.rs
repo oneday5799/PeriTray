@@ -197,6 +197,15 @@ static SNAPSHOT: Mutex<MusicSnapshot> = Mutex::new(MusicSnapshot {
 
 /// 后台线程是否已起来（避免重复起线程）。
 static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// 后台线程是否**已经起来过**（只读观察口，供按需启动的验收脚本与判据使用）。
+///
+/// ⭐ 为什么需要这个观察口：按需启动的判据是「该起的时候起了、没有的时候确实没起」，
+/// 而「没起」这件事**从外部看不出来**——快照为空既可能是「没起」，也可能是
+/// 「起了但机器上一个会话都没有」。⚠️ 所以验收必须能直接问这一句。
+pub fn worker_started() -> bool {
+    WORKER_STARTED.load(Ordering::Acquire)
+}
 /// 会话集合的版本号：每读到一次新的会话集合就 +1（去重判据之一）。
 static SESSION_EPOCH: AtomicUsize = AtomicUsize::new(0);
 /// 读当前快照（绘制层入口）。

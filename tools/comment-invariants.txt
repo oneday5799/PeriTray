@@ -19,6 +19,7 @@
 # FLOOR	⛔+⭐ 总数下界	778
 # FLOOR	⛔+⭐ 总数下界	790
 # FLOOR	⛔+⭐ 总数下界	864
+# FLOOR	⛔+⭐ 总数下界	889
 
 src-tauri/src/audio_notify.rs	fn post_sync_callbacks	⛔	1
 src-tauri/src/audio.rs	<file>	⭐	1
@@ -146,7 +147,7 @@ src-tauri/src/main.rs	fn make_panic_hook	⛔	1
 src-tauri/src/main.rs	fn spawn_dev_open_settings	⛔	1
 src-tauri/src/main.rs	fn spawn_dev_open_settings	⭐	1
 src-tauri/src/main.rs	fn spawn_startup_update_check	⛔	1
-src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⛔	2
+src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⛔	3
 src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⭐	5
 src-tauri/src/shortcut.rs	fn cycle_device_shortcut	⭐	1
 src-tauri/src/shortcut.rs	fn sync_device_shortcuts	⛔	2
@@ -162,6 +163,7 @@ src-tauri/src/taskbar_music.rs	const COVER_CACHE	⭐	1
 src-tauri/src/taskbar_music.rs	const MAX_DECODE_PX	⛔	1
 src-tauri/src/taskbar_music.rs	const N	⛔	1
 src-tauri/src/taskbar_music.rs	const N	⭐	1
+src-tauri/src/taskbar_music.rs	const WORKER_STARTED	⭐	1
 src-tauri/src/taskbar_music.rs	fn apply_dev_artist_gate	⛔	1
 src-tauri/src/taskbar_music.rs	fn apply_dev_artist_gate	⭐	1
 src-tauri/src/taskbar_music.rs	fn available	⭐	1
@@ -305,8 +307,8 @@ src-tauri/src/taskbar_widget.rs	fn align_in_slot	⛔	3
 src-tauri/src/taskbar_widget.rs	fn align_in_slot	⭐	1
 src-tauri/src/taskbar_widget.rs	fn align_in_slot_orders_left_center_right	⛔	1
 src-tauri/src/taskbar_widget.rs	fn align_in_slot_orders_left_center_right	⭐	1
-src-tauri/src/taskbar_widget.rs	fn apply_from_config	⛔	5
-src-tauri/src/taskbar_widget.rs	fn apply_from_config	⭐	2
+src-tauri/src/taskbar_widget.rs	fn apply_from_config	⛔	6
+src-tauri/src/taskbar_widget.rs	fn apply_from_config	⭐	3
 src-tauri/src/taskbar_widget.rs	fn apply_wheel_volume	⛔	1
 src-tauri/src/taskbar_widget.rs	fn apply_wheel_volume	⭐	1
 src-tauri/src/taskbar_widget.rs	fn battery_and_volume_degrade_independently	⛔	1
@@ -429,16 +431,20 @@ src-tauri/src/taskbar_widget.rs	fn music_and_device_text_caps_are_different_valu
 src-tauri/src/taskbar_widget.rs	fn music_and_device_text_caps_are_different_values	⭐	1
 src-tauri/src/taskbar_widget.rs	fn music_body_x	⛔	1
 src-tauri/src/taskbar_widget.rs	fn music_body_x	⭐	1
+src-tauri/src/taskbar_widget.rs	fn music_worker_needed	⛔	2
+src-tauri/src/taskbar_widget.rs	fn music_worker_needed	⭐	1
+src-tauri/src/taskbar_widget.rs	fn music_worker_starts_whenever_music_panel_could_show	⛔	3
+src-tauri/src/taskbar_widget.rs	fn music_worker_starts_whenever_music_panel_could_show	⭐	1
 src-tauri/src/taskbar_widget.rs	fn muted_device_shows_muted_instead_of_percent	⛔	1
 src-tauri/src/taskbar_widget.rs	fn of	⭐	1
 src-tauri/src/taskbar_widget.rs	fn ok	⛔	1
 src-tauri/src/taskbar_widget.rs	fn ok	⭐	2
 src-tauri/src/taskbar_widget.rs	fn on_click	⛔	1
 src-tauri/src/taskbar_widget.rs	fn on_click	⭐	1
-src-tauri/src/taskbar_widget.rs	fn on_music_changed	⛔	3
-src-tauri/src/taskbar_widget.rs	fn on_music_changed	⭐	1
+src-tauri/src/taskbar_widget.rs	fn on_music_changed	⛔	4
+src-tauri/src/taskbar_widget.rs	fn on_music_changed	⭐	2
 src-tauri/src/taskbar_widget.rs	fn other_panel_if_available	⛔	1
-src-tauri/src/taskbar_widget.rs	fn panel_falls_back_when_music_unavailable	⛔	2
+src-tauri/src/taskbar_widget.rs	fn panel_falls_back_when_music_unavailable	⛔	1
 src-tauri/src/taskbar_widget.rs	fn panel_falls_back_when_music_unavailable	⭐	2
 src-tauri/src/taskbar_widget.rs	fn panel_from_code	⛔	1
 src-tauri/src/taskbar_widget.rs	fn per_item_width_uses_the_wider_of_the_two_texts	⭐	1
@@ -486,6 +492,7 @@ src-tauri/src/taskbar_widget.rs	fn rescale_produces_no_alpha_halo	⛔	1
 src-tauri/src/taskbar_widget.rs	fn rescale_produces_no_alpha_halo	⭐	1
 src-tauri/src/taskbar_widget.rs	fn resolve_rel_x	⛔	2
 src-tauri/src/taskbar_widget.rs	fn resolve_rel_x	⭐	1
+src-tauri/src/taskbar_widget.rs	fn resolve_rel_x_clamps_the_persisted_drag_position	⛔	1
 src-tauri/src/taskbar_widget.rs	fn resolve_rel_x_clamps_the_persisted_drag_position	⭐	1
 src-tauri/src/taskbar_widget.rs	fn resolve_rel_x_priority_is_locked_then_custom_then_last_then_aligned	⭐	1
 src-tauri/src/taskbar_widget.rs	fn resolve_widget_labels	⛔	3
@@ -510,6 +517,7 @@ src-tauri/src/taskbar_widget.rs	fn slot_of	⛔	2
 src-tauri/src/taskbar_widget.rs	fn snapshot_store_reports_no_change_for_identical_content	⭐	1
 src-tauri/src/taskbar_widget.rs	fn spawn_switch_anim	⛔	2
 src-tauri/src/taskbar_widget.rs	fn spawn_widget	⭐	4
+src-tauri/src/taskbar_widget.rs	fn start_music	⛔	1
 src-tauri/src/taskbar_widget.rs	fn store	⭐	1
 src-tauri/src/taskbar_widget.rs	fn stretch_only_widens_the_gap_before_switch	⛔	1
 src-tauri/src/taskbar_widget.rs	fn stretch_only_widens_the_gap_before_switch	⭐	2
@@ -565,6 +573,7 @@ src-tauri/src/tray.rs	fn addr	⛔	1
 src-tauri/src/tray.rs	fn apply_devices_cache	⭐	1
 src-tauri/src/tray.rs	fn build_audio_devices_menu	⭐	1
 src-tauri/src/tray.rs	fn build_tooltip_text	⭐	1
+src-tauri/src/tray.rs	fn pick_tray_icon	⛔	1
 src-tauri/src/tray.rs	fn start_theme_watcher	⛔	3
 src-tauri/src/tray.rs	fn taskbar_theme_reader	⭐	1
 src-tauri/src/tray.rs	fn theme_changed_for_taskbar	⭐	1
@@ -587,4 +596,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	889
+# FLOOR	⛔+⭐ 总数下界	904
