@@ -1,7 +1,7 @@
 /**
  * Rust 警告闸门 —— 「零源码警告」判据在 **pre-commit 路径上的唯一入口**
  *
- * ⚠️ **2026-09-28 订正**：本文件头原写「CI 与 pre-commit 共用」，**与实际不符**——
+ * ⚠️ ** 订正**：本文件头原写「CI 与 pre-commit 共用」，**与实际不符**——
  *    `.github/workflows/ci.yml` 走的是 `cargo check` + `RUSTFLAGS: -D warnings`
  *    （rustc 侧硬失败）。两者**不共用**这条命令，但**结论一致且 CI 更严**：
  *    本脚本要费心区分的那类噪音（Cargo 自己的产物 I/O 诊断）**不经 rustc**，
@@ -13,7 +13,7 @@
  * ── 为什么需要本脚本（判据的真实缺陷）────────────────────────────
  * 原先 `tools/pre-commit` 与 CI 都用同一句朴素判据：`cargo check | grep "^warning"`。
  * 该判据**无法区分「rustc 的 lint 警告」与「Cargo 自己的产物 I/O 诊断」**，
- * 于 2026-09-24 在提交 T3-2 时**误拦**（下称「锁文件噪音」）：
+ * 于 在提交 T3-2 时**误拦**（下称「锁文件噪音」）：
  *
  *   warning: error deleting lock file for incremental compilation session
  *            directory `...\incremental\PeriTray-<hash>\s-<hash>.lock`: 拒绝访问。 (os error 5)

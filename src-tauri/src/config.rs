@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for LogRetention {
     }
 }
 
-/// 任务栏信息窗的**内容缩放档位**（用户 2026-09-25 新增设置）。
+/// 任务栏信息窗的**内容缩放档位**（用户 新增设置）。
 ///
 /// ⛔ **作用域边界（用户明确要求，实现时不得越界）**：本档位**只改内容**——
 ///   图标边长 / 信息文字字号 / 随内容一起缩放的间距与项宽上限；
@@ -66,7 +66,7 @@ impl<'de> Deserialize<'de> for LogRetention {
 pub enum TaskbarContentScale {
     /// **默认档**：内容按**系统（任务栏）DPI** 布局，即与底衬同口径。
     ///
-    /// ⛔ 这一档在 2026-09-29 之前叫 `follow_system`（文案「跟随系统」）——
+    /// ⛔ 这一档在 之前叫 `follow_system`（文案「跟随系统」）——
     ///   改名时**语义不变**，只是文案贴合实际（它本来就是本设置引入前的行为）。
     #[default]
     Default,
@@ -208,9 +208,10 @@ pub fn taskbar_devices_available(c: &Config) -> bool {
 
 /// 任务栏组件**此刻该显示哪一块**（`None` = 整个组件不显示）。
 ///
-/// ⭐ 三态而不是布尔（2026-09-28 引入音乐组件时升的）。
+/// ⭐ 三态而不是布尔。三层判据（⓪ 组件存在性 / ① 记住的那块可用吗 / ② 回落）、
+/// 「恒真」反例、以及**三层维度为什么不能合并**，全文 → **Wiki 15 §8.6.3**。
 ///
-/// ⛔⛔ **两个组件开关都关 ⇒ 整个组件不显示**（第一层，2026-09-30 用户报）。
+/// ⛔⛔ **两个组件开关都关 ⇒ 整个组件不显示**（⓪ 层，用户口径）：
 /// ```text
 /// 记住=Music ∧ 音乐可用        → Music
 /// 记住=Devices ∧ 设备可用      → Devices
@@ -218,32 +219,14 @@ pub fn taskbar_devices_available(c: &Config) -> bool {
 /// 两个组件开关都关             → None（**组件整体不存在**）
 /// ```
 ///
-/// ⚠️⚠️ **这一层为什么必须单独存在**：下面 ①② 两层判的都是「**显示哪一块**」，
-///   判据是「记住的那块可用吗」—— 而**音乐侧的「可用」只看有没有会话、
-///   不看 `taskbar_music_enabled`**（这是 ③ 号判据
-///   `remembered_panel_wins_over_switch_when_both_enabled` 的子情形明确要的：
-///   音乐开关关着、但用户上次选的就是音乐 ⇒ 仍显示音乐）。
-///   ⇒ 于是「两个开关都关 + 记住的是音乐 + 有会话」会**穿过 ① 的
-///   `Music if music_available` 分支** ⇒ **组件仍然存在**，
-///   而且留下的**恰是本应最后关闭的那一块**（用户 2026-09-30 实测现象）。
-///
-///   ⚛️ **别把「音乐可用」改成含开关**来消这个 bug：那会推翻上面那条
-///   **已钉死的**不变量（两个开关是**两个独立维度**，「记住的选择」才是权威）。
-///   正解是补上**「组件存不存在」**这一层——它是**第三个维度**，
-///   ①② 只管「存在之后显示哪块」。
-///
-/// ⚠️⚠️ **判据曾经写反过，症状是「点切换按钮没反应」**（用户 2026-09-28 实测）：
+/// ⛔⛔ **⛔ 不得把本函数写成「一层」**——写错时的症状与决策史 → Wiki 15 §8.6.3：
 /// ```text
-/// if music_available && (music_enabled || panel == Music) { return Music }
+/// ⛔ if music_available && (music_enabled || panel == Music) { return Music }   ← 恒真
 /// ```
-/// 这一行在**音乐开关开着**时恒为真 ⇒ `taskbar_panel` **从头到尾没被读到**。
-/// 点切换把字段写成 `Devices`、日志也照打「切换组件 → Devices」，
-/// 而显示层下一帧又判回 `Music` ⇒ **屏幕上纹丝不动，且日志完全正常**。
-/// 那正是「点了没反应」最难归因的形态：事件到了、状态改了、日志无异常。
-/// ⇒ 教训：**「两个开关」与「当前显示哪块」是两个不同维度**，
-///   后者必须由前者 + 记住的选择共同决定，不能让开关单独决定。
-///   ⛔ 别把本函数改成**一层**：既有「记住 vs 开关」（2026-09-28）、
-///     既有「组件存不存在」（2026-09-30）——两个 bug 都源于**维度被合并**。
+/// ⛔ 上行在**音乐开关开着**时恒为真 ⇒ `taskbar_panel` **从头到尾没被读到**：点切换把
+///   字段写成 `Devices`、日志照打「切换组件 → Devices」，显示层下一帧又判回 `Music`
+///   ⇒ **屏幕上纹丝不动，且日志完全正常**。
+///   ⛔ 两个 bug（开关压过记住的选择 / 组件存在性被面板盖住）都源于**维度被合并**。
 pub fn taskbar_panel_for(c: &Config, music_available: bool) -> Option<TaskbarPanel> {
     // ⓪ 组件的**存在**判据：两个组件开关都关 ⇒ 什么都不显示。
     //   这一层**先于**「记住的选择」——不然「记住的是音乐」会把已关闭的
@@ -326,7 +309,7 @@ pub struct Config {
     /// 见 `PinnedDevice` 文档）。空表 = 未固定任何设备。
     #[serde(default)]
     pub pinned_taskbar_devices: Vec<PinnedDevice>,
-    /// 任务栏信息窗的**总开关**（用户 2026-09-28 要求，默认关闭）。
+    /// 任务栏信息窗的**总开关**（要求，默认关闭）。
     ///
     /// ⛔ **与 `pinned_taskbar_devices` 是两个独立维度，缺一不可**：
     /// · 本字段 = 「要不要**显示**这个窗」；
@@ -376,14 +359,14 @@ pub struct Config {
     pub taskbar_custom_x: Option<i32>,
     /// 任务栏信息窗的**内容缩放档位**（`"default"` / `"smaller"`）。
     ///
-    /// ⛔ 作用域（用户 2026-09-25 明确要求）：**只改内容**（图标 / 文字 / 随内容缩放的
+    /// ⛔ 作用域（明确要求）：**只改内容**（图标 / 文字 / 随内容缩放的
     ///   间距与项宽上限），**底衬仍按系统 DPI 缩放**（窗口高度、圆角不受本项影响）。
     ///   落地见 `taskbar_widget::Metrics` 的 `content_dpi`。
     /// ⚠️ 是 enum 而非 `String`：取值集合固定且只有两档，用 `String + VALID_*` 归一化
     ///   反而多一处可能漂移的清单（`taskbar_position` 那套是历史写法）。
     #[serde(default)]
     pub taskbar_content_scale: TaskbarContentScale,
-    /// 「显示音乐控制组件」开关（用户 2026-09-28 新增，**默认关闭**）。
+    /// 「显示音乐控制组件」开关（用户 新增，**默认关闭**）。
     ///
     /// ⛔ 与 [`Config::taskbar_widget_enabled`] **是两个独立开关**：
     ///   设备信息组件的开关**不控制**音乐组件，反之亦然。
@@ -548,8 +531,8 @@ fn battery_thresholds_valid(thresholds: &[i32]) -> bool {
 ///
 /// **为什么需要它**（方案 D 的读取侧前提）：
 /// `rename_device` 从今以后**同时**写「原名」与「`core_name` 短名」两条键（归并双写），
-/// 因此新产生的改名天然三处一致。但**历史上**只写过「原名」那一条 ——
-/// 那些条目在设备页 / 任务栏（按短名查）**查不到**，用户会看到「改了名的地方没变」。
+/// 因此新产生的改名天然三处一致。少了这一步归并，只有「原名」一条键的条目在
+/// 设备页 / 任务栏（按短名查）**查不到**，用户会看到「改了名的地方没变」。
 ///
 /// **为什么放在这里**：`normalize_config` 是**纯函数**（不读全局状态、不持锁、不做 I/O），
 /// 且被**加载路径**（`parse_config_text`）与**写入路径**（`finalize_before_persist`）共用 ⇒
@@ -588,9 +571,9 @@ fn backfill_device_name_keys(config: &mut Config) -> bool {
 /// ⛔ **为什么需要它**：`resolved_display_name` 的第 1 级是「固定项自带的 alias」，
 ///   其余所有表面（设备信息页、音量页、托盘、设置页）都只认 `device_names`
 ///   ⇒ 旧配置里带 alias 的固定项会出现**「任务栏一个名、别处另一个名」**。
-///   `alias` 字段如今**没有任何 UI 入口**（旧选择器已退役，只剩
-///   `try_toggle_pinned_taskbar_device` 的形参），所以它是**纯历史数据**——
-///   折进 `device_names` 既保住用户当初起的名，又让两侧口径一致。
+///   `alias` 字段**没有任何 UI 入口**（只剩 `try_toggle_pinned_taskbar_device`
+///   的形参），所以它是**只读的历史数据**——折进 `device_names` 既保住用户当初
+///   起的名，又让两侧口径一致。
 ///
 /// **键取 `fallback` 的短名部分**（`n:<core_name>`）——与 `resolved_display_name`
 /// 构造 `fallback` 的算法是同一个（`DeviceKey::Name(core_name(name))`），
@@ -601,7 +584,7 @@ fn backfill_device_name_keys(config: &mut Config) -> bool {
 fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
     // 先收集再改：`device_names` 的插入与 `alias` 的清空都会改变被遍历的结构。
     //
-    // ⭐⭐ **折叠后必须清掉 `alias` 本身**（P0，用户 2026-09-28 评审定案）：
+    // ⭐⭐ **折叠后必须清掉 `alias` 本身**（P0，用户 评审定案）：
     //   `resolved_display_name` 的第 1 级是 `pin.alias`、**优先于** `device_names`。
     //   若只折进全局表却留着 alias，用户日后全局改名为 Y 时：
     //   任务栏仍显示 alias「X」、其余各处显示 Y ⇒ **刚修掉的不一致原样复发**，
@@ -620,8 +603,8 @@ fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
             continue;
         };
         // `fallback` 本身就是 `n:<短名>`；退化时从 `key` 的 `n:` 形态再取一次。
-        // ⚠️ 一律取**owned** `String`：`core_name` 返回 String，与 `&str` 混用会
-        //    逼出借用技巧（曾写成 `Box::leak` ⇒ 直接内存泄漏，禁）。
+        // ⛔ 一律取** owned** `String`：`core_name` 返回 `String`，与 `&str` 混用会
+        //    逼出借用技巧（`Box::leak` ⇒ 直接内存泄漏，禁）。
         let short: Option<String> = p
             .fallback
             .as_deref()
@@ -667,7 +650,7 @@ fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
 /// · `new_name` 为空、或与原名相同 ⇒ 视为「恢复默认」，**两种形态都删净**；
 /// · 否则两种形态都写入同一个自定义名。
 ///
-/// ⚠️ **为什么抽成独立纯函数**：`rename_device` 是 `#[tauri::command]`、需要 `AppHandle`
+/// ⛔ **必须抽成独立纯函数**：`rename_device` 是 `#[tauri::command]`、需要 `AppHandle`
 /// 才能 `emit`，直接单测代价高；而这段归并逻辑恰恰**必须**被单测钉住（它是静默失效的来源）。
 /// 抽成纯函数后既可直接测，也与本仓 `normalize_config` 的既有风格一致。
 pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) -> bool {
@@ -987,8 +970,9 @@ fn sync_log_cache(config: &Config) {
 
 /// 配置文件路径（`<可写根目录>/config.toml`）。
 ///
-/// 根目录走 [`crate::process::writable_root`] 而非 `exe_dir()`：**MSIX 的包安装目录只读**，
-/// 原先写在这里的每一次保存都会失败（且失败提示本身也写不进日志，全静默）。
+/// ⛔ 根目录走 [`crate::process::writable_root`] 而非 `exe_dir()`：
+/// **MSIX 的包安装目录只读且不在重定向表内**，往里写是静默失败
+/// （失败提示本身也写不进日志）。
 /// 非 MSIX 环境下 `writable_root()` 与 `exe_dir()` 同值，故老用户路径不变。
 fn config_path() -> std::path::PathBuf {
     crate::process::writable_root().join("config.toml")
@@ -1115,12 +1099,10 @@ pub fn init_config() {
         }
     }
 
-    // 「载入时归一化」必须记在**日志级别缓存建立之后**。
+    // 「载入时归一化」必须记在**日志级别缓存建立之后**（即 `sync_log_cache` 之后）。
     //
-    // 踩过的坑：这一行原先写在解析分支里（即 `sync_log_cache` 之前），
-    // 而那时 `LOG_LEVEL` 还是静态初值 0 ⇒ `standard_log_enabled()` 判为关闭，
-    // 这行日志**永远不会输出**（等于死代码）。归一化发生在日志缓存之前，
-    // 是它天然会踩到的时间差。
+    // 依据：记在 `sync_log_cache` 之前时 `LOG_LEVEL` 还是静态初值 0 ⇒
+    // `standard_log_enabled()` 判为关闭 ⇒ 这行日志**永远不会输出**（等于死代码）。
     //
     // 仍然受用户配置的 `log_level` 门控：归一化是**修复**而非数据丢失，
     // 用户主动把日志关掉时不打扰他（对照：解析失败那条必须强开日志）。
@@ -1196,7 +1178,7 @@ struct PersistJob {
 
 /// 落盘队列：`with_config_mut` 只把快照交给写线程，调用线程立即返回（B11）。
 ///
-/// **为什么要有它**：原实现是在**调用线程**上直接落盘（`File::create` +
+/// ⛔ **为什么要有它**：落盘**不得**留在**调用线程**上（`File::create` +
 /// `write_all` + `sync_all` + `rename`）。P1-3 已把落盘移出**配置锁**（那一步是对的），
 /// 但没移出**调用线程** —— 而 11 个调用点里有 10 个就在**主线程**上：
 /// 9 个同步命令（`update_config` / `toggle_device_hidden` / `rename_device` /
@@ -1211,7 +1193,7 @@ struct PersistJob {
 /// ⚠️ **代价（知情，已评估）**：进程**异常终止**（崩溃 / 被强杀）时，最后一次设置
 /// 可能尚未落盘。正常退出路径全部会 [`flush_persist`]（`RunEvent::Exit`、
 /// 看门狗自重启前、`builder.build()` 失败后），故该窗口只存在于异常终止，
-/// 通常 < 10ms。取舍理由：原实现是「**每次**改设置都卡 UI」（必然、高频），
+/// 通常 < 10ms。取舍理由：留在调用线程是「**每次**改设置都卡 UI」（必然、高频），
 /// 本实现是「**极端**情况下丢最后一次设置」（偶发、低损）。
 static PERSIST_TX: OnceLock<SyncSender<PersistJob>> = OnceLock::new();
 
@@ -1309,7 +1291,6 @@ fn persist_now(job: &PersistJob) {
     // 取 `LAST_CONFIG_CONTENT`（下面两处），即白名单第 2 条
     // `PERSIST_LOCK → LAST_CONFIG_CONTENT`。**反向边不存在**——没有任何路径在持
     // `LAST_CONFIG_CONTENT` 时取 `PERSIST_LOCK`，故不构成 AB/BA。
-    // （早先这里写的是「不与任何其他锁构成嵌套」，与下面的事实不符，已改正。）
     let _serial = crate::state::lock_unpoisoned(&PERSIST_LOCK);
 
     // 已有更新的写入取过号 → 本次内容已过期，丢弃（防乱序覆盖）
@@ -1469,8 +1450,8 @@ for_each_config_field!(config_field_names_impl);
 // `with_config(_mut)` 读配置。于是「持配置锁 → 调菜单 API」与「主线程 → 等该锁」
 // 构成 **AB/BA 永久死锁**：整进程冻结，看门狗也救不回（其探活同样要主线程）。
 //
-// 这条纪律原先只写在 `AGENTS.md` 评审项与注释里，**没有任何机械防线**：
-// `tools/check.mjs` 不扫 Rust，编译器也看不见。B8 把「持锁深度」记下来，
+// 这条纪律需要**机械防线**：`tools/check.mjs` 不扫 Rust，编译器也看不见。
+// B8 把「持锁深度」记下来，
 // 由 `tray.rs` 的薄包装在调用 API 前 `debug_assert!` —— 复发时开发期立刻 panic，
 // 而不是线上冻结 40 秒后被系统按「无响应」杀掉。
 //
@@ -2068,7 +2049,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **旧档位 `follow_system` 必须被接受，且映射到 `Default`**（2026-09-29 改档）。
+    /// ⭐⭐ **旧档位 `follow_system` 必须被接受，且映射到 `Default`**（改档）。
     ///
     /// ⛔ 那一档只是**改名**（「跟随系统」→「默认」），语义没变 ⇒ 升级后不能把用户
     ///   静默改档，否则「我明明选的是跟随系统，怎么变了」无从排查。
@@ -2583,11 +2564,10 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
 
     /// ⭐ 短名入口在**只有长形态键**时也必须解析到自定义名。
     ///
-    /// ⚠️ 契约已变更（2026-09-28）：本用例原先断言「未回填时设备页**拿不到**名」
-    ///   （那是在记录一个待修的静默失效）。现在 `resolve_device_name_in` 多了
-    ///   **第 3 级**（任一同 `core_name` 键），所以**回填之前**就已经能解析到了。
-    ///   回填仍然有价值：它让「短名键」存在，使绝大多数查询走 O(1) 的前两级、
-    ///   不必每次扫全表 —— 但它**不再是「能不能解析到」的前提**。
+    /// ⚠️ 本用例覆盖的是「只有长形态键」这一支：`resolve_device_name_in` 的
+    ///   **第 3 级**（任一同 `core_name` 键）已经能解析到，**回填与否都能解析**。
+    ///   回填的价值在于让「短名键」存在，使绝大多数查询走 O(1) 的前两级、
+    ///   不必每次扫全表 —— 它是**性能前提**，不是「能不能解析到」的前提。
     #[test]
     fn resolve_device_name_finds_the_alias_from_any_form() {
         let mut cfg = Config::default();

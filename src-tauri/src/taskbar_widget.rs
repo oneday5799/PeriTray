@@ -1,6 +1,6 @@
 //! 任务栏信息窗（B3-A 路线）：把一块**自绘的分层子窗口**嵌进任务栏。
 //!
-//! ── 形态（选定 B3-A，理由见 PLAYBOOK §E 与 spike `B3-spike-结论.md`）────────
+//! ── 形态（选定 B3-A，路线取舍全文 → Wiki 15 §1）────────────────────────
 //!   1. **建窗**：`CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, .., WS_POPUP)`
 //!      —— 此时还是**顶层窗**，`WS_EX_LAYERED` 不受「分层属性用于子窗口」的代际检查约束。
 //!   2. **改样式**：清 `WS_POPUP`、加 `WS_CHILD`（`SetParent` **不会**自动改，MSDN 明确要求）。
@@ -12,12 +12,11 @@
 //!
 //! ⛔ **校验用「双判」**：`SetParent` 返回**前一个父窗**，成功时它本来就是 `NULL`
 //!   ⇒ 单看返回值有歧义。判据 = 先 `SetLastError(0)`，再「返回 `NULL` **且** 错误码非 0」才算失败；
-//!   最后再 `GetParent` 复核一次（TokenBar 的缺陷正是**不校验却直接标成功**）。
+//!   最后再 `GetParent` 复核一次（的缺陷正是**不校验却直接标成功**）。
 //!
-//! ── 为什么不用「创建时直接带 `WS_CHILD + WS_EX_LAYERED`」──────────────────
-//!   该形态在宿主清单**缺 `<compatibility><supportedOS>`** 时**恒定失败**且 `err=0`
-//!   （实测矩阵见 PLAYBOOK §E「建窗前置」）。本仓虽已补清单（`src-tauri/app.manifest`），
-//!   但 popup→reparent 路线**不依赖**它，兼容性更好，故仍选此形态。
+//! ⛔ **不选「创建时直接带 `WS_CHILD + WS_EX_LAYERED`」**：该形态在宿主清单缺
+//!   `<compatibility><supportedOS>` 时**恒定失败且 `err=0`**（实测矩阵 → Wiki 15 §2.4）；
+//!   本仓虽已补清单（`src-tauri/app.manifest`），但 popup→reparent 路线**不依赖**它。
 //!
 //! ── 透明与深浅色 ────────────────────────────────────────────────────────
 //!   · 背景像素 `alpha = 0` ⇒ **全透明且穿透**（点击落到任务栏）；
@@ -25,25 +24,14 @@
 //!   · 抗锯齿边缘**必须预乘** `(R·A/255, G·A/255, B·A/255, A)` —— 用 straight alpha
 //!     会让边缘**过亮泛白**（实测）。
 //!   · 内容色：浅色主题用**黑色**，深色主题用**白色**（复用 `windows::system_dark_mode()`）。
-//!   · ⚠️ `UpdateLayeredWindow` 是**一次性提交位图**，不是持久绘制目标
+//!   · ⛔ `UpdateLayeredWindow` 是**一次性提交位图**，不是持久绘制目标
 //!     ⇒ 主题变化时**必须重新生成 DIB 再提交一次**。
-//!
-//! ── 本模块的里程碑 ──────────────────────────────────────────────────────
-//!   里程碑 1（已完成）：建窗 + 挂载 + 自绘一块可辨识的内容。
-//!   里程碑 2+3（已完成）：接入真实内容 + 由设置页驱动（挂载 / 拆除 / 重定位）。
-//!   里程碑 4（已完成）：**布局重构** —— 图标放大到 32px，电量画图标**右上角**、
-//!     音量画**右下角**，缺失一律 `N/A`；widget 在任务栏内**垂直居中**。
-//!   里程碑 5（已完成）：**手动拖拽** —— 关掉「固定位置」后可拖动，落点落盘（`taskbar_custom_x`）。
-//!   里程碑 6（已完成）：**Z 序维护** —— 挂载时显式 `HWND_TOP` 提顶，之后每 2s **幂等**
-//!     重申（`WM_APP_RAISE`）；并把「任务栏换了句柄」（= Explorer 重建）提升为
-//!     **立刻重建**的触发条件，不再等 30s 慢节拍。
-//!   刻意**不含**：多显示器（本机无 `Shell_SecondaryTrayWnd`，无法验证）。
 //!
 //! ── ⛔⛔ 线程模型（**本模块最容易做错的地方**）───────────────────────────
 //!   两条**硬约束**彼此冲突，必须用「后台取数 → 投递主线程 → 主线程重绘」化解：
 //!     1. **窗口过程只在创建线程上被调用**，而 `UpdateLayeredWindow` 更新的是窗口表面
 //!        ⇒ **重绘只能在主线程**（widget 建在 Tauri `setup` 回调 = 主线程）。
-//!     2. **数据获取极慢**（WMI 设备枚举实测 600ms+，见 PLAYBOOK §E）
+//!     2. **数据获取极慢**（WMI 设备枚举实测 600ms+）
 //!        ⇒ **取数绝不能在主线程**，否则任务栏/整个 UI 卡顿。
 //!   ⇒ 数据流：事件/定时线程 → `refresh_async()`（后台取数）
 //!     → 写入 `SNAPSHOT`（`Mutex<Option<WidgetSnapshot>>`）
@@ -90,7 +78,7 @@ const CLICK_TIME_MS: u64 = 400;
 #[cfg(target_os = "windows")]
 static PRESS_CURSOR: std::sync::Mutex<Option<(i32, i32, u64)>> = std::sync::Mutex::new(None);
 
-/// 当前**被按下**的按钮（`-1` = 无）。用户 2026-09-29 要求所有可点按钮按下时变灰。
+/// 当前**被按下**的按钮（`-1` = 无）。要求所有可点按钮按下时变灰。
 ///
 /// ⭐ 存的是**布局里那一项的编号**，不是屏幕坐标：
 ///   · 命中判定用**已发布的布局**（`music_layout` / `DEV_SWITCH_RECT`），
@@ -136,8 +124,8 @@ pub fn press_target_at(local: (i32, i32)) -> i32 {
     if switch_anim_active() {
         return PRESS_NONE;
     }
-    // ⭐⭐ 切换按钮**只在 hover 时可点**（用户 2026-09-29：「hover 时才显示」）。
-    //   ⚠️ 必须与绘制用**同一个判据**（`switch_icon_alpha`）：只改绘制不改这里，
+    // ⭐⭐ 切换按钮**只在 hover 时可点**（「hover 时才显示」）。
+    //   ⛔ 必须与绘制用**同一个判据**（`switch_icon_alpha`）：只改绘制不改这里，
     //   就会留下一个「看不见但点得到」的按钮 —— 那比按钮常驻更糟，
     //   因为用户点了有反应却**看不到自己点了什么**。
     //   （`want_hover` 用窗口矩形判光标在内 ⇒ 能按到切换键时必然已 hover。）
@@ -272,9 +260,9 @@ pub fn on_click(hwnd: *mut core::ffi::c_void, local: (i32, i32)) {
 ///   「有没有会话」决定组件**在不在**；只重绘的话，无会话→有会话时窗口仍然挂着空窗。
 #[cfg(target_os = "windows")]
 pub fn on_music_changed() {
-    // ⛔⛔ **只重绘、绝不取数**（2026-09-29 修：播放/暂停图标延迟数秒才变）。
+    // ⛔⛔ **只重绘、绝不取数**（修：播放/暂停图标延迟数秒才变）。
     //
-    // 根因：这里原先调 `refresh_async()`，而那是**设备**刷新通道 ——
+    // 根因：`refresh_async()` 是**设备**刷新通道 ——
     //   `spawn_blocking(fetch_into_snapshot)` 会跑一轮 **WMI 设备枚举（实测 600ms+）**，
     //   跑完才 `post_refresh`。音乐面板的内容全部来自 SMTC 快照，
     //   而快照在进到这里之前**已经更新完毕** ⇒ 这一轮 WMI **纯浪费**，
@@ -366,27 +354,27 @@ pub fn hit_test_music(cursor: (i32, i32)) -> MusicHit {
     MusicHit::None
 }
 
-/// 「切换」按钮的语义（用户 2026-09-28 指定的循环顺序）：
+/// 「切换」按钮的语义（指定的循环顺序）：
 ///
 /// ```text
 ///   会话1 → 会话2 → … → 会话N → 换组件 → 会话1 → …
 /// ```
 ///
 /// ⛔⛔ **「只有一个会话」时，会话列表在第一次点击前就已经走完** ⇒ 下一步应当是
-///   **换组件**。我第一版写的守卫是 `if !need_panel_switch && n <= 1 { return; }`
-///   —— 它把「没有下一个会话」误当成「无处可切」，于是 N=1（绝大多数情况）时
-///   **点切换完全没反应**（用户 2026-09-28 实测报出）。
+///   **换组件**。⛔ 不得用 `if !need_panel_switch && n <= 1 { return; }` 这类守卫：
+///   它把「没有下一个会话」误当成「无处可切」，于是 N=1（绝大多数情况）时
+///   **点切换完全没反应**。
 ///   ⇒ 正确判据是「**还有没有下一个会话**」，而不是「会话数是否 > 1」。
 fn advance_switch_target(hwnd: *mut core::ffi::c_void) {
     let snap = crate::taskbar_music::snapshot();
     let n = snap.sessions.len();
     let cur_panel = current_panel();
 
-    // ① ⭐⭐ **会话轮转只在音乐面板里做**（2026-09-29 改）。
+    // ① ⭐⭐ **会话轮转只在音乐面板里做**（改）。
     //
-    //   原先不分面板：设备面板上点「切换」也先切会话 ⇒ **从设备面板切到音乐
-    //   面板要点两次**（真机实测），而按钮就画在最右缘、提示写的就是「切换」，
-    //   用户的预期是「换一块显示的内容」。
+    //   ⛔ 判据是**按当前面板分流**，不分面板则设备面板上点「切换」也会先切会话
+    //   ⇒ **从设备面板切到音乐面板要点两次**（真机实测），而按钮就画在最右缘、
+    //   提示写的就是「切换」，用户的预期是「换一块显示的内容」。
     //   ⇒ 设备面板上这个按钮**只切面板**，一次到位；
     //     音乐面板上它才是「下一个会话」，会话走完再交给 ② 切面板。
     //
@@ -406,16 +394,16 @@ fn advance_switch_target(hwnd: *mut core::ffi::c_void) {
         crate::config::with_config_mut(|c| c.taskbar_panel = other);
         // ⭐⭐ **进入音乐面板一律从会话 0 开始**——这就是「环」的闭合点。
         //
-        //   用户 2026-09-29 选定「单按钮 + 循环语义」，整个环是：
+        //   选定「单按钮 + 循环语义」，整个环是：
         //   ```text
         //   Devices --点--> Music/会话0 --点--> 会话1 --点--> Devices --点--> …
         //   ```
-        //   ⚠️ 若**不**归零：从音乐面板离开时 `current` 停在 `n-1` 且被钉住，
+        //   ⛔ 若**不**归零：从音乐面板离开时 `current` 停在 `n-1` 且被钉住，
         //   再进来点一下又是「没有下一个」⇒ **直接切面板**
         //   ⇒ **会话 0 永久不可达**（真机实测：音乐面板上点「切换」只会切面板）。
         //   归零同时也让每次进入音乐面板的起点可预期。
         //
-        //   ⚠️ 归零会带来「换会话 ⇒ 封面要重新解码」的窗口（worker 异步），
+        //   ⛔ 归零会带来「换会话 ⇒ 封面要重新解码」的窗口（worker 异步），
         //   那由 `select_session` **同步清 `cover_hash`** 来保证快照自洽
         //   （见 `taskbar_music::select_session`）——两处必须一起改，
         //   只改其一会退回「闪现旧封面」。
@@ -458,7 +446,7 @@ fn other_panel_if_available(
 
 // ══ 面板切换动画（Music ↔ Devices）══════════════════════════════════════
 //
-// 形态（用户 2026-09-29 选定）：**横向滑动**，旧面板左移淡出、新面板自右滑入，
+// 形态（选定）：**横向滑动**，旧面板左移淡出、新面板自右滑入，
 // 时长 **150ms**。⛔ 会话轮转（同一面板内的上一首/下一首会话）**不参与**动画 ——
 // 它不换面板、宽度也不变，套一层滑动只会让歌名整段平移，观感更差。
 //
@@ -469,7 +457,7 @@ fn other_panel_if_available(
 //   → 主线程每帧把两张缓存位图错位合成一帧再提交
 //   → 动画线程在最后投 `WM_APP_SWITCH_END`，主线程释放缓存 + 清状态 + 补一帧常规重绘。
 
-/// 动画时长（毫秒）—— 用户 2026-09-29 选定 150ms。
+/// 动画时长（毫秒）—— 选定 150ms。
 const SWITCH_ANIM_MS: u64 = 150;
 
 /// 逐帧节拍。150 / 16 ≈ 9 帧。
@@ -531,7 +519,7 @@ fn panel_from_code(c: u8) -> Option<crate::config::TaskbarPanel> {
 static WIDGET_ANIMATING: AtomicBool = AtomicBool::new(false);
 /// 本模块专属的动画起始时刻（[`crate::state::monotonic_ms`] 刻度），`0` = 无动画。
 ///
-/// ⚠️ 必须与 [`WIDGET_ANIMATING`] **成对**——见 `state::try_begin_animation_on`
+/// ⛔ 必须与 [`WIDGET_ANIMATING`] **成对**——见 `state::try_begin_animation_on`
 ///   的说明：release 是 `panic = "abort"`，`Drop` 复位根本不跑，
 ///   唯一的兜底就是这个单调时钟。
 static SWITCH_ANIM_STARTED: AtomicU64 = AtomicU64::new(0);
@@ -548,7 +536,7 @@ fn switch_anim_active() -> bool {
 
 /// 第 `now` 毫秒时的动画进度（`0..=1`）。
 ///
-/// ⚠️ `started == 0` 视为「没有动画」⇒ 返回 `1.0`（**直接到终态**）。
+/// ⛔ `started == 0` 视为「没有动画」⇒ 返回 `1.0`（**直接到终态**）。
 ///   绝不能返回 `0.0`：那会让窗口停死在「旧面板刚要滑走」的那一帧，
 ///   看起来就是「面板点坏了、切不过去」。
 #[cfg(target_os = "windows")]
@@ -737,7 +725,7 @@ fn begin_switch_anim(
     from: crate::config::TaskbarPanel,
     to: crate::config::TaskbarPanel,
 ) -> bool {
-    // ⚠️ 先看动画标志、再取守卫，**两道门缺一不可**：
+    // ⛔ 先看动画标志、再取守卫，**两道门缺一不可**：
     //   守卫由动画线程在末尾释放，而缓存位图的释放要等主线程处理
     //   `WM_APP_SWITCH_END`。两者之间有个「守卫已放、状态未清」的窗口，
     //   此时若只查守卫，新的动画会进来并**覆盖缓存**，随后到达的结束消息
@@ -795,7 +783,7 @@ fn spawn_switch_anim(guard: crate::state::SingleFlightGuard<'static>, hwnd: isiz
             //   编译器会直接拒绝；句柄本身只是整数，跨线程传值安全，
             //   真正保证「只在主线程碰窗口」的是**用法**——本线程只 `PostMessageW`。
             unsafe { ffi::post_refresh(hwnd as *mut core::ffi::c_void) };
-            // ⚠️ 这里**必须**用 `thread::sleep`：`tokio::time::sleep` 在没有
+            // ⛔ 这里**必须**用 `thread::sleep`：`tokio::time::sleep` 在没有
             //   运行时的真线程里会 panic（AGENTS.md 明确写了这条反向纪律）
             std::thread::sleep(std::time::Duration::from_millis(SWITCH_ANIM_FRAME_MS));
         }
@@ -954,7 +942,7 @@ pub fn current_panel() -> Option<crate::config::TaskbarPanel> {
 
 /// 「切换」按钮本帧是否该显示。
 ///
-/// ⭐ 判据（用户 2026-09-28）：**有东西可切才显示**
+/// ⭐ 判据（用户）：**有东西可切才显示**
 ///   · 两个开关都开            ⇒ 能在「设备 / 音乐」之间切
 ///   · 音乐面板 ∧ 会话数 > 1   ⇒ 能在多个媒体会话之间切
 ///   · 只开一个开关且只有一个会话 ⇒ 无处可切 ⇒ **不显示**（占位也是噪音）
@@ -971,7 +959,7 @@ fn switch_visible(panel: crate::config::TaskbarPanel) -> bool {
 /// 设备面板的「切换」按钮矩形（`None` = 本帧不显示）。
 ///
 /// ⛔⛔ **两个面板都必须有它**：切换按钮只画在音乐面板时，��到设备面板就是
-/// **单程票**——用户再也回不去音乐面板，只能去设置页（实测 2026-09-28：
+/// **单程票**——用户再也回不去音乐面板，只能去设置页（实测：
 /// 修好「记住的选择」后组件确实切到了设备面板，却发现**回不来了**）。
 /// 用户原话是「在**任务栏组件**的最右边」，组件指整体而非音乐面板。
 #[cfg(target_os = "windows")]
@@ -989,7 +977,7 @@ fn dev_switch_hit(local: (i32, i32)) -> bool {
     hit_rect(*crate::state::lock_unpoisoned(&DEV_SWITCH_RECT), local)
 }
 
-/// ⭐⭐ 「切换」按钮只在 **hover** 时显示（用户 2026-09-29）。
+/// ⭐⭐ 「切换」按钮只在 **hover** 时显示（用户）。
 ///
 /// 抽成纯函数是为了让「显示」与「可点」**由同一判据驱动**——
 ///
@@ -997,7 +985,7 @@ fn dev_switch_hit(local: (i32, i32)) -> bool {
 ///   因为用户点了会有反应，却**看不到自己点了什么**。
 ///   （本仓同类教训：「绘制与命中必须同源」，见 `press_target_at` 的注释。）
 ///
-/// **宽度不跟着变**（用户 2026-09-28 明确要求 hover 前后长度一致）：
+/// **宽度不跟着变**（明确要求 hover 前后长度一致）：
 /// `switch_w` 恒计入 `content_w`，未 hover 时那块是**全透明**的
 ///（分层窗按像素 alpha）⇒ 看不见空洞，而 `want_hover` 用**窗口矩形**判
 /// 光标在内 ⇒ 那块 45px 正是 hover 区的一部分 ⇒ 鼠标移过去按钮就浮现，
@@ -1019,14 +1007,14 @@ fn switch_clickable(hovered: bool) -> bool {
 
 /// ⭐⭐ 音乐面板文字的**绘制框**：返回 `(绘制宽度, 是否需要省略号)`。
 ///
-/// ⛔⛔ **上限必须与布局侧是同一个值**（2026-09-29 修「文字被截断、右侧却留大片空白」）。
+/// ⛔⛔ **上限必须与布局侧是同一个值**（修「文字被截断、右侧却留大片空白」）。
 ///
 ///   当时**只改了布局侧**：面板宽度按音乐面板自己的 `MUSIC_TEXT_MAX_W_DIP`
 ///   （320 DIP ⇒ 125% 下 400px）算，而**绘制侧仍在用 `m.item_max_w`**
 ///   （150 DIP ⇒ 125% 下 188px —— 那个字段的注释里明写是
 ///   「**给设备面板的**电量 / 音量那几行短数字设计的」）
 ///   ⇒ 面板画到 400px 宽、文字只画到 188px 就打「…」
-///   ⇒ 右侧约 212px 空白（用户 2026-09-29 实测报出：hover 时能明显看到后面空着）。
+///   ⇒ 右侧约 212px 空白（报出：hover 时能明显看到后面空着）。
 ///
 ///   ⇒ 抽成本函数，**布局与绘制都从这里取**，杜绝「两份上限」再次分叉
 ///   （同源纪律，与「绘制与测宽必须同源」同源）。
@@ -1048,15 +1036,14 @@ fn hit_rect(r: Option<windows_sys::Win32::Foundation::RECT>, local: (i32, i32)) 
 /// ⛔ 分成两处写就是「切形态时横向跳」那类闪的来源：两处一旦漂移，肉眼只看到
 ///   「动一下指针内容就错位」，几乎无法定位。
 ///
-/// ⭐⭐ **`cover_gap` 由调用方传进来，不在这里重算**（2026-09-30）。
-/// 本函数原先自己算了一遍 `m.dip(MUSIC_COVER_GAP_DIP)`，而 `draw_music_render`
-/// 里也有一份 `cover_gap` ⇒ **同一口径写了两遍**。
-/// ⇒ 一旦「封面↔文字间距」的口径变了（用户 2026-09-30 就在反复调这一项），
+/// ⭐⭐ **`cover_gap` 由调用方传进来，不在这里重算**。
+/// 同一口径写两遍（本函数与 `draw_music_render` 各算一次 `cover_gap`）必然漂移。
+/// ⇒ 一旦「封面↔文字间距」的口径变了（这一项用户反复在调），
 ///   两处很容易只改一处 ⇒ **正文起点与封面右缘错位**，表现为
-///   「封面到双排信息的距离变了」（用户实测报的就是这个）。
+///   「封面到双排信息的距离变了」。
 /// ⇒ 现在**只有 `draw_music_render` 那一处**算 `cover_gap`，本函数只做加法。
 ///
-/// ⚠️ `pad_x` / `icon` 传的是**封面那一侧**的度量（当前是固定档 `m_art`）：
+/// ⛔ `pad_x` / `icon` 传的是**封面那一侧**的度量（当前是固定档 `m_art`）：
 ///   两者必须**同源**，否则正文起点会跟着设置漂。
 #[cfg(target_os = "windows")]
 fn music_body_x(pad_x: i32, icon: i32, cover_gap: i32) -> i32 {
@@ -1070,10 +1057,10 @@ fn music_body_x(pad_x: i32, icon: i32, cover_gap: i32) -> i32 {
 ///
 /// ⚠️⚠️ 借坐标只在**尺寸相等**时恰好居中：都从 `y` 起画时，`[y, y + size]`
 ///   的中心才是 `h / 2` —— 而这要求所有控件的 `size` 与 `y` 同源同值。
-///   用户 2026-09-30 要求「缩放设置只管三键与切换键、封面恒定」
+///   要求「缩放设置只管三键与切换键、封面恒定」
 ///   ⇒ 封面与三键**不再相等** ⇒ 复用 `icon_y` 会让三键**偏上**：
 ///   125% 下 `h=50`、封面 40、三键 32 ⇒ 封面 `[5,45]` 中心 25，
-///   三键 `[5,37]` 中心 21 ⇒ **偏上 4px**（用户实测报「缩小的三键没垂直居中」）。
+///   三键 `[5,37]` 中心 21 ⇒ **偏上 4px**。
 ///
 /// ⛔ 这正是「同一口径写了两份」的变种：此处若各写各的 `(h - size) / 2`，
 ///   改一处就会重新漂。
@@ -1084,7 +1071,7 @@ fn center_y(h: i32, size: i32) -> i32 {
 
 /// 音乐面板绘制（**主线程**）。
 ///
-/// 形态（用户 2026-09-28 指定）：
+/// 形态（指定）：
 /// · 静态 = 左边封面 + 上排标题 / 下排艺人
 /// · hover = 封面 + 三键（上一首 / 播放暂停 / 下一首）
 /// · 「切换」按钮恒在**最右侧**（仅在 `switch_visible` 时）
@@ -1101,14 +1088,14 @@ pub fn draw_music(hwnd: *mut core::ffi::c_void) -> bool {
 /// 面板切换动画要把**旧面板**也画一份留作滑走的起点，而那块位图
 /// **绝不能提交**（一提交就等于「面板瞬间换掉了」，动画等于没播）。
 ///
-/// ⚠️ 此时还必须跳过 `publish_music_layout` / `publish_item_rects`：
+/// ⛔ 此时还必须跳过 `publish_music_layout` / `publish_item_rects`：
 ///   发布的是**动画中间态**的坐标 ⇒ 命中测试会照着移动中的矩形判定，
 ///   用户的点击会落在「已经滑走」的位置上。
 #[cfg(target_os = "windows")]
 fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let dark = crate::windows::system_dark_mode();
     let m = Metrics::current_content();
-    // ⭐ 封面 + 双排信息**恒定**（用户 2026-09-30：缩放设置对它们不生效）；
+    // ⭐ 封面 + 双排信息**恒定**（缩放设置对它们不生效）；
     //   三键 / 切换键 / 各项间距 / 左右留白仍跟随 `m`（同轮逐条确认「都按 A」）。
     let m_art = Metrics::art_fixed();
     let snap = crate::taskbar_music::snapshot();
@@ -1117,7 +1104,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
 
     // ── 建字体 + 测量（与设备面板同一套度量/测量入口）────────────────
     let (font, memdc) = unsafe {
-        // ⚠️ **不加粗**（用户 2026-09-29）。设备面板的「电量 / 音量」曾按 2026-09-25
+        // ⚠️ **不加粗**（用户）。设备面板的「电量 / 音量」曾按
         //   的要求加粗，同日用户又要求设备面板一并取消 ⇒ 现在两侧同为常规字重；
         //   但歌名 / 歌手是**连续文字**，加粗后 Segoe UI Variable Text 在 15px 下
         //   笔画粘连、字腔变窄，观感偏「糊成一团」。
@@ -1131,7 +1118,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         let screen = windows_sys::Win32::Graphics::Gdi::GetDC(std::ptr::null_mut());
         let dc = windows_sys::Win32::Graphics::Gdi::CreateCompatibleDC(screen);
         windows_sys::Win32::Graphics::Gdi::ReleaseDC(std::ptr::null_mut(), screen);
-        // ⚠️ **必须与 `draw_items_render` 同款判据**（2026-09-29 补齐）。
+        // ⛔ **必须与 `draw_items_render` 同款判据**（补齐）。
         //   缺了它**不会闪退**（实测：NULL HDC 下 `measure_text` 只是**静默返回 0**，
         //   判据 `measure_text_with_null_dc_does_not_crash_but_returns_garbage`），
         //   但「文字宽度 = 0」会让 `body_w` 算窄 ⇒ **面板过窄、文本被裁切**，
@@ -1155,7 +1142,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     };
     let artist_wide: Vec<u16> = cur.artist.encode_utf16().collect();
     // ⚠️ **标题有「未在播放」兜底、艺人没有** —— 艺人可能是空串（实测某播放器上报
-    //   `artist = ""`），这是 2026-09-29 闪退的根因所在（见 `measure_text` 的注释）。
+    //   `artist = ""`），这是 闪退的根因所在（见 `measure_text` 的注释）。
     let (t_nat, a_nat) = unsafe {
         (
             ffi::measure_text(memdc, font, &title_wide),
@@ -1164,23 +1151,23 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     };
     unsafe { windows_sys::Win32::Graphics::Gdi::DeleteDC(memdc) };
 
-    // ⭐ **两个尺寸是分别定的，别再让它们相等**（用户 2026-09-28 实测报「切换太大、三键太小」）：
+    // ⭐ **两个尺寸是分别定的，别再让它们相等**（实测：切换键过大、三键过小）：
     //   · 三键占**满高度**（`m.h`）—— 它们是「有边框 + 内容」的线稿图标，32px 下边框只有
     //     1.6px、暂停双竖条只有 25.6/1024 ≈ **0.8px** ⇒ 几乎看不见。占满高度后边框 2px、
     //     竖条 1px，才读得出是三个键。控制行占满高也是常规做法。
     //   · 「切换」图标**保持原尺寸**（= `m.icon`，与控制键同一边长）——
-    //     用户 2026-09-28 复核后要求改回。三键占满高度是它**自身线稿太细**所致
+    //     用户 复核后要求改回。三键占满高度是它**自身线稿太细**所致
     //     （内部元素 25.6/1024 ⇒ 32px 下 0.8px），与切换图标无关，两者不必一起改。
     let switch_px = m.icon;
-    // ⭐ **所有间隙一律 = `m.icon_text_gap`**（用户 2026-09-29：「缩短三键的间距，
+    // ⭐ **所有间隙一律 = `m.icon_text_gap`**（「缩短三键的间距，
     //   改为和封面到上一首按钮的间距一致」）。
     //   ⛔ 末段（下一首→切换）的**基准值**也用它：否则最短宽度下会出现
     //   「5 / 5 / 5 / 13」这种一眼可见的不齐（撑长的余量仍然只加在末段）。
-    //   原先用 `m.item_gap`（10 DIP）⇒ 125% 下 13px，比 5px 宽一倍多。
-    // ⛔ 固定（用户 2026-09-30 选 BBB）：按键间距不随缩放设置变
+    //   ⛔ 不用 `m.item_gap`（10 DIP）：125% 下 13px，比 5px 宽一倍多。
+    // ⛔ 固定（选 BBB）：按键间距不随缩放设置变
     let gap = m_art.icon_text_gap;
 
-    // ⭐ **封面右侧的间隙另算，比按键之间宽**（用户 2026-09-29：「把封面到上一首
+    // ⭐ **封面右侧的间隙另算，比按键之间宽**（「把封面到上一首
     //   按钮和到两排文字的距离同时增加一些」）。
     //   · `gap`       = 按键↔按键、末段基准（保持 5px 不变）
     //   · `cover_gap` = 封面↔文字（静态）/ 封面↔第一键（hover）
@@ -1191,10 +1178,10 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     // ⛔ 固定（BBB）：封面↔文字 / 封面↔第一键 的间距不随设置变
     let cover_gap = m_art.dip(MUSIC_COVER_GAP_DIP);
     // ⛔⛔ 文字宽度**上限必须大于「固定段」**，否则「撑长」永远看不到
-    //   （用户 2026-09-29 实测报「没变化啊」）。
-    //   根因：原先复用了 `m.item_max_w`（= 150 DIP，**给设备面板的电量/音量
-    //   那几行短数字设计的**）⇒ 125% 下上限 188px，而固定段（三键 3×50 + 间隙
-    //   2×13）已有 176px ⇒ **最多只能撑 12px**，肉眼根本看不出来。
+    //   （实测：肉眼看不出变化）。
+    //   依据：`m.item_max_w` = 150 DIP，是**给设备面板那几行短数字设计的**；
+    //   复用它时 125% 下上限只有 188px，而固定段（三键 3×50 + 间隙 2×13）已有
+    //   176px ⇒ **最多只能撑 12px**，肉眼根本看不出来。
     //   ⇒ 音乐面板用自己的上限 `MUSIC_TEXT_MAX_W_DIP`，并强制它**大于固定段**。
     const MUSIC_TEXT_MAX_W_DIP: i32 = 320; // 125% 下 400px，够长的歌名也能撑开
                                            // ⚠️ 上限也用 `m_art`：否则设置变小 ⇒ 上限变小 ⇒ **歌名被更早截断**，
@@ -1208,14 +1195,14 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     let text_w = t_nat.min(text_cap).max(a_nat.min(text_cap));
 
     // ⭐⭐ **组件宽度恒定：正文区宽度只按静态形态定一次，两种形态共用**
-    //   （用户 2026-09-28：「以当前非 hover 时的长度为准，让 hover 时的长度固定一致」）。
+    //   （「以当前非 hover 时的长度为准，让 hover 时的长度固定一致」）。
     //   此前 hover 用 `btn * 3 + gap * 2`（50×3+13×2 = 176）而静态是 164
     //   ⇒ 指针一进组件，窗口宽度从 262 跳到 ~300，**整个面板左右窜动**。
     //   现在 `body_w` 与 hovered **无关** ⇒ 两种形态的 `content_w` 逐字节相同。
     //   ⚠️ 代价（可接受、且是这条要求的直接推论）：三键的边长不再恒为 `m.h`，
     //   而要**在同一条带内均分**（下式）。`min(.., m.h)` 保证标题很长时也不会
     //   超过控件高度。
-    // ⭐⭐ **封面 ↔ 三键的间距恒定**（用户 2026-09-29 明确要求）：
+    // ⭐⭐ **封面 ↔ 三键的间距恒定**（明确要求）：
     //   「封面-音乐控制3键之间固定间距，固定后的音乐组件总宽度就是最短宽度，
     //     当音乐信息长度超过这个长度后则撑长音乐组件长度，
     //     但仍不改变封面-音乐控制3键之间的间距，
@@ -1228,12 +1215,12 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     // ⚠️ 顺带修掉一个一直存在的重复计数：旧式把 `m.icon + m.icon_text_gap`
     //   **又加了一遍**（`body_w` 本该只是正文区），导致文字与切换键之间恒定多出
     //   一段死空白。现在这段空白变成了规格里那个「可变间距」。
-    // ⭐ 固定边长 = **封面边长**（`m.icon`），不放大（用户 2026-09-29：「不要让三键变大」）。
+    // ⭐ 固定边长 = **封面边长**（`m.icon`），不放大（「不要让三键变大」）。
     //
-    // ⚠️⚠️ 格子与图标尺寸必须**一致**（这一条踩过两次）：
+    // ⛔⛔ 格子与图标尺寸必须**一致**（这一条踩过两次）：
     //   · 格子 `m.h`(50) 而图标按 `m.icon`(40) 画 ⇒ 每格四周空 5px，
     //     「两键之间」的**视觉**间隙 = 5+5+5+5 = 15px，而「封面↔第一键」只有
-    //     5+5 = 10px ⇒ 代码同一口径、看上去却三键更散（用户报「缩短三键之间的间距」）。
+    //     5+5 = 10px ⇒ 代码同一口径、看上去却三键更散。
     //   · 反过来把图标放大到填满 50px 格子 ⇒ 间隙对了，但按键**变大了**（用户不要）。
     //   ⇒ 正解：**格子也用 `m.icon`**，图标填满格子，视觉间隙 == `gap` 本身，
     //     而按键尺寸保持不变。
@@ -1300,10 +1287,10 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                                           //
                                           // ⚠️⚠️ 复用 `icon_y` 只有在 `btn == 封面边长` 时才恰好居中（两者都从
                                           //   `icon_y` 起画，`[icon_y, icon_y + size]` 的中心才是 `h/2`）。
-                                          //   而用户 2026-09-30 要求「缩放设置只管三键与切换键」、封面恒定
+                                          //   而要求「缩放设置只管三键与切换键」、封面恒定
                                           //   ⇒ 两者**不再相等** ⇒ 复用会让三键整体偏上：
                                           //   125% 下 h=50、封面 40、三键 32 ⇒ 封面 [5,45] 中心 25，
-                                          //   三键 [5,37] 中心 21 ⇒ **偏上 4px**（用户实测报「缩小的三键没垂直居中」）。
+                                          //   三键 [5,37] 中心 21 ⇒ **偏上 4px**。
                                           //
                                           //   ⭐ 与「切换」键同款做法（`let sy = (h - switch_px) / 2`）：
                                           //   **每个控件按自己的尺寸居中**，不借封面的位置。
@@ -1331,7 +1318,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     if hovered {
         // ⭐ 三键**顶格左对齐**排布：余量不摊给它们，而是全留给「下一首 → 切换」那一段
         //   （见上面 `body_w` 那段规格）。**不能居中**——居中会让封面到第一个键的
-        //   距离随歌名变化，正是用户要求恒定的那一段。
+        //   距离随歌名变化，而这一段必须是**恒定**的（用户口径）。
         let mut x = music_body_x(m_art.pad_x, m_art.icon, cover_gap);
         for slot in buttons.iter_mut() {
             *slot = windows_sys::Win32::Foundation::RECT {
@@ -1423,7 +1410,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
 
         let body_x = music_body_x(m_art.pad_x, m_art.icon, cover_gap);
         if hovered {
-            // ② 三键：不可用的键画**半透明**（与 FluentFlyout 一致：不隐藏、只置灰）
+            // ② 三键：不可用的键画**半透明**（与 一致：不隐藏、只置灰）
             let slots = [
                 music_icons::Icon::Prev,
                 if cur.playing {
@@ -1442,7 +1429,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                     1 => cur.can_play_pause,
                     _ => cur.can_next,
                 };
-                // ⭐ 「按下变灰」（用户 2026-09-29）：不可用档 0.5，按下再乘 0.55。
+                // ⭐ 「按下变灰」（用户）：不可用档 0.5，按下再乘 0.55。
                 //   两个维度**相乘**而不是二选一 —— 不可用的键同时按下时仍然更暗，
                 //   不会出现「按下反而变亮」。
                 let scale = if enabled { 1.0f32 } else { 0.5f32 }
@@ -1456,7 +1443,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                 //   于是「两键之间的**视觉**间隙」= 内部留白×2 + 基准间隙
                 //   = 5+5+5+5 = **20px**，而「封面↔第一键」只有 5+5 = 10px
                 //   ⇒ 明明代码里两处用的是同一个 `gap`，看上去三键却明显更散
-                //   （用户 2026-09-29 报「缩短三键之间的间距」）。
+                //   （实测：三键间距看起来过大）。
                 //   按 `btn` 画满格子后，视觉间隙 == `gap` 本身。
                 if let Some(scaled) = music_icons::get(slots[i], dark)
                     .and_then(|r| music_icons::scale_to_slot(slots[i], r, btn as u32))
@@ -1488,7 +1475,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
             //
             // ⛔⛔ 上限用 **`text_cap`**（音乐面板自己的），**不是** `m.item_max_w`
             //   （那是设备面板的 150 DIP）。用错的后果：面板按 400px 画、
-            //   文字按 188px 画 ⇒ 右侧 212px 空白 + 无谓的「…」（2026-09-29 实测）。
+            //   文字按 188px 画 ⇒ 右侧 212px 空白 + 无谓的「…」（实测）。
             let (t_clamped, t_ellipsis) = music_text_box(t_nat, text_cap);
             let (a_clamped, a_ellipsis) = music_text_box(a_nat, text_cap);
             if t_clamped > 0 {
@@ -1532,14 +1519,14 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                 for yy in 0..(ih as i32).min(h - sb.top) {
                     for xx in 0..(iw as i32).min(total_w - sb.left) {
                         let si = ((yy * iw as i32 + xx) * 4) as usize;
-                        // ⭐ 按下变灰（用户 2026-09-29）
+                        // ⭐ 按下变灰（用户）
                         let press = if pressed_id() == PRESS_MUSIC_SWITCH {
                             0.55f32
                         } else {
                             1.0f32
                         };
                         // ⭐⭐ 未 hover ⇒ alpha 归零 ⇒ **切换按钮不显示**
-                        //   （用户 2026-09-29：「要求切换按钮在 hover 时才显示」）
+                        //   （「要求切换按钮在 hover 时才显示」）
                         let a = (ipx[si + 3] as f32 * press * switch_icon_alpha(hovered)).round()
                             as u32;
                         if a == 0 {
@@ -1575,7 +1562,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         crate::taskbar_tooltip::sync(hwnd as _, &entries);
     }
 
-    // ⚠️ 字体必须在这里销毁：动画路径（`publish = false`）不走下面的提交/释放，
+    // ⛔ 字体必须在这里销毁：动画路径（`publish = false`）不走下面的提交/释放，
     //   每帧漏一个 `destroy_font` 就会把 GDI 字体对象泄漏光。
     unsafe { ffi::destroy_font(font) };
     if !publish {
@@ -1590,19 +1577,19 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
 // 布局度量：**标称值一律是 DIP**（96 DPI 基准），绘制前按实际 DPI 换算
 // ══════════════════════════════════════════════════════════════════════
 //
-// ⭐⭐ 为什么必须按 DPI 换算（用户 2026-09-25 报「底衬高度不对」的根因）：
-//   FluentFlyout 是 WPF 程序，`TaskbarWidgetControl.xaml` 里的 `Height="40"`
+// ⭐⭐ 为什么必须按 DPI 换算（现象：底衬比控件矮一截）：
+// 对照组是 WPF 程序，`TaskbarWidgetControl.xaml` 里的 `Height="40"`
 //   是**设备无关单位**，由 `Windows/TaskbarWindow.xaml.cs` 换算成物理像素：
 //       double dpiScale = GetDpiForWindow(taskbarHandle) / 96.0;
 //       int physicalHeight = (int)(logicalHeight * dpiScale);   // 40 × 1.25 = 50
-//   我们原先把 40 直接当**物理像素**用 ⇒ 125% 缩放下底衬比它矮 **10px**。
+//   把 40 直接当**物理像素**用，125% 缩放下底衬就会比它矮 **10px**。
 //   ⚠️ 只换算高度是不够的：内容（图标/字号/间距）不跟着换算就会显得空 ——
-//      FluentFlyout 的封面图同样是 `36 DIP × dpiScale`，故**整套**一起换算。
+// 对照组的封面图同样是 `36 DIP × dpiScale`，故**整套**一起换算。
 //
 // ⛔ 标称值只在本段定义一次；**绘制与测宽必须取同一份 `Metrics`**，
 //   各写各的换算必然漂移（一处改了另一处忘了 ⇒ 相邻项重叠，且不报错）。
 
-/// widget 高度（DIP）。⭐ 逐字等于 FluentFlyout 控件的 `Height="40"`。
+/// widget 高度（DIP）。⭐ 逐字等于 控件的 `Height="40"`。
 #[cfg(target_os = "windows")]
 const WIDGET_H_DIP: i32 = 40;
 
@@ -1612,7 +1599,7 @@ const PAD_X_DIP: i32 = 6;
 
 /// 字体像素高度（DIP）—— 电量/音量两行共用。
 #[cfg(target_os = "windows")]
-// ⭐ 12 DIP（用户 2026-09-29：「字体看起来很小」；原 11）。
+// ⭐ 12 DIP（用户口径：「字体看起来很小」）。
 //   仍放得下：两行各占 `text_row_h = m.icon / 2`（125% 下 20px），
 //   12 DIP × 1.25 = 15px < 20px ✔（「偏小」档 12px < 16px ✔）。
 const FONT_PX_DIP: i32 = 12;
@@ -1632,7 +1619,7 @@ const ITEM_GAP_DIP: i32 = 10;
 /// 音乐面板：**封面右缘 → 正文**（文字 / 三键）的间隙（DIP）。
 ///
 /// ⭐ 独立于设备面板的 `ICON_TEXT_GAP_DIP`：那个是「封面↔电量/音量文字」共用的，
-///   改它会连带改到设备面板（用户 2026-09-29 只要求改音乐面板）。
+///   改它会连带改到设备面板（用户 只要求改音乐面板）。
 /// ⛔ 静态形态（文字）与 hover 形态（三键）**必须同值**，否则来回移指针时
 ///   内容会横向跳一下。
 const MUSIC_COVER_GAP_DIP: i32 = 8;
@@ -1643,7 +1630,7 @@ const ITEM_MAX_W_DIP: i32 = 150;
 
 /// hover 底衬的圆角半径（DIP）。
 ///
-/// ⭐ 逐字等于 FluentFlyout `Controls/TaskbarWidgetControl.xaml` 里 `MainBorder` 的
+/// ⭐ 逐字等于 `Controls/TaskbarWidgetControl.xaml` 里 `MainBorder` 的
 ///   `CornerRadius="6"`（**同一份口径**，别再各写各的）。
 ///   圆角而不是直角：直角矩形贴在任务栏上像一个「色块 bug」，圆角读起来像有意画的「胶囊」。
 #[cfg(target_os = "windows")]
@@ -1658,7 +1645,7 @@ const BACKDROP_RADIUS_DIP: i32 = 6;
 pub struct Metrics {
     /// **底衬**口径的 DPI（96 = 100%），恒为**系统/任务栏 DPI**。
     ///
-    /// ⛔ 用户 2026-09-25 明确要求「底衬仍跟随系统缩放，不跟随『任务栏内容缩放大小』
+    /// ⛔ 明确要求「底衬仍跟随系统缩放，不跟随『任务栏内容缩放大小』
     ///   设置改变」⇒ `h` / `radius` **只**由它换算，`taskbar_content_scale` 不得影响。
     pub dpi: u32,
     /// **内容**口径的 DPI。`icon` / `font` / `pad_x` / `icon_text_gap` / `item_gap` /
@@ -1677,7 +1664,7 @@ pub struct Metrics {
     pub item_max_w: i32,
     /// 图标右侧每行文本的掩码高度 = 图标高度的一半。
     /// ⭐ 电量占**上半行**（= 图标的右上角）、音量占**下半行**（= 图标的右下角）
-    ///   —— 用户 2026-09-24 指定的布局。
+    ///   —— 指定的布局。
     pub text_row_h: i32,
 }
 
@@ -1710,7 +1697,7 @@ impl Metrics {
         Self::for_dpis(bd, cd)
     }
 
-    /// 「偏小」档的内容 DPI = **比系统低一档**（用户 2026-09-29 定义：
+    /// 「偏小」档的内容 DPI = **比系统低一档**（用户 定义：
     /// 「把内容的大小降一档，例如当前系统缩放是 125%，则使用 100% 的缩放」）。
     ///
     /// ⭐ 走 **Windows 标准缩放阶梯**（100/125/150/175/200/225/250/300/350/400/
@@ -1775,9 +1762,9 @@ impl Metrics {
 
     /// DIP → 物理像素（四舍五入），按**内容** DPI。`dpi == 0` 视为 96。
     ///
-    /// ⚠️ 单独抽出来是给**不在本表里**的 DIP 值用（如 `estimate_text_px` 的
+    /// ⛔ 单独抽出来是给**不在本表里**的 DIP 值用（如 `estimate_text_px` 的
     ///   每字符宽度估算）—— 那些值按字号比例缩放，不适合塞进固定字段。
-    /// ⚠️ 走**内容**口径：文本宽度属于内容，必须与 `font` 同步缩放，
+    /// ⛔ 走**内容**口径：文本宽度属于内容，必须与 `font` 同步缩放，
     ///   否则「字号小、估宽按大字号」⇒ 窗口比内容宽（留白）或反之（重叠）。
     ///
     /// ⭐ 生产调用点：`draw_items` 里换算 `EDGE_MARGIN_DIP`（靠左/靠右的留白）。
@@ -1805,16 +1792,16 @@ impl Metrics {
     ///
     /// ⛔⛔ 这是「绘制」（`draw_items`）与「测宽」（`fetch_into_snapshot`）的**共同入口**
     ///   —— 两处各写各的换算必然漂移：窗口按旧口径找避让槽、内容按新口径画
-    ///   ⇒ 文字压到邻居上，且不报错、不 panic（见 PLAYBOOK §E10.3）。
+    ///   ⇒ 文字压到邻居上，且不报错、不 panic（→ Wiki 15 §4.2）。
     pub fn current_content() -> Self {
-        // ⚠️ `with_config` 的闭包只返回一个 `Copy` 枚举值 ⇒ guard 不泄漏到锁外，
+        // ⛔ `with_config` 的闭包只返回一个 `Copy` 枚举值 ⇒ guard 不泄漏到锁外，
         //    与 AGENTS.md 的「持锁区不得做窗口操作」纪律不冲突。
         let scale = crate::config::with_config(|c| c.taskbar_content_scale);
         Self::for_scales(taskbar_dpi(), scale)
     }
 
     /// 音乐组件的**封面 + 双排信息**专用度量：**恒为默认档**，不随
-    /// 「任务栏内容缩放大小」改变（用户 2026-09-30 明确要求）。
+    /// 「任务栏内容缩放大小」改变（明确要求）。
     ///
     /// ⭐ 只作用于音乐面板里的**这两样**；同一面板的**三键 / 切换键 / 各项间距 /
     ///   左右留白**仍跟随设置（用户同轮逐条确认「都按 A」＝跟随）。
@@ -1822,7 +1809,7 @@ impl Metrics {
     /// ⚠️⚠️ **为什么这两样要钉住、其余跟随**（别再合并成一个档位）：
     ///   封面是**正方形图片**、双排信息是**两行连续文字**，它们与设备面板那种
     ///   「一串电量/音量数字」对尺寸缩放的敏感度完全不同 ⇒ 一起缩放会让
-    ///   **封面与文字的比例**失真（用户 2026-09-30 实测后要求拆开）。
+    ///   **封面与文字的比例**失真（用户 实测后要求拆开）。
     ///   而按键是**图标控件**，与设备面板的图标同性质 ⇒ 跟着设备那档走才对。
     ///
     /// ⚛️ 连带一处必须一起钉住：**文字宽度上限** `MUSIC_TEXT_MAX_W_DIP` 的换算。
@@ -1862,17 +1849,17 @@ fn taskbar_dpi() -> u32 {
 
 /// 把一个 **DIP** 标称值换算成本机物理像素，**走「内容」口径**。///
 /// ⭐ 供 `taskbar_tooltip` 复用 ⇒ tooltip 的字号/宽度与 widget 的文字**同一尺度**。
-/// ⛔⛔ **必须是内容口径、不是系统 DPI**（早先误用了 `taskbar_dpi()`，125% 下得 14px）：
+/// ⛔⛔ **必须是内容口径、不是系统 DPI**（误用 `taskbar_dpi()` 时 125% 下得 14px）：
 /// widget 上的文字按**内容**口径解析（`Default` 档 = 96 DPI 基准 ⇒ 11px），
 /// 而底衬/任务栏按系统 DPI（125% ⇒ 50px）。两者是**故意**分开的（`E14` 的硬红线）。
 /// 误用系统 DPI ⇒ 125% 下 tooltip 文字 14px 而 widget 文字 11px
-/// ⇒ **提示比它所描述的内容还大**，与 FluentFlyout 实测「tooltip 与 widget 文字等大」相反。
+/// ⇒ **提示比它所描述的内容还大**，与 实测「tooltip 与 widget 文字等大」相反。
 ///
 /// ⭐ 走**当前显示的面板**对应的内容尺度，不是单一全局档位：
 ///   · 音乐面板 ⇒ [`Metrics::art_fixed`]（封面 + 双排信息**固定档**）
 ///   · 设备面板 / 无面板 ⇒ [`Metrics::current_content`]（跟随设置）
 ///
-///   ⚠️ 若这里只读全局档位，用户设「偏小」时**音乐那块的提示会比它描述的文字大**
+///   ⛔ 若这里只读全局档位，用户设「偏小」时**音乐那块的提示会比它描述的文字大**
 ///   —— 正是上面那条硬红线。音乐面板的文字档与封面档**恒定**，提示必须跟着恒定。
 #[cfg(target_os = "windows")]
 pub fn content_px(dip: i32) -> i32 {
@@ -2003,8 +1990,8 @@ fn volume_worker_loop(rx: std::sync::mpsc::Receiver<(String, bool)>) {
                 } else if let Err(e) = crate::audio::set_device_volume(&device_id, next) {
                     append_log(&format!("[widget] 滚轮写音量失败: {e}"));
                 } else {
-                    // ⭐⭐ **乐观更新 + 立即重绘**（用户 2026-09-28：滚动时音量信息
-                    //   刷新率太低、不实时）。原先只调 `refresh_async()`，它要先跑
+                    // ⭐⭐ **乐观更新 + 立即重绘**（滚动时音量信息
+                    //   刷新率太低、不实时）。⛔ 不走 `refresh_async()`：它要先跑
                     //   完一整轮 WMI 枚举（数百毫秒）才重画 ⇒ 数字明显滞后于滚动。
                     //   ⇒ 先把**刚写进去的值**就地落到快照，再直接 `post_refresh`
                     //   让主线程马上重绘这一帧（单帧 0.45ms，见 `snapshot::store`）。
@@ -2046,7 +2033,7 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
         return false;
     }
-    // ⛔⛔ **面板闸**（2026-09-28 引入音乐组件时加）：本函数用命中下标去
+    // ⛔⛔ **面板闸**（引入音乐组件时加）：本函数用命中下标去
     //   `snapshot::load()`（**设备**快照）取要调音量的设备。音乐面板发布的矩形
     //   下标空间与之**完全不同**（封面+三键=1 项，可能还有切换按钮）⇒ 不设闸就会
     //   「在音乐面板上滚滚轮，把**别的设备**的音量改了」，而且**不报错、日志正常**
@@ -2070,7 +2057,7 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     let Some((wx, wy, _, _)) = window_screen_rect(hwnd) else {
         return false;
     };
-    // ⭐ 触发区用 `LAST_ITEM_RECTS` —— 与 tooltip **同一份**矩形（用户 2026-09-28
+    // ⭐ 触发区用 `LAST_ITEM_RECTS` —— 与 tooltip **同一份**矩形（用户
     //   要求「触发区域与 tooltip 一致」）。它是 widget 局部坐标 ⇒ 减去窗口原点。
     let rects = crate::state::lock_unpoisoned(&LAST_ITEM_RECTS).clone();
     let local = (pt.x - wx, pt.y - wy);
@@ -2089,9 +2076,9 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
         }
         return false;
     };
-    // ⛔ 下面这些早退**必须留痕**：滚轮的第一报障是「滚轮没反应」，而命中判定之后的
+    // ⛔ 下面这些早退**必须留痕**：滚轮最常见的失效表现是「没反应」，而命中判定之后的
     //   每一条早退都曾是**一行日志都不打**的静默 return ⇒ 现场完全无法归因
-    //   （2026-09-28 实测：验收脚本一直往**无音频端点**的 #0 上注入，日志里什么都没有，
+    //   （实测：验收脚本一直往**无音频端点**的 #0 上注入，日志里什么都没有，
     //   差点被误读成「滚轮功能坏了」）。判据：命中之后不许有静默 return。
     let reject = |why: &str| {
         if crate::config::verbose_log_enabled() {
@@ -2118,7 +2105,7 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     let Some(tx) = volume_worker_sender() else {
         return reject("拿不到后台写线程");
     };
-    // 记标准级：这是**用户动作的结果**（「滚轮没反应」是最可能的报障）
+    // 记标准级：这是**用户动作的结果**（「没反应」是最常见的失效表现）
     append_log(&format!(
         "[widget] 滚轮调音量: idx={idx} dir={} step={:.1}%",
         if up { "up" } else { "down" },
@@ -2149,7 +2136,7 @@ impl MountReport {
     /// 3. `parent == taskbar` 且 `taskbar != 0`（`GetParent` 复核确实是任务栏）
     ///
     /// ⛔ 只看第 1、2 条不够：`SetParent` 可能「返回成功但没真挂上」
-    ///   （TokenBar 就这样把失败标成了成功）。第 3 条是**结果复核**，不可省。
+    ///   （就这样把失败标成了成功）。第 3 条是**结果复核**，不可省。
     pub fn ok(&self) -> bool {
         self.hwnd != 0 && self.reparent_err == 0 && self.taskbar != 0 && self.parent == self.taskbar
     }
@@ -2166,13 +2153,13 @@ impl MountReport {
 
 /// 一台设备在 widget 上要显示的**全部**信息。
 ///
-/// ⚠️ 这里的 `Option` **保留三态**，与后端一致：`None` = 读不出（显示占位符），
+/// ⛔ 这里的 `Option` **保留三态**，与后端一致：`None` = 读不出（显示占位符），
 ///    `Some(0)` = 真的是 0（电量耗尽 / 音量静音）——**二者显示必须不同**。
 #[derive(Debug, Clone, PartialEq)]
 pub struct WidgetItem {
     /// 展示名（已按物理设备身份聚合过的名字）
     ///
-    /// ⚠️ 曾用于画在 widget 上；用户 2026-09-24 明确「**设备名以后再说**」
+    /// ⚠️ 曾用于画在 widget 上；明确「**设备名以后再说**」
     ///   ⇒ 当前**不显示**，但字段保留（诊断日志、将来恢复显示都要用）。
     pub name: String,
     /// 画哪个图标（鼠标 / 喇叭 / 耳机）。由 `audio_endpoint_name` 归一化而来。
@@ -2227,7 +2214,7 @@ mod snapshot {
 
     /// 就地更新某端点的音量（**滚轮乐观更新**）。返回是否真的改了。
     ///
-    /// ⭐ 为什么需要（用户 2026-09-28：滚动时音量刷新率太低）：`refresh_async`
+    /// ⭐ 为什么需要（滚动时音量刷新率太低）：`refresh_async`
     ///   要先跑完一整轮 WMI/端点枚举（数百毫秒）才重画 ⇒ 数字明显滞后于滚动。
     ///   这里先落**刚写进去的那个值**，主线程立即重绘；随后那轮枚举会用真值校正。
     /// ⚠️ 只按 `audio_device_id` 匹配（**不是**按名字/身份键）：端点 id 是
@@ -2272,7 +2259,7 @@ static REPARENT_ERR: AtomicIsize = AtomicIsize::new(0);
 /// ⭐ 唯一用途：区分两种「窗口不在」——
 ///   · **任务栏句柄变了** ⇒ Explorer 重建 ⇒ **立刻**重建窗口（否则用户要盯着空任务栏
 ///     等满 30s 的慢节拍）；
-///   · **句柄没变** ⇒ 同一个任务栏上挂不上（环境拦截，PLAYBOOK §E3）⇒ 退回 30s 慢节拍，
+///   · **句柄没变** ⇒ 同一个任务栏上挂不上（环境拦截，→ Wiki 15 §6.3）⇒ 退回 30s 慢节拍，
 ///     ⛔ **不能**每 2s 重试一次 —— 实测「反复操作任务栏 → 恶化；静置 → 自愈」。
 ///
 /// ⛔ 必须在**每次尝试之后**（成功或失败）都写入：只在成功时写的话，失败后句柄一直是旧值
@@ -2334,7 +2321,7 @@ static REFRESH_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 
 /// 可用区（= 整条任务栏）左端的屏幕 x（物理像素）。
 ///
-/// ⚠️ 自 2026-09-26 第二次方案变更后，它**恒等于任务栏左缘**（典型为 0）——
+/// ⚠️ 自 第二次方案变更后，它**恒等于任务栏左缘**（典型为 0）——
 ///   像素扫描被移除（见 `find_widget_slot`），这里保留为原子量只是为了
 ///   让「可用区」与窗口位置在绘制线程上仍走同一套传递路径。
 #[cfg(target_os = "windows")]
@@ -2348,7 +2335,7 @@ static SLOT_VALID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
 /// 「未固定位置」时沿用的上一次窗口左端（**相对任务栏客户区**）。
 ///
-/// ⚠️ `0` 作**哨兵值**表示「还没画过」：任务栏左端恒为 0、槽起点恒 ≥ 100
+/// ⛔ `0` 作**哨兵值**表示「还没画过」：任务栏左端恒为 0、槽起点恒 ≥ 100
 ///   ⇒ 真实的相对 x 不可能是 0，故哨兵不会与合法值撞车。
 #[cfg(target_os = "windows")]
 static LAST_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
@@ -2357,7 +2344,7 @@ static LAST_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(
 
 /// 光标是否**悬停**在 widget 上（决定要不要铺 hover 底衬）。
 ///
-/// ⛔⛔ **为什么必须轮询 `GetCursorPos`，不能等 `WM_MOUSEMOVE`**（2026-09-25 定）：
+/// ⛔⛔ **为什么必须轮询 `GetCursorPos`，不能等 `WM_MOUSEMOVE`**（定）：
 ///   `ULW` 分层窗按 alpha 做命中测试 —— 没有底衬时窗口像素**全透明**
 ///   ⇒ 鼠标消息**根本不会投递到本窗口**（被放行给下层 `Shell_TrayWnd`）
 ///   ⇒ 「靠鼠标消息让底衬出现」是**鸡生蛋**，永远等不到第一条消息。
@@ -2409,7 +2396,7 @@ static DRAG_ORIGIN_CURSOR_X: std::sync::atomic::AtomicI32 = std::sync::atomic::A
 
 /// 按下那一刻的窗口左端（**父窗客户区**坐标，物理像素）—— 即 `SetWindowPos` 用的那个坐标系。
 ///
-/// ⚠️ 与 `DRAG_ORIGIN_CURSOR_X`（**屏幕**坐标）不是同一坐标系，但拖拽只用到**增量**：
+/// ⛔ 与 `DRAG_ORIGIN_CURSOR_X`（**屏幕**坐标）不是同一坐标系，但拖拽只用到**增量**：
 ///   光标 Δ 与窗口 Δ 在纯平移下相等（同一 DPI、无缩放）⇒ 直接相加成立。
 ///   ⛔ 绝不能把它当屏幕坐标去和任务栏屏幕左端做减法 —— 口径换算一律走 `window_parent_x`。
 #[cfg(target_os = "windows")]
@@ -2559,7 +2546,7 @@ pub(crate) mod ffi {
     ///
     /// ⚠️ 这里**刻意不动 Z 序**（`SWP_NOZORDER` ⇒ 插入位置参数被忽略，故传 `NULL`）：
     ///   本函数的职责只有「让分层窗显示」这一条。Z 序由 `raise_to_top` 单独负责 ——
-    ///   早先这里传的是 `HWND_TOPMOST`，**看起来**在设置顶，实际被 `SWP_NOZORDER`
+    ///   ⛔ 传 `HWND_TOPMOST` 只会**看起来**在设置顶，实际被 `SWP_NOZORDER`
     ///   忽略 ⇒ 是个**死参数**（从未生效，却让人以为 Z 序已经被设置过）。
     pub unsafe fn show(hwnd: HWND) {
         SetWindowPos(
@@ -2576,17 +2563,17 @@ pub(crate) mod ffi {
 
     /// 把 widget 提到**兄弟 Z 序的最顶**。
     ///
-    /// ⛔⛔ **为什么必须显式做**（真机实测，2026-09-25）：
+    /// ⛔⛔ **为什么必须显式做**（真机实测，）：
     ///   · `SetParent` 确实会把窗口放到兄弟 Z 序最顶 —— 但那是**建窗顺序的副产品**，
     ///     不是可以依赖的契约：**任何后继的 `SetParent`**（另一个任务栏 widget 自愈、
     ///     系统自己的 XAML 岛）都会插到我们之上。实测：用一个同款形态
     ///     （popup → 改样式 → `SetParent`）的兄弟窗，它落第 0 位、**我们被挤到第 1 位**。
     ///   · 另一条建窗路线（`CreateWindowExW` 直接以任务栏为父）落**最底** ——
-    ///     参考实现 StockBar 正是因此才要「约 2 秒维护重贴 Z 序」。
+    ///     参考实现 正是因此才要「约 2 秒维护重贴 Z 序」。
     ///   · Explorer 重建后我们会重新挂载，此时**谁先谁后取决于系统时序**，更不该赌。
     /// ⇒ 可见性不能依赖「挂载顺序」，必须**主动重申**（见 `WM_APP_RAISE` 维护路径）。
     ///
-    /// ⚠️ 子窗必须用 `HWND_TOP`（= 兄弟 Z 序最顶）；`HWND_TOPMOST` 对**子窗**无意义
+    /// ⛔ 子窗必须用 `HWND_TOP`（= 兄弟 Z 序最顶）；`HWND_TOPMOST` 对**子窗**无意义
     ///   （那是顶层窗的概念，在子窗上会被忽略或产生意外结果）。
     pub unsafe fn raise_to_top(hwnd: HWND) {
         SetWindowPos(
@@ -2717,11 +2704,11 @@ pub(crate) mod ffi {
 
     /// 一次性测量文本宽度（像素）。用 `DrawTextW` 的 `DT_CALCRECT`，不为实际绘制付代价。
     ///
-    /// ⚠️ `DT_CALCRECT` 会**修改传入的 `RECT`**（写回测量结果）⇒ 必须传可写指针。
+    /// ⛔ `DT_CALCRECT` 会**修改传入的 `RECT`**（写回测量结果）⇒ 必须传可写指针。
     /// ⚠️ **只在对齐方式与真实绘制一致时，测量值才对得上**；这里统一用
     ///   `DT_LEFT | DT_SINGLELINE | DT_NOPREFIX`（与 `draw_text` 完全一致），
     ///   否则会出现「算 40px、画 46px」的错位（文本被裁切）。
-    /// ⛔⛔ **空串必须在这里拦下**（2026-09-29 实测闪退，根因）：
+    /// ⛔⛔ **空串必须在这里拦下**（实测闪退，根因）：
     ///
     /// `Vec::<u16>::new().as_ptr()` 是**悬垂的对齐哨兵指针**（u16 对齐 = 2），
     /// **不是有效内存**。而 `DrawTextW` 即使 `cch = 0` 也会去解引用它
@@ -2830,7 +2817,7 @@ pub(crate) mod ffi {
             // 装不下 ⇒ 用 `…` 而不是硬切半个字形（真机实测过差别）
             flags |= DT_END_ELLIPSIS;
         }
-        // ⚠️ 同样不能把**空切片**的悬垂指针交给 GDI（根因见 `measure_text` 的注释）。
+        // ⛔ 同样不能把**空切片**的悬垂指针交给 GDI（根因见 `measure_text` 的注释）。
         //   跳过绘制、仍返回全白掩码 ⇒ 契约不变（调用方的合成照常走，只是没有笔画）。
         if !text.is_empty() {
             DrawTextW(memdc, text.as_ptr(), text.len() as i32, &mut rc, flags);
@@ -2854,16 +2841,16 @@ pub(crate) mod ffi {
     ///   `ANTIALIASED_QUALITY(4)`，得到灰度抗锯齿。
     /// 建字体。`bold` ⇒ `FW_BOLD`（700），否则 `FW_NORMAL`（400）。
     ///
-    /// ⭐ `bold` 参数目前**两个调用点都传 `false`**（用户 2026-09-29：设备面板与
+    /// ⭐ `bold` 参数目前**两个调用点都传 `false`**（设备面板与
     ///   音乐面板文字都取消加粗，tooltip 一直是常规字重 ⇒ 三处统一）。
-    ///   ⚠️ **别把它当成死参数**：2026-09-25 曾要求「电量/音量加粗」（理由是 11px 细体
-    ///   在浅色任务栏上偏虚），2026-09-29 又推翻 —— 说明这条是**观感取舍、不是技术上不可行**，
+    ///   ⛔ **别把它当成死参数**： 曾要求「电量/音量加粗」（理由是 11px 细体
+    ///   在浅色任务栏上偏虚）， 又推翻 —— 说明这条是**观感取舍、不是技术上不可行**，
     ///   换字体后基础条件变了结论就会变，改前先量一下实际效果。
-    /// ⚠️ 加粗会让文本**变宽**：`measure_text` 与绘制共用同一个 HFONT，
+    /// ⛔ 加粗会让文本**变宽**：`measure_text` 与绘制共用同一个 HFONT，
     ///   故排版宽度自动跟着变（这正是「测量与绘制必须同字体」那条纪律的收益）。
     /// 面板用的字体族（**带回落**，Win10 上必须能降级）。
     ///
-    /// ⚠️⚠️ **为什么不能直接写死 "Segoe UI Variable Text"**：
+    /// ⛔⛔ **为什么不能直接写死 "Segoe UI Variable Text"**：
     ///   `CreateFontW` 找不到请求的字体时**不报错**，而是**静默替换**成字体映射器
     ///   挑的别的字体（不崩溃、不返回 NULL）⇒ 那样在 Windows 10 上会显示成某个
     ///   随机字体，且**没有任何日志**。
@@ -2964,7 +2951,7 @@ pub(crate) mod ffi {
     /// ⛔ 前提是**必须实色背景**：ClearType 的彩色边缘依赖「底色已知且不透明」，
     ///   一旦叠到半透明底衬上就会脏（`taskbar_widget` 头部记着这条）。
     pub unsafe fn create_font_cleartype(px_height: i32, bold: bool) -> HFONT {
-        // ⭐ 与面板**同一个字体族**（用户 2026-09-29）：tooltip 是面板的延续，
+        // ⭐ 与面板**同一个字体族**（用户）：tooltip 是面板的延续，
         // 族名若与面板不同，同一首歌在两处的字形/字距就不一样（此前是
         // 面板 Segoe UI + tooltip 也 Segoe UI，但字重不同 ⇒ 观感仍不一致）。
         let face: &[u16] = widget_face();
@@ -3060,7 +3047,7 @@ pub(crate) mod ffi {
             return 0;
         }
         if msg == WM_MOUSEWHEEL {
-            // ⭐ 音量滚轮（用户 2026-09-28）。命中判定与记账都在**窗口线程**完成
+            // ⭐ 音量滚轮（用户）。命中判定与记账都在**窗口线程**完成
             //   （纯内存：读上一帧发布的矩形 + 取方向），**实际写音量在后台线程**。
             // ⛔ 必须 `return 0` 吃掉这条消息：落到 `DefWindowProcW` 会被转发给
             //   父窗口（任务栏）⇒ 变成「滚动整个任务栏」。
@@ -3074,7 +3061,7 @@ pub(crate) mod ffi {
             // ⭐ 记按下点与时刻（供 UP 时区分「点击」与「拖拽」——音乐面板的按钮
             //   靠点击触发，而 `drag_begin` 是**无条件** SetCapture 的）
             super::press_record();
-            // ⭐ 记下按到哪个按钮（用户 2026-09-29：按下要变灰）。
+            // ⭐ 记下按到哪个按钮（按下要变灰）。
             //   ⛔ **必须在 `drag_begin` 之前**：`drag_begin` 会 `SetCapture`，
             //   而 `SetCapture` 可能立刻触发 `WM_CAPTURECHANGED`（见下）把状态清掉。
             super::press_begin(hwnd);
@@ -3103,7 +3090,7 @@ pub(crate) mod ffi {
             // 捕获被别处抢走（任务栏抢焦点、其它窗口 `SetCapture`…）：
             // 窗口停在哪就记哪 —— 总比丢掉位置强。非拖拽期间到达则直接返回。
             //
-            // ⭐⭐ 这里**必须**清按下态（用户 2026-09-29 的「按下变灰」）：
+            // ⭐⭐ 这里**必须**清按下态（用户 的「按下变灰」）：
             //   捕获被抢走时**不会**有 `WM_LBUTTONUP` 到来 ⇒ 漏清的话按钮会
             //   **永久停在按下态**，而画面上没有任何东西会再去纠正它。
             super::set_pressed(super::PRESS_NONE, hwnd);
@@ -3169,7 +3156,7 @@ fn forget_widget() {
 /// 挂载 widget 到任务栏（**里程碑 1**：建窗 + 挂载 + 自绘一帧）。
 ///
 /// 返回 `MountReport`，调用方用 `report.ok()` 判定成败并落日志。
-/// ⚠️ 本函数**必须在常驻泵消息的线程上调用**（窗口随创建线程退出而销毁）。
+/// ⛔ 本函数**必须在常驻泵消息的线程上调用**（窗口随创建线程退出而销毁）。
 #[cfg(target_os = "windows")]
 pub fn spawn_widget() -> MountReport {
     // ⭐ 幂等：已挂且窗口仍存活 ⇒ 直接回现状，**不再建第二个窗**。
@@ -3227,7 +3214,7 @@ pub fn spawn_widget() -> MountReport {
         append_log(&format!("[widget] SetParent 失败: err={}", err));
     }
 
-    // 5) GetParent 复核（TokenBar 缺的就是这步）
+    // 5) GetParent 复核（缺的就是这步）
     let parent = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetParent(hwnd) };
     report.parent = parent as isize;
 
@@ -3271,7 +3258,7 @@ pub fn spawn_widget() -> MountReport {
 ///
 /// hover 底衬的不透明度（0–255）—— **浅色系统主题**。
 ///
-/// ⭐ 取值出处：FluentFlyout `Controls/TaskbarWidgetControl.xaml.cs` 的 `Grid_MouseEnter`
+/// ⭐ 取值出处： `Controls/TaskbarWidgetControl.xaml.cs` 的 `Grid_MouseEnter`
 ///   浅色分支用 `Color.FromArgb(255,255,255,255)` + `Opacity = 0.6`
 ///   ⇒ 有效 alpha = 255 × 0.6 = **153**。
 #[cfg(target_os = "windows")]
@@ -3281,7 +3268,7 @@ const HOVER_BACKDROP_ALPHA_LIGHT: u32 = 153;
 ///
 /// ⭐ 同出处（深色分支）：`Color.FromArgb(197,255,255,255)` + `Opacity = 0.075`
 ///   ⇒ 有效 alpha = 197 × 0.075 = 14.775 ⇒ 取 **15**。
-/// ⚠️ 两种主题下底衬**都是白色**，只有不透明度不同（FluentFlyout 即如此）。
+/// ⚠️ 两种主题下底衬**都是白色**，只有不透明度不同（即如此）。
 #[cfg(target_os = "windows")]
 const HOVER_BACKDROP_ALPHA_DARK: u32 = 15;
 
@@ -3294,7 +3281,7 @@ const HOVER_BACKDROP_ALPHA_DARK: u32 = 15;
 #[cfg(target_os = "windows")]
 const HOVER_POLL_MS: u64 = 50;
 
-/// widget 最多显示的设备台数（用户 2026-09-24 指定）。
+/// widget 最多显示的设备台数（指定）。
 ///
 /// ⭐ 与 `PINNED_TASKBAR_LIMIT = 8` 的关系：那个是**固定上限**（最多能 pin 几台），
 ///   这个是**显示上限**（任务栏上最多画几台）。显示上限更小，因为有**物理宽度**约束
@@ -3306,7 +3293,7 @@ const WIDGET_MAX_ITEMS: usize = 8;
 ///
 /// `Some(b)` → `"85%"`；读不出 → `"N/A"`。
 ///
-/// ⭐ **为什么不画设备名**：用户 2026-09-24 明确「设备名以后再说」⇒ 当前只画
+/// ⭐ **为什么不画设备名**：明确「设备名以后再说」⇒ 当前只画
 ///   「图标 + 电量 + 音量」。设备名仍保留在 `WidgetItem` 里（诊断日志用）。
 ///
 /// ⭐ **为什么把「格式化」与「绘制」分开**：格式化是**纯函数**，可以单测
@@ -3326,7 +3313,7 @@ fn format_battery(it: &WidgetItem) -> String {
 ///
 /// 静音 → `"静音"`；`Some(v)` → `"85%"`；**没有音量可显示 → `"N/A"`**。
 ///
-/// ⚠️ 「无音频端点」与「有端点但暂时读不出」**都显示 `N/A`**（用户 2026-09-24 口径：
+/// ⚠️ 「无音频端点」与「有端点但暂时读不出」**都显示 `N/A`**（用户 口径：
 ///   没有音量就显示 N/A）。两者在数据层仍由 `has_audio` 区分 —— 将来若要改成
 ///   「无端点整段不画」，不必回头动数据。
 #[cfg(target_os = "windows")]
@@ -3340,7 +3327,7 @@ fn format_volume(it: &WidgetItem, fine_adjust: bool) -> String {
     if it.is_muted == Some(true) {
         return "静音".to_string();
     }
-    // ⭐ **是否带小数由「音量精细调节」开关决定**（用户 2026-09-28）：
+    // ⭐ **是否带小数由「音量精细调节」开关决定**（用户）：
     //   · 开 ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了但数字没变」
     //     看起来像失效；
     //   · 关 ⇒ `40%`：此时滚轮是 1% 步进，多余的小数位是噪音。
@@ -3405,9 +3392,9 @@ fn apply_wheel_volume(current: f32, up: bool, fine_adjust: bool) -> f32 {
 
 /// 命中测试：光标（窗口局部坐标）落在哪一项的**整块**区域内。
 ///
-/// ⭐ **触发区必须与 tooltip 完全一致**（用户 2026-09-28 明确要求）：两者都用
-///   `item_rects` 发布的同一份矩形。第一版只把「音量文本那一行」当触发区，
-///   于是「鼠标停在图标上滚」完全无效 —— 而那恰恰是最顺手的位置。
+/// ⭐ **触发区必须与 tooltip 完全一致**（明确要求）：两者都用
+///   `item_rects` 发布的同一份矩形。只把「音量文本那一行」当触发区的话，
+///   「鼠标停在图标上滚」完全无效 —— 而那恰恰是最顺手的位置。
 ///   ⛔ 分叉后既不一致（图标上滚没反应）又不易察觉（tooltip 明明弹了）。
 fn hit_test_item_rects(
     rects: &[windows_sys::Win32::Foundation::RECT],
@@ -3432,7 +3419,7 @@ fn hit_test_item_rects(
 ///   · `tray-headphone-icon{,-dark}.png`—— 耳机（音频端点前缀是「耳机」）
 ///
 /// ⛔ **为什么必须嵌二进制而不是运行时读文件**：MSIX 包安装目录只读、
-///   且 Tauri 的 `resources` 部署路径与 exe 不同（见 PLAYBOOK §I）
+///   且 Tauri 的 `resources` 部署路径与 exe 不同
 ///   ⇒ 运行期找文件必然踩路径坑。`include_bytes!` 零歧义。
 ///
 /// ⚠️ 解码（PNG → RGBA）用 `image` crate，结果按 `(kind, dark)` 缓存到
@@ -3440,7 +3427,7 @@ fn hit_test_item_rects(
 #[cfg(target_os = "windows")]
 /// 图标重采样（**预乘空间**）+ 结果缓存。
 ///
-/// ⛔⛔ **为什么需要它（2026-09-29 用户报「跟随系统缩放后图标变糊，且越大越糊」）**：
+/// ⛔⛔ **为什么需要它**：
 ///   母图只有 **32×32**，而 `m.icon = 32 × content_dpi/96`（125% ⇒ 40、150% ⇒ 48……）。
 ///   100% 时 32→32 走**恒等分支、零重采样** ⇒ 锐利；一旦 >100% 就变成
 ///   **32→N 的放大**——放大**不可能凭空造出细节**，双线性只能把每个源像素摊成
@@ -3555,7 +3542,7 @@ mod resample {
 
     /// ⭐ **Lanczos3（窗化 sinc）可分离缩小**，输入输出**都是预乘**。
     ///
-    /// ⚠️⛔⛔ **封面不能用面积平均**（用户 2026-09-29 实测报「封面非常模糊」，
+    /// ⛔⛔ **封面不能用面积平均**（实测：小尺寸下会糊，
     ///   且 128→40 仍糊）。两者差别在**模糊半径**：3.2:1 的 box 平均在**输出**尺度上
     ///   约糊 1.6px，照片上非常明显；实测（对照「单步 400→40 lanczos3」）：
     ///   ```text
@@ -3584,15 +3571,15 @@ mod resample {
         fn axis_weights(src: u32, dst: u32) -> Vec<Vec<(u32, f64)>> {
             const A: f64 = 3.0;
             let scale = src as f64 / dst as f64;
-            // ⚠️⚠️ **缩小必须把核「拉宽」到 `scale` 倍**（`max`，不是 `min`）：
+            // ⛔⛔ **缩小必须把核「拉宽」到 `scale` 倍**（`max`，不是 `min`）：
             //   6.4:1 缩小时若仍用 ±3 源像素的核，就等于**点采样**——混叠严重
             //   （`image` crate 也是按 `support = A * max(scale,1)` 做的）。
             let fscale = scale.max(1.0);
             let support = A * fscale;
             let mut table = Vec::with_capacity(dst as usize);
             for i in 0..dst {
-                // ⛔⛔ 目标 → 源的映射是**乘** `scale`，不是除 —— 我第一版写成了
-                //   `(i + 0.5) / scale - 0.5`，于是 40 个输出像素的采样中心全部
+                // ⛔⛔ 目标 → 源的映射是**乘** `scale`，不是除 —— 写成
+                //   `(i + 0.5) / scale - 0.5` 时，40 个输出像素的采样中心全部
                 //   落在源图 x∈[0,9]（40×6.4 的正确位置应是 x∈[0,256]），
                 //   屏幕上表现为「封面变成一块纯色」（那张封面左上角正好是天空）。
                 let center = (i as f64 + 0.5) * scale - 0.5;
@@ -3822,9 +3809,9 @@ mod resample {
         out: &mut [u8],
         premul_in: bool,
     ) {
-        // 标准 Catmull-Rom 权重（t ∈ [0,1)）。⚠️ **第 i 个权重对应偏移 i-1**
+        // 标准 Catmull-Rom 权重（t ∈ [0,1)）。⛔ **第 i 个权重对应偏移 i-1**
         //   （即 -1, 0, +1, +2）—— 索引时必须写 `x0 - 1 + i`。
-        //   ⛔ 我第一版写成 `x0 + i`，**整体偏移了一个像素**：t=0 时权重 [0,1,0,0]
+        //   ⛔ 写成 `x0 + i` 会**整体偏移一个像素**：t=0 时权重 [0,1,0,0]
         //   落在 `x0+1` 上，于是「放大 2×1 的黑白」得到 [255,255,255,255]
         //   （全白）而不是 [0, ~52, ~203, 255]。判据 `scale_up_interpolates` 抓到。
         let weights = |t: f64| -> [f64; 4] {
@@ -3992,7 +3979,7 @@ mod icons {
 
     /// 缩放到 `side × side`（**带缓存**，见 [`resample`]）。
     ///
-    /// ⚠️ `slot` 必须**按图标内容唯一**（设备图标用 `NS_DEVICE + 序号`、
+    /// ⛔ `slot` 必须**按图标内容唯一**（设备图标用 `NS_DEVICE + 序号`、
     ///   音乐图标用 `NS_MUSIC + 序号`、封面用 `NS_COVER | hash`）——它是缓存键，
     ///   撞车会让一个图标**显示成另一个**。⛔ 不要用 `AudioKind as u32` 直接当槽：
     ///   那只是碰巧不撞，没有语义保护。
@@ -4218,26 +4205,11 @@ fn resolve_rel_x(
 
 /// 在任务栏上取「可用区域」——**就是整条任务栏**。
 ///
-/// ⛔⛔⛔ **2026-09-26 第二次方案变更：彻底移除像素扫描。**
-///
-///   本章先后试过两代「避让」实现，**两代都已删除**：
-///   ① 枚举任务栏子窗取矩形（`third_party_widget_rects`）；
-///   ② 逐列扫描任务栏像素找「视觉空白段」（`select_slot` / `pick_widest_run` /
-///      `erase_self_region` / `find_widget_slot` 的 BitBlt 部分）——
-///      即「第一代删掉后」留下来的那一半。
-///
-///   ⛔ **② 为什么也不能留**（用户 2026-09-26 第二次反馈：「靠左/右没有出现在
-///   整个任务栏的最左/右侧，居中也不对」）：
-///   · `SLOT_SAFE_MARGIN = 100` 把可用区间裁成 `[100, width-100]`
-///     ⇒ `slot_x` **永远 ≥ 100** ⇒ 「靠左」永远差 100px；
-///     右端同理永远差 100px；`center` 也因此在裁剪后的区间里算，不是真正的屏幕中心。
-///   · `pick_widest_run` 只返回**最宽的空白段**，`slot` 因此是
-///     「任务栏里某一段」而不是「整条任务栏」⇒ 三档位置全都建立在一个
-///     **与用户所见无关**的坐标系上。
-///   · 它还依赖 `wanted`（内容估算宽度）参与切段 ⇒ 设备数一变、槽就变 ⇒
-///     位置跟着漂 —— 用户看到的是「位置设置不生效」。
-///   ⇒ **根因不是参数没调对，而是「避让」这个前提本身**。用户要求的是
-///     「**直接使用整个任务栏**」，因此像素扫描整体退役。
+/// ⛔⛔⛔ **彻底移除像素扫描，不得重开**。两代「避让」实现（枚举任务栏子窗取矩形 /
+///   逐列扫描像素找视觉空白段）均已删除，其失真机理与用户反馈留档 → **Wiki 15 §8**。
+///   一句话根因：避让让 `slot_x` 建立在一个**与用户所见无关**的坐标系上
+///   （裁边距 ⇒ 靠左/右各差 100px；只取最宽空白段 ⇒ `center` 不在屏幕中心）。
+///   ⛔ 因此根因不是参数没调对，而是「避让」这个**前提**本身。
 ///
 /// ⭐ **现口径（用户钦定）**：可用区域 = `[任务栏左缘, 任务栏右缘]`，
 ///   与「任务栏上有什么」**完全无关**。
@@ -4271,8 +4243,8 @@ fn find_widget_slot() -> Option<(i32, i32)> {
 ///   · `left`/`right` 相对任务栏的最左/最右，各自再留 `edge_margin`。
 ///   ⭐ 参数名沿用 `slot_*` 只是为了不动调用点；语义即「可用区」。
 ///
-/// ⭐⭐ **`edge_margin` 的口径来自实测 Windows 自身组件**（2026-09-26 用户要求
-///   「可参考 Windows 开始按钮和时间日期组件」）。125% DPI 逐像素实测：
+/// ⭐⭐ **`edge_margin` 的口径来自实测 Windows 自身组件**（用户口径：
+///   可参考 Windows 开始按钮与时间日期组件）。125% DPI 逐像素实测：
 ///   · 开始按钮图标落在 `x = 26..54`（按钮窗口 `0..69`）⇒ **距左 26px**；
 ///   · 时钟/托盘最右有内容的列 = `2535` ⇒ **距右 24px**。
 ///   两者高度一致（24~26）⇒ 取 **`EDGE_MARGIN_DIP = 20`**（96 DPI 基准，经 `content_dpi`
@@ -4280,8 +4252,9 @@ fn find_widget_slot() -> Option<(i32, i32)> {
 ///   ⛔ 不要重新引入「避让」那种更大的安全边距（旧的 `SLOT_SAFE_MARGIN = 100`
 ///   比 Windows 观感大 4 倍，正是被用户否掉的原因）。
 ///
-/// ⚠️ `edge_margin` 必须**由调用方按内容 DPI 传入**（纯函数纪律：不能在这里读 `Metrics`，
-///   否则单测会走 `config::with_config` panic，见 `config.rs:1172`）。
+/// ⛔ `edge_margin` 必须**由调用方按内容 DPI 传入**（纯函数纪律：不能在这里读 `Metrics`，
+///   否则单测会走到 `config::with_config` 里的 `expect("Config not initialized")`
+///   而 panic —— 用例须先调 `config::ensure_config_ready()`）。
 /// ⚠️ 窗口太宽时边距会与 `max_offset` 冲突 ⇒ 先夹到 `max_offset`（`min`），
 ///   否则 `left` 会算出「窗口右缘超出可用区」的负偏移（`right` 侧尤其危险）。
 #[cfg(target_os = "windows")]
@@ -4306,8 +4279,8 @@ fn align_in_slot(
 
 /// 「靠左/靠右」时窗口距任务栏边缘的留白（**DIP**，96 DPI 基准）。
 ///
-/// ⭐⭐ **取值依据 = 实测 Windows 自身组件**（2026-09-26 用户要求「可参考 Windows 开始
-///   按钮和时间日期组件，他们距离边缘保留了一段距离」）。125% DPI 逐像素实测：
+/// ⭐⭐ **取值依据 = 实测 Windows 自身组件**（用户口径：参考 Windows 开始按钮与
+///   时间日期组件，二者距边缘都留了一段距离）。125% DPI 逐像素实测：
 ///   · **开始按钮**：图标像素落在 `x = 26..54`（按钮窗口本身是 `0..69`）⇒ 距左 **26px**；
 ///   · **时钟/托盘**：最右有内容的列 = `2535`（任务栏右缘 2560）⇒ 距右 **24px**。
 ///   两者几乎相同（24~26）⇒ 取 **20 DIP**，经内容 DPI 换算后 125% 下 = **25px**，
@@ -4317,7 +4290,7 @@ fn align_in_slot(
 ///   4 倍，且它当初是为了「避让第三方 widget」而存在的（该方案已被用户否决）。
 ///   本常量**只为观感**服务，与避让无关。
 ///
-/// ⚠️ 单位是 **DIP**（不是像素）：必须经 `Metrics` 的 `content_dpi` 换算 —— 否则
+/// ⛔ 单位是 **DIP**（不是像素）：必须经 `Metrics` 的 `content_dpi` 换算 —— 否则
 ///   高 DPI 下留白会显得过窄。换算入口见调用点（`m` 已是内容口径）。
 #[cfg(target_os = "windows")]
 const EDGE_MARGIN_DIP: i32 = 20;
@@ -4426,24 +4399,24 @@ pub(crate) fn inside_rounded_rect(x: i32, y: i32, w: i32, h: i32, r: i32) -> boo
 
 /// 给整块 widget 铺一层 **hover 底衬**（白色半透明，**鼠标悬停时才有**）。
 ///
-/// ⭐ 口径来源 = FluentFlyout（用户 2026-09-25 指定「和 FluentFlyout 一致」）：
+/// ⭐ 口径来源 = 那个 WPF 底衬（要求「和它一致」）：
 ///   白色 + 圆角 6 + **占满控件高度**（其 `MainBorder` 无 `Margin`、控件 `Height="40"`）；
 ///   ⚠️ 6 与 40 都是 **DIP** ⇒ 由 `Metrics` 按 DPI 换算成物理像素（见 `Metrics` 的文档）。
 ///   不透明度按**系统主题**取 153（浅色）/ 15（深色）—— 见 `HOVER_BACKDROP_ALPHA_*`。
-///   ⚠️ 与 FluentFlyout 的唯一差别：它用 WPF 的 200ms 淡入淡出动画，我们是逐像素合成、
+///   ⚠️ 与它的唯一差别：它用 WPF 的 200ms 淡入淡出动画，我们是逐像素合成、
 ///     **没有过渡动画**（进出/切主题都是瞬时切换）。
 ///
 /// ⛔ **必须预乘**：`UpdateLayeredWindow(ULW_ALPHA)` 要求 32bpp 位图是预乘的
 ///   （`0xAARRGGBB` 的 RGB = 原色 × alpha / 255）。白色预乘后 RGB 恰好等于 alpha。
 ///
-/// ⛔⛔ **它同时承担「拖拽命中区」的职责**（2026-09-24 真机实测，不是推测）：
+/// ⛔⛔ **它同时承担「拖拽命中区」的职责**（真机实测，不是推测）：
 ///   `ULW` 分层窗的命中测试**按 alpha 走** —— alpha = 0 的像素把鼠标消息
 ///   **放行给下层窗口**。沿 widget 垂直中线逐 2px 采样 **68 点**，只有 **11 点**
 ///   命中 widget，且全部落在**字形笔画**上（图标轮廓 x≈10-12/30-32、数字竖笔 78-100）；
 ///   内边距、项间隙、字形与图标的中空内部统统穿透给 `Shell_TrayWnd`。
 ///   ⇒ 「hover 才铺底衬」与「拖拽可用」是**自洽**的：hover 由轮询判定（见 `HOVERED`），
 ///     底衬铺上后命中测试才开始生效，此时按下左键即可拖。
-/// ⚠️ 底衬必须**先**画：后续内容按 `blend_over`（source-over）叠在它**之上** ⇒
+/// ⛔ 底衬必须**先**画：后续内容按 `blend_over`（source-over）叠在它**之上** ⇒
 ///   内容只会盖住它，不会被它抹掉。
 #[cfg(target_os = "windows")]
 fn fill_hover_backdrop(px: &mut [u32], w: i32, h: i32, alpha: u32, radius: i32) {
@@ -4466,7 +4439,7 @@ fn fill_hover_backdrop(px: &mut [u32], w: i32, h: i32, alpha: u32, radius: i32) 
 /// 按**系统主题**选 hover 底衬的不透明度（纯函数，可单测）。
 ///
 /// ⭐ 用**系统**主题（`SystemUsesLightTheme`）而不是 widget 内容色用的**应用**主题
-///   （`AppsUseLightTheme`）—— 与 FluentFlyout 完全对齐：它的 `Grid_MouseEnter` 读的正是
+///   （`AppsUseLightTheme`）—— 与 完全对齐：它的 `Grid_MouseEnter` 读的正是
 ///   `GetWindowsTheme(out appTheme, out systemTheme)` 里的 `systemTheme`。
 ///   两者在「应用深色 + 系统浅色」这类自定义主题下**会不一致**。
 #[cfg(target_os = "windows")]
@@ -4505,7 +4478,7 @@ fn want_hover(
 
 /// 「光标是否还在 widget 内」⇒ 按下态该不该被清掉（**纯函数**，供单测钉住）。
 ///
-/// ⛔⛔ **为什么必须有这条兜底**（用户 2026-10-05 报障）：
+/// ⛔⛔ **为什么必须有这条兜底**（现象）：
 ///   按住按钮后把鼠标移出窗口，按钮**永久停在按下态（变灰）**，必须再点一下才恢复。
 ///   根因链（每一环都必要）：
 ///   ① 按下变灰由 `pressed_id()` 驱动（绘制处 ×0.55）；
@@ -4516,7 +4489,7 @@ fn want_hover(
 ///   ④ 于是松手时 `WM_LBUTTONUP` 发给了光标下的**别的窗口**，本窗口永不清；
 ///   ⑤ `WM_CAPTURECHANGED` 也救不了 —— 捕获从未被取走，没有事件可等。
 ///   ⇒ 画面上**再没有任何东西会纠正它**，按钮就一直灰着。
-/// ✅ 兜底：50ms 的 hover 轮询是此刻**唯一还在运行**的通道，由它清。
+///   ⇒ **兜底就靠它**：50ms 的 hover 轮询是此刻**唯一还在运行**的通道，由它清。
 ///
 /// ⭐ 拖拽期间不受影响：`want_hover` 在 `dragging` 时恒为 `true`
 ///   ⇒ `want == true` ⇒ 原样返回、不清（拖拽本就允许光标移出窗口）。
@@ -4533,9 +4506,9 @@ fn pressed_after_hover(want: bool, pressed: i32) -> i32 {
 ///
 /// ⛔⛔ **为什么不能用「取最大 alpha」**（本函数引入前的写法）：底衬会先把整块区域写成
 ///   `alpha = 153`，于是**抗锯齿边缘**（覆盖度 < 153）被 `a > dst_a` 判假而**丢弃** ⇒
-///   字形笔画被侵蚀、文字看起来**变细**（用户 2026-09-25 报的「hover 时内容会变细」）。
+///   字形笔画被侵蚀、文字看起来**变细**（报的「hover 时内容会变细」）。
 ///   alpha=28 的旧底衬下，边缘覆盖度几乎都 > 28，所以那时看不出来；换成 153 后立刻显形。
-/// ✅ 正确做法 = 标准 source-over：`out = src + dst × (1 − As/255)`。
+/// ⛔ 正确做法 = 标准 source-over：`out = src + dst × (1 − As/255)`。
 ///   ⭐ **无底衬时 `dst_a == 0` ⇒ 退化为 `out == src`**，非 hover 路径**逐位零变化**
 ///     （已由 `blend_over_with_no_backdrop_is_identity` 钉住）。
 /// ⚠️ 预乘保证 `pr ≤ a`、`dst_rgb ≤ dst_a` ⇒ `out_rgb ≤ out_a ≤ 255`，**不会溢出**。
@@ -4613,7 +4586,7 @@ fn blit_text_mask(
 // 拖拽（全部在**主线程**：鼠标消息只投递给创建窗口的那个线程）
 // ══════════════════════════════════════════════════════════════════════════
 //
-// ⭐ 交互口径（用户 2026-09-24）：设置页「固定位置」**关掉**后，任务栏窗口可以用
+// ⭐ 交互口径（用户）：设置页「固定位置」**关掉**后，任务栏窗口可以用
 //   鼠标拖着走；松开即记住位置，重启后仍在原处。
 //
 // ⛔ **为什么必须画底衬**：`ULW` 分层窗按 alpha 命中测试，透明像素把鼠标放行给下层
@@ -4649,7 +4622,7 @@ fn window_screen_rect(hwnd: *mut core::ffi::c_void) -> Option<(i32, i32, i32, i3
 ///   （窗口 rect `(0,1380)`、客户区原点也是 `(0,1380)`），但那是**别人的样式**给的巧合，
 ///   不是我们能依赖的契约。`ScreenToClient` 是显式换算，与父窗样式无关。
 ///
-/// ⚠️ 拖拽**原点**与**落点**都必须走本函数：两处若用不同口径换算，
+/// ⛔ 拖拽**原点**与**落点**都必须走本函数：两处若用不同口径换算，
 ///   窗口会在第一次 `WM_MOUSEMOVE` 时**跳一段固定偏移**（差值正好是客户区原点偏移）。
 #[cfg(target_os = "windows")]
 fn window_parent_x(hwnd: *mut core::ffi::c_void) -> Option<i32> {
@@ -4771,7 +4744,7 @@ fn drag_finish(hwnd: *mut core::ffi::c_void) {
 
 /// 真实内容的自绘与提交（**主线程**调用）。
 ///
-/// 布局（用户 2026-09-24 指定）：每台设备一段，段内**左侧一个放大图标**，
+/// 布局（指定）：每台设备一段，段内**左侧一个放大图标**，
 /// 图标**右上角**画电量、**右下角**画音量（各占图标高度的一半）；
 /// 横向按项依次排列，宽度 = 各段实测宽度之和 + 间隔 + 内边距。
 /// 窗口宽度随之改变（`ULW` 的 `SIZE` 参数**同时**设定窗口形状 ⇒ 无需 `MoveWindow`）。
@@ -4799,11 +4772,11 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     }
 
     // ── 先在**测量用 DC** 上量出每段文本宽度 ────────────────────────────
-    // ⚠️ 测量与绘制必须用**同一个字体 + 同样的 DrawTextW 标志**，
+    // ⛔ 测量与绘制必须用**同一个字体 + 同样的 DrawTextW 标志**，
     //    否则会出现「按测量宽度排版、实际文本更长」⇒ 相邻项重叠（见 measure_text 注释）。
     let (font, memdc) = unsafe {
-        // ⚠️ **不加粗**（用户 2026-09-29：「设备信息组件的文字也取消加粗」）。
-        //   这**推翻了 2026-09-25 的「电量/音量加粗」**：当时的理由是「11px 细体在浅色
+        // ⚠️ **不加粗**（「设备信息组件的文字也取消加粗」）。
+        //   这**推翻了 的「电量/音量加粗」**：当时的理由是「11px 细体在浅色
         //   任务栏上偏虚」，但换过 Segoe UI Variable Text 之后细体并不虚，
         //   加粗反而让数字与 `%` 在 15px 下显得糊、且整块面板比 tooltip 更重。
         //   ⇒ 现在**三处口径统一为常规字重**：设备面板 / 音乐面板 / tooltip。
@@ -4852,7 +4825,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
 
     // ── 计算总宽并建主 DIB ────────────────────────────────────────────
     // 每项宽 = 图标 + 间隙 + **两段文本里更宽的那段**（两段共用同一列起画点）；
-    // 项与项之间再加 `ITEM_GAP`，两端加 `PAD_X`。
+    // 项与项之间再加 `m.item_gap`，两端加 `pad_x`。
     let per_item: Vec<i32> = (0..items.len())
         .map(|i| m.icon + m.icon_text_gap + bat_w[i].0.max(vol_w[i].0))
         .collect();
@@ -4908,7 +4881,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     };
     let slot_rel_x = SLOT_X.load(Ordering::Acquire) - tb_left;
     let slot_w = SLOT_W.load(Ordering::Acquire);
-    // ⛔⛔ **窗口宽度不再被「槽」钳制**（2026-09-26 第二次方案变更）：
+    // ⛔⛔ **窗口宽度不再被「槽」钳制**（第二次方案变更）：
     //   旧代码是 `desired_w.min(slot_w.max(min_run_w))` —— 那是为「避让后可能只剩
     //   53px 的窄槽」写的补丁，副作用是**内容被截断**（用户正是抱怨这点）。
     //   现在可用区 = **整条任务栏**（见 `find_widget_slot`）⇒ 窗口就按内容宽度画，
@@ -4931,7 +4904,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     LAST_X.store(rel_x, Ordering::Release);
     // ⭐ 定位结果**必须落日志**：本模块最容易「看起来正常但位置不对」——
     //   贴靠算错、未固定时沿用旧值，全都表现为「窗口在那儿，只是不在你以为的地方」。
-    //   ⚠️ 重绘是事件驱动的低频操作（非每帧），此处打日志不会淹没有用信息。
+    //   ⛔ 重绘是事件驱动的低频操作（非每帧），此处打日志不会淹没有用信息。
     // ⛔ `pos` 与 `rel_x` **必须成对观察**：三档 `rel_x` 若相同，说明贴靠未生效，
     //   不是「设置没保存」。⭐ `余量` 把这一判据显式打出来。
     //   ⭐ 可用区现为**整条任务栏**，正常应看到 `area=(0,w=任务栏宽)` 且
@@ -4967,14 +4940,14 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
 
         // 内容色（预乘前的原色）：浅色主题黑、深色主题白
         let (cr, cg, cb): (u8, u8, u8) = if dark { (255, 255, 255) } else { (0, 0, 0) };
-        // ⭐ hover 底衬（白色半透明，**鼠标悬停时才有**）—— 口径与 FluentFlyout 一致。
+        // ⭐ hover 底衬（白色半透明，**鼠标悬停时才有**）—— 口径与 一致。
         //    ⛔ 判据是 `HOVERED`（由轮询光标得出），**不再看 `locked`**：
-        //       用户 2026-09-25 要求「和 FluentFlyout 一致 + hover 时才出现」，
-        //       而 FluentFlyout 没有「固定位置」概念 ⇒ hover 即显示。
+        //       要求「和 一致 + hover 时才出现」，
+        //       而 没有「固定位置」概念 ⇒ hover 即显示。
         //    ⚠️ 它同时是**拖拽命中区**（分层窗按 alpha 命中测试）：hover 成立 ⇒ 底衬铺上
         //       ⇒ 命中测试开始生效 ⇒ 此刻按下左键能收到 `WM_LBUTTONDOWN`。自洽性论证见
         //       `fill_hover_backdrop` 与 `HOVERED` 的文档。
-        //    ⚠️ 底衬必须**先**画（后续内容按 source-over 叠在它之上 ⇒ 只会盖住它、不会抹掉它）。
+        //    ⛔ 底衬必须**先**画（后续内容按 source-over 叠在它之上 ⇒ 只会盖住它、不会抹掉它）。
         if HOVERED.load(Ordering::Acquire) {
             let alpha = hover_backdrop_alpha_for(crate::windows::system_uses_light_theme());
             fill_hover_backdrop(px, total_w, h, alpha, m.radius);
@@ -5004,7 +4977,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
                             continue;
                         }
                         // 图标 PNG 是 straight alpha（`image` 的 RGBA）⇒ 按覆盖度预乘
-                        // ⚠️ 图标自带颜色（黑白线稿），不能用 `cr/cg/cb` 覆盖 —— 那条路
+                        // ⛔ 图标自带颜色（黑白线稿），不能用 `cr/cg/cb` 覆盖 —— 那条路
                         //    只适用于「GDI 掩码反推的纯色文本」。
                         let r = ipx[si] as u32;
                         let g = ipx[si + 1] as u32;
@@ -5067,7 +5040,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
                 for yy in 0..(ih as i32).min(h - sb.top) {
                     for xx in 0..(iw as i32).min(total_w - sb.left) {
                         let si = ((yy * iw as i32 + xx) * 4) as usize;
-                        // ⭐ 按下变灰（用户 2026-09-29；设备面板的切换键）
+                        // ⭐ 按下变灰（用户；设备面板的切换键）
                         let press = if pressed_id() == PRESS_DEV_SWITCH {
                             0.55f32
                         } else {
@@ -5106,7 +5079,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     //   （真机实测：日志里 `窗=(-14,1324)` 与 `窗=(1109,1324)` 交替出现。）
     //   ⇒ 顺序即契约：**先落位，再发布**。
     //
-    // ⚠️ 动画路径（`publish = false`）必须**在第一次 commit 之前**就返回：
+    // ⛔ 动画路径（`publish = false`）必须**在第一次 commit 之前**就返回：
     //   下面这两次提交都是真提交（会立刻改变窗口表面），一提交
     //   「旧面板」就被画上屏了 ⇒ 还没开始滑就已经换掉，动画等于没播。
     //   顺带也跳过了后面整段「落位后发布给 tooltip」——那正是要跳过的。
@@ -5195,7 +5168,7 @@ fn draw_blank(hwnd: *mut core::ffi::c_void, w: i32) -> bool {
     unsafe { ffi::free_dib(&dib) };
     // ⭐ 开发门控**在 blank 阶段也要跑**：`draw_blank` 用 `commit(.., 0, ..)`
     //   ⇒ 此刻 widget **本身**就在任务栏最左端。若门控只挂在 `draw_items` 上，
-    //   就永远观测不到「tooltip 落在最左端」这个状态——而那正是用户报告的现象。
+    //   就永远观测不到「tooltip 落在最左端」这个状态——而那正是要观测的状态。
     //   （不设 `PM_DEV_TOOLTIP_SHOW` 时本函数立即返回，零开销。）
     crate::taskbar_tooltip::dev_force_show(hwnd as _);
     ok
@@ -5330,7 +5303,7 @@ pub fn destroy_widget() {
 
 /// 从后端聚合结果构造 widget 条目列表（**纯函数**，可单测）。
 ///
-/// ⭐⭐ **只画「已勾选的设备」**（用户口径 2026-09-24 拍板）。判据 = `d.pinned`。
+/// ⭐⭐ **只画「已勾选的设备」**（用户口径 拍板）。判据 = `d.pinned`。
 ///
 /// ⛔ 为什么必须显式过滤，而不是「照抄 `group_taskbar_devices` 的输出」：
 ///   那个函数的保留规则是 `pinned || battery.is_some() || audio_device_id.is_some()`，
@@ -5343,7 +5316,7 @@ pub fn destroy_widget() {
 ///   任务栏空间有限，把有效信息放在最显眼处；同时顺序**稳定**（同分时保持后端顺序），
 ///   避免每次刷新条目跳来跳去（对 30s 兜底刷新尤其重要）。
 ///   ⚠️ pin 但读不出数据的条目**仍然保留**：已连接设备保持正常亮度，只有离线占位
-///   条目置灰。这保留了 `3dcbdc7` 的「pin = 强制显示」语义，同时避免 Xbox 等
+///   条目置灰。这保留了「pin = 强制显示」语义（→ Wiki 15 §7），同时避免 Xbox 等
 ///   已连接但暂时没有电量数据的设备被误判为离线。
 #[cfg(target_os = "windows")]
 fn should_dim_item(it: &WidgetItem) -> bool {
@@ -5356,16 +5329,16 @@ fn should_dim_item(it: &WidgetItem) -> bool {
 /// （那里也已改成调它）。两处各写一份必然分叉，症状是「用户在设置里改过名、
 /// 任务栏 tooltip 显示旧名」。
 ///
-/// ⚠️ 持锁纪律：这里**只读配置**且在闭包内**纯计算**（不调任何 Tauri 窗口/托盘 API）
+/// ⛔ 持锁纪律：这里**只读配置**且在闭包内**纯计算**（不调任何 Tauri 窗口/托盘 API）
 /// ⇒ 符合 AGENTS.md「持锁区只能做纯内存操作」。
 #[cfg(target_os = "windows")]
 /// ⭐ 「解析每台设备显示名」的**可注入纯函数**。
 ///
 /// ⛔ **为什么要这一层间接**：`resolve_widget_labels` 要读**全局配置**（单测里不可控），
 /// 而判据必须能证明「**生产路径真的走了三级链**」。
-/// 第一版判据只测 `device_identity::resolved_display_name` 这个纯函数本身
-/// ⇒ **实测注入「把生产侧退回 `d.name.clone()`」后仍 337 全绿**（等于没测，
-/// 与 AGENTS.md 记的「第一版只断言局部量 ⇒ 改回错误实现依然全绿」同一个坑）。
+/// 只测 `device_identity::resolved_display_name` 这个纯函数本身是不够的：
+/// **实测注入「把生产侧退回 `d.name.clone()`」后仍全绿**（等于没测——
+/// 判据只断言局部量时，改回错误实现依然全绿）。
 /// ⇒ 判据改为**穿过本函数**：传入不同 `resolver` 就能验证**接线**，而不只是算法。
 fn resolve_labels_with<F>(
     devices: &[crate::device_identity::PhysicalDevice],
@@ -5394,7 +5367,7 @@ fn resolve_widget_labels(devices: &[crate::device_identity::PhysicalDevice]) -> 
 /// = [`build_items_with_labels`] 的「不做名称解析」特例：**labels 全部为 `None`**
 /// ⇒ 每项退回 `d.name`（`pick_display_name` 的输出）。
 ///
-/// ⚠️ **只被 `#[cfg(test)]` 使用**（生产路径走 [`resolve_widget_labels`]）。
+/// ⛔ **只被 `#[cfg(test)]` 使用**（生产路径走 [`resolve_widget_labels`]）。
 /// ⛔ 因此**必须**带 `#[cfg(test)]`：AGENTS.md 记过「test-only 包装函数不加
 /// `cfg(test)` ⇒ 触发 `dead_code` ⇒ 警告闸门拦提交」（E15.5 实测）。
 /// 加上后既满足闸门，也让「生产不走这条」变成**可编译期验证**的事实。
@@ -5458,29 +5431,20 @@ fn build_items_with_opt_labels(
     items
 }
 
-/// 判据的**纯函数形式**（可单测，不读全局状态）。
-///
-/// ⭐ 判据本体在 `config::taskbar_widget_visible`（开关 ∧ 列表非空）——放配置层是因为
-///   设置页要读同一口径（渲染开关的初值），两边各判一次必然漂移。
-///
-/// ⛔ **旧口径已退役**（用户 2026-09-28）：此前是「`pinned_taskbar_devices` 非空即显示」，
-///   也就是**拿设备列表当开关**。那让「关闭组件」等价于「清空设备列表」——
-///   用户重新打开时设备全没了，与「关闭但保留设备信息」的口径直接冲突。
-///   ⇒ 现在是显式开关 `taskbar_widget_enabled`，且关闭**不碰**列表。
 #[cfg(target_os = "windows")]
 /// 窗口是否**应该存在**。
 ///
-/// ⭐ 判据 = **已选设备非空**（用户口径 2026-09-24：默认关闭，只有用户选了设备才显示）。
+/// ⭐ 判据 = [`current_panel`] 非空（用户口径：默认关闭，只有用户选了设备才显示）。
+///   设备侧判据在 `config::taskbar_devices_available`，音乐侧的回落链见
+///   `config::taskbar_panel_for`。
 ///   ⇒ 刻意**不新增**「启用」布尔字段：`pinned_taskbar_devices` 本身既是「显示哪些」
 ///   也是「要不要显示」。多一个开关就多一个可能与设备列表不一致的状态。
 ///
-/// ⛔ 与「当前可见」区分：`pinned` 是「强制显示」语义（读不出数据也保留，见 `3dcbdc7`），
-///   所以「非空」不等于「一定有内容」—— 但那正是用户要的：pin 了就该看到（哪怕是 `--`）。
-/// ⛔ **2026-09-28 起判据升为三态**（引入音乐组件）：旧口径只是
-///   `taskbar_widget_enabled && !pinned_taskbar_devices.is_empty()`，
-///   而音乐模式**没有钉设备** ⇒ 会被判成「不显示」⇒ 开关开了也没反应。
-///   现在改问 [`current_panel`]（回落链见 `config::taskbar_panel_for`）。
-///   设备侧的判据本身**没变**，仍在 `config::taskbar_devices_available`。
+/// ⛔ 与「当前可见」区分：`pinned` 是「强制显示」语义（读不出数据也保留，
+///   → Wiki 15 §7），所以「非空」不等于「一定有内容」—— 但那正是用户要的：
+///   pin 了就该看到（哪怕是 `--`）。
+/// ⛔ **判据是三态**（设备 / 音乐 / 无）：只看 `enabled && !pinned.is_empty()`
+///   会把音乐模式判成「不显示」（音乐模式没有钉设备）⇒ 开关开了也没反应。
 pub fn should_show() -> bool {
     current_panel().is_some()
 }
@@ -5506,12 +5470,9 @@ pub fn apply_from_config(app: &tauri::AppHandle) {
         }
         let want = should_show();
         let mounted = widget_alive();
-        // ⛔⛔ **已移除「位置不可用」提示（2026-09-26 方案变更）**：
-        //   它曾用于报告「槽不够宽 ⇒ 贴靠三档同解」。既然避让逻辑已整体删除
-        //   （见 `find_widget_slot` 的文档），可用区恒为整条任务栏、
-        //   不会再被第三方透明窗挤成 53px，
-        //   `SLOT_ALIGN_OK` / `POSITION_WARNED` / `POSITION_NOTED` / `notify_position_unavailable`
-        //   全部随之退役 —— **不再有「提示无空间」这条路径**。
+        // ⛔⛔ **不再有「位置不可用」这条路径**：它曾用于报告「槽不够宽 ⇒ 贴靠三档同解」，
+        //   而两代避让逻辑已整体删除（`find_widget_slot` 的文档 + 留档 → Wiki 15 §8）
+        //   ⇒ 可用区恒为整条任务栏，不会再被第三方透明窗挤成「三档同解」。
         //   ⭐ 现在的规则只有一条：能显示就显示（内容放不下由绘制侧截断）。
         match (want, mounted) {
             // 该显示但没挂 ⇒ 挂上（在主线程）
@@ -5545,7 +5506,7 @@ pub fn apply_from_config(app: &tauri::AppHandle) {
                 }
             }
             // 已挂且该挂 ⇒ 重跑一次刷新，让位置/数据按新配置重算。
-            // ⚠️ 必须走 `refresh_async` 而不是直接重绘：位置来自**后台**的视觉扫描。
+            // ⛔ 必须走 `refresh_async` 而不是直接重绘：位置来自**后台**的视觉扫描。
             // ⛔ 且**必须**先置 `FORCE_REPAINT`：改贴靠位置既不改数据也不改槽位，
             //    仅靠 `refresh_async` 会被「无变化不重绘」吃掉（真机实测：
             //    设置页保存成功、窗口却留在原地，日志只有一句「快照无变化」）。
@@ -5591,7 +5552,7 @@ fn fetch_into_snapshot(force: bool) -> bool {
         }
     };
     let items = build_items_with_labels(&devices, &resolve_widget_labels(&devices));
-    // ⛔ **不再做像素扫描 / 宽度估算**（2026-09-26 第二次方案变更，见 `find_widget_slot`）：
+    // ⛔ **不再做像素扫描 / 宽度估算**（第二次方案变更，见 `find_widget_slot`）：
     //    可用区恒为**整条任务栏**，与内容宽度无关 ⇒ 设备数变化不再让位置漂移。
     //    ⚠️ `estimate_widget_width` 现仅用于**单测**核对绘制侧的 `desired_w` 口径；
     //      生产路径的宽度由 `draw_items` 里的 `content_w + pad_x*2` 直接算。
@@ -5666,7 +5627,7 @@ pub fn refresh_async_force() {
 
 /// 本轮刷新是否**强制**绕过 TTL 缓存。
 ///
-/// ⚠️ 是个**或累加器**，且必须在**实际干活的那一刻**（`spawn_blocking` 闭包开头）
+/// ⛔ 是个**或累加器**，且必须在**实际干活的那一刻**（`spawn_blocking` 闭包开头）
 ///   读并清，**不能**在入口读：合并窗口内到达的 force 请求必须被**下一次补跑**捡走，
 ///   在入口读会把它连同本次非强制刷新一起吞掉 ⇒ 表现为「偶尔有次电量不更新」。
 static REFRESH_FORCE: AtomicBool = AtomicBool::new(false);
@@ -5689,7 +5650,7 @@ fn refresh_async_with(force: bool) {
         // ⭐ 未挂载（或句柄已失效）⇒ 没有消费方，直接早退。
         //    ⛔ 判据用 `widget_alive()` 而不是 `handle != 0`：句柄失效时若还往下走，
         //       会白跑一次 600ms 的 WMI 取数，最后 `PostMessageW` 静默失败。
-        //    ⚠️ 早退前**必须**把 `REFRESH_RUNNING` 放回去，否则后续刷新全被合并掉、永不再跑。
+        //    ⛔ 早退前**必须**把 `REFRESH_RUNNING` 放回去，否则后续刷新全被合并掉、永不再跑。
         let handle = WIDGET_HWND.load(Ordering::SeqCst);
         if !widget_alive() {
             REFRESH_RUNNING.store(false, O::SeqCst);
@@ -5722,7 +5683,7 @@ fn refresh_async_with(force: bool) {
 
 /// 维护循环的 tick 间隔（秒）。
 ///
-/// ⭐ 取 **2**：与参考实现 StockBar 的「约 2 秒维护重贴 Z 序」同量级。
+/// ⭐ 取 **2**：与参考实现 的「约 2 秒维护重贴 Z 序」同量级。
 ///   ⛔ 但这个 tick **只做廉价动作**（`IsWindow` + `FindWindowW` + 一次 `GetWindow`），
 ///   **绝不做 WMI 取数** —— 那由 `REFRESH_EVERY_TICKS` 单独控制（30s 一次）。
 #[cfg(target_os = "windows")]
@@ -5752,7 +5713,7 @@ struct TickPlan {
 /// ⛔ 为什么值得抽出来单测：这里的失效方式**全是静默的** ——
 ///   · `raise` 写漏 ⇒ Z 序被后来者压住后**永不恢复**（窗口还在、只是看不见）；
 ///   · `remount` 判据写反 ⇒ 要么 Explorer 重建后空等 30s，要么**每 2s 挂一次**
-///     （反复操作任务栏会触发「越试越糟」的环境效应，PLAYBOOK §E3）。
+///     （反复操作任务栏会触发「越试越糟」的环境效应，→ Wiki 15 §6.3）。
 ///   两者都不报错、不崩溃，只能靠用例钉住。
 #[cfg(target_os = "windows")]
 fn plan_tick(alive: bool, taskbar_changed: bool, tick: u64) -> TickPlan {
@@ -5780,7 +5741,7 @@ fn plan_tick(alive: bool, taskbar_changed: bool, tick: u64) -> TickPlan {
 ///   （触发挂载风暴，见 `plan_tick`），要么让 hover 迟钝到 2s（底衬跟不上鼠标）。
 ///   **节奏不同就分开。**
 ///
-/// ⚠️ 本线程只做**只读查询**（`IsWindow` / `GetCursorPos` / `GetWindowRect`）——
+/// ⛔ 本线程只做**只读查询**（`IsWindow` / `GetCursorPos` / `GetWindowRect`）——
 ///   与维护线程里的 `FindWindowW` 同属只读，跨线程安全。
 ///   ⛔ 真正「碰窗口」的动作（`SetWindowPos` / `ULW` 提交）一律留在主线程；
 ///     本线程只 `PostMessageW` 请求重绘。
@@ -5838,11 +5799,11 @@ fn start_hover_watcher() {
         // ── 光标落在**第几个设备**上 ──────────────────────────────────
         // ⭐ 500ms 延迟只作用于**首次出现**；已在显示时切换设备**立即**跟随。
         //
-        // ⚠️⚠️ 初版把「`idx < 0`」一律当作「离开 ⇒ 隐藏」，而**设备之间的空隙**
-        //   同样给出 `idx < 0`。后果（真机复现）：光标从设备 0 扫到设备 1 时
-        //   途经空隙 ⇒ 提示先**消失**、再等**满 500ms** 才在新设备上方出现。
-        //   用户看到的正是「提示首帧在**上一个**设备上方，然后才跳过来」。
-        //   ⇒ 判据必须是「**是否还在 widget 内**」，不是「是否命中某个设备」。
+        // ⛔ 判据必须是「**是否还在 widget 内**」，不是「是否命中某个设备」：
+        //   **设备之间的空隙**同样给出 `idx < 0`。误判成「离开 ⇒ 隐藏」的后果
+        //   （真机复现）：光标从设备 0 扫到设备 1 时途经空隙 ⇒ 提示先**消失**、
+        //   再等**满 500ms** 才在新设备上方出现，用户看到的是「提示首帧在
+        //   **上一个**设备上方，然后才跳过来」。
         if want {
             let idx = hovered_item_index(cursor, rect);
             let shown = HOVER_SINCE.load(Ordering::Acquire) == -1;
@@ -6032,7 +5993,7 @@ pub fn refresh_count() -> usize {
 /// ⚠️ 事件在**异步线程**回调（见 `commands.rs` 顶部注释），而 `refresh_async()`
 ///   内部会 `PostMessage` 回主线程 ⇒ 回调返回后重绘才发生，回调本身不做重活。
 ///
-/// ⚠️ 必须在**主线程**调用（`app.listen` 要求；`setup` 回调正是主线程）。
+/// ⛔ 必须在**主线程**调用（`app.listen` 要求；`setup` 回调正是主线程）。
 ///
 /// ⭐ **无条件安装**（不再要求「先挂载成功」）—— 这是「设置页改了没用」的关键修复：
 ///   用户勾选设备的那一刻窗口**还不存在**，若等挂载成功才装监听，就永远收不到
@@ -6049,7 +6010,7 @@ pub fn install_event_listeners(app: &tauri::AppHandle) {
             return;
         }
         // ── ① 数据类事件：只请求一次刷新（未挂载时 `refresh_async` 自己早退）──
-        // ⚠️ 事件名必须与 `emit` 处**逐字一致**（大小写/连字符），否则 `listen` 静默
+        // ⛔ 事件名必须与 `emit` 处**逐字一致**（大小写/连字符），否则 `listen` 静默
         //    不生效（不报错、不触发）—— 改名前先 grep `emit(` 核对。
         // ⭐⭐ 第二位 = 是否**强制**绕过 TTL 缓存（`true` = 强制现查 WMI）。
         //   判据只有一条：**这个事件是否携带「设备列表 / 电量」的新信息**。
@@ -6079,7 +6040,7 @@ pub fn install_event_listeners(app: &tauri::AppHandle) {
         for (ev, force) in DATA_EVENTS {
             // 忽略返回值（EventId）：本应用不取消订阅，见函数注释
             let _ = app.listen(ev, move |_| {
-                // ⚠️ `volume-changed` 在**拖动音量条时会连续触发**（实测几十次/秒）
+                // ⛔ `volume-changed` 在**拖动音量条时会连续触发**（实测几十次/秒）
                 //    ⇒ 这里**必须**走 `refresh_async()` 的合并窗口，绝不能直接取数，
                 //    否则会把 WMI（实测 600ms+）打爆、拖滑块直接卡顿。
                 refresh_async_with(force);
@@ -6130,7 +6091,7 @@ pub fn destroy_widget() {}
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
 
-    /// ⭐⭐ **「文字被截断但右侧留大片空白」的判据**（用户 2026-09-29）。
+    /// ⭐⭐ **「文字被截断但右侧留大片空白」的判据**（用户）。
     ///
     /// 缺陷形态：布局侧按音乐面板自己的上限（`MUSIC_TEXT_MAX_W_DIP` = 320 DIP ⇒
     /// 125% 下 400px）算面板宽度，而**绘制侧仍在用 `m.item_max_w`**
@@ -6180,7 +6141,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **「切换按钮只在 hover 时显示」这条需求本身**（用户 2026-09-29）。
+    /// ⭐⭐ **「切换按钮只在 hover 时显示」这条需求本身**（用户）。
     ///
     /// 判据钉的是**显示与可点同源**这个性质：不可见 ⇒ 必定不可点。
     /// ⛔ 两处若各写一份判据，迟早漂移成「看不见但点得到」——
@@ -6200,7 +6161,7 @@ mod tests {
         assert!(super::switch_clickable(true), "hover ⇒ 可点");
     }
 
-    /// ⭐ **宽度不因 hover 变**（用户 2026-09-28 明确要求）。
+    /// ⭐ **宽度不因 hover 变**（明确要求）。
     ///
     /// 判据：`switch_w` 恒计入 `content_w`，与 `hovered` 无关 ⇒
     /// 未 hover 时那块是**全透明**的（分层窗按像素 alpha，看不见空洞），
@@ -6231,13 +6192,13 @@ mod tests {
         assert!(switch_w > 0, "预留宽度必须为正（否则按钮无处可画）");
     }
 
-    /// ⭐⭐ **空串闸的机械判据**（2026-09-29）：之前我写过「无法用单测覆盖，
+    /// ⭐⭐ **空串闸的机械判据**：之前我写过「无法用单测覆盖，
     /// 只能真机复现」——**那是错的**，测试进程里能建真实 DC。
     ///
     /// 判据的可证伪性：**删掉 `measure_text` 里的空串闸，本用例会让测试进程
     /// 直接崩掉**（访问违例，`DrawTextW` 解引用 `Vec::new().as_ptr()` 的悬垂哨兵），
     /// 而不是「断言失败」——所以 CI 上表现为**测试二进制异常退出**，
-    /// 这正是它当年在真机上的形态。
+    /// 这正是真机上的形态。
     #[test]
     fn measure_text_on_empty_slice_returns_zero_and_never_touches_gdi() {
         use windows_sys::Win32::Graphics::Gdi::{
@@ -6279,7 +6240,7 @@ mod tests {
         assert!(!font.is_null());
         let text: Vec<u16> = "Aimer".encode_utf16().collect();
         let w = unsafe { super::ffi::measure_text(std::ptr::null_mut(), font, &text) };
-        // ⚠️ 结论（2026-09-29 实测）：**不崩，但返回的是垃圾值**。
+        // ⚠️ 结论（实测）：**不崩，但返回的是垃圾值**。
         //   `SelectObject(NULL, …)` 与 `DrawTextW(NULL, …, DT_CALCRECT)` 都不失败，
         //   只是拿不到真实度量 ⇒ `rc` 保持全 0 ⇒ 返回 0。
         //   ⇒ 危害不是「闪退」而是**静默错值**：文字宽度算成 0 ⇒
@@ -6291,7 +6252,7 @@ mod tests {
         unsafe { windows_sys::Win32::Graphics::Gdi::DeleteObject(font) };
     }
 
-    /// ⭐ **音乐状态变化绝不能走设备取数通道**（用户 2026-09-29 报「点暂停后
+    /// ⭐ **音乐状态变化绝不能走设备取数通道**（现象：点暂停后
     ///   播放/暂停键延迟数秒才变」）。
     ///
     /// 判据钉住两件**可机械观测**的事：
@@ -6487,7 +6448,7 @@ mod tests {
         assert_eq!(super::press_target_at((5, 5)), super::PRESS_NONE);
         super::SWITCH_ANIM_STARTED.store(saved, Ordering::SeqCst);
     }
-    /// ⭐⭐ **按下态绝不能「卡住」**（用户 2026-09-29 的「按下变灰」）。
+    /// ⭐⭐ **按下态绝不能「卡住」**（用户 的「按下变灰」）。
     ///
     /// 风险点在 `WM_CAPTURECHANGED`：捕获被任务栏/别的窗口抢走时
     /// **不会**有 `WM_LBUTTONUP` 到来 ⇒ 漏清的话按钮会**永久停在灰态**，
@@ -6525,7 +6486,7 @@ mod tests {
             }
         }
     }
-    /// ⭐⭐⭐ **缩放不许把图标放大**（用户 2026-09-29：「跟随系统缩放后图标变糊，且越大越糊」）。
+    /// ⭐⭐⭐ **缩放不许把图标放大**（「跟随系统缩放后图标变糊，且越大越糊」）。
     ///
     /// 根因：母图只有 32×32，而 `m.icon = 32 × content_dpi/96`。100% 时 32→32 走
     /// **恒等分支、零重采样** ⇒ 锐利；一旦 >100% 就变成**放大**，而放大造不出细节
@@ -6605,7 +6566,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐⭐ **封面缩小后必须补回锐度**（用户 2026-09-29：「还是有点糊」）。
+    /// ⭐⭐⭐ **封面缩小后必须补回锐度**（「还是有点糊」）。
     ///
     /// 缩小必然低通，Lanczos3 已接近理论最优，但「最优」≠「看起来够锐」——
     /// 真机封面实测（256→40，相邻像素差分和，越大越锐）：
@@ -6615,10 +6576,10 @@ mod tests {
     /// ```
     /// ⇒ Lanczos3 之后还差约 **27%**。
     ///
-    /// ⚠️⚠️ 判据图案必须是**多尺度细节**（几个不同频率叠加），不能是：
-    ///   · 纯渐变 —— 锐化在那里本就加不出多少（我第一版只放渐变，只涨 3.7%）；
+    /// ⛔⛔ 判据图案必须是**多尺度细节**（几个不同频率叠加），不能是：
+    ///   · 纯渐变 —— 锐化在那里本就加不出多少（只放渐变时实测只涨 3.7%）；
     ///   · 纯阶跃硬边 —— 它的 10%→90% 过渡宽度**本来就是理论极限**，
-    ///     加了 overshoot 钳制后更不可能变窄（第二版就栽在这）。
+    ///     加了 overshoot 钳制后更不可能变窄（实测如此）。
     /// 照片的主体正是多尺度细节，所以这样才对应用户的实际观感。
     #[test]
     fn cover_sharpen_boosts_fine_detail() {
@@ -6670,7 +6631,7 @@ mod tests {
         );
     }
 
-    /// ⭐ **字号必须放得下每一行**（用户 2026-09-29 要求「字体看起来很小」⇒ 11→12 DIP）。
+    /// ⭐ **字号必须放得下每一行**（要求「字体看起来很小」⇒ 11→12 DIP）。
     ///
     /// 面板把空间切成上下两行（`text_row_h = m.icon / 2`），字号一旦超过行高，
     /// 两行就会**互相压字**——而这既不报错也不 panic，只是「糊成一团」，极难归因。
@@ -6696,7 +6657,7 @@ mod tests {
     }
 
     /// ⭐⭐ **封面右侧的间隙**与**按键之间的间隙**是两个值，且两种形态同源
-    /// （用户 2026-09-29：先要求两者一致、再要求把封面侧加大）。
+    /// （先要求两者一致、再要求把封面侧加大）。
     ///
     /// 判据：
     /// · 封面侧间隙 **>** 按键间隙（用户明确要求「增加一些」）
@@ -6725,7 +6686,7 @@ mod tests {
         assert_eq!(m.pad_x + m.icon, m.pad_x + m.icon);
     }
 
-    /// ⭐⭐⭐ **撑长只加在「下一首 → 切换」那一段**（用户 2026-09-29 明确规格）。
+    /// ⭐⭐⭐ **撑长只加在「下一首 → 切换」那一段**（明确规格）。
     ///
     /// 原文：「封面-音乐控制3键之间固定间距，固定后的音乐组件总宽度就是最短宽度，
     /// 当音乐信息长度超过这个长度后则撑长音乐组件长度，但仍不改变封面-音乐控制3键
@@ -6771,9 +6732,9 @@ mod tests {
         assert_eq!(body(t2) - body(t1), t2 - t1, "撑长量必须等于文字宽增量");
     }
 
-    /// ⭐⭐⭐ **缩小必须覆盖**整幅**源图**（2026-09-29 实测踩到：封面变成纯色块）。
+    /// ⭐⭐⭐ **缩小必须覆盖**整幅**源图**（实测踩到：封面变成纯色块）。
     ///
-    /// ⛔⛔ 判据的图案**不能有周期性**：我第一版用「2px 黑白条」，结果**采错区域也照样通过**
+    /// ⛔⛔ 判据的图案**不能有周期性**：「2px 黑白条」会让**采错区域也照样通过**
     ///   —— 条纹每 4px 重复，采到源图哪一段都是满对比度。
     ///   ⇒ 改用**单调渐变**：它对「采样位置」敏感，采错区域立刻现形
     ///   （输出会挤在梯度的一小段里，min/max 明显不到位）。
@@ -6807,7 +6768,7 @@ mod tests {
         }
     }
 
-    /// ⭐⭐ **封面缩小必须比面积平均更锐**（用户 2026-09-29：「封面仍然有点糊」）。
+    /// ⭐⭐ **封面缩小必须比面积平均更锐**（「封面仍然有点糊」）。
     ///
     /// 照片上面积平均（box）的模糊半径约等于缩放比的一半，3.2:1 时在**输出**尺度上
     /// 约糊 1.6px —— 边缘与细节糊成一片。Lanczos3 支撑只有 3 个源像素、带锐化旁瓣，
@@ -6929,7 +6890,7 @@ mod tests {
             );
         }
     }
-    /// ⭐⭐⭐ **音乐开关开着时，记住的选择仍必须说了算**（2026-09-28 用户报「点切换没反应」）。
+    /// ⭐⭐⭐ **音乐开关开着时，记住的选择仍必须说了算**。
     ///
     /// ⛔ 判据曾写成 `music_available && (music_enabled || panel == Music)`：
     /// 音乐开关一开，这行**恒为真** ⇒ `taskbar_panel` 从没被读到 ⇒ 点切换写了字段、
@@ -7022,7 +6983,7 @@ mod tests {
 
     // ── format_battery / format_volume：两行文本的语义 ────────
     //
-    // ⭐ 布局口径（用户 2026-09-24）：电量画在图标**右上角**、音量画在图标**右下角**，
+    // ⭐ 布局口径（用户）：电量画在图标**右上角**、音量画在图标**右下角**，
     //   **没有可显示的值一律 `N/A`**。两个格式化函数是这两条口径的**唯一落地点**，
     //   故必须各自有用例钉住（绘制路径依赖 GDI，无法单测）。
 
@@ -7085,7 +7046,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **音量文本是否带小数，由「音量精细调节」开关决定**（用户 2026-09-28）。
+    /// ⭐⭐ **音量文本是否带小数，由「音量精细调节」开关决定**（用户）。
     ///
     /// · **开** ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了但数字
     ///   没变」看起来像失效；
@@ -7140,7 +7101,7 @@ mod tests {
 
     // ── 滚轮调音量：与弹出窗口逐字对齐 ────────────────────────
     //
-    // ⭐ 对齐对象是 `popup-audio.js` 的滑块：初值**先取整**（:181），
+    // ⭐ 对齐对象是 `popup-audio.js` 的滑块：初值**先取整**（181），
     //   步进 coarse 用 `floor(pct)+1` / `ceil(pct)-1`、fine 用 `round((pct±0.1)*10)/10`。
 
     /// ⛔ 步进量：精细 0.1、普通 1（百分点）。
@@ -7265,14 +7226,14 @@ mod tests {
             format_volume(&item(Some(80), Some(0.4), true, Some(true)), false),
             "静音"
         );
-        // ⚠️ 不能只断言「不含 40%」这类弱判据 —— 必须断言**就是**「静音」，
+        // ⛔ 不能只断言「不含 40%」这类弱判据 —— 必须断言**就是**「静音」，
         //    否则「静音 + 百分比同时出现」这种回归照样能通过。
     }
 
-    /// ⚠️ **契约已变更**（2026-09-28）：音量显示改为**固定一位小数**（`40.0%`）——
+    /// ⚠️ **契约已变更**：音量显示改为**固定一位小数**（`40.0%`）——
     ///   滚轮有 0.1% 步进档，只显示整数会让人以为滚轮没生效。
     ///   保留的判据是「四舍五入到 0.1 个百分点」：`0.996` ⇒ `99.6%`。
-    /// ⚠️ **契约已变更**（2026-09-28）：音量显示的格式**由「音量精细调节」决定**——
+    /// ⚠️ **契约已变更**：音量显示的格式**由「音量精细调节」决定**——
     ///   开 ⇒ 一位小数（`40.0%`），关 ⇒ 整数（`40%`）。
     ///   保留的判据是「四舍五入、不是截断」：`0.996` ⇒ `100%`（关）/ `99.6%`（开）。
     #[test]
@@ -7320,7 +7281,7 @@ mod tests {
     /// 与 `PinnedDevice.alias` 里 ⇒ 若 widget 侧直接用 `d.name`，
     /// **tooltip 会显示旧名**（而设置页/选择器显示新名）。
     ///
-    /// ⚠️ **判据形状的教训（本次实测踩到）**：第一版只测
+    /// ⚠️ **判据形状的教训（实测踩到）**：只测
     /// `device_identity::resolved_display_name` 这个**纯函数本身** ⇒ 实测把生产侧
     /// （`resolve_widget_labels`）改成 `d.name.clone()` 后，**337 条依然全绿**——
     /// 「算法对」不等于「接线对」。⇒ 本条改为**穿过** [`resolve_labels_with`]，
@@ -7387,7 +7348,7 @@ mod tests {
     ///
     /// ⛔ 这条是上条的**互补**：上条验「三级链算法对」，本条验「**真的把 labels 传下去了**」。
     /// 少了本条，把 `build_items_with_labels` 里的 `labels.get(i)` 改回 `d.name.clone()`
-    /// 仍会全绿——那正是本次最初发生的失效。
+    /// 仍会全绿——这正是缺了它会发生的失效。
     ///
     /// 可证伪：把 `build_items_with_opt_labels` 的 `name:` 字段改回 `d.name.clone()`
     /// ⇒ 本条转红。
@@ -7443,10 +7404,8 @@ mod tests {
 
     /// ⛔ tooltip 的 `rect` **必须互不重叠**。
     ///
-    /// 为什么这是硬要求：重叠区会让 `QuotaDock` 式的「一设备一 `TOOLINFO`」判不出
-    /// 「光标属于谁」⇒ 提示串到别的设备上，**且不会报错**。
-    /// `QuotaDock` 自己也把这条写成测试（`taskbar.rs` 的
-    /// 「每个厂商拥有互不重叠的独立悬浮区域」）。
+    /// 为什么这是硬要求：「一设备一提示区」的判定靠**矩形互不重叠**才分得出
+    /// 「光标属于谁」⇒ 一旦重叠，提示串到别的设备上，**且不会报错**。
     ///
     /// 可证伪：把 `item_rects` 里的 `cursor += w + m.item_gap` 改成 `cursor += w`（重叠）
     /// 或 `- m.item_gap`（反重叠）⇒ 本条转红。
@@ -7491,9 +7450,9 @@ mod tests {
 
     /// ⭐⭐ DPI 换算的核心断言：**125% 下底衬高必须是 50px**。
     ///
-    /// 口径出处 = FluentFlyout `Windows/TaskbarWindow.xaml.cs`：
+    /// 口径出处 = `Windows/TaskbarWindow.xaml.cs`：
     ///   `physicalHeight = (int)(logicalHeight * dpiScale)`，`logicalHeight = 40`（DIP）
-    /// ⇒ 125% 时 40 × 1.25 = **50**。我们原先把 40 当物理像素用，比它矮 10px。
+    /// ⇒ 125% 时 40 × 1.25 = **50**；把 40 当物理像素用就比它矮 10px。
     ///
     /// 可证伪：把 `Metrics::for_dpi` 里的 `dpi as f32 / 96.0` 换成 `1.0`（即不做换算）
     /// ⇒ `m120.h == 40`，本条转红。
@@ -7520,10 +7479,10 @@ mod tests {
         assert_eq!(Metrics::for_dpi(0).h, 40);
         assert_eq!(Metrics::for_dpi(0).dpi, 96);
     }
-    /// ⛔⛔ 本设置的**作用域边界**（用户 2026-09-25 明确要求）：
+    /// ⛔⛔ 本设置的**作用域边界**（明确要求）：
     ///   内容随档位变，**底衬必须恒定**。
     ///
-    /// ⭐⭐⭐ 音乐面板内部还要**再分一次**（用户 2026-09-30 逐条确认「都按 A」）：
+    /// ⭐⭐⭐ 音乐面板内部还要**再分一次**（用户 逐条确认「都按 A」）：
     /// ```text
     /// 固定（不随本设置变）：封面边长 · 双排信息字号 · 文字宽度上限 · 第二行位置
     /// 跟随本设置：播放三键 · 切换键 · 各项间距 · 左右留白
@@ -7543,7 +7502,7 @@ mod tests {
     #[test]
     fn content_scale_really_changes_content_metrics() {
         use crate::config::TaskbarContentScale;
-        // ⚠️ 底衬 DPI 必须挑「能降一档」的：100%（96）已是缩放阶梯**地板**，
+        // ⛔ 底衬 DPI 必须挑「能降一档」的：100%（96）已是缩放阶梯**地板**，
         //   「偏小」无法再降 ⇒ 两档必然相等（`step_down_dpi` 的既有约定）。
         //   在 96 上断言「两档不同」会自己转红 —— 实测踩过（left 32 / right 32）。
         for backdrop in [120u32, 144, 192] {
@@ -7574,11 +7533,11 @@ mod tests {
         );
     }
 
-    /// ⭐⭐⭐ **缩小的三键必须按自己的尺寸垂直居中**（用户 2026-09-30 实测报障：
+    /// ⭐⭐⭐ **缩小的三键必须按自己的尺寸垂直居中**（实测：
     /// 「音乐组件中缩小的三键没有垂直居中」）。
     ///
     /// ## 根因
-    /// 三个控件原先都从**同一个** `icon_y`（= 封面的上边距）起画。
+    /// 三个控件若都从**同一个** `icon_y`（= 封面的上边距）起画，
     /// `[y, y + size]` 的中心是 `h/2` **只在所有控件 size 相等时**成立；
     /// 而「缩放设置只管三键与切换键、封面恒定」⇒ **两者不再相等**
     /// ⇒ 125% 下 `h=50`、封面 40、三键 32：封面 `[5,45]` 中心 25、
@@ -7620,7 +7579,7 @@ mod tests {
             );
 
             // ② ⭐ 这条才是缺陷本身：三键比封面小 ⇒ **上边距必须更大**。
-            //    复用封面坐标（`btn_y == cover_y`）⇒ 偏上，正是用户报的那个现象。
+            //    复用封面坐标（`btn_y == cover_y`）⇒ 偏上，正是要避免的现象。
             assert!(
                 btn_y > cover_y,
                 "h={h}：三键({btn})比封面({cover})小 ⇒ 上边距({btn_y})必须大于封面({cover_y})，\
@@ -7651,7 +7610,7 @@ mod tests {
         assert_eq!(big.content_dpi, 120);
         assert_eq!((big.icon, big.font, big.text_row_h), (40, 15, 20));
 
-        // ── 内容：「偏小」= **降一档** ⇒ 125% 系统下用 100%（用户 2026-09-29 的原话）──
+        // ── 内容：「偏小」= **降一档** ⇒ 125% 系统下用 100%（用户 的原话）──
         assert_eq!(
             small.content_dpi, 96,
             "系统 125% 时「偏小」必须降到 100%（不是 93.75%）"
@@ -7672,7 +7631,7 @@ mod tests {
         }
     }
 
-    /// ⭐⭐ **「偏小」= 沿 Windows 标准缩放阶梯降一档**（用户 2026-09-29 定义）。
+    /// ⭐⭐ **「偏小」= 沿 Windows 标准缩放阶梯降一档**（用户 定义）。
     ///
     /// 判据把用户的原话逐条钉住：`125% ⇒ 100%`、`150% ⇒ 125%`、`200% ⇒ 175%`。
     /// ⛔ **不是「乘 0.75」**：那在 125% 上会得到 93.75%，不是任何一档。
@@ -7794,7 +7753,7 @@ mod tests {
     /// 按较窄的那段算 ⇒ 估算宽度小于实际绘制宽度 ⇒ `find_widget_slot` 选出的槽偏窄
     /// ⇒ 内容溢出压到邻居上（且不报错，只能靠肉眼看出来）。
     ///
-    /// ⚠️ **样本必须让两段宽度不等**：若样本里两段一样宽（如都用 `50%`），
+    /// ⛔ **样本必须让两段宽度不等**：若样本里两段一样宽（如都用 `50%`），
     ///   `min` 与 `max` 同解 ⇒ 本条用例**失去区分力**（注入 `min` 仍绿，实测过）。
     /// 可证伪：把 `estimate_widget_width` 里的 `bat.max(vol)` 改成 `bat.min(vol)`，本条转红。
     #[test]
@@ -7835,7 +7794,7 @@ mod tests {
     // ── build_items：从后端设备构造条目 ─────────────────────
     //
     // ⭐ 下面所有用例的样本都用 `pinned_dev(...)` 造：`build_items` 现在**只画已勾选
-    //   的设备**（用户口径 2026-09-24），用 `dev(..., false)` 造样本会得到空列表
+    //   的设备**（用户口径），用 `dev(..., false)` 造样本会得到空列表
     //   ⇒ 用例失去区分力（索引越界 panic 而不是断言失败，掩盖真实缺陷）。
 
     /// 造一台**已勾选**的设备（= `dev(..., pinned = true)`）。
@@ -7849,7 +7808,7 @@ mod tests {
         dev(name, battery, volume, is_muted, audio_id, true)
     }
 
-    /// ⛔⛔ **核心口径**（用户 2026-09-24 拍板）：任务栏窗口**只画已勾选的设备**。
+    /// ⛔⛔ **核心口径**（用户 拍板）：任务栏窗口**只画已勾选的设备**。
     ///
     /// ⭐ 为什么单列一条：`group_taskbar_devices` 的保留规则是「有数据的设备一律留」，
     ///   若直接照抄它的输出，用户勾 1 台却看到 8 台 ⇒ **设置页形同虚设**（真机实测）。
@@ -8055,7 +8014,7 @@ mod tests {
 
     /// ⭐ **缩小**必须是**面积平均**（不是最近邻）。
     ///
-    /// ⛔⛔ **本条钉的契约在 2026-09-29 被有意改掉了**（旧契约 = 最近邻，理由是
+    /// ⛔⛔ **本条钉的契约在 被有意改掉了**（旧契约 = 最近邻，理由是
     ///   「1–2px 笔画被双线性糊成灰带」）。改契约的依据不是口味，而是**母图换了**：
     ///   母图从 32 提到 256 之后，缩小时源里**根本不存在 1px 笔画**——最小笔画是
     ///   51/1024 × 256 ≈ **12.8px**，缩到 48px 仍有 2.4px。此时最近邻会
@@ -8147,7 +8106,7 @@ mod tests {
     /// ⭐⭐ **本次需求的核心判据**：靠左/靠右时**距边缘恰好 `edge_margin`**，
     /// 且**内容绝不越出可用区**。
     ///
-    /// ⛔ 上一版是「紧贴边缘」（`left == slot_x`），用户明确要求参考 Windows
+    /// ⛔ 不得「紧贴边缘」（`left == slot_x`）：用户明确要求参考 Windows
     ///   开始按钮/时钟的留白（实测 24~26px @125%）。
     ///
     /// 可证伪：
@@ -8284,14 +8243,10 @@ mod tests {
     /// ⭐⭐ **位置语义的可证伪测试**：可用区 = 整条任务栏时，
     /// `left`/`center`/`right` 必须分别落在**左侧留白后 / 正中 / 右侧留白前**。
     ///
-    /// ── 为什么这条是本次方案变更的**核心回归** ────────────────────────
-    /// 旧实现（像素扫描避让）里，可用区是「任务栏里某一段**空白**」：
-    ///   · `SLOT_SAFE_MARGIN = 100` ⇒ `slot_x ≥ 100` ⇒ 「靠左」永远差 100px；
-    ///   · `pick_widest_run` 只给最宽段 ⇒ `center` 在**裁剪后**的区间里算。
-    /// 用户实测反馈正是「靠左/右没有出现在整个任务栏的最左/右侧，居中也不对」。
-    /// ⇒ 本条以**整条任务栏**（`slot_x = 0`、`slot_w = 屏幕宽`）为口径断言三档位置；
-    ///   居中不留边距，左右各留 Windows 风格边距。若有人把避让扫描加回来 ⇒ **转红**。
-    ///
+    /// ── 为什么这条是三档位置的**核心回归** ────────────────
+    /// 本条以**整条任务栏**（`slot_x = 0`、`slot_w = 屏幕宽`）为口径断言三档位置：
+    /// 居中不留边距，左右各留 Windows 风格边距。
+    /// ⛔ 若有人把「避让扫描」加回来 ⇒ 本条**转红**（两代避让为何退役 → Wiki 15 §8）。
     /// 可证伪：把 `align_in_slot` 的 `"left" => 0` 改成 `100`（旧安全边距）
     /// ⇒ 第 1 条断言转红；把 `"right" => max_offset` 改成 `slot_w`
     /// ⇒ 第 3 条断言转红（右缘溢出）。
@@ -8319,7 +8274,7 @@ mod tests {
         );
 
         // ⛔⛔ 最重要的性质：三档**必须严格递增** —— 相等就意味着贴靠失效
-        //   （旧方案把窗口钳成 53px 时正是三档同解）。
+        //   （把窗口钳成固定宽度时正是三档同解）。
         let l = align_in_slot(area_x, area_w, content_w, "left", EDGE_MARGIN);
         let c = align_in_slot(area_x, area_w, content_w, "center", EDGE_MARGIN);
         let r = align_in_slot(area_x, area_w, content_w, "right", EDGE_MARGIN);
@@ -8425,8 +8380,8 @@ mod tests {
 
     // ── hover 底衬：主题 → 不透明度 / 光标命中判定 ──────────────────
 
-    /// ⭐ 两个 alpha 必须**逐字**等于 FluentFlyout 换算出来的值 —— 这是「与 FluentFlyout
-    ///   一致」这句承诺的**唯一机械判据**（改了常量却忘了另一处，只有这里会转红）。
+    /// ⭐ 两个 alpha 必须**逐字**等于换算出来的值 —— 这是「底衬不透明度照搬桌面平台
+    ///   惯例」这句承诺的**唯一机械判据**（改了常量却忘了另一处，只有这里会转红）。
     #[test]
     fn hover_backdrop_alpha_matches_fluent_flyout() {
         // 浅色分支：Color.FromArgb(255,255,255,255) × Opacity 0.6 ⇒ 153
@@ -8440,7 +8395,7 @@ mod tests {
         assert!(hover_backdrop_alpha_for(false) < hover_backdrop_alpha_for(true));
     }
 
-    /// 用户 2026-10-05 报障的判据：光标移出 widget 后按下态必须被清掉。
+    /// 判据：光标移出 widget 后按下态必须被清掉。
     ///
     /// ⭐ 这是**可证伪**的：把 `pressed_after_hover` 的 `if want` 反过来（即「移出才保留」）
     ///   本单测立刻转红；反过来把它改成恒返回 `PRESSED`（即没有兜底）也会转红。
@@ -8573,7 +8528,7 @@ mod tests {
     }
 
     /// ⛔⛔ **同一个任务栏上挂不上时，绝不能每 tick 重试** —— 那会触发
-    ///   「反复操作任务栏 → 恶化；静置 → 自愈」的环境效应（PLAYBOOK §E3）。
+    ///   「反复操作任务栏 → 恶化；静置 → 自愈」的环境效应（→ Wiki 15 §6.3）。
     ///
     /// 可证伪：把 `taskbar_changed || due` 改成 `true` ⇒ 15 个 tick 里出现 15 次重建 ⇒ 转红。
     #[test]
@@ -8600,12 +8555,13 @@ mod tests {
 
     // ── wants_widget：窗口「该不该存在」的判据 ─────────────────
 
-    /// ⭐ 用户口径（2026-09-28 修订）：「**默认关闭**；关闭只隐藏窗口，**不丢设备**」。
+    /// ⭐ 用户口径（修订）：「**默认关闭**；关闭只隐藏窗口，**不丢设备**」。
     ///
-    /// ⛔ 旧口径已退役：此前是「列表非空即显示」，等于**拿设备列表当开关**——
+    /// ⛔ 关闭只隐藏窗口、**不碰设备列表**：把设备列表当开关的话，
     ///   「关闭组件」就等于「清空设备」，用户重开时设备全没了。
     ///
-    /// 可证伪：把 `config::taskbar_widget_visible` 改回「只看列表非空」⇒ 本组三条全红。
+    /// 可证伪：把 [`crate::config::taskbar_devices_available`] 改回「只看列表非空」
+    /// ⇒ 本组三条全红。
     #[test]
     fn widget_visibility_is_switch_and_list() {
         use crate::config::{Config, PinnedDevice};
@@ -8659,7 +8615,7 @@ mod tests {
         );
     }
 
-    /// ⭐ **三态回落链**（用户 2026-09-28 指定的降级规则）——本批新增的核心判据。
+    /// ⭐ **三态回落链**（指定的降级规则）——本批新增的核心判据。
     ///
     /// ```text
     /// 音乐可用 ∧ (音乐开关开 ∨ 记住的是音乐) → Music
@@ -8723,7 +8679,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **两个组件开关都关 ⇒ 整个组件不显示**（用户 2026-09-30 实测报障）。
+    /// ⭐⭐ **两个组件开关都关 ⇒ 整个组件不显示**（实测）。
     ///
     /// ⛔ **这一格此前从未被测过**，bug 就藏在那个空格里：
     /// `panel_falls_back_when_music_unavailable` 的 ④ 用 `Config::default()`，
@@ -8732,7 +8688,7 @@ mod tests {
     /// ⇒ 「两个开关都关 + 记住=Music + 有会话」会**穿过** ① 的
     /// `Music if music_available` ⇒ 组件仍然存在，且留下的**恰是本应最后关闭的那块**。
     ///
-    /// ⚠️ 判据锚在**「组件存不存在」这个维度**上，与 `taskbar_panel` 无关：
+    /// ⛔ 判据锚在**「组件存不存在」这个维度**上，与 `taskbar_panel` 无关：
     ///   下面把 `taskbar_panel` 在 Music/Devices 之间**都试一遍**，
     ///   两种都必须 `None` —— 只要有一种漏掉，闸门就有洞。
     ///
@@ -8756,13 +8712,13 @@ mod tests {
 
         for panel in [TaskbarPanel::Music, TaskbarPanel::Devices] {
             let c = Config {
-                // ⚠️ `TaskbarPanel` 是 `Copy` ⇒ 这里**不能** `.clone()`
+                // ⛔ `TaskbarPanel` 是 `Copy` ⇒ 这里**不能** `.clone()`
                 //    （`clippy::clone_on_copy` 在 `-D warnings` 下是硬失败）
                 taskbar_panel: panel,
                 ..base.clone()
             };
             // 有会话（true）与无会话（false）都要 None：
-            // 「音乐侧可用性只看有没有会话」⇒ 这一支曾经能靠 true 复活组件
+            // 「音乐侧可用性只看有没有会话」⇒ 这一支**不得**靠 true 复活组件
             assert_eq!(
                 taskbar_panel_for(&c, true),
                 None,
@@ -8773,7 +8729,7 @@ mod tests {
                 None,
                 "两个开关都关 + 记住={panel:?} ⇒ 组件必须不存在"
             );
-            // ⚠️ 存在性判据**与用户的选择无关**：不许改写
+            // ⛔ 存在性判据**与用户的选择无关**：不许改写
             assert_eq!(c.taskbar_panel, panel, "关组件不得改写用户的选择");
         }
 
@@ -8800,11 +8756,11 @@ mod tests {
 
     // ── 中毒（poison）后的可证伪验证 ──────────────────────────────────
     //
-    // ⛔ 为什么要有这组：`LAST_ITEM_RECTS` 原先的 6 处都是裸 `.lock()`，
-    //   其中 4 处写成「中毒就跳过/放弃」（`.ok()?` / `if let Ok` / `Err(_) => return`）。
+    // ⛔ 为什么要有这组：`LAST_ITEM_RECTS` 的 6 处访问**不得**用裸 `.lock()`，
+    //   其中「中毒就跳过/放弃」（`.ok()?` / `if let Ok` / `Err(_) => return`）是错的：
     //   中毒一旦发生，**跳过一次就永远跳**（没有自愈、没有日志）⇒ 命中判定、
-    //   tooltip 锚点、滚轮音量会静默永久失效。现在统一走 `lock_unpoisoned`
-    //   （中毒恢复）。**下面两条断言正是这个差异的可证伪判据。**
+    //   tooltip 锚点、滚轮音量会静默永久失效。一律走 `lock_unpoisoned`（中毒恢复）。
+    //   **下面两条断言正是这个差异的可证伪判据。**
 
     /// 真实调用点：把 `LAST_ITEM_RECTS` 弄中毒后，`publish_item_rects` + `item_rect_count`
     /// 仍须正常工作（修复前：`item_rect_count` 恒报 0、发布被静默丢弃）。
@@ -8836,7 +8792,7 @@ mod tests {
             1,
             "⭐ 中毒后发布**必须**生效、计数**必须**是真实值（修复前：恒 0）"
         );
-        // 命中判定也须继续工作（原先 `Err(_) => return false` ⇒ 恒不命中）
+        // 命中判定也须继续工作（写成 `Err(_) => return false` 就会恒不命中）
         let hit = hovered_item_index(Some((7, 5)), Some((0, 0, 100, 20)));
         assert_eq!(
             hit, 0,

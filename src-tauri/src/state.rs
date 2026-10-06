@@ -5,13 +5,12 @@
 //! 本模块是**全局锁的登记处**。新增任何 `static … Mutex` / `RwLock` 之前，先在这里
 //! 登记它的层级以及它与既有锁的获取关系。
 //!
-//! 为什么必须集中登记：**锁序缺陷（AB/BA 死锁）不产生编译错误，也不产生 panic 栈**。
-//! 它的表现是整个进程静默僵死（窗口点不动、日志停在同一行），事后只能靠人把两条
-//! 路径的加锁顺序摆在一起看。原先的锁序说明散落在 4 个文件的行内注释里
-//! （`battery_notify.rs` / `config.rs` / `device_data.rs` / `tray.rs`），挡不住新调用点
-//! ——新代码只要在闭包里顺手取一次另一把锁，死锁条件就齐备了，而没有任何一处会报错。
+//! ⛔ 为什么必须集中登记（判据全文 → Wiki 13 §2）：**锁序缺陷（AB/BA 死锁）
+//!   不产生编译错误，也不产生 panic 栈**，表现是整个进程静默僵死（窗口点不动、
+//!   日志停在同一行）；锁序说明若只写在各调用点的行内注释里，就挡不住新调用点
+//!   ——新代码在闭包里顺手取一次另一把锁，死锁条件即齐备，而没有任何一处会报错。
 //!
-//! 因此下面给出**白名单**：**不在白名单里的「持 A 取 B」一律按缺陷处理**。
+//! ⇒ 下面是**白名单**：**不在白名单里的「持 A 取 B」一律按缺陷处理**。
 //!
 //! ## 一、允许的嵌套边（白名单，当前仅此三条）
 //!
@@ -19,13 +18,13 @@
 //! |---|---|---|---|
 //! | 1 | `DEVICES_CACHE` → `CONFIG` | `tray.rs::build_tooltip_text` | 两条临界区内都只剩纯内存操作（`format!` / 字段读）。落盘已被 P1-3 移出配置锁、B11 移出调用线程 |
 //! | 2 | `PERSIST_LOCK` → `LAST_CONFIG_CONTENT` | `config.rs::persist_now` | 只在 `peritray-config` 写线程（或队列满时的同步兜底）上执行，不与 UI 线程争抢 |
-//! | 3 | `BT_LOCK` → `BLE_CONN` | `bluetooth.rs::bt_action` → `bt_ble::ble_connect` / `ble_disconnect` | `BT_LOCK` 是蓝牙操作的串行锁，`BLE_CONN` 是连接表。两条临界区内都只剩纯内存操作（查表/摘表/换表）——原先的持锁 WinRT 调用与日志 I/O 已在 P3-10 修复，见「四」 |
+//! | 3 | `BT_LOCK` → `BLE_CONN` | `bluetooth.rs::bt_action` → `bt_ble::ble_connect` / `ble_disconnect` | `BT_LOCK` 是蓝牙操作的串行锁，`BLE_CONN` 是连接表。两条临界区内都只剩纯内存操作（查表/摘表/换表）——持锁的 WinRT 调用与日志 I/O 都已收敛到锁外，见「四」 |
 //!
 //! ## 二、禁止的反向边（一旦出现即构成 AB/BA 死锁条件）
 //!
 //! | 边 | 当前状态 | 为什么必须守住 |
 //! |---|---|---|
-//! | `CONFIG` → `DEVICES_CACHE` | **不存在** | 与白名单第 1 条反向。全仓 66 处 `with_config` / `with_config_mut` 调用点（2026-09-18 复核）目前都是纯字段读写；只要有一处在闭包里取设备缓存锁，死锁条件立刻齐备 |
+//! | `CONFIG` → `DEVICES_CACHE` | **不存在** | 与白名单第 1 条反向。全仓 66 处 `with_config` / `with_config_mut` 调用点（复核）目前都是纯字段读写；只要有一处在闭包里取设备缓存锁，死锁条件立刻齐备 |
 //! | `LAST_CONFIG_CONTENT` → `PERSIST_LOCK` | **不存在** | 与白名单第 2 条反向 |
 //! | `BLE_CONN` → `BT_LOCK` | **不存在** | 与白名单第 3 条反向 |
 //!
@@ -38,7 +37,7 @@
 //! | 符号 | 定义处 | 说明 |
 //! |---|---|---|
 //! | `CONFIG` | `config.rs` | 配置。**临界区内只允许纯内存操作**（P1-3 / B11 已把落盘全部外移） |
-//! | `DEVICES_CACHE` | 本文件 | 设备列表缓存 + 写入时刻（托盘 tooltip、低电量通知、**任务栏信息窗**三处共用；2026-09-29 起携带时间戳） |
+//! | `DEVICES_CACHE` | 本文件 | 设备列表缓存 + 写入时刻（托盘 tooltip、低电量通知、**任务栏信息窗**三处共用； 起携带时间戳） |
 //! | `TRAY_ICON` | `tray.rs` | 托盘句柄。锁内只取句柄/换菜单，**调用 API 前必须先释放**（`set_icon` / `set_tooltip` / `set_menu` 会同步等主线程） |
 //! | `AUTO_MENU_ITEM` | 本文件 | 自启菜单项，同 `TRAY_ICON`（`set_text` 同步等主线程） |
 //! | `DEVICE_REGISTERED_KEYS` | `shortcut.rs` | 已注册快捷键集合。锁内只算差集，插件 API 调用在锁外 |
@@ -69,23 +68,23 @@
 //! | `force_mute_prev_volume()` | `audio.rs` | 强制静音前的音量 |
 //! | `ANIM_TEST_LOCK` | 本文件（`#[cfg(test)]`） | 串行化动画相关用例 |
 //!
-//! ## 四、持锁做 I/O：历史与现状
+//! ## 四、持锁做 I/O：三处禁例与其判据
 //!
-//! 登记锁序时顺带扫出三处「持锁做 I/O」（同属 `AGENTS.md`「持锁区不得调用…」）。
-//! 前两处已在紧随 P3-10 的提交中修复，留档于此以免回归：
+//! 登记锁序时顺带扫出三处「持锁做 I/O」（同属 `AGENTS.md`「持锁区不得调用…」），
+//! 判据留档于此以免回归：
 //!
-//! - ✅ `bt_ble.rs` 的 `ble_connect` / `ble_disconnect`：原先在持 `BLE_CONN` 时
+//! - ⛔ `bt_ble.rs` 的 `ble_connect` / `ble_disconnect`：持 `BLE_CONN` 时
 //!   ① 调 WinRT（`session.Close()` / `device.Close()`）；② **写日志文件**
 //!   （`verbose_log!` / `append_verbose_log` / `append_log`，`sync_all` 在杀软实时
-//!   扫描下可达数十毫秒）。现改为锁内只「摘表/换表」，锁外再 Close 与记日志
-//!   ——与 P2-7 的低电量通知同款：锁内取数据，锁外做 I/O。
-//! - ✅ `audio.rs` 的 `toggle_device_mute`：原先在持 `force_mute_prev_volume()` 时
-//!   调用 `SetMasterVolumeLevelScalar`（COM）。这与 `toast.rs` 已修过的是**完全同类**
-//!   的 edition 2021 临时量陷阱（`if let Some(x) = lock().take()` 会让守卫活到整个
-//!   `if` 块）；现已把 `remove` 落到独立语句。
-//! - ✅ `bt_ble.rs` 的 `.lock().map_err(..)`：P3-10 的最后一个遗留项，已收敛到统一的
-//!   `state::lock_unpoisoned`。原先把它当作「命令边界可上报中毒」的**唯一例外**，
-//!   但该理由在此站不住脚：`BLE_CONN` 是无不变式的纯缓存，而 Mutex 中毒是**永久性**的
+//!   扫描下可达数十毫秒）——两条都违规。判据：锁内只「摘表/换表」，Close 与记日志
+//!   一律锁外，与 P2-7 的低电量通知同款：锁内取数据，锁外做 I/O。
+//! - ⛔ `audio.rs` 的 `toggle_device_mute`：持 `force_mute_prev_volume()` 时
+//!   调 `SetMasterVolumeLevelScalar`（COM）即违规。这与 `toast.rs` 是**完全同类**的
+//!   edition 2021 临时量陷阱（`if let Some(x) = lock().take()` 会让守卫活到整个
+//!   `if` 块）；判据：`remove` 必须落到独立语句。
+//! - ⛔ `bt_ble.rs` 的 `.lock().map_err(..)`：**不得**把它当作「命令边界可上报中毒」
+//!   的例外，一律收敛到 `state::lock_unpoisoned`。该例外理由在此站不住脚：
+//!   `BLE_CONN` 是无不变式的纯缓存，而 Mutex 中毒是**永久性**的
 //!   ⇒ 「上报」换不来任何安全性，只会把「一次 panic」放大成「蓝牙连接/断开在进程余下
 //!   生命周期内彻底失效」；更糟的是 `ble_connect` 的换表步骤若在加锁处 Err，会在
 //!   **未改动缓存**的情况下返回 ⇒ 缓存仍指向那个已被释放的旧连接，重试将直接返回
@@ -106,7 +105,7 @@
 //! grep -rn -A6 "with_config_mut(" src-tauri/src/ | grep -E "lock_unpoisoned|read_unpoisoned|\.lock\(\)"
 //!
 //! # ③ 加锁入口唯一性：`.lock()` 只允许出现在本文件的 lock_unpoisoned 实现与中毒单测中。
-//! #    命中里会混进注释中的历史说明，需人工剔除；本次实测 state.rs 之外仅 2 处，均为注释。
+//! #    命中里会混进注释中的历史说明，需人工剔除（代码侧当前为 0 处；⛔ 别把注释命中当违规）。
 //! grep -rn "\.lock()" src-tauri/src/
 //! ```
 //!
@@ -216,7 +215,7 @@ fn try_begin_animation_with_timeout(timeout_ms: u64) -> Option<SingleFlightGuard
     try_begin_animation_on(&ANIMATING, &ANIMATION_STARTED, timeout_ms, "[popup]")
 }
 
-/// 通用的「取动画单飞守卫」（2026-09-29 为任务栏面板切换动画抽出）。
+/// 通用的「取动画单飞守卫」（为任务栏面板切换动画抽出）。
 ///
 /// ⭐ 抽出它的原因：任务栏的切换动画**不能**复用弹窗那对 `ANIMATING` /
 ///   `ANIMATION_STARTED`。二者共用会引入两条真实故障：
@@ -276,7 +275,7 @@ pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceL
 /// 依据：本项目各静态量在 panic 后仅需「可用」而非「严格一致」，
 /// 统一在此表达该语义，避免每个调用点各自发明一套。
 ///
-/// **禁止的写法及其后果**（评审时逐条对照；括号内为 2026-09-17 统一前的历史写法）：
+/// **禁止的写法及其后果**（评审时逐条对照；括号内为该写法所在的文件）：
 /// - `Mutex::lock()` 之后直接 `unwrap()`（`audio_notify.rs`）——中毒即 **panic**。
 ///   最危险的是 COM 回调路径：panic 会穿过 FFI/COM 边界向外抛，属未定义行为，
 ///   且会把「一次 panic」放大成「此后每次回调都炸」。
@@ -287,12 +286,12 @@ pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceL
 ///   中毒即**静默跳过整个临界区**。写入侧跳过尤其致命：缓存/句柄会永久停在旧值
 ///   （如 `TRAY_ICON` 永不被赋值 ⇒ tooltip 此后再也刷不动）。
 ///
-/// **曾经的「唯一例外」已取消（P3-10 收敛）**：`bt_ble.rs` 原先用
-/// `.lock().map_err(|e| e.to_string())?` 把中毒上报给调用方（那里返回 `Result`）。
-/// 取消的理由：Mutex 中毒是**永久性**的，而该处锁保护的是**无不变式的纯缓存** ⇒
-/// 「上报」换不来任何安全性，只会把「一次 panic」放大成「该功能在进程余下生命周期内
-/// 彻底失效」，并会在 `ble_connect` 的换表步骤制造「缓存指向已释放连接」的幽灵连接。
-/// ⇒ **全仓一律走本函数，无例外**；机械判据见模块文档 §五。
+/// **无任何例外**：`bt_ble.rs` 不得用 `.lock().map_err(|e| e.to_string())?` 把中毒
+/// 上报给调用方（那里返回 `Result`）。理由：Mutex 中毒是**永久性**的，而该处锁
+/// 保护的是**无不变式的纯缓存** ⇒ 「上报」换不来任何安全性，只会把「一次 panic」
+/// 放大成「该功能在进程余下生命周期内彻底失效」，并会在 `ble_connect` 的换表步骤
+/// 制造「缓存指向已释放连接」的幽灵连接。
+/// ⇒ **全仓一律走本函数**；机械判据见模块文档 §五。
 ///
 /// > 本注释刻意不把被禁写法写成**连续字面量**（上一条已按该规则改写），
 /// > 以便「全仓 grep 该字面量 = 0」这条验收可机械执行、无需先剥离注释。
@@ -389,7 +388,7 @@ pub(crate) fn run_coalesced(
 
 /// 设备缓存的内容 **+ 写入时刻**（`monotonic_ms` 刻度）。
 ///
-/// ⚠️⚠️ **时间戳必须与列表放在同一把锁里**（2026-09-29）：
+/// ⚠️⚠️ **时间戳必须与列表放在同一把锁里**：
 ///   另起一把 `Mutex<Instant>` 就等于**新增一把锁**，而本文件头的锁序白名单
 ///   只登记了 `DEVICES_CACHE` ⇒ 新锁要么重新登记、要么引入一条**未登记的嵌套边**。
 ///   放在同一个结构里则白名单原样有效，零新增锁、零新增边。
@@ -401,7 +400,7 @@ pub struct DeviceCache {
 
 /// 设备缓存，避免重复 WMI 查询（实测单轮 **517~684ms**）。
 ///
-/// 消费者：托盘 tooltip、低电量通知、**任务栏信息窗**（2026-09-29 起）。
+/// 消费者：托盘 tooltip、低电量通知、**任务栏信息窗**（起）。
 ///
 /// 锁序：本锁是**顶层锁**，白名单允许它 → `CONFIG`（唯一实例在
 /// `tray.rs::build_tooltip_text`）。完整登记见本文件头的模块文档。
@@ -605,8 +604,8 @@ mod tests {
     }
 
     /// 守卫的核心契约：互斥 + Drop 复位。
-    /// 「Drop 复位」是本条修复的立足点——原先靠两处手工 `store(false)`，
-    /// 漏一处弹窗就永久打不开也关不掉。
+    /// 「Drop 复位」是本条修复的立足点——靠手工 `store(false)` 复位时漏一处，
+    /// 弹窗就永久打不开也关不掉。
     #[test]
     fn animation_guard_is_exclusive_and_released_on_drop() {
         let _serial = lock_unpoisoned(&ANIM_TEST_LOCK);
@@ -791,7 +790,7 @@ mod tests {
 
     /// **对照臂**：为什么「统一入口」不能退回「中毒就跳过」的写法。
     ///
-    /// 2026-09-28 实测发现 `taskbar_tooltip.rs::sync()` **同一个函数里两种语义**：
+    /// 实测发现 `taskbar_tooltip.rs::sync()` **同一个函数里两种语义**：
     /// 读路径 `unwrap_or_else(into_inner)`（恢复），写路径 `if let Ok`（跳过）⇒ 中毒时
     /// 写 `ENTRIES` 被跳过、写 `LAST_SYNCED` 却成功 ⇒ 下一帧「没变就返回」成立 ⇒
     /// `ENTRIES` **永远不再更新** ⇒ tooltip 永久消失且无任何日志。

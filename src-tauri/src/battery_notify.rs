@@ -155,8 +155,7 @@ fn select_pending_notices(
 /// 检查设备电量是否达到配置的阈值，**收集**待通知条目并返回。
 ///
 /// ── 为什么要与「显示」拆开（P2-7）────────────────────────────────
-/// 原实现是 `check_battery_notify` 一个函数做完全部工作（取配置 → 判定 →
-/// `show_toast`），而它的调用点写成：
+/// ⛔ 「取配置 → 判定 → `show_toast`」**不得**塞进同一个函数：那会让调用点写成——
 ///
 /// ```ignore
 /// crate::battery_notify::check_battery_notify(&crate::state::lock_unpoisoned(cache));
@@ -180,9 +179,8 @@ pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> 
     #[cfg(test)]
     record_devices_cache_lock_state(&COLLECT_LOCK_PROBE);
 
-    // 一次性把需要的配置全部 `clone` 出来，避免在循环里反复取配置锁。
-    // 原先第 53 行的「每台设备取一次配置锁」在设备多时是 O(N) 次加锁，
-    // 而 `device_names` 是同一份快照，取一次即可。
+    // 配置必须**一次性** `clone` 出来再进循环：逐台设备取一次配置锁是 O(N) 次加锁，
+    // 而 `device_names` 等四份都出自同一份配置快照，取一次即可。
     let (enabled, selected, thresholds, device_names) = config::with_config(|c| {
         (
             c.low_battery_notify,
@@ -222,7 +220,7 @@ pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> 
 /// 设备缓存锁的**两段式**执行器：锁内收集、**锁外**发送（P2-7 的唯一承载点）。
 ///
 /// ── 为什么要有这一层（P2-7）────────────────────────────────────────
-/// 「锁内只收集、锁外再发通知」这条纪律原先只由**调用方的花括号**承载：
+/// 「锁内只收集、锁外再发通知」这条纪律**只由调用方的花括号承载**，故固化成示例：
 ///
 /// ```ignore
 /// let pending = { let g = lock_unpoisoned(cache); collect_pending_notices(&g) };
@@ -303,7 +301,7 @@ mod tests {
     /// ③ **对照判据**：把 `notify_low_battery` 的 `guard` 挪到 `emit_notifications`
     ///    之前（即恢复成「持锁发送」的旧形态）后，本用例必须转红。
     ///
-    /// 实得（2026-09-19）：正常形态 ①=0 / ②均被写 / ③=1 全绿；
+    /// 实得：正常形态 ①=0 / ②均被写 / ③=1 全绿；
     /// 注入「guard 活到发送处」后 ③ 报 `left: 0, right: 1` 转红。
     #[test]
     fn cache_lock_is_released_before_emit() {

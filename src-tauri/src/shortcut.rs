@@ -49,8 +49,8 @@ pub fn register_shortcuts(app: &tauri::AppHandle) {
             )
         });
 
-    // B15：这 5 个键的注册失败同样要能被用户看见。原先 `register_single` 的返回值
-    // 被 `let _ =` 丢弃，启动时若某个键被别的程序占用，日志与界面都毫无痕迹。
+    // B15：这 5 个键的注册失败同样要能被用户看见——`register_single` 的返回值
+    // **不得**丢弃，否则启动时若某个键被别的程序占用，日志与界面都毫无痕迹。
     // 收集失败键后与设备快捷键的失败**合并成一份**上报（两条通道与前端文案全复用）。
     let mut failed: Vec<String> = Vec::new();
     if let Some(ref key) = device_key {
@@ -182,10 +182,10 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
         let action = format!("device_shortcut_key:{}", key);
         let key_str = key.clone();
         let action_for_log = action.clone();
-        // ⚠️ 原实现是 `let _ = on_shortcut(...)` 且**无条件** insert 进注册表：
-        // 失败（典型是被其他程序占用）也会被当成「已注册」，此后 `diff_keys` 永远
+        // ⛔ `on_shortcut(...)` 的返回值**不得**丢弃、且**只有 `Ok` 才可** insert 进注册表：
+        // 失败（典型是被其他程序占用）若被当成「已注册」，此后 `diff_keys` 永远
         // 认为它无需注册 ⇒ 该快捷键**静默永久失效**，且日志里连一行失败都没有。
-        // 现在：只有 `Ok` 才计入注册表，失败则记入 `failed` 供调用方提示用户。
+        // 失败则记入 `failed` 供调用方提示用户。
         match app
             .global_shortcut()
             .on_shortcut(sc, move |_app, _shortcut, event| {
@@ -226,8 +226,8 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
 ///
 /// **返回值 = 本次注册是否失败**（B15）。
 ///
-/// 原实现是 `let _ = app.global_shortcut().on_shortcut(..)`：返回值被丢弃且**不记日志**，
-/// 于是启动时这 5 个键若被其他程序占用，日志里一行都没有——用户只知道
+/// ⛔ 返回值**不得**丢弃且**必须记日志**：否则启动时这 5 个键若被其他程序占用，
+/// 日志里一行都没有——用户只知道
 /// 「我的音量快捷键按了没反应」，既看不到原因也查不到记录。
 ///
 /// 与 `sync_device_shortcuts`（P2-12）的区别：本函数**没有注册表**，

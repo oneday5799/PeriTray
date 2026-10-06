@@ -67,7 +67,7 @@ fn apply_devices_cache(new_devices: Vec<crate::device::Device>) -> bool {
     // P2-11：中毒时不再静默返回 false —— 那会让调用方认为「设备列表没变」，
     // 于是 tooltip 与弹窗卡片此后再也不刷新（无日志的哑故障）。
     //
-    // ⭐ 2026-09-29：写入统一走 `state::store_devices_cache`，因为**只有它会盖时间戳**。
+    // ⭐：写入统一走 `state::store_devices_cache`，因为**只有它会盖时间戳**。
     //   在这里直接 `*guard = …` 的话，列表被更新而 `at_ms` 仍是 `None`
     //   ⇒ 任务栏侧的 TTL 判据永远判成「没有可用缓存」⇒ 每轮都全量现查 WMI
     //   （现象与改之前**完全一样**，且更难发现：代码看着是对的）。
@@ -123,8 +123,7 @@ fn build_tooltip_text() -> String {
 fn update_tooltip() {
     let tooltip = build_tooltip_text();
 
-    // 先取句柄再释放锁：`set_tooltip` 内部同步等主线程，
-    // 持 TRAY_ICON 调用会与「主线程等 TRAY_ICON」构成 AB/BA 死锁（详见 build_audio_devices_menu 注释）
+    // 先取句柄再释放锁：`set_tooltip` 内部同步等主线程（同 build_audio_devices_menu 注释）
     let tray = {
         let guard = crate::state::lock_unpoisoned(TRAY_ICON.get_or_init(|| Mutex::new(None)));
         match *guard {
@@ -218,26 +217,13 @@ fn pick_tray_icon() -> Image<'static> {
 
 /// 主题监视线程的循环体：把「注册通知 / 等待 / 读取当前值」编排成一个可测的逻辑单元。
 ///
-/// ── 为什么要抽出来（P3-11）─────────────────────────────────────────
-/// 原循环的次序是「**读**当前值 → 注册通知 → 等待」：
+/// ⛔ ⛔ 次序必须是「**先注册通知、再读当前值**」。反序（先读后注册）留一个窗口：
+/// 系统恰好在「读完、注册前」切换主题 ⇒ 那次变更**不触发事件** ⇒ 托盘图标停在
+/// 旧主题，直到用户下次手动切。单次丢失看似无害，但它正是那种「偶发、难复现、
+/// 被归因成『图标有时不刷新』」的缺陷，而修复成本只是把两行换一下位置。
 ///
-/// ```ignore
-/// let mut last = system_dark_mode();      // ① 读
-/// loop {
-///     RegNotifyChangeKeyValue(..);        // ② 注册
-///     WaitForSingleObject(event, INFINITE); // ③ 等
-///     let current = system_dark_mode();   // ④ 再读并比较
-/// }
-/// ```
-///
-/// 隐患在 ① 与 ② 之间的窗口：若系统恰好在「① 读完之后、② 注册之前」切换主题，
-/// 那次变更**不会**触发事件 ⇒ 托盘图标停留在旧主题，直到用户下次手动切主题。
-/// 单次丢失看似无害，但这正是那种「偶发、难复现、被归因成『图标有时不刷新』」
-/// 的缺陷 —— 修复成本极低（把注册提到读取之前），不修反而不划算。
-///
-/// 抽成函数是为了让「顺序」这件事可被断言：`ThemeWatchState::load` 只做
-/// 「读一次当前值」，调用方负责先注册再 load。因果顺序写在类型上，
-/// 不靠注释约束后人。
+/// 抽成函数是为了让「顺序」可被断言：`ThemeWatchState::load` 只做「读一次当前值」，
+/// 调用方负责先注册再 load —— 因果顺序写在类型上，不靠注释约束后人。
 ///
 /// ── 可测性设计 ─────────────────────────────────────────────────
 /// `load` / `on_notify` **不直接调用** `system_dark_mode()`，而是接收一个
@@ -282,7 +268,7 @@ fn theme_watch_state_now() -> ThemeWatchState {
 ///
 /// ── 为什么抽成函数：让「读哪个注册表值」可被测试断言 ──────────────────
 /// 「任务栏底衬跟随**系统**主题（`SystemUsesLightTheme`）」这件事，
-/// 第一版只是**写在调用点的字面代码**里（`sys_state.on_notify(system_uses_light_theme)`），
+/// 若只**写在调用点的字面代码**里（`sys_state.on_notify(system_uses_light_theme)`），
 /// 单测无法触及 —— 实测把生产代码改成读**应用**主题后，
 /// 只断言「`ThemeWatchState` 类型行为」的测试**依然全绿**，等于没测。
 ///
@@ -328,7 +314,7 @@ fn system_theme_watch_state_now() -> ThemeWatchState {
 /// 主题监视的**启动次序**，抽出来是为了让「先注册、后读取」这件事可被断言。
 ///
 /// ── 为什么不能只靠注释保证（P3-11 验收教训）──────────────────────
-/// 第一版把次序写在 `start_theme_watcher` 的字面顺序里，单测只能断言
+/// 把次序只写在 `start_theme_watcher` 的字面顺序里，单测就只能断言
 /// 「局部变量的值」——把生产代码的次序**改回「先读后注册」后测试依然全绿**，
 /// 等于没测。真正能证伪的写法是把「调用哪个、按什么顺序」变成函数的返回值，
 /// 于是单测可以在**不碰注册表**的前提下断言真实的调用序列。
@@ -385,11 +371,11 @@ fn start_theme_watcher() {
             // 「注册」与「读取」之间无论发生什么都不会丢：
             //   · 变更在注册之前 → 首次读取拿到的是**新值**
             //   · 变更在注册之后 → 会触发事件，进入下面的循环再读一次
-            // 原实现把读取放在注册之前，上面第一种情况会**静默丢失**。
+            // ⛔ 读取**不得**放在注册之前：那样上面第一种情况会**静默丢失**。
             //
             // ⚠️ 次序由 `ordered_register_then_read` 承载（单测断言它的调用序列）。
             // 这里刻意调它而不是直接写两行 —— 直接写会让「次序」变成没人守的约定，
-            // 改错也没有任何测试会转红（P3-11 第一版验收教训）。
+            // 改错也没有任何测试会转红（P3-11 验收教训）。
             let mut registered = false;
             let mut state = ThemeWatchState { last: false };
             // ── 系统主题的独立去重状态（任务栏底衬用）─────────────────────
@@ -430,8 +416,8 @@ fn start_theme_watcher() {
                 if state.on_notify(crate::windows::system_dark_mode) {
                     std::thread::spawn(update_tray_icon);
                 }
-                // 见上：系统主题独立判据 ⇒ 通知任务栏重绘（真机缺陷修复：
-                // 原先只刷托盘图标，任务栏要等 hover 才更新）。
+                // 见上：系统主题独立判据 ⇒ 通知任务栏重绘（⛔ 只刷托盘图标是不够的：
+                // 任务栏要等到 hover 才会更新）。
                 if theme_changed_for_taskbar(&mut sys_state) {
                     crate::taskbar_widget::notify_system_theme_changed();
                 }
@@ -981,9 +967,9 @@ mod tests {
         /// 核心回归（任务栏底衬不随系统主题更新）：**任务栏判据读的必须是「系统」主题，
         /// 而不是「应用」主题**。
         ///
-        /// ── 为什么必须这样断言（第一版验收教训）────────────────────────
-        /// 第一版只断言 `ThemeWatchState` 这个**类型**能独立演进（用两个闭包模拟），
-        /// 完全没有触及生产代码「到底把哪个读取器传给判据」。
+        /// ── 为什么必须这样断言（验收教训）────────────────────────
+        /// 只断言 `ThemeWatchState` 这个**类型**能独立演进（用两个闭包模拟）
+        /// 是**不够**的：那完全没有触及生产代码「到底把哪个读取器传给判据」。
         /// 实测：把生产代码改成读**应用**主题后，那版测试**依然全绿** —— 等于没测。
         ///
         /// ⇒ 本用例改为断言**生产路径的读取器来源**：`taskbar_theme_reader()`
@@ -1021,8 +1007,8 @@ mod tests {
         /// 与上一条互补：上一条钉死「读哪个值」，本条钉死「变了要报 true」。
         ///
         /// ⚠️ 这里直接构造 `ThemeWatchState` 并喂值，**不经 probe 包装函数**——
-        ///   上一版为此加了个 `theme_changed_for_taskbar_probe`，它只被测试调用
-        ///   ⇒ 触发 `dead_code`（`#![warn(unused_imports, dead_code)]` 拦提交）。
+        ///   ⛔ 别为此再加一个 `theme_changed_for_taskbar_probe` 之类的**只被测试调用**的包装：
+        ///   它会触发 `dead_code`（`#![warn(unused_imports, dead_code)]` 拦提交）。
         ///   而「变化→true」本就是 `ThemeWatchState` 自身的职责，直接用即可。
         #[test]
         fn taskbar_criterion_fires_on_system_theme_change() {
@@ -1082,8 +1068,7 @@ mod tests {
         ///
         /// 这是唯一能证伪「次序被改回去」的测试：把
         /// `ordered_register_then_read` 里两行交换，本用例立刻转红。
-        /// 第一版没有这层，导致「生产代码改回旧次序后测试依然全绿」——
-        /// 那种测试等于没测。
+        /// 少了这层，「生产代码改回旧次序后测试依然全绿」——那种测试等于没测。
         #[test]
         fn register_is_called_before_read() {
             use std::cell::RefCell;

@@ -2,8 +2,8 @@
 //!
 //! ## 职责边界
 //!
-//! 本模块**只管取数与控制**，不碰任何绘制。绘制在 `taskbar_widget::draw_music`
-//! 那边，本模块通过 [`snapshot`] 把「一个音乐面板的静态快照」交出去。
+//! 本模块**只管取数与控制**，不碰绘制；绘制在 `taskbar_widget::draw_music` 那边，
+//! 本模块通过 [`snapshot`] 把「一个音乐面板的静态快照」交出去。
 //!
 //! ## 为什么全部放后台线程
 //!
@@ -17,7 +17,7 @@
 //!
 //! ⛔ **回调只单向投递**。SMTC 事件（`Revents`）在**任意线程**触发，一律
 //!   `post_message` 给 widget 窗口线程，**绝不**反过去等它处理完。
-//!   （FluentFlyout 用 `Dispatcher.Invoke` 同步等 UI 线程，那是本仓明令禁用的反模式。）
+//!   （用 `Dispatcher.Invoke` 同步等 UI 线程，那是本仓明令禁用的反模式。）
 //!
 //! ## 会话增删的订阅维护
 //!
@@ -25,9 +25,9 @@
 //! · 新增会话 → 给它挂 4 个事件回调（媒体属性 / 播放信息 / 播放状态 / 时间线）
 //! · 消失会话 → 退订并 **drop 闭包**
 //! ⛔ 闭包持有 `Session` 强引用 ⇒ 不 drop 就等于**会话永不释放**（泄漏）。
-//!   这一层在 FluentFlyout 里是第三方库替它做的，我们得自己做。
+//!   这一层第三方库会替调用方做，直连 WinRT 时**得自己做**。
 //!
-//! ## SMTC API 的几个坑（全部由 2026-09-28 的探针实测确认，勿凭直觉改）
+//! ## SMTC API 的几个坑（全部由探针实测确认，勿凭直觉改）
 //!
 //! 1. 方法名是 **PascalCase**（`RequestAsync` / `GetSessions` / `TryPlayAsync`），
 //!    不是 snake_case。
@@ -79,7 +79,7 @@ pub struct MusicSnapshot {
     pub cover_size: u32,
     /// ⭐⭐ **用户显式选中的会话 id**（`None` = 跟随系统）。
     ///
-    /// ⛔⛔ **为什么必须记 id 而不是记下标**（2026-09-29 修「切不过面板」）：
+    /// ⛔⛔ **为什么必须记 id 而不是记下标**（修「切不过面板」）：
     ///   `select_session` 改的是 `current` 下标，而下一次 `refresh_snapshot` 会用
     ///   **系统**的 `GetCurrentSession()` **重算** `current`
     ///   ⇒ 用户的选���下一轮就被抹掉。
@@ -113,17 +113,16 @@ static COVER_CACHE: OnceLock<Mutex<CoverCache>> = OnceLock::new();
 /// 封面在缓存里的**画布边长**（不是显示边长！显示边长是 `taskbar_widget` 的
 /// `m.icon`，随 DPI/缩放档位变）。
 ///
-/// ⛔⛔ **这里曾经是 32，封面因此非常模糊**（用户 2026-09-29 实测报）。
-///   根因与设备图标当初那个问题**同源**：32px 的缓存画布在「跟随系统缩放」下
-///   要被**放大**到 `m.icon`（125% ⇒ 40）——放大造不出细节，双三次/双线性只能把
-///   每个源像素摊成渐变块，照片类内容尤其明显（大片柔和色带）。
+/// ⛔⛔ **缓存画布不得小于任何目标尺寸**：32px 的画布在「跟随系统缩放」下要被
+///   **放大**到 `m.icon`（125% ⇒ 40），而放大造不出细节——双三次/双线性只能把
+///   每个源像素摊成渐变块，照片类内容尤其明显（大片柔和色带，实测「封面非常模糊」）。
 ///   ⇒ 与图标的修法一致：**缓存画布必须大于任何目标尺寸**，让运行时永远走**缩小**
 ///   （面积平均 = 超采样渲染，锐利）。
 ///   128 覆盖到 200% 缩放（`m.icon` 64）仍有 2:1 余量。
 ///   代价：单张 128×128×4 = 64KB，缓存 4 张共 256KB —— 可接受。
 ///
-/// ⭐ 提到 **256** 是因为「两次重采样」本身也是损失来源（用户 2026-09-29 反馈
-///   128 仍偏糊）。实测（400×400 源 → 40px，对照「单步 lanczos3」）：
+/// ⭐ 提到 **256** 是因为「两次重采样」本身也是损失来源。实测（400×400 源 → 40px，
+///   对照「单步 lanczos3」）：
 ///   ```text
 ///   128→40 lanczos3  MAD 1.80   400→40 单步 cubic MAD 0.65
 ///   ```
@@ -230,7 +229,7 @@ pub fn select_session(idx: usize) {
         // ⭐ 记 **id**：下标会随会话列表重排而失效，id 不会
         //   （会话 id = 源应用 AUMID，见 `SessionInfo::id`）
         s.pinned_session_id = Some(s.sessions[idx].id.clone());
-        // ⛔⛔ **换会话必须同时清封面**（2026-09-29 修「闪现另一个会话的封面」）。
+        // ⛔⛔ **换会话必须同时清封面**（修「闪现另一个会话的封面」）。
         //   `cover_hash` 是**由 worker 异步解码后回填**的，而 `current` 是这里
         //   **同步**改的 ⇒ 不清就会出现一段「`current` 已是新会话、`cover_hash`
         //   还是旧会话」的**内部不自洽**快照 ⇒ 面板先画出**旧封面**，
@@ -286,7 +285,7 @@ fn music_worker_loop(rx: Receiver<Cmd>) {
         }
     };
 
-    // ⭐ **manager 层的两个事件必须订**（FluentFlyout 恰好漏了这俩 ⇒ 换 app 播放时
+    // ⭐ **manager 层的两个事件必须订**（恰好漏了这俩 ⇒ 换 app 播放时
     //   要等下一次媒体属性变化才反应过来，慢一拍）：
     //   · `SessionsChanged`      → 有会话出现/消失（决定「音乐面板可不可用」）
     //   · `CurrentSessionChanged`→ 播放焦点转移（决定「当前是哪个会话」）
@@ -296,13 +295,13 @@ fn music_worker_loop(rx: Receiver<Cmd>) {
     let mut watched: Vec<(String, Subscription)> = Vec::new();
 
     // ⛔⛔ 循环退出条件只能是「通道断开」，**绝不是「收到了一条消息」**。
-    //   我第一版写的是 `pending = rx.recv_timeout(..).is_err()` ——
-    //   超时(is_err=true)会继续、**收到消息(is_err=false)反而退出** ⇒
+    //   ⛔ 不得用 `pending = rx.recv_timeout(..).is_err()`：超时(is_err=true)会继续、
+    //   **收到消息(is_err=false)反而退出** ⇒
     //   线程在**第一条消息**上死掉。而 `request_refresh()` 会被**每个 SMTC 事件**调用
-    //   ⇒ 实测启动约 90 秒后（用户报「音乐组件消失了」）后台线程就没了：
+    //   ⇒ 实测启动约 90 秒后后台线程就没了：
     //   订阅被 drop、快照被清空（会话数=0）⇒ 面板按回落链退成设备组件。
     //   ⭐ 这类「跑一会儿就消失」的 bug，日志里**看不出异常**（线程正常返回），
-    //   唯一线索是快照被清空 —— 教训：**「静默失效」又见一处**。
+    //   唯一线索是快照被清空 —— 这类 bug **日志里看不出异常**。
     loop {
         // 先把积压的命令**全部**执行掉（它们比取数更即时）
         while let Ok(cmd) = rx.try_recv() {
@@ -479,10 +478,10 @@ fn subscribe(session: &GlobalSystemMediaTransportControlsSession) -> Option<Subs
         ))
         .ok()?;
 
-    // ⚠️ **本版本没有独立的 `PlaybackStateChanged` 事件**（实测：该 crate 的 session
+    // ⚠️ **平台没有独立的 `PlaybackStateChanged` 事件**（实测：该 crate 的 session
     //   只有 Timeline/PlaybackInfo/MediaProperties 三个）⇒ 播放状态变化由
-    //   `PlaybackInfoChanged` 一并覆盖。**别照抄 FluentFlyout 的四事件列表**
-    //   （它用的第三方库有独立事件，本仓直连 WinRT 没有）。
+    //   `PlaybackInfoChanged` 一并覆盖。**别照抄第三方库那份四事件列表**
+    //   （它有独立事件，本仓直连 WinRT 没有）。
     let playback_info = session
         .PlaybackInfoChanged(&Handler::<PlaybackInfoChangedEventArgs>::new(
             move |_, _| {
@@ -515,7 +514,7 @@ fn subscribe(session: &GlobalSystemMediaTransportControlsSession) -> Option<Subs
 
 /// 开发门控：把**艺人名强制清空**（`PM_DEV_EMPTY_ARTIST=1`）。
 ///
-/// ⭐ **为什么需要它**（2026-09-29）：空 artist 是 2026-09-29 那次**访问违例闪退**
+/// ⭐ **为什么需要它**：空 artist 是 那次**访问违例闪退**
 ///   的触发条件，而它的复现**不可控** —— 得恰好有个播放器不上报 artist。
 ///   ⛔ **它不是那道闪退的兜底**：闪退已由机械判据
 ///   `measure_text_on_empty_slice_returns_zero_and_never_touches_gdi` 覆盖
@@ -559,7 +558,7 @@ fn apply_dev_artist_gate(artist: String, on: bool) -> String {
 /// ② 否则系统的 `GetCurrentSession` 对应的会话
 /// ③ 否则 0
 ///
-/// ⛔⛔ 反序的后果（2026-09-29 真机实测）：`select_session` 改的下标每轮都被
+/// ⛔⛔ 反序的后果（真机实测）：`select_session` 改的下标每轮都被
 ///   冲回系统当前 ⇒ 「切换」按钮第①步「还有下一个会话」**恒成立**
 ///   ⇒ 从设备面板**永远切不到音乐面板**，且**零日志**。
 fn resolve_current_index(
@@ -635,7 +634,7 @@ fn refresh_snapshot(mgr: &GlobalSystemMediaTransportControlsSessionManager) {
     }
 
     // ⭐ 去重：内容与下标都没变就不发通知（SMTC 事件会**重复**触发，
-    //   不去重会让封面被反复重解码 —— 这是 FluentFlyout 踩过并修掉的）。
+    //   不去重会让封面被反复重解码 —— 这是 踩过并修掉的）。
     {
         let mut snap = lock_unpoisoned(&SNAPSHOT);
         let same =
@@ -702,9 +701,9 @@ fn decode_cover(bytes: &[u8]) -> Option<CoverImage> {
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let side = COVER_PX;
     let (w, h) = (img.width(), img.height());
-    // ⛔⛔ **这里曾经写成 `w.min(h).min(COVER_PX * 4)`** —— 那个 `.min(128)` 是想
-    //   「限制处理量」，但它**把图裁成了中心 128×128**（400×400 封面的正中 32%）
-    //   ⇒ 屏幕上表现为「封面只显示了一部分」（用户 2026-09-28 实测报出）。
+    // ⛔⛔ **不得**写成 `w.min(h).min(COVER_PX * 4)`：那个 `.min(128)` 看似「限制
+    //   处理量」，实则**把图裁成了中心 128×128**（400×400 封面的正中 32%）
+    //   ⇒ 屏幕上表现为「封面只显示了一部分」。
     //   ⭐ 正确做法：**取整张图的正方形部分**再缩放。`MAX_DECODE_PX` 只用来
     //   防止超大图吃掉内存，命中它时**先缩后裁**而不是**先裁后缩**。
     const MAX_DECODE_PX: u32 = 512;
@@ -851,7 +850,7 @@ mod tests {
     }
     use super::*;
 
-    /// ⭐⭐⭐ **后台线程不能在「收到消息」时退出**（2026-09-28 用户报「音乐组件消失了」）。
+    /// ⭐⭐⭐ **后台线程不能在「收到消息」时退出**。
     ///
     /// 根因：循环退出条件写成 `pending = rx.recv_timeout(..).is_err()`
     /// ⇒ 超时(is_err=true)继续、**收到消息(is_err=false)反而退出**。
@@ -861,13 +860,13 @@ mod tests {
     /// ⚠️ 这个 bug 特别贵的地方在于**日志里看不出异常**（线程正常返回、无 panic）。
     ///
     /// 判据：向通道发一条消息，接收端**必须继续等**（只有 `Disconnected` 才退出）。
-    /// 旧写法在这里会让第二次 `recv` 直接返回 `Disconnected`（因为 sender 已 drop）。
+    /// ⛔ 用 `recv`（而非 `try_recv` 轮询）：后者会让第二次等待直接返回 `Disconnected`。
     #[test]
     fn worker_loop_survives_incoming_message() {
         let (tx, rx) = std::sync::mpsc::channel::<Cmd>();
         // 模拟后台循环的等待逻辑
         // 只走**前 2 轮**：第 3 轮会阻塞在 `recv_timeout` 上，而 sender 仍活着
-        // ⇒ 那里拿不到消息，断言不到任何东西（实测旧写法在这里白等 150ms）。
+        // ⇒ 那里拿不到消息，断言不到任何东西（实测白等 150ms）。
         for _ in 0..2 {
             while let Ok(cmd) = rx.try_recv() {
                 let _ = cmd;
@@ -904,7 +903,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐⭐ **封面缓存画布必须大于任何目标尺寸**（用户 2026-09-29 实测报「封面非常模糊」）。
+    /// ⭐⭐⭐ **封面缓存画布必须大于任何目标尺寸**。
     ///
     /// 根因与设备图标当初同源：`COVER_PX` 曾是 **32**，而绘制时目标边长是
     /// `taskbar_widget` 的 `m.icon`（随 DPI 与缩放档位变，125% ⇒ 40）。
@@ -923,7 +922,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **封面必须取整张图，不是中心裁剪**（2026-09-28 用户实测报「只显示了一部分」）。
+    /// ⭐⭐ **封面必须取整张图，不是中心裁剪**。
     ///
     /// 根因：解码时写了 `w.min(h).min(COVER_PX * 4)`，那个 `.min(128)` 本意是
     /// 「限制处理量」，实际把 400×400 的封面**裁成了中心 128×128**（正中 32%）。

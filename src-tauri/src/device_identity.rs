@@ -129,7 +129,7 @@ fn format_guid_bytes(b: &[u8]) -> String {
 /// 从 PnP 实例路径读容器 GUID（CFGMGR32）。
 ///
 /// 失败（定位不到 / 属性缺失 / 占位容器）一律返回 `None` ⇒ 调用方降级。
-/// ⚠️ `CM_Get_DevNode_PropertyW` **首次调用只为取长度，必然返回
+/// ⛔ `CM_Get_DevNode_PropertyW` **首次调用只为取长度，必然返回
 /// `CR_BUFFER_SMALL`(0x1A)，不能当成错误** —— 这是本 API 最常见的误用点。
 pub fn container_of_instance(instance: &str) -> Option<String> {
     let wide: Vec<u16> = instance.encode_utf16().chain(std::iter::once(0)).collect();
@@ -198,7 +198,7 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
 /// 变换规则（实机验证见下）：
 ///   1. 剥掉开头的 `\\?\`（或 `\\.\`）；
 ///   2. **从最后一个 `#{` 处截断** —— 那是接口类 GUID 后缀。
-///      ⚠️ **不能用第一个 `#{`**：蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头
+///      ⛔ **不能用第一个 `#{`**：蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头
 ///      （形如 `HID#{00001812-…}_Dev_VID&021532_…`），按第一个切会把设备 ID 段整段丢掉；
 ///      同时这一步也顺带丢掉了尾部偶发的 `\KBD` 后缀（实机见过）；
 ///   3. `#` → `\`。
@@ -209,7 +209,7 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
 /// 刻意不转大写是为了不破坏蓝牙 HID 设备 ID 段里 `{00001812-…}_Dev_VID&…_c6947e50a677`
 /// 那种「大小写混合且必须逐字匹配（对注册表而言）」的形态。
 ///
-/// ⭐ **实机验证（2026-09-21，Razer Orochi V2 `1532:0094`）**：hidapi 枚举到的
+/// ⭐ **实机验证（Razer Orochi V2 `1532:0094`）**：hidapi 枚举到的
 /// **12 个集合全部**解析出容器，且与设备自身容器
 /// `40e11c06-72bd-5b38-9bd2-0e15079b3b45` 一致（分域后仍是 12 个，一个不少）
 /// ⇒ 映射与容器解析在真机上 **12/12** 成立。
@@ -242,11 +242,11 @@ pub fn devnode_from_hidapi_path(path: &str) -> Option<String> {
 ///
 /// ⚠️ **本函数返回的列表包含「非在场（phantom）」设备** —— 只传了
 /// `CM_GETIDLIST_FILTER_ENUMERATOR`，**没有**叠加 `CM_GETIDLIST_FILTER_PRESENT`。
-/// 实测（2026-09-21）：HID `ENUMERATOR` = **87** 条，而 `ENUMERATOR|PRESENT` = **29** 条；
+/// 实测：HID `ENUMERATOR` = **87** 条，而 `ENUMERATOR|PRESENT` = **29** 条；
 /// 差集 58 条用 `CM_LOCATE_DEVNODE_NORMAL` **全部失败**、用 `..._PHANTOM` **全部成功**
 /// ⇒ 「非在场」这一解释成立（不是定位调用写错）。USB 51 vs 18、SWD 36 vs 30 同理。
 ///
-/// ✅ **当前无影响**：唯一调用方 `bluetooth_container_map()` 只用 `BTHENUM` / `BTHLE`，
+/// **当前无影响**：唯一调用方 `bluetooth_container_map()` 只用 `BTHENUM` / `BTHLE`，
 /// 而这两个枚举器上两者结果**完全相同**（14 vs 14、3 vs 3，差集 0）。
 /// ⛔ **但这颗雷要记住**：若日后有人拿本函数去枚举 `HID` / `USB` / `SWD`，
 /// 会拿到**一批非在场设备**，且它们 `CM_Locate_DevNodeW(NORMAL)` 必然失败 ——
@@ -299,7 +299,7 @@ fn enumerator_instance_ids(enumerator: &str) -> Vec<String> {
 ///     —— 经典蓝牙与 BLE 都有此形态（`BTHLE\Dev_<mac>\…` 同构，仅大小写不同）
 ///   · 服务节点：`BTHENUM\{0000110b-…}_VID&…\8&1d39e19e&0&5088112E80E8_C00000000`
 ///
-/// ⚠️ **绝不能用「第一个 12 位十六进制串」**：服务节点形态下它会命中 A2DP 服务 GUID 里的
+/// ⛔ **绝不能用「第一个 12 位十六进制串」**：服务节点形态下它会命中 A2DP 服务 GUID 里的
 /// `00805F9B34FB` —— 本机实测该错误取法在 3/3 服务节点上**全部**返回这个值。
 pub fn mac_from_bluetooth_instance(instance: &str) -> Option<String> {
     // 实例路径恒为 ASCII；非 ASCII 直接放弃，避免下面的字节下标切片踩到字符边界。
@@ -435,7 +435,7 @@ pub fn audio_kind_from_wireless_kind(kind: Option<crate::device::Wireless24gKind
 ///
 /// 这是任务栏信息窗的数据单元：电量来自蓝牙属性 / HID，音量来自该设备的**输出**端点。
 ///
-/// ⚠️ **「置灰占位」条目的判据**：`connected == false` 且 `node_count == 0` 时，
+/// ⛔ **「置灰占位」条目的判据**：`connected == false` 且 `node_count == 0` 时，
 /// 这条是「被用户固定、但此刻枚举不到（未连接/未插）」的反向补建。前端应置灰呈现
 /// 而非隐藏；已连接但暂时读不出电量的 Xbox 等设备不能因此被误判为离线。
 /// 电量仍须保留三态：`Some(0)` 是合法电量，不能用布尔真假判断。
@@ -529,9 +529,8 @@ impl Grouper {
     /// 加入一个节点。`key` 为 `None` 的节点**直接丢弃** —— 没有身份的设备不该出现在任务栏。
     ///
     /// `audio` 是该节点命中的输出端点：**音频端点行传 `Some`，设备行传 `None`**。
-    /// 参数**个数保持不变**（用整条 `AudioDevice` 顶替原先的 `Option<&str>` id），
-    /// 避免把 `add` 推进 `too_many_arguments` —— 本仓 clippy 基线对它是收紧的，
-    /// 新增一处即转红。
+    /// ⛔ `add` 的**参数个数不得变动**（第 4 参用整条 `AudioDevice` 顶替设备行 id），
+    /// 否则 clippy 的 `too_many_arguments` 转红 —— 本仓 clippy 以 `-D warnings` 收紧。
     pub fn add(
         &mut self,
         key: Option<&str>,
@@ -684,7 +683,7 @@ pub fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
 ///   · **被固定（pin）⇒ 一律保留**，即使此刻读不出任何数据。固定是用户的显式意图，
 ///     「pin 了却看不见」会让用户以为设置丢了；这类条目由前端**置灰**呈现。
 ///
-/// ⚠️ 「强制显示」由**两条互补**的路径实现，**缺一不可**：
+/// ⛔ 「强制显示」由**两条互补**的路径实现，**缺一不可**：
 ///   ① 上面的保留条件 —— 设备**在**枚举结果里、只是读不出数据（HID 层不响应等）。
 ///      走这条能保住**真实设备信息**（名字、类别、`node_count`）；
 ///   ② 函数末尾的**反向补建** —— 设备**根本枚举不到**（未连接的耳机、没插的接收器在
@@ -818,7 +817,7 @@ pub struct MergedDevice {
     pub key: String,
     /// 组内候选名按 `pick_display_name` 挑出的名字（与 `PhysicalDevice` 同一规则）
     pub name: String,
-    /// 电量；两侧都没有则为 `None`（⚠️ `Some(0)` 是合法值，判空必须用 `is_none()`）
+    /// 电量；两侧都没有则为 `None`（⛔ `Some(0)` 是合法值，判空必须用 `is_none()`）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery: Option<i32>,
     /// 组内命中的端点 id（输出优先，详见 `merge_by_identity` 的排序约定）
@@ -841,7 +840,7 @@ pub struct MergedDevice {
 /// 若上游填入占位容器（`{…-ffffffffffff}`），占位容器上的多条无关设备就会
 /// **静默并成一条**（Spec §3.1：「比现状更糟」）。
 ///
-/// ⚠️ 今天的上游是安全的（`wmi_query.rs:242/333` 走 `device_key`，内部已过 `usable_container`），
+/// ⛔ 今天的上游是安全的（`wmi_query.rs:242/333` 走 `device_key`，内部已过 `usable_container`），
 /// 所以本函数在生产路径上**恒返回 `Some`** —— 它是**结构性防御**，不是补漏。
 /// 判据刻意做得极保守：**只拒绝 `c:` 级里不可用的容器**，其余一律原样放行
 /// （`i:` / `n:` 无可校验的语义，且它们的降级代价是「拆细」而非「串号」，方向安全）。
@@ -999,7 +998,7 @@ fn pinned_placeholder_name(p: &crate::config::PinnedDevice) -> String {
 ///
 /// 三级优先级（与选择器既有行为**逐字相同**）：
 /// 1. `PinnedDevice.alias`（用户给固定设备起的别名）——**仅当本设备确实被固定**；
-///    ⚠️ **该级自 2026-09-28 起恒为空**：`config::normalize_config` 的
+///    ⚠️ **该级自 `normalize_config` 起恒为空**：它的
 ///    `fold_pinned_alias_into_device_names` 会把旧 alias 折进 `device_names` 并清空它
 ///    （否则它压住全局改名 ⇒ 任务栏一个名、别处另一个名）。
 ///    **字段保留仅为旧配置反序列化不丢数据**，别再往这里加新的语义。
@@ -1055,7 +1054,7 @@ pub struct SelectableDevice {
     pub fallback: String,
     /// 该设备来自哪一页（T3-3 的「仅设备页 / 仅音量页」标注）
     ///
-    /// ⚠️ **当前前端不使用**（用户 2026-09-24 决定「不用标注来源」，T3-3 已取消）。
+    /// ⛔ **当前前端不使用**（用户 决定「不用标注来源」，T3-3 已取消）。
     /// 保留字段的理由：它是并集的**固有信息**，后端算好只花一次 `BTreeSet` 查找；
     /// 删掉则将来想加回标注必须重跑一遍合并逻辑。若确定永不需要，可连同
     /// `DeviceSources` 一起删除（届时 `merge_by_identity` 内的两个 `BTreeSet` 也可去掉）。
@@ -1331,8 +1330,8 @@ mod tests {
         assert_ne!(a, other, "不同容器的设备必须分开");
     }
 
-    /// ⭐⭐ **T1-0.5（前置门）：PnP 侧 `device_key` 与音频侧 `audio_endpoint_key`
-    /// 对**同一条音频端点**必须产出逐字相同的键。**
+    /// ⭐⭐ **T1-0.5（前置门）**：PnP 侧 `device_key` 与音频侧 `audio_endpoint_key`
+    /// 对**同一条音频端点**必须产出逐字相同的键。
     ///
     /// 为什么这条单测必须先于 T1-1 存在：
     /// 任务栏设备选择器的第 1 层（`merge_by_identity`）**整条合并判据**建立在这个等式上。
@@ -1386,10 +1385,11 @@ mod tests {
         assert_eq!(pnp_c.encode(), "c:40e11c06-72bd-5b38-9bd2-0e15079b3b45");
 
         // ④b ⛔ **契约钉板（本单测的真正价值所在）**：
-        //    两条路径对容器 GUID 的归一化责任**曾经不同** ——
+        //    ⛔ 两条路径对容器 GUID 的归一化责任必须**一致**：
         //      · `device_key(Some(raw), ..)` 内部经 `usable_container` ⇒ **会** `normalize_guid`；
-        //      · `audio_endpoint_key(..)` 曾是 `DeviceKey::Container(c.clone())` ⇒ **裸克隆，不归一化**。
-        //    ⇒ 那时它把「容器串必须已归一化」的责任**推给了调用方**；新调用方（`merge_by_identity`）
+        //      · `audio_endpoint_key(..)` 必须是 `DeviceKey::Container(normalize_guid(c))`
+        //        ⇒ 早期它是**裸克隆**，把「容器串必须已归一化」的责任**推给了调用方**；
+        //        新调用方（`merge_by_identity`）
         //      若从别处取得容器串，就会**静默分叉** —— 键不等 ⇒ 不合并、不报错。
         //
         //    ⭐ **本钉板首次运行时抓到了更糟的一种：占位容器被原样接受**
@@ -2137,7 +2137,7 @@ mod tests {
     /// `{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`，若 `merge_by_identity` 自己判容器
     /// （而不复用 `usable_container`）就会并成一条。
     ///
-    /// ⚠️ 用例必须用**无容器**的真实形态喂入：`container_of_audio_endpoint` 已过
+    /// ⛔ 用例必须用**无容器**的真实形态喂入：`container_of_audio_endpoint` 已过
     /// `usable_container` ⇒ 占位容器在 `AudioDevice.container_id` 上**表现为 `None`**，
     /// 于是三条各走 `i:SWD\MMDEVAPI\{id}`、id 互不相同 ⇒ 天然不合并。
     /// ⛔ 若改成「手动喂占位容器串」，测的就是**另一条代码路径**（`device_key` 的排除逻辑），
@@ -2188,7 +2188,7 @@ mod tests {
     /// （今天 `container_of_audio_endpoint` 已过 `usable_container` ⇒ 传进来就是 `None`），
     /// `audio_endpoint_key` 也必须**自己降级**，不得原样接受。
     ///
-    /// ⚠️ 本用例来自一次**探针实测**：修复前，两条落在占位容器上的端点被并成 **1 条**
+    /// ⛔ 本用例来自一次**探针实测**：修复前，两条落在占位容器上的端点被并成 **1 条**
     /// （键 `c:{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`）——
     /// 与设备侧是**同一个洞**，只是当时只堵了设备侧。**这就是「防御必须对称」的证据。**
     #[test]
@@ -2229,7 +2229,7 @@ mod tests {
 
     #[test]
     fn merge_by_identity_never_trusts_upstream_null_container_key() {
-        // ⚠️ 必须是**已编码**形态（带 `c:` 前缀）—— 这才是 `Device.device_key` 的真实形态
+        // ⛔ 必须是**已编码**形态（带 `c:` 前缀）—— 这才是 `Device.device_key` 的真实形态
         //    （`wmi_query.rs` 里 `.map(|k| k.encode())`）。
         //    若传裸 GUID，`normalize_encoded_key` 会走「前缀未知」分支而**与拆掉防御同路**，
         //    用例便失去区分力（这一点在 T1-2 注入时被实测抓到，故在此显式标注）。

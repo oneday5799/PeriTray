@@ -12,7 +12,7 @@
  * 故把命令行收敛到本文件一处，CI 与钩子都只调用它。
  *
  * ── 为什么不直接用 `cargo clippy -- -D warnings` ─────────────────
- * 2026-09-18 在当前 HEAD 上实测：默认 lint 集报 **88 条**（bin 44 个唯一位置，
+ * 在当前 HEAD 上实测：默认 lint 集报 **88 条**（bin 44 个唯一位置，
  * 另加 test 编译单元的重复计数）。裸 `-D warnings` 会让 CI **首次运行即红**；
  * 而这 88 条**全是风格类**（当时的分布：`redundant_closure` 16 /
  * `field_reassign_with_default` 16 / `manual_clamp` 8 / `manual_c_str_literals` 8 /
@@ -50,7 +50,7 @@
  * · **基线写错 lint 名不会静默失效**：`-D warnings` 会把 `unknown_lints`
  *   升级为 `error[E0602]` ⇒ 但**改基线必须实跑一次**，否则 CI 会以
  *   「unknown lint」的形式变红（已实测）。
- * · **工具链版本已固定（2026-09-19，本节此前写「CI 用浮动 @stable」）**：版本由仓库根的
+ * · **工具链版本已固定（，本节此前写「CI 用浮动 @stable」）**：版本由仓库根的
  *   `rust-toolchain.toml` 指定；`ci.yml` / `release.yml` 都**从该文件读 channel 再安装**，
  *   并在同一步断言「生效工具链 == 文件里的值」⇒ 本地与 CI 同版，
  *   **「Rust 往 clippy::all 加新 lint ⇒ CI 无故变红」这一类风险已消除**。
@@ -73,9 +73,9 @@ import path from "node:path";
 const OPTIONAL = process.argv.includes("--optional");
 
 /**
- * 存量基线（2026-09-18 首次实测；此后按批修复，**修掉一条就删一行**）。
+ * 存量基线（首次实测；此后按批修复，**修掉一条就删一行**）。
  *
- * 注释里的数字是 2026-09-20 实测的**唯一位置数**——同一处源码会在 bin 与 test 两个
+ * 注释里的数字是 实测的**唯一位置数**——同一处源码会在 bin 与 test 两个
  * 编译单元里各报一次，故 `cargo` 输出的原始告警行数约为它的两倍。两种口径都写清，
  * 免得下一个人对着 `cargo clippy` 的条数说「对不上」。
  *
@@ -83,7 +83,7 @@ const OPTIONAL = process.argv.includes("--optional");
  *    `unknown lint (E0602)` 的形式让 CI 变红，而不是静默失效（已实测）。
  */
 const BASELINE_ALLOW = [
-  // ⚠️ 这是**有意保留的决定，不是遗漏**（2026-09-20 批 3 逐处判过）：
+  // ⚠️ 这是**有意保留的决定，不是遗漏**（批 3 逐处判过）：
   // 两处命中是 `dedup.rs::try_insert`（14 参 / 107 行 / 2 个调用点）与
   // `wmi_query.rs::query_pnp_devices`（8 参 / 115 行 / 1 个调用点）。
   // 清掉它得把参数收进结构体——那是**真重构**（约 222 行 + 3 个调用点），
@@ -134,7 +134,7 @@ if (!clippyAvailable) {
 
 // 工具链版本自检（**只告警，不拦截**）。版本固定在仓库根的 rust-toolchain.toml，
 // CI 那一步会硬断言；本地此前没有任何判据 —— 若被 RUSTUP_TOOLCHAIN 之类覆盖，
-// 本次 clippy 结果就不代表 CI 的结果（这正是 2026-09-19「本地绿、CI 红」的成因）。
+// 本次 clippy 结果就不代表 CI 的结果（这正是「本地绿、CI 红」的成因）。
 const pinned = (() => {
   try {
     const text = fs.readFileSync(path.join(ROOT, "rust-toolchain.toml"), "utf8");

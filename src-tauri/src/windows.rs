@@ -337,11 +337,11 @@ pub fn system_dark_mode() -> bool {
 /// 读 `SystemUsesLightTheme`（**系统**主题，区别于**应用**主题）。
 ///
 /// ⭐ 为什么单开一个函数而不复用 `system_dark_mode()`：那个读的是 `AppsUseLightTheme`
-///   （**应用**主题），用于决定 widget **内容**的明暗；而底衬配色的口径来自 FluentFlyout，
-///   它按 **systemTheme**（`SystemUsesLightTheme`）取值
-///   （`WindowsThemeDetector.GetWindowsTheme(out appTheme, out systemTheme)`）。
+///   （**应用**主题），用于决定 widget **内容**的明暗；而底衬配色按**系统主题**取值
+///   （`SystemUsesLightTheme`，见
+///   `WindowsThemeDetector.GetWindowsTheme(out appTheme, out systemTheme)`）。
 ///   两者在「应用深色 + 系统浅色」这类自定义主题下**会不一致**，故分开读。
-/// ⚠️ 读失败按 FluentFlyout 的约定**回落 light**（其源码注释：on error, default to light）。
+/// ⚠️ 读失败按 `WindowsThemeDetector` 的约定**回落 light**（其源码注释：on error, default to light）。
 #[cfg(target_os = "windows")]
 pub fn system_uses_light_theme() -> bool {
     use windows_sys::core::w;

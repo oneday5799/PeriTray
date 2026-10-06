@@ -1,29 +1,26 @@
 //! 任务栏 widget 的**每设备 hover tooltip**（**自绘分层顶层窗**）。
 //!
-//! ── 为什么放弃原生 `TOOLTIPS_CLASSW`（勿再改回去）────────────────────────
-//! 原生方案的定位能力已被**实测证伪**，不是「用法不对」，是**控件不响应**：
-//! 1. ⛔ `TTM_SETTOOLPOS` **在 Windows SDK 里根本不存在**（本机
-//!    `CommCtrl.h` 的 `WM_USER+35` 是 `TTM_GETTITLE`）⇒ 按 MSDN 照抄会一直
-//!    在发「取标题」，控件合法地无视且**不报错**。
-//! 2. ⛔ 换成 SDK 里真实存在的 `TTM_TRACKACTIVATE` / `TTM_TRACKPOSITION`
-//!    （`WM_USER+17` / `+18`）后，`TRACKACTIVATE` **返回 TRUE**，
-//!    窗矩形却**纹丝不动**（`期望(1192,1349) 实际(1231,1394)`），跨 tick 重放无效。
-//! 3. ⛔ 提示按**光标**定位，而光标在**任务栏内** ⇒ 默认位置必然压在任务栏上
-//!    （真机实测：任务栏 `y=1380..1440`，提示落在 `y≈1390..1408`）。
-//!
-//! ⇒ 结论：原生控件的定位是**不可靠的黑盒**——两个参考实现 `gold-monitor` 与
-//! `QuotaDock` 全部**零** `TTM_*` 调用，说明它们根本没管过定位。
+//! ── ⛔ 不得回退到原生 `TOOLTIPS_CLASSW`（勿再改回去）
+//! 被证伪的是**控件本身**，不是用法（决策史与完整矩阵 → Wiki 15 §4.7.4）：
+//! 1. `TTM_SETTOOLPOS` **在 Windows SDK 里根本不存在**（本机 `CommCtrl.h` 的
+//!    `WM_USER+35` 是 `TTM_GETTITLE`）⇒ 照抄 MSDN 就是在发「取标题」，控件
+//!    合法地无视且**不报错**。
+//! 2. 换用 SDK 里真实存在的 `TTM_TRACKACTIVATE` / `TTM_TRACKPOSITION`
+//!    （`WM_USER+17` / `+18`）后，`TRACKACTIVATE` **返回 TRUE**，窗矩形却
+//!    **纹丝不动**（`期望(1192,1349) 实际(1231,1394)`），跨 tick 重放无效。
+//! 3. 提示按**光标**定位，而光标在**任务栏内** ⇒ 默认位置必然压在任务栏上
+//!    （真机：任务栏 `y=1380..1440`，提示落在 `y≈1390..1408`）。
 //!
 //! ── 自绘方案 ───────────────────────────────────────────────────────────
 //! · **一个**顶层 `WS_POPUP` + `WS_EX_LAYERED`，`UpdateLayeredWindow(ULW_ALPHA)` 逐帧提交
 //! · ⭐ 复用 `taskbar_widget` 的**同一套**渲染管线（`create_dib` / `render_text_mask`
 //!   / `blit_text_mask` / `blend_over` / `inside_rounded_rect`）——**不是**重写一份
-//!   ⇒ 圆角、抗锯齿、预乘合成与 widget 逐字一致（这正是「与 FluentFlyout 一致」的落点）
+//!   ⇒ 圆角、抗锯齿、预乘合成与 widget 逐字一致（这正是「与 widget 一致」的落点）
 //! · ⛔ `WS_EX_TRANSPARENT`（点击穿透）+ `WS_EX_NOACTIVATE`：提示**绝不能**
 //!   抢走 widget 的命中，否则用户一动鼠标提示就消失
 //! · 500ms 初始延迟由本模块的 hover 判定实现 ⇒ **变成可测的逻辑**，不再依赖控件计时
 //!
-//! ── 视觉基准（FluentFlyout `CustomToolTip.xaml`）───────────────────────
+//! ── 视觉基准（`CustomToolTip.xaml`）───────────────────────
 //! · `FontSize=11` / `LineHeight=11` / `MaxWidth=400`
 //! · `CornerRadius=4` / `BorderThickness=1` / 背景 `#F9F9F9` / 边框 `#E5E5E5`
 //! · `DropShadowEffect`：`BlurRadius=10` / `Direction=270` / `Depth=5` /
@@ -62,36 +59,32 @@ const TIP_MAX_W_PX: i32 = 320;
 
 /// 提示的字号（**px**）。
 ///
-/// ⚠️⚠️ **有意偏离 `base.css:922` 的 `font-size: 12px`**，取 **14**：
-///   用户 2026-09-28 反馈 12px「**太虚太小**」⇒ 直接定为 14。
-///   ⛔ 别以「与页面 tooltip 保持一致」为理由改回 12 —— 那是**上一轮**的要求，
-///   本条是**更新后**的要求，两条都在，但后者更具体、以它为准。
-///   （与页面的一致性仍体现在底色/边框/圆角/阴影/内边距上，见文件头。）
+/// ⭐ 取 **15**：对齐面板歌名的实际像素高（歌名 12 DIP × 125% = 15px），比 14px
+///   显式小一号；12 与 14 用户都嫌「太虚太小」。
+/// ⚠️⚠️ **有意偏离 `base.css:922` 的 `font-size: 12px`**；与页面 tooltip 的观感
+///   一致性仍体现在底色/边框/圆角/阴影/内边距上（见文件头）。
+/// ⛔ 别以「与页面 tooltip 保持一致」为理由改回 12 —— 那是 CSS 的口径，提示框跟的
+///   是面板字号。
+/// ⛔ 改这个值前先确认用户是否改主意，不是「顺手对齐回 CSS」。
+///   （6 → 14 → 15 三步的出处与决策史 → Wiki 15 §4.7.3）
 /// ⚠️ 与 `taskbar_widget::FONT_PX_DIP`(11) **仍是不同值**：那是 widget **内容**的
 ///   字号（跟随用户的内容缩放设置），跟的是内容档位，不是提示。
-// ⭐ 15px（用户 2026-09-29）。⚠️ 历史上被要求过两次：
-//   · 2026-09-28：「太虚太小」14px（base.css 是 12）
-//   · 2026-09-29：面板改用 Segoe UI Variable Text 后，tooltip 仍是 14px
-//     ⇒ **比面板小一号**（面板歌名 12 DIP × 125% = 15px）。⇒ 对齐到 15。
-//   ⛔ 改这个值前先确认用户是否改主意——不是「顺手对齐回 CSS」。
 const TIP_FONT_PX: i32 = 15;
 
 /// 提示的行高（**px**）。
 ///
-/// ⭐ 取 `字号 + 2` 而不是照抄 `base.css` 的 16：`line-height` 在 CSS 里是**倍数语义**
-///   （`16px` 其实是 `1.33`），自绘里我们直接用绝对行距 ⇒ 必须随字号走，
-///   否则 14px 字的降部/升部会被 16px 行距的固定掩码切掉（表现为「字被削顶」）。
-/// 单行行距（px）。
+/// ⭐ 别照抄 `base.css` 的 `line-height: 16px`：`line-height` 在 CSS 里是**倍数语义**
+///   （16px 对 12px 字其实是 `1.33`），而自绘走绝对行距 ⇒ 照抄 16 会让 15px 字的
+///   降部/升部被固定掩码切掉（表现为「字被削顶」）。
 ///
 /// ⭐⭐ **必须由字体实际度量决定**，不能写成 `字号 + 常数`
-///   （用户 2026-09-29 实测报「tooltip 行高不够、字体底部显示不全」——
-///   那正是硬编码 `字号 + 2` 的必然结果：15px 的 Segoe UI Variable Text
-///   行高本就 >17px，下伸部与中文字形的底沿被逐行裁掉）。
+///   （硬编码 `字号 + 2` ⇒ 15px 的 Segoe UI Variable Text 行高本就 >17px，
+///   下伸部与中文字形的底沿被逐行裁掉，**表现为行高不够、字底部显示不全**）。
 ///   `GetTextMetricsW` 的 `tmHeight + tmExternalLeading` 正是 GDI 自己算的
 ///   「单行占位高度」，**换字体 / 换字号都会自动跟随**，不必再手动对齐常数。
 ///
 /// ⛔ 缓存：字体只建一次（`ensure_font`），度量也只查一次（`OnceLock`）。
-///   取不到时回落到 `字号 × 1.25`，比旧的 `+2` 保守。
+///   取不到时回落到 `字号 × 1.25`，比硬编码 `字号 + 2` 保守。
 static TIP_LINE_H: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
 
 fn line_h_px() -> i32 {
@@ -178,7 +171,7 @@ type ShadowLayer = (i32, i32, i32, u32); // (dx, dy, blur, peak_alpha)
 ///
 /// ⚠️ **y 偏移为正**（向下）：CSS 的 `box-shadow` y 向下为正，而 CSS
 ///   **不做 y 翻转** ⇒ 浅色主题的阴影在**气泡下方**。
-///   （FluentFlyout 的 `Direction=270` 是向上，两套基准不同，此处跟 CSS。）
+///   （的 `Direction=270` 是向上，两套基准不同，此处跟 CSS。）
 const SHADOW_LIGHT: [ShadowLayer; 2] = [
     (0, 8, 16, 36), // 0.14 × 255 = 35.7 ⇒ 36
     (0, 0, 2, 46),  // 0.18 × 255 = 45.9 ⇒ 46
@@ -191,20 +184,20 @@ const SHADOW_DARK: [ShadowLayer; 1] = [
 
 /// tooltip 与**任务栏外缘**之间的留白（**DIP**）。
 ///
-/// ⭐ 取 **16**，对齐 FluentFlyout `TaskbarWidgetControl.xaml:45` 的
-///   `ToolTipService.VerticalOffset="-16"`（用户 2026-09-28 要求「参考 FluentFlyout」）。
-///   初版取 6 是「凭观感估的」，没有出处 ⇒ 改成有出处的 16。
-/// ⚠️ 与 FluentFlyout 的**参照点**仍有一处**有意的**不同：
+/// ⭐ 取 **16**，对齐 `TaskbarWidgetControl.xaml:45` 的
+///   `ToolTipService.VerticalOffset="-16"`（要求「参考 FluentFlyout」）。
+///   ⛔ 不接受凭观感估出来的值——本项目的尺寸一律要有出处。
+/// ⚠️ 与上面那个 WPF tooltip 的**参照点**仍有一处**有意的**不同：
 ///   它是 `Placement="RelativePoint"` ⇒ 以**光标点**为参照，偏移 -16；
 ///   本仓光标在任务栏**内**（任务栏是交互面），以光标为参照会让提示压住任务栏
 ///   ⇒ 改为以**任务栏外缘**为参照。两者在「光标贴着任务栏上沿」时等价。
 ///
 /// ⛔ 初始延迟**不**跟着改成 800：`CustomToolTip.xaml` 附近的
-///   `InitialShowDelay="800"` 是 FluentFlyout 的值，而 500ms 是**用户先前明确指定**的
+///   `InitialShowDelay="800"` 是那个 WPF tooltip 的值，而 500ms 是**用户先前明确指定**的
 ///   ⇒ 冲突时以用户决定为准（这条纪律见 AGENTS「关键限定必须保留在条目内」）。
 const TIP_TASKBAR_GAP_DIP: i32 = 16;
 
-/// 悬停后多久显示（**ms**）——对齐 FluentFlyout `ToolTipService.InitialShowDelay`。
+/// 悬停后多久显示（**ms**）——对齐 `ToolTipService.InitialShowDelay`。
 pub const TIP_DELAY_MS: u64 = 500;
 
 /// DIP → 物理像素（走**内容** DPI，widget 里的字号也走这个 ⇒ 两者同口径）。
@@ -284,7 +277,7 @@ pub fn tip_rect_for(index: usize, bubble_w: i32, bubble_h: i32) -> Option<RECT> 
     let gap = tip_px(TIP_TASKBAR_GAP_DIP);
     let vertical = tb_w < tb_h; // 竖排任务栏
                                 // ⛔⛔ 锚点拿不到 ⇒ **返回 `None`（不显示）**，不许退化成「任务栏最左端」。
-                                //   原写法 `None => (tb_left, tb_w)` 会让提示落在屏幕**左下角**：
+                                // ⛔ 不得回落成 `(tb_left, tb_w)`：那会让提示落在屏幕**左下角**：
                                 //   开发门控实测第一帧 `窗=(-12,1334)`——`item_rects` 还没发布时的典型表现。
                                 //   「一个位置错误但可见的提示」比「没有提示」更糟（它会闪一下再跳走）。
     let (anchor_x, anchor_w) = crate::taskbar_widget::item_rect_on_screen(index)?;
@@ -295,7 +288,7 @@ pub fn tip_rect_for(index: usize, bubble_w: i32, bubble_h: i32) -> Option<RECT> 
         bottom: 0,
     };
     if vertical {
-        // 竖排：提示放在其**左侧**（FluentFlyout 在竖排下干脆不显示，
+        // 竖排：提示放在其**左侧**（在竖排下干脆不显示，
         // 这里给一个不越界的落位，好过什么都不做）。
         r.left = tb_left - gap - bubble_w;
         r.top = anchor_x + (anchor_w - bubble_h) / 2;
@@ -355,7 +348,7 @@ fn clamp_to_screen(r: &mut RECT) {
 
 /// 文字**折行**后的行（每行是已 UTF-16 编码的文本）。
 ///
-/// ⭐ 用户要求「长设备名折行，不截断」⇒ 这里按 `TIP_MAX_W_DIP` 硬折，
+/// ⭐ 口径是**折行、不截断**（用户钦定）⇒ 按 `TIP_MAX_W_DIP` 硬折，
 ///   而**不是**用 `DT_END_ELLIPSIS`。
 #[cfg(target_os = "windows")]
 fn wrap_lines(
@@ -373,7 +366,7 @@ fn wrap_lines(
         if c == 0 {
             continue;
         }
-        // 换行符 = **硬换行**（用户 2026-09-28：音乐面板 tooltip 要「上排歌名 / 下排歌手」）。
+        // 换行符 = **硬换行**（音乐面板 tooltip 要「上排歌名 / 下排歌手」）。
         // 此前这里只跳 NUL、按宽度折行，把两行文本当成一行里夹了个换行符，
         // DrawText 画出来是方框或空白。设备名不含换行符 ⇒ 对既有条目零影响。
         if c == 10 {
@@ -536,8 +529,7 @@ fn render_and_show(index: usize) {
     // ⛔ 拿不到气泡几何 ⇒ **先隐藏**再返回：不隐藏的话，上一次显示的提示会
     //   **留在旧位置**（内容还是旧的），看起来像「提示卡住不动」。
     // ⚠️ 统一走 `lock_unpoisoned`：**中毒时恢复**而不是「隐藏提示并放弃」。
-    //   原写法是 `let Ok(entries) = … else { hide(); return; }` ⇒ 一旦中毒，提示
-    //   **永久**不再显示且无任何日志（观察不到、也自愈不了）。
+    // ⛔ 一旦中毒，提示**不得**就此**永久**不再显示（那会无任何日志、也自愈不了）。
     let entries = crate::state::lock_unpoisoned(&ENTRIES);
     let Some(entry) = entries.get(index) else {
         hide();
@@ -808,7 +800,7 @@ unsafe fn blit_text_opaque(
     //   **不保证像素变了**（真机实测：返回 19 而一个暗像素都没有）。
     //   真正的判据是贴回后主缓冲里的像素，由 `text_patch_alpha_must_be_opaque` 锚定。
     // ⛔ 空串不能交给 GDI：`Vec::new().as_ptr()` 是悬垂哨兵指针，`DrawTextW` 即使
-    //   `cch = 0` 也会解引用它 ⇒ 访问违例（2026-09-29 在 widget 侧实测到闪退，
+    //   `cch = 0` 也会解引用它 ⇒ 访问违例（在 widget 侧实测到闪退，
     //   同一个洞在这里也开着 —— **所有**「`&[u16]` 进 GDI」的入口都要拦）。
     if !text.is_empty() {
         let _drawn = DrawTextW(
@@ -1092,7 +1084,7 @@ pub fn sync(_owner: HWND, entries: &[TipEntry]) {
     //
     //   ⛔ **不能更早**（旧代码就在这里）：`render_and_show` 读的是**全局** `ENTRIES`，
     //      早于写入就等于**拿上一帧的条目渲染当前画面** ⇒ tooltip 落后一拍。
-    //      实测 2026-09-29：点「切换」那一瞬新会话元数据未到、标题为空
+    //      实测：点「切换」那一瞬新会话元数据未到、标题为空
     //      （面板自己画兜底「未在播放」），tooltip 把这个**瞬时错值**渲染了出来；
     //      下一帧本该自愈 —— 但**光标静止时没有下一帧**
     //      （hover 轮询只在「换设备 / 首次延迟到期 / 离开」时投递，
@@ -1184,7 +1176,7 @@ mod tests {
 
     /// ⭐ 视觉常量必须**逐字**等于 `base.css` 里 `.tooltip-content` 的值。
     ///
-    /// ⛔ **基准是本仓的 CSS，不是 FluentFlyout**：用户 2026-09-28 要求
+    /// ⛔ **基准是本仓自己的 CSS**：要求
     ///   「与弹出窗口和设置窗口的 tooltip 样式尽量一致」⇒ 唯一来源是
     ///   `src-tauri/dist/styles/base.css:896-912`。
     ///   ⚠️ 唯二**有意偏离**：`font-size`(12→14) 与 `line-height`(16→字号+2)，
@@ -1198,8 +1190,8 @@ mod tests {
         assert_eq!(TIP_CORNER_R_PX, 4);
         // base.css:907  border: 1px solid
         assert_eq!(TIP_BORDER_PX, 1);
-        // ⚠️ 字号/行高**有意偏离 base.css**（用户两次要求：2026-09-28「太虚太小」⇒ 14px；
-        //   2026-09-29 与面板对齐 ⇒ 15px）。base.css 是 12px / 16px；
+        // ⚠️ 字号/行高**有意偏离 base.css**（用户两次要求：「太虚太小」⇒ 14px；
+        // 与面板对齐 ⇒ 15px）。base.css 是 12px / 16px；
         //   这里断言的是**当前的、有意为之**的偏离值。
         //   ⛔ 改这两个值前先确认用户是否改主意——不是「顺手对齐回 CSS」。
         assert_eq!(
@@ -1242,7 +1234,7 @@ mod tests {
 
     /// ⛔ 阴影 y 偏移的**符号**：CSS 的 `box-shadow` y 向下为正。
     ///
-    /// 可证伪：把它改成负的（照抄 FluentFlyout 的 `Direction=270`）⇒ 转红。
+    /// 可证伪：把它改成负的（照抄 的 `Direction=270`）⇒ 转红。
     /// 两者基准不同：本仓 CSS 阴影在**下方**。
     #[test]
     fn shadow_offset_sign_matches_css_not_fluent_flyout() {
@@ -1289,8 +1281,8 @@ mod tests {
         const { assert!(PALETTE_DARK.border_a > PALETTE_LIGHT.border_a) };
     }
 
-    /// ⭐⭐⭐ **设备间的空隙（`idx < 0`）不得触发隐藏**——这是用户报告的
-    /// 「hover 在非第一个设备时，tooltip 的首帧会出现在第一个设备上方」的根因。
+    /// ⭐⭐⭐ **设备间的空隙（`idx < 0`）不得触发隐藏**——现象是「hover 在非第一个
+    /// 设备时，tooltip 的首帧会出现在第一个设备上方」，其根因如下。
     ///
     /// 机制：`hovered_item_index` 在光标落在**两个设备的间隙**时同样返回 `-1`，
     /// 而初版把「`idx < 0`」一律当「离开 widget ⇒ 隐藏」。于是光标从设备 0 扫到
@@ -1516,7 +1508,7 @@ mod tests {
 
     /// ⭐ 行高必须**由字体度量给出**，且**放得下字形**。
     ///
-    /// 用户 2026-09-29 实测报「tooltip 行高不够、字体底部显示不全」——
+    /// 行高不足的**现象**是「字底部显示不全」——
     /// 根因是行高被硬编码成 `字号 + 2`（15px 字号 ⇒ 17px 行距），
     /// 而 Segoe UI Variable Text 的单行占位高度本就 >17px
     /// ⇒ 下伸部与中文字形的底沿被逐行裁掉（**不报错、不 panic**）。

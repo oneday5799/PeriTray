@@ -123,7 +123,7 @@ pub(crate) fn devices_for_taskbar_within(
     let (cached, age) = crate::state::devices_cache_snapshot();
     let out = devices_for_taskbar_with(cached, age, max_age_ms, || query_devices(false));
     if let Ok(devices) = &out {
-        // ⭐⭐ **写回是这次改动的关键一行**（2026-09-29）。
+        // ⭐⭐ **写回是这次改动的关键一行**。
         //   此前**只有** `tray::refresh_devices_cache` 写缓存，而它在默认配置下
         //   整个循环体被 `if !has_tray && !has_battery_notify { continue; }` 跳过
         //   ⇒ **共享缓存**恒空 ⇒「缓存优先」从未生效，每轮都白付一次
@@ -132,10 +132,10 @@ pub(crate) fn devices_for_taskbar_within(
         //
         // ⛔⛔ **别把这句读成「电量每次都现查」—— 那是个已证伪的说法。**
         //   `query_devices()` 是四步，**电量值早就在复用后台缓存**：
-        //   ① `Win32_PnPEntity` 设备清单（❌ 无缓存，**贵的就是这一步**）
-        //     ② 蓝牙设备+电量（✅ `bluetooth::BT_BATTERY` + 单飞守卫）
-        //     ③ `Win32_Battery`（❌）
-        //     ④ 2.4G 接收器电量（✅ `wireless_24g::CACHE`）
+        //   ① `Win32_PnPEntity` 设备清单（**无缓存**，贵的就是这一步）
+        //     ② 蓝牙设备+电量（**有缓存**：`bluetooth::BT_BATTERY` + 单飞守卫）
+        //     ③ `Win32_Battery`（**无缓存**）
+        //     ④ 2.4G 接收器电量（**有缓存**：`wireless_24g::CACHE`）
         //   ⇒ 死的不是电量，是**设备清单**。详见 Wiki 15 §8.6.9。
         //   ⚠️ 无条件写（含「强制现查」路径）：`store_devices_cache` 每次都会盖时间戳，
         //   这正是 TTL 判据要的量（「距上次问过 WMI 多久」）。
@@ -220,7 +220,7 @@ pub async fn get_selectable_devices(
 ) -> Result<Vec<crate::device_identity::SelectableDevice>, String> {
     let devices = run_blocking(devices_for_taskbar).await??;
     // 输出与输入各自枚举：`enumerate_*` 内部直读 MMDevice，开销在 13–15ms 量级
-    // （实测，见 PLAYBOOK §E），远小于设备侧 WMI 的 600ms+，无需缓存。
+    // （实测），远小于设备侧 WMI 的 600ms+，无需缓存。
     let outputs = run_blocking(crate::audio::enumerate_output_devices)
         .await?
         .map_err(|e| e.to_string())?;
@@ -479,8 +479,8 @@ const TRAY_DEVICE_LIMIT: usize = 4;
 /// 切换「托盘设备」列表中的某个设备：存在则移除，不存在则加入（受上限保护）。
 ///
 /// ── 为什么必须是「只接 `&mut Config` 的单函数」（P2-8）──────────────────
-/// 原实现是「先 `with_config` 读一次（查重 + 数上限）→ 再 `with_config_mut` 写一次」
-/// ——**两次独立加锁**，中间还夹着一次 `run_blocking` 线程切换，于是：
+/// ⛔ **不得**拆成「先 `with_config` 读一次（查重 + 数上限）→ 再 `with_config_mut`
+/// 写一次」：那是**两次独立加锁**，中间还夹着一次 `run_blocking` 线程切换，于是：
 ///
 /// ```text
 /// 线程 A: 读 count=3（未达上限）...................... 写 → 4 个
@@ -642,7 +642,7 @@ pub async fn toggle_pinned_taskbar_device(
     Ok(())
 }
 
-/// 设置页「任务栏组件」折叠区的**已钉设备清单**（用户 2026-09-28）。
+/// 设置页「任务栏组件」折叠区的**已钉设备清单**（用户）。
 ///
 /// ⭐ 与 `get_selectable_devices` 的分工（**刻意不同，勿合并**）：
 /// · 那个是「**可勾选**的候选」（两页并集、**不做** pin 补建）⇒ 给「选择器」用；
@@ -685,9 +685,9 @@ pub struct PinnedTaskbarEntry {
 ///
 /// ⭐ `name` 走 `resolved_display_name` ⇒ 与**任务栏窗口 tooltip 逐字一致**
 ///   （`pin.alias` > `device_names` > `pick_display_name` 短名）。
-///   ⛔ 上一版直接返回 `d.name`（`pick_display_name` 的原始输出）⇒ 用户改过名后
-///   设置页仍显示旧名，与任务栏窗口不一致（用户 2026-09-28 报）。
-/// ⚠️ 身份判据（`audio_ids` / `fallback`）一律用**原始** `d.name` / `d.key`：
+///   ⛔ **不得**直接返回 `d.name`（`pick_display_name` 的原始输出）：用户改过名后
+///   设置页仍显示旧名，与任务栏窗口不一致。
+/// ⛔ 身份判据（`audio_ids` / `fallback`）一律用**原始** `d.name` / `d.key`：
 ///   别名是显示层概念，绝不能参与匹配。
 fn pinned_taskbar_entry(
     d: &crate::device_identity::PhysicalDevice,
@@ -727,11 +727,11 @@ pub async fn get_pinned_taskbar_list() -> Result<Vec<PinnedTaskbarEntry>, String
         .map_err(|e| e.to_string())?;
     // ⭐ 取一份**整份**配置快照：本命令的 `name` 字段要与**任务栏 tooltip 逐字一致**
     //   ⇒ 必须走同一个 `resolved_display_name`（`pin.alias` > `device_names` > 短名）。
-    // ⛔⛔ **上一版这里注释写的是「显示名由 `group_taskbar_devices` 内部解析」——
-    //   那是错的**：`group_taskbar_devices` 返回的是 `pick_display_name` 的**原始输出**，
+    // ⛔⛔ **「显示名由 `group_taskbar_devices` 内部解析」这个说法是错的**——
+    //   它返回的是 `pick_display_name` 的**原始输出**，
     //   任务栏 widget 是**自己再套一层** `resolved_display_name`（见 `taskbar_widget.rs`
     //   的 `resolve_widget_labels`）。本命令直接用 `d.name` ⇒ 设置页「任务栏」列表
-    //   在用户改过名后仍显示**旧名**，与任务栏窗口不一致（用户 2026-09-28 报）。
+    //   在用户改过名后仍显示**旧名**，与任务栏窗口不一致。
     let config_snapshot = config::with_config(|c| c.clone());
     let pinned = config_snapshot.pinned_taskbar_devices.clone();
     let grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
@@ -743,7 +743,7 @@ pub async fn get_pinned_taskbar_list() -> Result<Vec<PinnedTaskbarEntry>, String
     Ok(out)
 }
 
-/// 弹出窗口设备卡片右键菜单：**按设备名**钉到/移出任务栏（用户 2026-09-28）。
+/// 弹出窗口设备卡片右键菜单：**按设备名**钉到/移出任务栏（用户）。
 ///
 /// ⭐ 为什么**必须由后端解析 `key`/`fallback`**（不能沿用设置页那条命令让前端传参）：
 ///   设置页的选择器拿的是 `SelectableDevice`，**后端已把 `key` 与 `fallback` 算好**；
@@ -937,8 +937,8 @@ pub async fn get_sessions_device_names(
 
 /// 切换系统默认输出设备。
 ///
-/// `crate::audio::set_default_device` 走 `IPolicyConfig` COM 接口，实测耗时
-/// 数十至数百毫秒（还要等音频服务响应），原先作为**同步命令**在主线程执行
+/// 必须走**异步命令**：`crate::audio::set_default_device` 走 `IPolicyConfig`
+/// COM 接口，实测耗时数十至数百毫秒（还要等音频服务响应），放主线程同步执行
 /// ⇒ 每次点击设备名都会冻结 UI 同等时长（B4）。
 /// `emit` 放在 `.await` 之后，与既有的 `toggle_device_tray` 形态一致。
 #[tauri::command(async)]
@@ -1040,7 +1040,7 @@ pub fn set_hotkey_config(
     let prev_sc = prev_key.as_deref().and_then(|pk| parse_shortcut(pk).ok());
 
     // ① 校验阶段：**不做任何副作用**。
-    // 原实现先注销旧键再校验新键，于是「新键解析失败」这条分支会留下：
+    // ⛔ 校验**必须**先于注销：反序会让「新键解析失败」这条分支留下：
     // 注册表里旧键已没了、配置里旧键还在 —— 前端显示「已设置 XX」但按键无反应，
     // 且不广播 config-changed，用户完全无从察觉（见代码审查报告 P1-5）。
     let new_sc = match key.as_deref() {
@@ -1076,7 +1076,7 @@ pub fn set_hotkey_config(
             }
             return Err(e);
         }
-        // 成功后才记日志：原先在注册尝试之前打印，失败时日志与事实相反
+        // 成功后才记日志：注册尝试之前打印的话，失败时日志与事实相反
         standard_log!("[hotkey] registered {} {}", new_key_str, action);
     }
     set_config_key(&action, key);

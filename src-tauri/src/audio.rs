@@ -82,7 +82,7 @@ pub(crate) fn is_apartment_mode_conflict(hr: i32) -> bool {
 
 /// 确保当前线程已初始化 COM（幂等调用）。
 ///
-/// **显式契约（P2-5）**——原先这些是散落在调用点的隐性假设：
+/// **显式契约（P2-5）**：以下三条是全进程 COM 约定的唯一书面口径：
 /// - 本项目**进程内统一使用 STA**（`COINIT_APARTMENTTHREADED`），且**从不调用
 ///   `CoUninitialize`**：COM 在整个进程生命周期内保持可用，故各处只做「确保」，
 ///   不做配对释放。将来若要加反初始化，必须同时审视 `audio_notify` 的 STA 线程
@@ -137,7 +137,7 @@ pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
 /// 交给 `SetMasterVolumeLevelScalar` / `SetMasterVolume`，换来一个 `E_INVALIDARG`。
 /// 收敛点收成一处，既保住「NaN 视为 0.0」的既有语义，也让 `clippy::manual_clamp` 无话可说。
 ///
-/// 唯一的残留差异：`-0.0` 经 `clamp` 仍是 `-0.0`（原写法给 `+0.0`）——
+/// 唯一的残留差异：`-0.0` 经 `clamp` 仍是 `-0.0`（无判据时给 `+0.0`）——
 /// 两者数值相等，且 Windows 侧按 `0.0 <= level <= 1.0` 校验，行为一致。
 fn sanitize_volume(v: f32) -> f32 {
     if v.is_nan() {

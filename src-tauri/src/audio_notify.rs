@@ -34,8 +34,8 @@ fn post_sync_callbacks(hwnd: HWND) -> windows::core::Result<()> {
 ///
 /// **投递失败必须回滚标志**：标志已置 `true` 而消息未入队时，消息处理器永不运行，
 /// 标志会**永久停在 `true`**，此后所有设备变更回调都在 CAS 处失败并静默跳过 ——
-/// 音频设备变更通知彻底失效，且不产生任何日志。原实现写作 `let _ = PostMessageW(...)`，
-/// 恰好把这个失败吞掉了（见代码审查报告 P3-12）。
+/// 音频设备变更通知彻底失效，且不产生任何日志。
+/// ⛔ 因此 `PostMessageW` 的返回值**不得**写成 `let _ =` 丢弃（审查报告 P3-12）。
 ///
 /// 4 个 COM 回调统一走本函数，避免下次再漏改其中一处。
 fn request_sync_callbacks(hwnd: HWND) {
@@ -202,7 +202,6 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 (*pwstrdeviceid).to_string().unwrap_or_default(),
                 dwnewstate.0
             );
-            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
             request_sync_callbacks(self.hwnd);
         }
         Ok(())
@@ -214,7 +213,6 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceAdded id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             );
-            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
             request_sync_callbacks(self.hwnd);
         }
         Ok(())
@@ -226,7 +224,6 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 "[audio_notify] OnDeviceRemoved id={}",
                 (*pwstrdeviceid).to_string().unwrap_or_default()
             );
-            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
             request_sync_callbacks(self.hwnd);
         }
         Ok(())
@@ -245,7 +242,6 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
                 erender.0,
                 (*pwstrdefaultdeviceid).to_string().unwrap_or_default()
             );
-            // 合并：已排队则跳过；投递失败由 request_sync_callbacks 回滚标志
             request_sync_callbacks(self.hwnd);
         }
         Ok(())
@@ -488,8 +484,8 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         if hr.is_err() {
             // 区分「公寓模型冲突」与真失败（P2-5）：前者说明有代码抢先把本线程初始化
-            // 成了 MTA（约定是进程内统一 STA）。原先只记一句 "failed" 且不带 HRESULT
-            // ⇒ 整条音频通知链路静默失效，却无从归因。
+            // 成了 MTA（约定是进程内统一 STA）。冲突**必须带 HRESULT 上报**——
+            // 混进一句 "failed" 会让整条音频通知链路静默失效，却无从归因。
             let code = hr.0;
             if crate::audio::is_apartment_mode_conflict(code) {
                 crate::process::append_log(

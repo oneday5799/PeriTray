@@ -47,7 +47,7 @@ pub fn writable_root() -> PathBuf {
 /// MSIX 包容器的 `LocalState` 绝对路径；非包上下文（或取不到 PFN / `%LOCALAPPDATA%`）
 /// 返回 `None`。
 ///
-/// 本机实测（Win11 26100，2026-09-23）：**包身份下 `LOCALAPPDATA` 环境变量未被重写**，
+/// 本机实测（Win11 26100，）：**包身份下 `LOCALAPPDATA` 环境变量未被重写**，
 /// 仍是 `C:\Users\<用户>\AppData\Local`，故 `%LOCALAPPDATA%\Packages\<PFN>\LocalState`
 /// 正是 `ApplicationData.Current.LocalFolder` 的真实路径（该目录实测存在且可写）。
 #[cfg(target_os = "windows")]

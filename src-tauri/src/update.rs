@@ -50,13 +50,13 @@ impl UpdateStatus {
 static LAST_STATUS: Mutex<Option<UpdateStatus>> = Mutex::new(None);
 
 fn set_last_status(status: UpdateStatus) {
-    // P2-11：统一入口。原写法 `if let Ok(guard) = mutex.lock()` 在中毒时静默丢弃状态，
-    // 设置页会永远显示不出「已是最新」。
+    // P2-11：统一入口。`if let Ok(guard) = mutex.lock()` 会在中毒时静默丢弃状态，
+    // 设置页就永远显示不出「已是最新」。
     *crate::state::lock_unpoisoned(&LAST_STATUS) = Some(status);
 }
 
 pub fn get_last_status() -> Option<UpdateStatus> {
-    // P2-11：原写法 `Mutex::lock()` 后接 `ok().and_then(..)` 在中毒时静默返回 None（同上后果）
+    // P2-11：`Mutex::lock()` 后接 `ok().and_then(..)` 在中毒时静默返回 None（同上后果）
     crate::state::lock_unpoisoned(&LAST_STATUS).clone()
 }
 
@@ -388,7 +388,7 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 /// 预发布仅在 `include_prerelease` 为真时参与。
 ///
 /// ── 为什么必须抽成纯函数 ────────────────────────────────────────────────
-/// 这段选择逻辑原先内联在 `check_for_update` 里，而后者要做网络 I/O ⇒ **无法单测**。
+/// `check_for_update` 要做网络 I/O ⇒ 选择逻辑若内联在里面就**无法单测**。
 /// 于是「选错版本」没有任何断言能拦住：不报错、不 panic，日志还照常打印
 /// `has_update=false`，只表现为**用户永远收不到更新提示**。
 ///
@@ -398,7 +398,7 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 /// 两者方向相反 ⇒ 参数顺序与分支必须**同时**反过来：
 ///   · `a > b` ⟺ `compare_versions(b_ver, a_ver)` 为真 ⇒ `Greater`
 ///   · `a < b` ⟺ `compare_versions(a_ver, b_ver)` 为真 ⇒ `Less`
-/// 若写成 `if compare_versions(a_ver, b_ver) { Greater }`（即 `b484039` 的原写法），
+/// 若写成 `if compare_versions(a_ver, b_ver) { Greater }`（方向写反），
 /// 得到的是一个**完全反转**的比较器，`max_by` 于是取到窗口内**最小**的版本。
 /// 判据见 `latest_release_picks_the_newest_not_the_oldest`。
 ///
@@ -574,11 +574,11 @@ mod tests {
         }
     }
 
-    /// 2026-09-22 发布 v1.3.7 后 `GET /repos/oneday5799/PeriTray/releases`
+    /// 发布 v1.3.7 后 `GET /repos/oneday5799/PeriTray/releases`
     /// 真实返回的 30 条窗口，顺序即 API 返回顺序（created_at 倒序）。
     ///
     /// 用**生产数据**当夹具是有意的：方向写反时它会取到窗口最旧的 `v1.2.9`
-    /// —— 这不是构造出来的场景，而是 2026-09-22 实测发生的失效。
+    /// —— 这不是构造出来的场景，而是 实测发生的失效。
     /// 窗口条数（30）也是接口默认 `per_page` 的真实值。
     const REAL_WINDOW: &[(&str, bool)] = &[
         ("v1.3.7", false),
@@ -619,7 +619,7 @@ mod tests {
 
     /// ⭐ 靶心：必须取到最新的 `v1.3.7`，而不是窗口最旧的 `v1.2.9`。
     ///
-    /// 修复前（`b484039` 写反的比较器）此处取到 `v1.2.9` ⇒ `has_update` 恒为 false
+    /// 比较器写反时此处取到 `v1.2.9` ⇒ `has_update` 恒为 false
     /// ⇒ **所有用户都被告知「已是最新」**，更新提示彻底失效。
     #[test]
     fn latest_release_picks_the_newest_not_the_oldest() {
@@ -636,7 +636,7 @@ mod tests {
         assert_ne!(picked, Some(oldest.tag_name.as_str()));
     }
 
-    /// 结果不得依赖 API 返回顺序 —— 原实现用 `find` 取第一条，正是依赖了这个假设。
+    /// 结果不得依赖 API 返回顺序 —— 用 `find` 取第一条正是依赖了这个假设。
     #[test]
     fn latest_release_ignores_api_order() {
         let mut reversed = real_window();

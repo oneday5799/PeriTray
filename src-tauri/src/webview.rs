@@ -87,7 +87,7 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 //   系统睡眠时 COM 不活跃，不阻塞事件循环（仅针对**休眠唤醒**这一类）。
 // popup 打开前 / 唤醒后：Resume + IsVisible(TRUE) → 恢复渲染。
 //
-// ⚠️ 范围限定（2026-09-18）：上面这条**不是**「运行期窗口冻结」的解释。
+// ⚠️ 范围限定：上面这条**不是**「运行期窗口冻结」的解释。
 //   实测（`AppHangTransient` / 退出码 `0xcfffffff`）证明那次冻结的根因是
 //   **锁序死锁（P0-4）**——子线程持配置锁调菜单 API（`run_item_main_thread!` =
 //   无超时 `rx.recv()`）⇄ 主线程等同一把配置锁 ⇒ 永久互等，与 WebView2 挂起态、
@@ -110,7 +110,7 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 /// 该约定与上游 `webview2-com` 一致：其 `TrySuspendCompletedHandler::create()` 返回持有
 /// 一份引用的智能指针，`TrySuspend(&handler)` 按借用传入，局部变量析构时释放。
 ///
-/// **实测（2026-09-20，WebView2 运行时 137.0.3296.52，真实进程 + env 门控探针）**：
+/// **实测（WebView2 运行时 137.0.3296.52，真实进程 + env 门控探针）**:
 /// - 成功路径：运行时**恰好** `1×AddRef → Invoke → 1×Release`（trace 序列 `A→I→R`）；
 /// - 错误路径（`IsVisible == TRUE` ⇒ 同步返回 `HRESULT_FROM_WIN32(ERROR_INVALID_STATE)`）：
 ///   运行时**零次引用操作**（序列 `""`）。
@@ -157,7 +157,7 @@ mod try_suspend_cb {
         out: *mut *mut core::ffi::c_void,
     ) -> i32 {
         // COM 契约：QI 必须让 IID_IUnknown 成功（返回同一对象并 AddRef）。
-        // 原实现对所有 IID 一律返回 E_NOINTERFACE（连 IUnknown 也不例外），非合规对象。
+        // ⛔ 不得对所有 IID 一律返回 E_NOINTERFACE（连 IUnknown 也不例外）：那是**非合规对象**。
         unsafe {
             if !iid.is_null() && guid_eq(&*iid, &windows_sys::core::IID_IUnknown) {
                 add_ref(this);
@@ -213,7 +213,8 @@ mod try_suspend_cb {
         Box::into_raw(obj) as *mut core::ffi::c_void
     }
 
-    /// 释放**调用方自己持有的那一份引用**（替代原先无条件释放的 `destroy`）。
+    /// 释放**调用方自己持有的那一份引用**（⛔ 不得无条件释放：runtime 若已 AddRef，
+    /// 提前释放会让对象被回收）。
     /// 与 `destroy` 的区别：若 runtime 已 AddRef，对象不会被提前回收。
     ///
     /// # Safety
@@ -272,7 +273,7 @@ mod try_suspend_cb {
             }
         }
 
-        /// 回归（2026-09-20 实测配对）：**调用点实际使用的** `release_owned` 在实测到的两条
+        /// 回归（实测配对）：**调用点实际使用的** `release_owned` 在实测到的两条
         /// 运行时路径上都只释放调用方那一份、且恰好回收一次。
         ///
         /// - 错误路径实测：运行时零次引用操作 ⇒ 调用方那一份是唯一引用；

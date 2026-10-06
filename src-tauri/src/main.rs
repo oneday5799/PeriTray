@@ -122,7 +122,7 @@ fn make_panic_hook(
     Box::new(move |info| {
         let msg = panic_payload_message(info.payload());
         let location = format_location(info.location());
-        // ⛔⛔ **必须先同步落盘，再走异步日志队列**（2026-09-29 实测踩到）。
+        // ⛔⛔ **必须先同步落盘，再走异步日志队列**（实测踩到）。
         //
         // 根因：`process::append_log` → `write_log` → `enqueue`，是**异步入队**，
         // 由后台写线程消费。而 panic 常常紧跟 `abort()`（panic 穿过
@@ -178,7 +178,7 @@ fn install_panic_hook() {
 
 /// panic 现场的**同步**落盘（不经异步队列，见 `make_panic_hook` 的注释）。
 ///
-/// ⛔⛔ **同一个坑我这轮踩了两次**（2026-09-29 实测），记在这里免得再犯：
+/// ⛔⛔ **同一个坑我这轮踩了两次**（实测），记在这里免得再犯：
 ///   ① 「日志里没有 `[panic]` 行」⇒ 我据此断定「**不是 panic**、是访问违例之外的某种东西」；
 ///   ② 「崩溃定位标记停在 B」⇒ 我据此断定「崩在 B 与 C 之间」。
 ///   而真相是**两者都走了异步队列**，进程硬崩时队列尾部整段丢失 ⇒
@@ -257,11 +257,11 @@ fn should_restart(stuck_streak: u32) -> bool {
     stuck_streak >= 2
 }
 
-/// 看门狗每轮的 sleep 间隔（B7 由 15s 收紧到 3s）。
+/// 看门狗每轮的 sleep 间隔（3s）。
 ///
-/// 收紧的理由：探活的判据是「主线程能否在 [`PROBE_REPLY_TIMEOUT`] 内执行一个纯内存
-/// 的排队任务」，而连续 2 次超时才判定僵死 ⇒ 自愈延迟 ≈ 2×3s + 2×2s = 10s，
-/// 原先（15s + 5s，同步等待）最坏要 ~40s 才重启。
+/// 收紧到这个量级的理由：探活的判据是「主线程能否在 [`PROBE_REPLY_TIMEOUT`] 内执行
+/// 一个纯内存的排队任务」，而连续 2 次超时才判定僵死 ⇒ 自愈延迟 ≈ 2×3s + 2×2s = 10s。
+/// 取更长间隔只会按倍数拖慢这个延迟。
 const WATCHDOG_ROUND_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// 探活等待上限：主线程超过这个时间仍未执行排队的闭包即视为无响应。
@@ -279,8 +279,8 @@ static EVENT_LOOP_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 
 /// 探活等待侧（B7）：`timeout` 内收到回执 ⇒ 事件循环有响应。
 ///
-/// **必须用 `recv_timeout` 而不是 `recv`**：后者在事件循环僵死时会永久挂住调用线程
-/// ——原实现正是栽在这里（详见 [`spawn_watchdog`] 的注释）。抽成独立函数是为了让
+/// ⛔ **必须用 `recv_timeout` 而不是 `recv`**：后者在事件循环僵死时会永久挂住调用线程
+/// （详见 [`spawn_watchdog`] 的注释）。抽成独立函数是为了让
 /// 这条契约有单测锚点：把它改回 `recv`，`probe_wait_returns_false_instead_of_hanging`
 /// 会直接挂死（即失败）。
 fn await_event_loop_reply(
@@ -317,7 +317,7 @@ fn is_time_jump(elapsed: std::time::Duration) -> bool {
 ///
 /// 取非 0（BSD sysexits 的 `EX_SOFTWARE`）：这条路径是「事件循环僵死后的自愈」，
 /// 不是正常关闭 —— 非 0 才能让任务管理器 / 事件日志 / 外部守护脚本把它与用户
-/// 主动退出区分开。原先一律用 0，异常退出在外部看来与正常关闭无异（P2-4）。
+/// 主动退出区分开——用 0 的话异常退出在外部看来与正常关闭无异（P2-4）。
 const EXIT_CODE_WATCHDOG_RESTART: i32 = 70;
 
 /// 事件循环僵死自愈：spawn 自身新实例后立即退出当前进程。
@@ -393,7 +393,7 @@ fn spawn_dev_open_settings(app: &tauri::AppHandle) {
 ///
 /// ⭐ **本函数不再由环境变量决定是否运行**（自里程碑 3 起）：监听与兜底循环是
 ///   「设置页能实时控制窗口」的前提，必须无条件装上；是否显示窗口由 `config` 决定
-///   （用户口径 2026-09-24：已选设备非空才显示，见 `taskbar_widget::should_show`）。
+///   （用户口径：已选设备非空才显示，见 `taskbar_widget::should_show`）。
 ///
 /// 三个**开发门控**变量（自动化验收用，不影响正常启动）：
 ///   · `PM_DEV_TASKBAR_WIDGET=1`        —— **强制挂载**（覆盖配置判据），同步、在主线程
@@ -583,14 +583,14 @@ fn spawn_startup_update_check(app: &tauri::AppHandle) {
 /// 的排队任务。连续 2 次超时（≈10s）判定僵死，自动重启自身进程自愈。
 /// 时间跳变检测：唤醒后主动 Resume WebView2（仅针对**休眠唤醒**这一类，见下方范围限定）。
 ///
-/// ⚠️ **范围限定（2026-09-18）**：**「B 类僵死」不是「运行期窗口冻结」的解释。**
+/// ⚠️ **范围限定**：**「B 类僵死」不是「运行期窗口冻结」的解释。**
 /// 实测（`AppHangTransient` / 退出码 `0xcfffffff`）证明那次冻结的根因是**锁序死锁（P0-4）**：
 /// 子线程持配置锁调菜单 API（`run_item_main_thread!` = 无超时 `rx.recv()`）⇄ 主线程等同一把
 /// 配置锁 ⇒ 永久互等。**看门狗救不回这一类**——本函数的探活同样依赖主线程。
 /// 遇到「窗口完全无响应」请**先查锁序**（登记表见 `state.rs` 模块文档）。
 ///
-/// ⚠️ **不要改回「调 Tauri API + 同步等待」的写法**。原实现是
-/// `spawn` 一个线程调 `w.is_visible()`——它内部是 `run_on_main_thread(..)` +
+/// ⛔ **不得**改回「`spawn` 一个线程调 Tauri API + 同步等待」的写法：
+/// `w.is_visible()` 内部是 `run_on_main_thread(..)` +
 /// `rx.recv()`，**无超时地同步等待主线程**。事件循环真僵死时它永不返回，于是：
 /// ① **每轮泄漏一个永久挂住的探针线程**（本循环 3s 一轮）；
 /// ② 这些线程各自已在主线程队列里压了一个任务，主线程一旦恢复就会一次性全部执行；
@@ -992,8 +992,8 @@ mod tests {
     /// B7 的核心契约：事件循环僵死时，等待侧必须**限时返回 false**，不得挂住。
     ///
     /// 可证伪性：把 `await_event_loop_reply` 里的 `recv_timeout` 改回 `recv`，
-    /// 本用例会直接**挂死**（= 失败），而不是侥幸通过。原实现的
-    /// `is_visible()` 正是这种「无超时同步等待」，才导致每轮泄漏一个探针线程。
+    /// 本用例会直接**挂死**（= 失败），而不是侥幸通过——无超时同步等待正是
+    /// 「每轮泄漏一个探针线程」的成因。
     #[test]
     fn probe_wait_returns_false_instead_of_hanging_when_no_reply() {
         // 发送端保持存活但永不发送 = 模拟「闭包已排队、主线程僵死不消费队列」
