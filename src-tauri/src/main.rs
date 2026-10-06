@@ -16,11 +16,12 @@ mod dedup;
 mod device;
 mod device_data;
 mod device_identity;
+#[cfg(target_os = "windows")]
+mod media_activate;
 mod popup;
 mod process;
 mod shortcut;
 mod state;
-#[cfg(target_os = "windows")]
 mod taskbar_music;
 #[cfg(target_os = "windows")]
 mod taskbar_tooltip;

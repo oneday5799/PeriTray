@@ -258,6 +258,15 @@ fn normalize_image_path(path: &str) -> Option<String> {
 }
 
 /// 从进程 PID 查询 exe 路径：主路径（OpenProcess）→ 内核兜底（NtQuerySystemInformation）。
+/// 从 pid 查 exe 完整路径（公开给「按 pid 启动应用」用）。
+///
+/// ⭐ 与 [`get_process_exe_path`] 的区别：那个给**小写**（身份匹配用），
+///   这个给**原样**（交给 `ShellExecuteW` 启动用，路径大小写须保持）。
+pub fn get_process_exe_path_raw(pid: u32) -> Option<Arc<str>> {
+    query_exe_path_by_pid(pid).map(Arc::from)
+}
+
+/// 从进程 PID 查询 exe 路径：主路径（OpenProcess）→ 内核兜底（NtQuerySystemInformation）。
 fn query_exe_path_by_pid(pid: u32) -> Option<String> {
     query_exe_path_by_openprocess(pid).or_else(|| {
         verbose_log!("[app_icon] 常规查询失败 pid={pid}，走 NtQuerySystemInformation 兜底");

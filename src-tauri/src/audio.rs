@@ -638,12 +638,14 @@ pub fn default_output_device_id() -> Result<String> {
 ///   上显示的音量与滚轮改动的量**必然是同一个对象**，不会各读各的。
 /// ⛔ 命中多条时取**第一条**：多条意味着该应用在同设备上有多个会话
 ///   （进程分裂），它们的音量本应一致；滚轮侧是**全部写成同一值**。
-pub fn media_session_volume(aumid: &str) -> Option<f32> {
+/// 读「AUMID 对应应用在默认输出设备上的那个会话」（`None` = 取不到）。
+///
+/// ⭐ **一次匹配带回全部所需**：音量（tooltip 第三行 + 滚轮）与 `pid`
+///   （点封面激活窗口只能按 pid 找）都出自这一条会话 ⇒ 两者必然指向同一个
+///   进程，不会各指各的；而重跑一次匹配等于多枚举一遍全部会话。
+pub fn media_session_of(aumid: &str) -> Option<AudioSession> {
     let dev = default_output_device_id().ok()?;
-    find_media_sessions(aumid, &dev)
-        .ok()?
-        .first()
-        .map(|s| s.volume)
+    find_media_sessions(aumid, &dev).ok()?.into_iter().next()
 }
 
 pub fn set_session_volume(session_id: &str, device_id: &str, volume: f32) -> Result<()> {

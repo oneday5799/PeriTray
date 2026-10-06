@@ -103,6 +103,14 @@ pub struct MusicSnapshot {
     ///   读音量是 COM 阻塞调用 ⇒ 现读会把阻塞带进绘制路径。
     /// 由音乐后台线程按轮询刷新（≤1.5s），滚轮改完由 worker 立即乐观更新。
     pub session_volume: Option<f32>,
+    /// ⭐ **当前会话所属应用的 pid**（`None` = 没有会话，或该应用在默认
+    ///   输出设备上匹配不到音频会话）。
+    ///
+    /// ⭐ 与 `session_volume` **同一次匹配的结果**（不额外枚举、不额外
+    ///   开销）⇒ 两者必然指向同一个进程，不会各指各的。
+    /// 用途：点封面要激活对应应用的窗口，而窗口只能按 pid 找
+    ///   （`EnumWindows` + `GetWindowThreadProcessId`）。
+    pub session_pid: Option<u32>,
 }
 
 impl MusicSnapshot {
@@ -205,6 +213,7 @@ static SNAPSHOT: Mutex<MusicSnapshot> = Mutex::new(MusicSnapshot {
     cover_size: 0,
     pinned_session_id: None,
     session_volume: None,
+    session_pid: None,
 });
 
 /// 后台线程是否已起来（避免重复起线程）。
@@ -255,25 +264,34 @@ pub fn refresh_session_volume() {
         let mut s = lock_unpoisoned(&SNAPSHOT);
         if s.session_volume.is_some() {
             s.session_volume = None;
+            s.session_pid = None;
         }
         return;
     }
-    let vol = crate::audio::media_session_volume(&aumid);
+    // ⭐ **一次匹配同时带回 pid 与音量**：pid 给「点封面激活窗口」用，
+    //   两者本就是同一个会话，重跑一次匹配等于多枚举一遍全部会话。
+    let found = crate::audio::media_session_of(&aumid);
+    let vol = found.as_ref().map(|s| s.volume);
+    let pid = found.as_ref().map(|s| s.pid);
     let mut s = lock_unpoisoned(&SNAPSHOT);
     // ⚠️ 只有**值真的变了**才记日志：这是每 1.5s 一次的轮询，
     //   逐次打日志会把日志刷爆。
-    if let (Some(a), Some(b)) = (s.session_volume, vol) {
-        if (a - b).abs() < f32::EPSILON {
-            return;
-        }
-    } else if s.session_volume.is_none() && vol.is_none() {
+    let vol_changed = match (s.session_volume, vol) {
+        (Some(a), Some(b)) => (a - b).abs() >= f32::EPSILON,
+        (None, None) => false,
+        _ => true,
+    };
+    if !vol_changed && s.session_pid == pid {
         return;
     }
-    crate::process::append_log(&format!(
-        "[music] 会话音量刷新: aumid={aumid} {:?} -> {:?}",
-        s.session_volume, vol
-    ));
+    if vol_changed {
+        crate::process::append_log(&format!(
+            "[music] 会话音量刷新: aumid={aumid} {:?} -> {:?}",
+            s.session_volume, vol
+        ));
+    }
     s.session_volume = vol;
+    s.session_pid = pid;
 }
 
 /// 滚轮改完会话音量后**立即**把新值落到快照（乐观更新）。
@@ -438,6 +456,7 @@ fn music_worker_loop(rx: Receiver<Cmd>) {
         s.sessions.clear();
         s.cover_hash = 0;
         s.session_volume = None;
+        s.session_pid = None;
     }
     notify_widget();
 }

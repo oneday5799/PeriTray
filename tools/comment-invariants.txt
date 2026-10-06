@@ -24,12 +24,19 @@
 # FLOOR	⛔+⭐ 总数下界	913
 # FLOOR	⛔+⭐ 总数下界	912
 # FLOOR	⛔+⭐ 总数下界	913
+# FLOOR	⛔+⭐ 总数下界	933
+# FLOOR	⛔+⭐ 总数下界	968
+# FLOOR	⛔+⭐ 总数下界	974
+# FLOOR	⛔+⭐ 总数下界	982
 
 src-tauri/src/app_icon.rs	const EXE_PATH_CACHE	⭐	1
+src-tauri/src/app_icon.rs	fn normalize_image_path	⭐	1
 src-tauri/src/audio_notify.rs	fn post_sync_callbacks	⛔	1
 src-tauri/src/audio.rs	<file>	⭐	1
 src-tauri/src/audio.rs	const MIN_STEM_LEN	⭐	1
 src-tauri/src/audio.rs	fn aumid_matches_exe_path_only_in_the_aumid_contains_direction	⛔	2
+src-tauri/src/audio.rs	fn default_output_device_id	⛔	1
+src-tauri/src/audio.rs	fn default_output_device_id	⭐	2
 src-tauri/src/audio.rs	fn find_media_sessions	⭐	1
 src-tauri/src/audio.rs	fn find_session_volume	⛔	4
 src-tauri/src/audio.rs	fn find_session_volume	⭐	4
@@ -163,6 +170,15 @@ src-tauri/src/main.rs	fn spawn_dev_open_settings	⭐	1
 src-tauri/src/main.rs	fn spawn_startup_update_check	⛔	1
 src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⛔	3
 src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⭐	5
+src-tauri/src/media_activate.rs	<file>	⛔	2
+src-tauri/src/media_activate.rs	<file>	⭐	1
+src-tauri/src/media_activate.rs	const MAX_WINDOWS_SCANNED	⭐	1
+src-tauri/src/media_activate.rs	fn activate_media_app	⛔	1
+src-tauri/src/media_activate.rs	fn bring_window_to_front	⭐	2
+src-tauri/src/media_activate.rs	fn is_browser_exe	⭐	1
+src-tauri/src/media_activate.rs	fn launch_exe	⛔	2
+src-tauri/src/media_activate.rs	fn launch_exe	⭐	1
+src-tauri/src/media_activate.rs	fn shell_apps_folder	⛔	3
 src-tauri/src/shortcut.rs	fn cycle_device_shortcut	⭐	1
 src-tauri/src/shortcut.rs	fn sync_device_shortcuts	⛔	2
 src-tauri/src/state.rs	<file>	⛔	5
@@ -170,8 +186,8 @@ src-tauri/src/state.rs	const DEVICES_CACHE_TEST_LOCK	⭐	1
 src-tauri/src/state.rs	fn lock_unpoisoned_takes_over_poisoned_mutex	⛔	1
 src-tauri/src/state.rs	fn storing_unchanged_content_still_refreshes_the_timestamp	⛔	1
 src-tauri/src/state.rs	fn try_begin_animation_with_timeout	⭐	1
-src-tauri/src/taskbar_music.rs	<file>	⛔	4
-src-tauri/src/taskbar_music.rs	<file>	⭐	1
+src-tauri/src/taskbar_music.rs	<file>	⛔	5
+src-tauri/src/taskbar_music.rs	<file>	⭐	4
 src-tauri/src/taskbar_music.rs	const COVER_CACHE	⛔	1
 src-tauri/src/taskbar_music.rs	const COVER_CACHE	⭐	1
 src-tauri/src/taskbar_music.rs	const MAX_DECODE_PX	⛔	1
@@ -191,8 +207,11 @@ src-tauri/src/taskbar_music.rs	fn music_worker_loop	⛔	4
 src-tauri/src/taskbar_music.rs	fn music_worker_loop	⭐	2
 src-tauri/src/taskbar_music.rs	fn notify_widget	⛔	1
 src-tauri/src/taskbar_music.rs	fn read_session_info	⛔	1
+src-tauri/src/taskbar_music.rs	fn refresh_session_volume	⛔	1
+src-tauri/src/taskbar_music.rs	fn refresh_session_volume	⭐	2
 src-tauri/src/taskbar_music.rs	fn refresh_snapshot	⛔	1
 src-tauri/src/taskbar_music.rs	fn refresh_snapshot	⭐	3
+src-tauri/src/taskbar_music.rs	fn request_refresh	⛔	2
 src-tauri/src/taskbar_music.rs	fn resolution_follows_the_id_not_the_index	⛔	1
 src-tauri/src/taskbar_music.rs	fn resolution_follows_the_id_not_the_index	⭐	1
 src-tauri/src/taskbar_music.rs	fn run_cmd	⛔	1
@@ -292,8 +311,8 @@ src-tauri/src/taskbar_widget.rs	const LADDER	⛔	1
 src-tauri/src/taskbar_widget.rs	const LAST_X	⛔	1
 src-tauri/src/taskbar_widget.rs	const LAST_X	⭐	1
 src-tauri/src/taskbar_widget.rs	const MAINTENANCE_TICK_SECS	⛔	1
-src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⛔	6
-src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⭐	18
+src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⛔	8
+src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⭐	20
 src-tauri/src/taskbar_widget.rs	const NS_COVER	⛔	2
 src-tauri/src/taskbar_widget.rs	const PAD_X_DIP	⭐	1
 src-tauri/src/taskbar_widget.rs	const PRESS_CURSOR	⭐	1
@@ -315,6 +334,7 @@ src-tauri/src/taskbar_widget.rs	const WM_APP_REFRESH	⭐	1
 src-tauri/src/taskbar_widget.rs	const WM_APP_SWITCH_END	⭐	1
 src-tauri/src/taskbar_widget.rs	const WM_APP_TOOLTIP_SHOW	⛔	1
 src-tauri/src/taskbar_widget.rs	fn activate_music	⛔	1
+src-tauri/src/taskbar_widget.rs	fn activate_music	⭐	2
 src-tauri/src/taskbar_widget.rs	fn advance_switch_target	⛔	4
 src-tauri/src/taskbar_widget.rs	fn advance_switch_target	⭐	3
 src-tauri/src/taskbar_widget.rs	fn align_in_slot	⛔	3
@@ -331,7 +351,7 @@ src-tauri/src/taskbar_widget.rs	fn begin_switch_anim	⛔	1
 src-tauri/src/taskbar_widget.rs	fn begin_switch_anim	⭐	1
 src-tauri/src/taskbar_widget.rs	fn blend_over	⛔	1
 src-tauri/src/taskbar_widget.rs	fn blend_over	⭐	1
-src-tauri/src/taskbar_widget.rs	fn blend_over_antialiased_edge_is_not_eroded	⭐	1
+src-tauri/src/taskbar_widget.rs	fn blend_over_antialiased_edge_is_not_eroded	⛔	2
 src-tauri/src/taskbar_widget.rs	fn blend_over_opaque_source_replaces_destination	⛔	1
 src-tauri/src/taskbar_widget.rs	fn blit_clips_both_directions_on_horizontal_offset	⭐	1
 src-tauri/src/taskbar_widget.rs	fn blit_premul_scaled	⛔	1
@@ -360,6 +380,12 @@ src-tauri/src/taskbar_widget.rs	fn content_scale_changes_content_but_never_backd
 src-tauri/src/taskbar_widget.rs	fn content_scale_really_changes_content_metrics	⛔	3
 src-tauri/src/taskbar_widget.rs	fn content_scale_really_changes_content_metrics	⭐	2
 src-tauri/src/taskbar_widget.rs	fn cover_gap_is_wider_than_button_gap_and_shared_by_both_forms	⭐	1
+src-tauri/src/taskbar_widget.rs	fn cover_hit_is_its_own_cell_and_never_steals_the_transport_keys	⛔	1
+src-tauri/src/taskbar_widget.rs	fn cover_hit_is_its_own_cell_and_never_steals_the_transport_keys	⭐	1
+src-tauri/src/taskbar_widget.rs	fn cover_press_result_stays_between_normal_and_backdrop	⛔	4
+src-tauri/src/taskbar_widget.rs	fn cover_press_result_stays_between_normal_and_backdrop	⭐	2
+src-tauri/src/taskbar_widget.rs	fn cover_press_scales_premultiplied_colors_at_the_call_site	⛔	5
+src-tauri/src/taskbar_widget.rs	fn cover_press_scales_premultiplied_colors_at_the_call_site	⭐	2
 src-tauri/src/taskbar_widget.rs	fn create_dib	⛔	1
 src-tauri/src/taskbar_widget.rs	fn create_font	⛔	2
 src-tauri/src/taskbar_widget.rs	fn create_font	⭐	2
@@ -375,6 +401,7 @@ src-tauri/src/taskbar_widget.rs	fn destroy_widget	⛔	2
 src-tauri/src/taskbar_widget.rs	fn destroy_widget	⭐	2
 src-tauri/src/taskbar_widget.rs	fn dev_switch_hit	⛔	1
 src-tauri/src/taskbar_widget.rs	fn dev_switch_hit	⭐	1
+src-tauri/src/taskbar_widget.rs	fn dimming_only_alpha_brightens_premultiplied_pixels	⭐	1
 src-tauri/src/taskbar_widget.rs	fn drag_begin	⭐	1
 src-tauri/src/taskbar_widget.rs	fn drag_finish	⛔	3
 src-tauri/src/taskbar_widget.rs	fn draw_blank	⭐	1
@@ -405,6 +432,7 @@ src-tauri/src/taskbar_widget.rs	fn for_scales	⛔	2
 src-tauri/src/taskbar_widget.rs	fn for_scales	⭐	1
 src-tauri/src/taskbar_widget.rs	fn forget_widget	⛔	1
 src-tauri/src/taskbar_widget.rs	fn format_battery	⛔	1
+src-tauri/src/taskbar_widget.rs	fn format_battery	⭐	1
 src-tauri/src/taskbar_widget.rs	fn format_volume	⛔	1
 src-tauri/src/taskbar_widget.rs	fn format_volume	⭐	3
 src-tauri/src/taskbar_widget.rs	fn free_dib	⛔	2
@@ -415,6 +443,7 @@ src-tauri/src/taskbar_widget.rs	fn hit_rect	⭐	1
 src-tauri/src/taskbar_widget.rs	fn hit_test_item_rects	⛔	2
 src-tauri/src/taskbar_widget.rs	fn hit_test_item_rects	⭐	1
 src-tauri/src/taskbar_widget.rs	fn hit_test_music	⛔	2
+src-tauri/src/taskbar_widget.rs	fn hit_test_music	⭐	1
 src-tauri/src/taskbar_widget.rs	fn hover_backdrop_alpha_for	⛔	1
 src-tauri/src/taskbar_widget.rs	fn hover_backdrop_alpha_for	⭐	1
 src-tauri/src/taskbar_widget.rs	fn hover_backdrop_alpha_matches_fluent_flyout	⛔	1
@@ -477,11 +506,12 @@ src-tauri/src/taskbar_widget.rs	fn press_begin	⛔	1
 src-tauri/src/taskbar_widget.rs	fn press_take_click	⛔	1
 src-tauri/src/taskbar_widget.rs	fn press_take_click	⭐	1
 src-tauri/src/taskbar_widget.rs	fn press_target_at	⛔	3
-src-tauri/src/taskbar_widget.rs	fn press_target_at	⭐	1
+src-tauri/src/taskbar_widget.rs	fn press_target_at	⭐	2
+src-tauri/src/taskbar_widget.rs	fn press_target_ids_match_draw_ids	⛔	1
 src-tauri/src/taskbar_widget.rs	fn press_target_ids_match_draw_ids	⭐	1
 src-tauri/src/taskbar_widget.rs	fn pressed_after_hover	⛔	2
 src-tauri/src/taskbar_widget.rs	fn pressed_after_hover	⭐	1
-src-tauri/src/taskbar_widget.rs	fn pressed_state_is_cleared_on_all_release_paths	⭐	1
+src-tauri/src/taskbar_widget.rs	fn pressed_state_is_cleared_on_all_release_paths	⛔	2
 src-tauri/src/taskbar_widget.rs	fn probe	⭐	1
 src-tauri/src/taskbar_widget.rs	fn publish_item_rects	⛔	2
 src-tauri/src/taskbar_widget.rs	fn publish_item_rects	⭐	1
@@ -577,7 +607,7 @@ src-tauri/src/taskbar_widget.rs	fn wheel_rounds_the_base_like_the_page_slider	�
 src-tauri/src/taskbar_widget.rs	fn wheel_step_follows_fine_adjust	⛔	1
 src-tauri/src/taskbar_widget.rs	fn wheel_write_device	⛔	3
 src-tauri/src/taskbar_widget.rs	fn wheel_write_device	⭐	1
-src-tauri/src/taskbar_widget.rs	fn wheel_write_media	⭐	1
+src-tauri/src/taskbar_widget.rs	fn wheel_write_media	⭐	2
 src-tauri/src/taskbar_widget.rs	fn widget_absent_when_both_component_switches_off	⛔	3
 src-tauri/src/taskbar_widget.rs	fn widget_alive	⭐	1
 src-tauri/src/taskbar_widget.rs	fn widget_labels_are_wired_to_the_resolver	⭐	1
@@ -615,4 +645,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	933
+# FLOOR	⛔+⭐ 总数下界	989

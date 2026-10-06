@@ -89,6 +89,7 @@ const PRESS_MUSIC_PREV: i32 = 0;
 const PRESS_MUSIC_PLAY: i32 = 1;
 const PRESS_MUSIC_NEXT: i32 = 2;
 const PRESS_MUSIC_SWITCH: i32 = 3;
+const PRESS_MUSIC_COVER: i32 = 5;
 const PRESS_DEV_SWITCH: i32 = 4;
 
 static PRESSED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(PRESS_NONE);
@@ -137,6 +138,9 @@ pub fn press_target_at(local: (i32, i32)) -> i32 {
             MusicHit::Next => PRESS_MUSIC_NEXT,
             // 未 hover ⇒ 切换键不可点
             MusicHit::Switch if hovered_now => PRESS_MUSIC_SWITCH,
+            // ⭐ 封面按下态与三键同款（×0.55）：激活别的应用后我们这个窗口
+            //   往往立刻失去 hover ⇒ 若按下时完全没有变化，用户会以为没点到。
+            MusicHit::Cover => PRESS_MUSIC_COVER,
             MusicHit::Switch | MusicHit::None => PRESS_NONE,
         },
         Some(crate::config::TaskbarPanel::Devices) => {
@@ -370,6 +374,8 @@ pub enum MusicHit {
     Next,
     /// 「切换」按钮
     Switch,
+    /// 封面（⇒ 激活该会话对应的应用）。
+    Cover,
 }
 
 #[cfg(target_os = "windows")]
@@ -403,6 +409,11 @@ pub fn hit_test_music(cursor: (i32, i32)) -> MusicHit {
                 _ => MusicHit::Next,
             };
         }
+    }
+    // ⭐ 封面（⇒ 激活对应应用）。⚠️ 判据**只认封面方块本身**，不把整个
+    //   正文左侧都算进去：正文里还有双排文字，点文字没理由切换应用。
+    if l.cover.right > l.cover.left && point_in(&l.cover, cursor) {
+        return MusicHit::Cover;
     }
     MusicHit::None
 }
@@ -947,6 +958,17 @@ pub fn activate_music(hwnd: *mut core::ffi::c_void, hit: MusicHit) {
         MusicHit::PlayPause => crate::taskbar_music::cmd_play_pause(),
         MusicHit::Next => crate::taskbar_music::cmd_next(),
         MusicHit::Switch => advance_switch_target(hwnd),
+        // ⭐ 点封面 ⇒ 激活该会话对应的应用。⚠️ 用**快照里的当前会话 id**
+        //   （与绘制、tooltip、滚轮同一份），不得在这里重取会话列表。
+        MusicHit::Cover => {
+            let snap = crate::taskbar_music::snapshot();
+            match snap.current_session() {
+                Some(cur) => {
+                    crate::media_activate::activate_media_app(&cur.id);
+                }
+                None => crate::process::append_log("[activate] 未受理: 音乐快照里没有当前会话"),
+            }
+        }
         MusicHit::None => {}
     }
 }
@@ -970,6 +992,12 @@ pub struct MusicLayout {
     pub buttons: [windows_sys::Win32::Foundation::RECT; 3],
     /// 「切换」按钮（`None` = 本帧不显示）。
     pub switch_btn: Option<windows_sys::Win32::Foundation::RECT>,
+    /// 封面方块（点它 ⇒ 激活对应应用）。
+    ///
+    /// ⭐ 与 `item` / `buttons` / `switch_btn` **同一纪律**：绘制时发布、
+    ///   命中时读取。⚠️ 封面位置**随 hover 变**（hover 时正文右移让位给三键），
+    ///   所以必须每帧发布，不能算一次存着。
+    pub cover: windows_sys::Win32::Foundation::RECT,
     /// 本帧是否 hover（决定静态/控制形态）。
     pub hovered: bool,
 }
@@ -1426,6 +1454,15 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
             item: item_rect,
             buttons,
             switch_btn,
+            // ⭐ 封面方块：位置与下面绘制 ① 封面用的 `(item_rect.left,
+            //   icon_y)` + `m_art.icon` 完全同一份算式 ⛔ 不许在命中侧
+            //   另算一遍（那就是第二个布局来源）。
+            cover: windows_sys::Win32::Foundation::RECT {
+                left: item_rect.left,
+                top: icon_y,
+                right: item_rect.left + m_art.icon,
+                bottom: icon_y + m_art.icon,
+            },
             hovered,
         });
     }
@@ -1459,10 +1496,22 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                 m_art.icon as u32, // 封面边长固定
                 &(cov.data.clone(), cov.px, cov.px),
             ) {
+                // ⭐ 「按下变灰」与三键同一系数（0.55）。⛔⛔ **预乘空间里
+                //   必须连颜色一起按新 alpha 等比缩放**（照三键那段
+                //   `ipx[si] * a / 255` 的写法）：封面缓存存的是**预乘**
+                //   数据（RGB 已乘过 alpha），若只压 alpha 而 RGB 保持原值，
+                //   等价于「亮度提高 1/0.55 倍 + 覆盖度下降」⇒ 两者在预乘
+                //   合成里**不是同一件事**，实测表现为封面**色相偏移**
+                //   （真机：蓝绿色封面按下后变成红黄色）。
+                let cover_press = if pressed_id() == PRESS_MUSIC_COVER {
+                    0.55f32
+                } else {
+                    1.0f32
+                };
                 for yy in 0..(chh as i32).min(h - icon_y) {
                     for xx in 0..(cw as i32).min(total_w - item_rect.left) {
                         let si = ((yy * cw as i32 + xx) * 4) as usize;
-                        let a = cpx[si + 3] as u32;
+                        let a = (cpx[si + 3] as f32 * cover_press).round() as u32;
                         if a == 0 {
                             continue;
                         }
@@ -1471,9 +1520,9 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                             px[di] = blend_over(
                                 px[di],
                                 a,
-                                cpx[si] as u32,
-                                cpx[si + 1] as u32,
-                                cpx[si + 2] as u32,
+                                cpx[si] as u32 * a / 255,
+                                cpx[si + 1] as u32 * a / 255,
+                                cpx[si + 2] as u32 * a / 255,
                             );
                         }
                     }
@@ -6689,10 +6738,88 @@ mod tests {
         assert_eq!(pressed_id(), PRESS_NONE, "清除后不得残留按下态");
     }
 
+    /// ⛔ 封面命中：**封面独立成一格，正文左侧不算封面**（点封面 ⇒ 激活应用）。
+    ///
+    /// ⛔ 判据钉两件容易退化的事：① 若把命中写成「item 内、buttons 外一律
+    ///   Cover」，正文（双排文字）也会变成「点击切换应用」⇒ 点文字误切应用，
+    ///   而面板其余空白仍是 None —— 两种空白行为不一致、极难归因；
+    ///   ② 三键优先级不得被封面抢走（布局改动让两者贴在一起时，命中结果
+    ///   不该取决于判断顺序）。
+    #[test]
+    fn cover_hit_is_its_own_cell_and_never_steals_the_transport_keys() {
+        let cover = windows_sys::Win32::Foundation::RECT {
+            left: 8,
+            top: 6,
+            right: 40,
+            bottom: 38,
+        };
+        let item = windows_sys::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: 240,
+            bottom: 44,
+        };
+        // ── 第 ① 组：默认布局（封面 8..40 与三键 60..84 **不重叠**）──
+        let btn = |l: i32| windows_sys::Win32::Foundation::RECT {
+            left: l,
+            top: 14,
+            right: l + 24,
+            bottom: 38,
+        };
+        *crate::state::lock_unpoisoned(&MUSIC_LAYOUT) = Some(MusicLayout {
+            item,
+            buttons: [btn(60), btn(88), btn(116)],
+            switch_btn: None,
+            cover,
+            hovered: true,
+        });
+        // 封面中心 ⇒ Cover
+        assert_eq!(
+            hit_test_music((
+                (cover.left + cover.right) / 2,
+                (cover.top + cover.bottom) / 2
+            )),
+            MusicHit::Cover,
+            "封面中心应命中封面（点它激活应用）"
+        );
+        // 正文左侧（封面右缘到第一键之间）⇒ None，**不是** Cover
+        assert_eq!(
+            hit_test_music((50, 22)),
+            MusicHit::None,
+            "正文不应被算成封面（点文字不该切换应用）"
+        );
+        // 第一键中心仍归第一键
+        assert_eq!(hit_test_music((72, 26)), MusicHit::Prev);
+        // 面板外 ⇒ None
+        assert_eq!(hit_test_music((300, 22)), MusicHit::None);
+
+        // ── 第 ② 组：**故意让封面与第一键重叠**（30..54 压住封面 8..40）──
+        //
+        // ⛔ **这组重叠是判据的关键，不是凑数**：第 ① 组里两者不重叠 ⇒
+        //   「先判三键」与「先判封面」给出**同一个结果** ⇒ 判据对「优先级」
+        //   **完全失明**。注入实测过：把封面判据整段挪到三键之前，① 全绿。
+        //   只有真的重叠，「同一个点归谁」才有唯一答案可断言。
+        *crate::state::lock_unpoisoned(&MUSIC_LAYOUT) = Some(MusicLayout {
+            item,
+            buttons: [btn(30), btn(88), btn(116)],
+            switch_btn: None,
+            cover,
+            hovered: true,
+        });
+        // 重叠点（36,26 落在封面 8..40 ∩ 第一键 30..54）⇒ 必须归**第一键**
+        assert_eq!(
+            hit_test_music((36, 26)),
+            MusicHit::Prev,
+            "封面与三键重叠时必须按「先判三键」归属（改成先判封面即转红）"
+        );
+        *crate::state::lock_unpoisoned(&MUSIC_LAYOUT) = None;
+    }
+
     /// ⭐ **命中映射必须与绘制用的编号一致**——错位会让「按 A 变灰 B」。
     #[test]
     fn press_target_ids_match_draw_ids() {
-        // 编号是「布局里第几项」，音乐三键的绘制循环按 `i` 取，两边必须同源。
+        // 编号是「布局里第几项」，音乐三键的绘制循环按 `i` 取，两边
+        // ⛔ 必须共用 [`music_btn_id`]，不许各自维护一套编号表。
         assert_eq!(music_btn_id(0), PRESS_MUSIC_PREV);
         assert_eq!(music_btn_id(1), PRESS_MUSIC_PLAY);
         assert_eq!(music_btn_id(2), PRESS_MUSIC_NEXT);
@@ -6704,6 +6831,7 @@ mod tests {
             PRESS_MUSIC_PLAY,
             PRESS_MUSIC_NEXT,
             PRESS_MUSIC_SWITCH,
+            PRESS_MUSIC_COVER,
             PRESS_DEV_SWITCH,
             PRESS_NONE,
         ];
@@ -8605,6 +8733,175 @@ mod tests {
         assert!((out >> 16) & 0xFF < 153, "必须比纯底衬暗 ⇒ 字确实画上去了");
     }
 
+    /// ⛔⛔ **预乘位图「变暗」时，颜色分量必须随新 alpha 等比缩放**。
+    ///
+    /// 根因（真机故障）：封面按下时把 alpha 乘 0.55、**RGB 保持原值**。
+    /// 而缓存里存的是**预乘**数据（RGB 已乘过 alpha）⇒ 那等价于
+    /// 「RGB 不变、覆盖度变低」⇒ 合成出的颜色比原来**亮得多**却只有一半
+    /// 不透明度 ⇒ 实测蓝绿色封面按下后**变成红黄色**（色相被带偏）。
+    ///
+    /// ⛔⛔ **判据钉的是绘制处的调用点文本，不是重算一遍公式**：
+    ///   初版判据在手抄一遍算法（`cpx[si] * a / 255`），对「调用点用错了
+    ///   对象」**完全失明** —— 注入把绘制处改回错误写法，判据仍全绿。
+    ///   ⇒ 这里改成**读源文件**、断言绘制段里那三行必须带 `* a / 255`。
+    ///   （与本仓既有做法一致：`inject-*.py` 也是钉锚点文本。）
+    ///
+    /// ⚠️ 附带一条**纯函数**判据（钉住「两种做法的亮度差」这个物理量），
+    ///   它负责回答「为什么错的那个会偏亮」，但**不负责发现调用点改错**。
+    #[test]
+    fn cover_press_scales_premultiplied_colors_at_the_call_site() {
+        // ⭐ 钉调用点：封面合成那三行必须逐行带 `* a / 255`。
+        // ⚠️ 必须**逐行**断言，不能数子串总数：文件里另有十几处
+        //   `* a / 255`（三键、设备角标），数总数会被无关改动带偏；
+        //   也不能只数 `cpx[si] as u32 * a / 255` 的出现次数——三个分量
+        //   下标写法不同（R 是 `cpx[si]`、G/B 是 `cpx[si + 1]`/`[si + 2]`），
+        //   数不出 3。
+        //
+        // ⛔⛔ **必须先把判据自身从待检文本里剔掉**（`fn_start` 之前）：
+        //   本函数的**断言数组里就写着那三行字面量** ⇒ 不剔除的话，
+        //   注入把绘制处改坏后，判据自己那份字面量照样命中 ⇒ **失明**
+        //   （实测：注入回 bug 仍全绿）。这就是「判据自己重算」的第三种自欺
+        //   ——此处靠**读源文件 + 排除自身**才真正钉住调用点。
+        let src = include_str!("taskbar_widget.rs");
+        let fn_start = src
+            .find("fn cover_press_scales_premultiplied_colors_at_the_call_site")
+            .expect("判据函数自身必须还在（否则下面按行号切片无从谈起）");
+        let draw_area = &src[..fn_start];
+        for line in [
+            "                                cpx[si] as u32 * a / 255,",
+            "                                cpx[si + 1] as u32 * a / 255,",
+            "                                cpx[si + 2] as u32 * a / 255,",
+        ] {
+            assert!(
+                draw_area.contains(line),
+                "封面合成段必须逐行保留按 alpha 缩放的写法，缺了：{line}"
+            );
+        }
+        // ⛔ 反证：同文件里**设备图标角标**也用同款写法（说明这是既有惯例，
+        //   不只三键一处）—— 只作「惯例存在」的旁证，不作为判据主干
+        //   （⛔ 它的缩进在不同段落不同，按次数计数太脆，已实测会误报）。
+        assert!(
+            src.contains("ipx[si] as u32 * a / 255"),
+            "同款写法在文件别处也应有（否则说明惯例本身被改了）"
+        );
+    }
+
+    /// ⛔⛔ **真机判据（跑真实合成链路）**：封面按下时合成结果必须
+    /// **落在「正常合成」与「纯底衬」之间**。
+    ///
+    /// ⚠️ **为什么必须是「跑合成」而不是「比截图」**：widget 是
+    ///   `WS_EX_LAYERED` + `UpdateLayeredWindow` 的分层窗，屏幕 DC 抓不到
+    ///   它（实测 `CAPTUREBLT` 也只抓到纯白）⇒ 任何基于截图像素的判据都
+    ///   做不出来。这里改成用**同一批函数**（`blend_over` + 预乘缩放）跑
+    ///   一遍真实数字。
+    ///
+    /// ⭐ **判别量 = 「插值区间」**（不是色相）：预乘合成里 alpha 就是覆盖
+    ///   度，所以覆盖度下降时，结果必然**向底衬方向插值** ⇒ 每个分量都
+    ///   必须落在「正常合成」与「纯底衬」之间。
+    ///   · 正确（RGB 按 `a/255` 缩放）⇒ 严格落在区间内；
+    ///   · 错误（只压 alpha）      ⇒ G/B **冲出区间上限**（数值 207/197
+    ///     都大于底衬 153）⇒ 一眼可辨。
+    /// ⚠️ ⛔ **不能用「色相（R:G:B 相对比例）不变」当判据**：预乘覆盖度
+    ///   一变，比值就必然变（底衬对三分量的贡献相同）⇒ 该指标对这条故障
+    ///   **结构性失明**（初版判据就是这么写的，转绿了）。
+    /// ⚠️ 也不能用「按下的总亮度必须低于松开」：本例正确解的总亮度
+    ///   （376）**高于**松开态（310）——覆盖度降了 ⇒ 底衬透得更多 ⇒ 更亮。
+    ///   这是物理事实，不是 bug（初版也踩过）。
+    #[test]
+    fn cover_press_result_stays_between_normal_and_backdrop() {
+        // 一块蓝绿色封面像素（预乘：RGB 已乘过 alpha）
+        let pix = [40u8, 120, 110, 200];
+        let backdrop = 153u32; // hover 底衬的白色分量（实测常量）
+
+        // ⚠️ 用**闭包**而不是 `fn` 项：`fn` 项不能捕获动态环境
+        //   （E0434，实测踩过）。
+        let composite = |press: f32, scale_colors: bool| -> (u32, u32, u32) {
+            let a = (pix[3] as f32 * press).round() as u32;
+            // ⛔⛔ 与绘制处同款：颜色必须随新 alpha 缩放（预乘空间的规矩）
+            let k = |c: u8| {
+                if scale_colors {
+                    u32::from(c) * a / 255
+                } else {
+                    u32::from(c)
+                }
+            };
+            let out = blend_over(
+                (backdrop << 24) | (backdrop << 16) | (backdrop << 8) | backdrop,
+                a,
+                k(pix[0]),
+                k(pix[1]),
+                k(pix[2]),
+            );
+            ((out >> 16) & 0xFF, (out >> 8) & 0xFF, out & 0xFF)
+        };
+
+        let normal = composite(1.0, true);
+        let pressed = composite(0.55, true);
+        let wrong = composite(0.55, false);
+
+        // ⭐ ① 正确解：三个分量都必须落在 [正常, 底衬] 之间
+        for i in 0..3 {
+            let v = [pressed.0, pressed.1, pressed.2][i];
+            let n = [normal.0, normal.1, normal.2][i];
+            let lo = n.min(backdrop);
+            let hi = n.max(backdrop);
+            assert!(
+                (lo..=hi).contains(&v),
+                "分量 {i} = {v} 越出插值区间 [{lo}, {hi}]（正常 {n} / 底衬 {backdrop}）"
+            );
+        }
+
+        // ⛔ ② 错误解必须**越界**（否则说明这条判据对该 bug 失明）
+        let escaped = (0..3)
+            .filter(|&i| {
+                let v = [wrong.0, wrong.1, wrong.2][i];
+                let n = [normal.0, normal.1, normal.2][i];
+                let lo = n.min(backdrop);
+                let hi = n.max(backdrop);
+                !(lo..=hi).contains(&v)
+            })
+            .count();
+        assert!(
+            escaped >= 1,
+            "⛔ 只压 alpha 必须至少让一个分量冲出插值区间（否则判据失明）：             正常 {normal:?} 正确 {pressed:?} 错误 {wrong:?}"
+        );
+
+        // ⛔ ③ 而且错误解明显更亮（这是真机看到「颜色突变」的观感来源）
+        let lum = |v: (u32, u32, u32)| v.0 + v.1 + v.2;
+        assert!(
+            lum(wrong) > lum(pressed) * 5 / 4,
+            "错误解必须明显更亮：正确 {} vs 错误 {}",
+            lum(pressed),
+            lum(wrong)
+        );
+    }
+
+    /// 纯函数部分：为什么「只压 alpha」会让颜色偏亮（预乘空间下的物理量）。
+    ///
+    /// ⭐ 判据量 = `RGB 之和 / 新 alpha`（预乘空间下的「亮度」）；
+    ///   ⛔ **两种做法必须在同一个新 alpha 下比**：只看「相对原值的比例」
+    ///   会被「整数 alpha 取整」带偏（实测 200×0.55 取整成 110，本身就和
+    ///   0.55 对不上）⇒ 比值差能到 20%，判据会翻车（初版翻在这）。
+    /// ⚠️ **不能用「色相（RGB 相对比例）」当判据**：按比例缩放不改比例，
+    ///   而错误做法也没改 RGB ⇒ 两种做法在色相上**都等于原值**，
+    ///   对这条故障**完全失明**。
+    #[test]
+    fn dimming_only_alpha_brightens_premultiplied_pixels() {
+        // 蓝绿色封面像素：偏蓝、alpha 中等（预乘：RGB 已乘过 alpha）
+        let (pr, pg, pb, pa) = (40u32, 120u32, 110u32, 200u32);
+        let a = (pa as f32 * 0.55f32).round() as u32;
+        assert_eq!(a, 110, "新 alpha = 200 × 0.55");
+        let lum_at = |r: u32, g: u32, b: u32| (r + g + b) as f64 / a as f64;
+        let correct = lum_at(pr * a / 255, pg * a / 255, pb * a / 255);
+        let wrong = lum_at(pr, pg, pb);
+        assert!(
+            wrong > correct * 1.5,
+            "只压 alpha 必须显著偏亮（实测 {:.0}%）：正确 {:.1} vs 错误 {:.1}",
+            (wrong / correct - 1.0) * 100.0,
+            correct,
+            wrong
+        );
+    }
     // ── hover 底衬：主题 → 不透明度 / 光标命中判定 ──────────────────
 
     /// ⭐ 两个 alpha 必须**逐字**等于换算出来的值 —— 这是「底衬不透明度照搬桌面平台
