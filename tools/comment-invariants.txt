@@ -28,6 +28,7 @@
 # FLOOR	⛔+⭐ 总数下界	968
 # FLOOR	⛔+⭐ 总数下界	974
 # FLOOR	⛔+⭐ 总数下界	982
+# FLOOR	⛔+⭐ 总数下界	989
 
 src-tauri/src/app_icon.rs	const EXE_PATH_CACHE	⭐	1
 src-tauri/src/app_icon.rs	fn normalize_image_path	⭐	1
@@ -382,7 +383,7 @@ src-tauri/src/taskbar_widget.rs	fn content_scale_really_changes_content_metrics	
 src-tauri/src/taskbar_widget.rs	fn cover_gap_is_wider_than_button_gap_and_shared_by_both_forms	⭐	1
 src-tauri/src/taskbar_widget.rs	fn cover_hit_is_its_own_cell_and_never_steals_the_transport_keys	⛔	1
 src-tauri/src/taskbar_widget.rs	fn cover_hit_is_its_own_cell_and_never_steals_the_transport_keys	⭐	1
-src-tauri/src/taskbar_widget.rs	fn cover_press_result_stays_between_normal_and_backdrop	⛔	4
+src-tauri/src/taskbar_widget.rs	fn cover_press_result_stays_between_normal_and_backdrop	⛔	3
 src-tauri/src/taskbar_widget.rs	fn cover_press_result_stays_between_normal_and_backdrop	⭐	2
 src-tauri/src/taskbar_widget.rs	fn cover_press_scales_premultiplied_colors_at_the_call_site	⛔	5
 src-tauri/src/taskbar_widget.rs	fn cover_press_scales_premultiplied_colors_at_the_call_site	⭐	2
@@ -401,7 +402,6 @@ src-tauri/src/taskbar_widget.rs	fn destroy_widget	⛔	2
 src-tauri/src/taskbar_widget.rs	fn destroy_widget	⭐	2
 src-tauri/src/taskbar_widget.rs	fn dev_switch_hit	⛔	1
 src-tauri/src/taskbar_widget.rs	fn dev_switch_hit	⭐	1
-src-tauri/src/taskbar_widget.rs	fn dimming_only_alpha_brightens_premultiplied_pixels	⭐	1
 src-tauri/src/taskbar_widget.rs	fn drag_begin	⭐	1
 src-tauri/src/taskbar_widget.rs	fn drag_finish	⛔	3
 src-tauri/src/taskbar_widget.rs	fn draw_blank	⭐	1
@@ -562,7 +562,7 @@ src-tauri/src/taskbar_widget.rs	fn slot_of	⛔	2
 src-tauri/src/taskbar_widget.rs	fn snapshot_store_reports_no_change_for_identical_content	⭐	1
 src-tauri/src/taskbar_widget.rs	fn spawn_switch_anim	⛔	2
 src-tauri/src/taskbar_widget.rs	fn spawn_widget	⭐	4
-src-tauri/src/taskbar_widget.rs	fn start_music	⛔	1
+src-tauri/src/taskbar_widget.rs	fn start_music	⛔	2
 src-tauri/src/taskbar_widget.rs	fn store	⭐	1
 src-tauri/src/taskbar_widget.rs	fn stretch_only_widens_the_gap_before_switch	⛔	1
 src-tauri/src/taskbar_widget.rs	fn stretch_only_widens_the_gap_before_switch	⭐	2
@@ -645,4 +645,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	989
+# FLOOR	⛔+⭐ 总数下界	988

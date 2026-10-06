@@ -364,9 +364,9 @@ async function showAudioContextMenu(x, y, device) {
     }
   }
 
-  // ⭐ 「钉到任务栏」——与设备信息页同一功能（用户 2026-09-28 要求两页都能加）。
+  // ⭐ 「钉到任务栏」——与设备信息页同一功能。
   //
-  // ⭐ 位置：**菜单最底部、「空间音效」之下**（用户 2026-09-28 指定）。
+  // ⭐ 位置：**菜单最底部、「空间音效」之下**。
   //    故本块刻意排在上面那段 await 之后追加——顺带天然满足
   //    ⛔「菜单项必须在所有 await 之后追加」：`showAudioContextMenu` 带
   //    `audioMenuToken` 重入令牌，提前追加会与空间音效查询竞态。
@@ -396,7 +396,7 @@ async function showAudioContextMenu(x, y, device) {
     }
     hideAllContextMenus();
   });
-  // ⛔ **只在「显示设备信息组件」开启时才追加这一项**（用户 2026-09-30 要求）。
+  // ⛔ **只在「显示设备信息组件」开启时才追加这一项**。
   //   组件关着时，钉过去也不会显示 ⇒ 入口没有意义。
   // ⚠️ 判据来自 `common.js` 的共用开关，与设备信息页**同一个函数**
   //   （`isTaskbarWidgetEnabled`）⇒ 两页不会分叉。

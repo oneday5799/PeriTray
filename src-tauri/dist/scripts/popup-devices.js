@@ -589,7 +589,7 @@ function showContextMenu(x, y, dev) {
   menu.appendChild(trayItem);
   menu.appendChild(trayItem);
 
-  // ⭐ 「钉到任务栏」——与上面「添加到托盘」同一范式（用户 2026-09-28）。
+  // ⭐ 「钉到任务栏」——与上面「添加到托盘」同一范式。
   //    语义是**切换**（已钉则显示「移出任务栏」）；后端 `toggle_taskbar_device_pin`
   //    返回切换**之后**的状态 ⇒ 直接用它更新本地 Set，不必再查一次。
   // ⛔ 后端按 `name` 自行解析 `key`/`fallback`（`core_name` 在 JS 侧无法等价复现），
@@ -607,7 +607,7 @@ function showContextMenu(x, y, dev) {
     }
     hideAllContextMenus();
   });
-  // ⛔ **只在「显示设备信息组件」开启时才追加这一项**（用户 2026-09-30 要求）。
+  // ⛔ **只在「显示设备信息组件」开启时才追加这一项**。
   //   组件关着时，钉过去也不会显示 ⇒ 入口没有意义。
   // ⚠️ 判据来自 `common.js` 的共用开关，与音量页**同一个函数**
   //   （`isTaskbarWidgetEnabled`）⇒ 两页不会分叉。

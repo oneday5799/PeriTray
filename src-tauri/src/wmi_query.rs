@@ -306,9 +306,9 @@ fn query_bt_devices(
         Err(_) => return,
     };
 
-    // 「MAC → 容器」映射：一次枚举覆盖本批全部蓝牙设备。
+    // 「MAC → 容器」映射：一次枚举覆盖全部蓝牙设备。
     // 实测同一 MAC 会命中 3~4 个 BTHENUM 服务实例但容器一致 ⇒ 单值映射无歧义。
-    // 失败时返回空表 ⇒ 本批设备降级到名称键，不影响枚举本身。
+    // 失败时返回空表 ⇒ 设备降级到名称键，不影响枚举本身。
     let container_map = device_identity::bluetooth_container_map();
 
     for (name, connected, battery, device_id, is_ble) in btc_devices {

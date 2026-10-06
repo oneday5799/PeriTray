@@ -196,24 +196,22 @@ fn launch_exe(exe_path: &str) -> bool {
 
 /// 点封面的主入口：把 AUMID 对应的应用拉到前台。
 ///
-/// ⭐ **三段递进**（路线与 `ck/AF-Media-Bar` / `ck/FluentFlyout` 同源，
-///   本仓把「按 pid 激活已有窗口」排在最前）：
+/// ⭐ **三段递进**（路线与 `ck/AF-Media-Bar` / `ck/FluentFlyout` 同源）：
 ///   ① 快照里的 pid → 找主窗口 → `ShowWindow(SW_RESTORE)` +
 ///      `SetForegroundWindow`。覆盖**有窗口的已运行应用**；
-///   ② pid 在、但**一个可见窗口都没有**（托盘/气泡类应用，本机实测的
-///      EchoMusic 正是如此：pid 17976 有 7 个顶层窗口、可见性全为 0）
-///      → `ShellExecuteW` 直接跑它的 exe，让它自己把 UI 拉出来；
-///      ⛔ 浏览器跳过（会开空白新窗，见 [`is_browser_exe`]）；
+///   ② pid 在、但**一个可见窗口都没有**（托盘/气泡类应用；实测该应用的
+///      pid 有 7 个顶层窗口、可见性全为 0）→ `ShellExecuteW` 直接跑它的
+///      exe，让它自己把 UI 拉出来；⛔ 浏览器跳过（见 [`is_browser_exe`]）；
 ///   ③ ②也没有 exe（没匹配到 pid）而 AUMID 含 `!` →
 ///      `explorer.exe shell:AppsFolder\{AUMID}`，覆盖**商店版**应用。
 ///
 /// ⛔ **全失败只记 standard 日志、不弹窗**：点击处理没有 UI 上下文可弹，
 ///   静默失败更糟（用户会以为功能不存在）。
-/// ⚠️ **已知缺口**：托盘类应用若 ② 也不奏效（取决于它自己的单实例实现，
-///   有的转发到已有实例、有的真开新进程），点封面就没有可见反应。
+/// ⚠️ **已知缺口**：②是否奏效取决于应用自己的单实例实现（有的转发到
+///   已有实例、有的真开新进程），都不奏效时点封面没有可见反应。
 ///   通用地触发托盘气泡需要 `Shell_NotifyIconGetRect` + 向图标发
 ///   `NIN_SELECT`，而那个 id 由**应用自己**注册、第三方查不到
-///   （本仓托盘 id 也只有自己知道）⇒ 无第三方通用解，本批不做。
+///   （本仓托盘 id 也只有自己知道）⇒ 无第三方通用解，不做。
 pub fn activate_media_app(aumid: &str) -> Activated {
     let aumid = aumid.trim();
     if aumid.is_empty() {

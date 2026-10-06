@@ -10,17 +10,17 @@
  *    · 「任务栏窗口位置」下拉     → `config.taskbar_position`（left/center/right）
  *    · 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default/follow_system）
  *
- * ⭐ 两个组件开关**互相独立**（用户 2026-09-28）：关掉「显示设备信息组件」**不会**
+ * ⭐ 两个组件开关**互相独立**：关掉「显示设备信息组件」**不会**
  *    关掉「显示音乐控制组件」，反之亦然。两个都开时，任务栏组件最右侧出现
  *    「切换」按钮（由后端 `taskbar_widget` 处理，本页不参与）。
  *
- * ⛔ 设备**添加**入口已从本页移除（用户 2026-09-28）：改到**弹出窗口**的设备卡片
- *    右键菜单「钉到任务栏」，与托盘的「添加到托盘」同一范式。本页只保留
+ * ⛔ 本页**不提供设备添加入口**：添加在**弹出窗口**的设备卡片右键菜单
+ *    「钉到任务栏」，与托盘的「添加到托盘」同一范式。本页只保留
  *    「查看已添加 + 移除」，且清单**必须含已断开设备**。
  *
  * ⛔ 落盘**不是可选的**：后端 `config::taskbar_panel_for()` 直接读本页写的字段
- *    决定组件显示哪一块（2026-09-28 起判据由「设备开关 ∧ 已钉设备」升为**三态**：
- *    音乐可用→音乐面板、否则设备可用→设备面板、否则不显示），窗口挂载/拆除/重绘
+ *    决定组件显示哪一块（判据见 `config::taskbar_panel_candidates`：
+ *    候选 = 开关开 ∧ 有内容，只有两个候选都有时「记住的选择」才生效），窗口挂载
  *    全由 `config-changed` 驱动 ⇒ 这里不落盘就等于**控件是死的**。 */
 function initTaskbarTab() {
   initTaskbarWidgetCard();
@@ -30,8 +30,8 @@ function initTaskbarTab() {
 }
 // ── 任务栏组件：总开关 + 已添加设备清单 ────────────────────────────
 //
-// ⭐ 开关落 `config.taskbar_widget_enabled`（**默认关**，用户 2026-09-28 口径）。
-// ⛔ **关闭不得清空设备列表** —— 用户要求「关闭后保留设备信息，方便重新打开」；
+// ⭐ 开关落 `config.taskbar_widget_enabled`（**默认关**）。
+// ⛔ **关闭不得清空设备列表**（关闭只隐藏组件，设备原样保留）；
 //    后端 `should_show()` 也据此判为「开关 ∧ 列表非空」，两侧口径必须一致。
 // ⭐ 展开区列出**已添加**的设备（含已断开，置灰呈现）+ 每行「移除」按钮；
 //    设备本身由弹出窗口右键菜单「钉到任务栏」添加，本页不再提供选择器。
@@ -152,7 +152,7 @@ function initTaskbarWidgetCard() {
 }
 
 
-/** 「显示音乐控制组件」单开关卡（用户 2026-09-28 新增）。 */
+/** 「显示音乐控制组件」单开关卡。 */
 function initTaskbarMusicCard() {
   const card = document.getElementById("taskbar-music-card");
   const toggle = document.getElementById("toggle-taskbar-music");
@@ -219,7 +219,7 @@ function initTaskbarPinCard() {
 
 // 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default / smaller）。
 //
-// ⛔ **作用域**（用户 2026-09-25 指定）：只改**内容**（图标边长 / 信息文字字号 /
+// ⛔ **作用域**：只改**内容**（图标边长 / 信息文字字号 /
 //    随内容缩放的间距与项宽上限），**底衬恒按系统 DPI**（窗口高度、圆角不受本项影响）。
 //    落地在 `taskbar_widget::Metrics`：内容走 `content_dpi`，底衬走 `dpi`，两者分开换算。
 //

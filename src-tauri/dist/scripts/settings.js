@@ -868,7 +868,7 @@ onTauriEvent("config-changed", async (event) => {
   await renderShutdownVolumeDevices();
   // ⭐ 任务栏卡片的「已添加清单」是**后端命令**的结果（`get_pinned_taskbar_list`），
   //   不随 `config` 快照自动更新 ⇒ 改名 / 钉移出后必须显式重拉，
-  //   否则用户停在任务栏 tab 上会一直看到旧名字（用户 2026-09-28 报）。
+  //   否则用户停在任务栏 tab 上会一直看到旧名字。
   if (typeof window.refreshTaskbarWidgetCardList === "function") {
     window.refreshTaskbarWidgetCardList();
   }

@@ -484,7 +484,7 @@ pub fn find_paired_bluetooth_devices(
 
     let btc_selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
     let btc_devices_info = DeviceInformation::FindAllAsyncAqsFilter(&btc_selector)?.join()?;
-    // 先把本批经典蓝牙设备收齐，再**一次性**读电量（P1-9）：
+    // 先把经典蓝牙设备收齐，再**一次性**读电量：
     // ⛔ 不得在循环里逐台调用：每次都会重建「系统类设备信息集」并全量枚举。
     let mut btc_entries: Vec<(String, bool, String)> = Vec::new();
     for device_info in btc_devices_info.into_iter() {

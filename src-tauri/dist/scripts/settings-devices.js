@@ -16,7 +16,7 @@ async function loadDevicesAsync() {
     deviceGroups = config.device_groups || {};
 
     // 设备列表 / 分组映射 / **别名表** 无变化时跳过 DOM 重建，避免闪烁。
-    // ⛔ 别名表必须算进 key（用户 2026-09-28 报「设置页不跟着改名刷新」）：
+    // ⛔ 别名表必须算进 key：
     //   渲染出来的文字来自 `getDisplayName(dev, config.device_names)`，
     //   而 key 里只有设备名与分组 ⇒ 改完名这三个都没变 ⇒ key 相同 ⇒ 直接
     //   `return`，DOM 留着**旧别名**。守卫本身是对的（防闪烁），只是漏了一个输入。
