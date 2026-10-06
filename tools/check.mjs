@@ -475,7 +475,7 @@ for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
 // `Vec::<u16>::new().as_ptr()` 是**悬垂的对齐哨兵指针**（u16 对齐 = 2），
 // 而 `DrawTextW` 即使 `cch = 0` 也会解引用它 ⇒ **访问违例**：
 // 进程直接消失，**无 panic、无 WER、看门狗不触发**。
-// 2026-09-29 真机实测：某个会话上报 `artist = ""` ⇒ 同一首歌画得好好的，
+// 真机实测：某个会话上报 `artist = ""` ⇒ 同一首歌画得好好的，
 // 「切换媒体会话」后崩 ⇒ 看起来像会话切换的 bug，实际是**空串**。
 //
 // ⭐ **为什么要有这条静态规则**：那三处闸是**逐个查出来、逐个补的**
@@ -524,6 +524,26 @@ for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
         );
       }
     }
+  }
+}
+
+// ── 第 9 类：已安装的钩子不得落后于 `tools/pre-commit` 模板 ─────────────
+// ⭐ **为什么要有这条**：`.git/hooks/` 不随仓库走，所以「模板加了新闸门、钩子还是旧的」
+//   是**静默**的——旧钩子照样绿，新闸门一次都不会跑。实测踩过：`tools/pre-commit`
+//   已加承重注释不变量闸门，`.git/hooks/pre-commit` 仍是旧版，
+//   于是「只改注释」的提交**不受任何闸门约束**，而 `AGENTS.md` 当时并无任何提示。
+//
+// ⚠️ 只在**钩子已安装**时报错：没装钩子的人（CI、只读 clone）不该被这条拦住，
+//   所以缺失即跳过；落后才转红，并直接给出修复命令。
+{
+  const tmpl = path.join(ROOT, "tools", "pre-commit");
+  const hook = path.join(ROOT, ".git", "hooks", "pre-commit");
+  if (fs.existsSync(hook) && read(hook) !== read(tmpl)) {
+    errors.push(
+      `.git/hooks/pre-commit 与 tools/pre-commit 不一致：钩子装的是旧版，\n` +
+        `    模板里新增的闸门（如承重注释不变量）在钩子里**不会执行**。\n` +
+        `    修复：cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`,
+    );
   }
 }
 

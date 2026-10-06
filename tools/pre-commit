@@ -1,6 +1,13 @@
 #!/bin/sh
 node tools/check.mjs || exit 1
 
+# 承重注释不变量（见 AGENTS.md「代码与注释风格」→ 注释体例）
+# ⚠️ 只在 Rust / tools 的**注释**有暂存改动时才跑：注释体例改动不该被
+#    前端文件的提交卡住，反之亦然；而每次都跑会让纯文档提交平白多花一次全仓扫描。
+if git diff --cached --name-only -- src-tauri/src tools | grep -q .; then
+  node tools/check-comment-invariants.mjs || exit 1
+fi
+
 # Rust 源有暂存改动时增量运行 rustfmt 与 cargo check（约定见 AGENTS.md Commit 规范）
 if git diff --cached --name-only -- src-tauri/src src-tauri/Cargo.toml src-tauri/Cargo.lock | grep -q .; then
   echo "[pre-commit] Rust 改动，运行 cargo fmt --check..."
