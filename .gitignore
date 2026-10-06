@@ -6,11 +6,6 @@
 /src-tauri/data/wireless_24g_devices_user.json
 
 *.pdb
-generate_icons.mjs
-generate_widget_icons.mjs
-# 音乐控制图标生成脚本（2026-09-28）—— 同样是「一次性、本机口径」的生成器，
-# 产物（src-tauri/icons/tray-music-*.png）入库，脚本本身不入库。
-generate_music_icons.mjs
 
 # Logs
 *.log
@@ -35,13 +30,10 @@ Thumbs.db
 /src-tauri/msix/stage/
 /src-tauri/msix/output/
 
-
 # 任务栏自绘 spike 阶段的**参考源码**（6 个同类开源项目，40 MB / 625 文件）：
 # StockBar / TokenBar / FluentFlyout / QuotaDock / bt-battery-bar / gold-monitor。
 # ⚠️ **绝不入库**：第三方源码 + 体量大；结论已提炼进 Wiki 15，这里只留「怎么查」用的原件。
 /ck/
-
-
 
 # tools/local 里截图/临时产物的默认落盘目录（脚本按 OUT/OUT_DIR 变量写这里）。
 /tools/local/_out/
