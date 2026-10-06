@@ -100,6 +100,10 @@ OpenRazer / `ck/` …）。这些一律进 Wiki，代码里最多留一句 `→ 
 → `git tag -a vX.Y.Z -F <notes>` 并 push）。⛔ **必须是附注 tag**：轻量 tag 的 ref 指向
 commit，CI 会取到**提交说明**当正文发出去。⛔ **tag 一旦推送即不可改**。
 beta 跳过 Wiki 校准轮，正式版必做。**详见 Wiki 09。**
+⛔ **打 tag 必须带 `--cleanup=whitespace`**：`git tag -a -F` 默认走 `strip`，
+会把**以 `#` 开头的整行当注释删掉** ⇒ notes 里的 `## ✨ 新功能` 这类分节标题被
+**静默吃掉**（Release 页上就只剩裸条目）。打完 tag 立刻用
+`git cat-file tag <ver> | sed '1,/^$/d'` 核对正文再 push——tag 推送后不可改。
 ⛔ **「五处版本号」有一处是构建产物**：`src-tauri/dist/settings.html`。
 只改 `package.json` / `Cargo.toml` 而没重跑前端构建，`check.mjs` 就会报
 「版本号不一致」⇒ bump 后必须让 `dist/` 与之同步。
