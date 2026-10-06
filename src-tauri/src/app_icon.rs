@@ -9,8 +9,38 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 static ICON_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new();
 static NAME_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new();
+static EXE_PATH_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new();
 
-/// 从进程PID获取应用名称（优先读取 exe 文件版本信息的 FileDescription，回退到 exe 文件名）
+/// 从 pid 取 **exe 文件完整路径**（小写），如 `C:\Program Files\Spotify\Spotify.exe`。
+///
+/// ⭐ **与 `get_process_name_by_pid` 是两件事、两个缓存**：后者给的是文件
+///   版本信息里的 `FileDescription`（本地化描述，`Spotify` / `网易云音乐`），
+///   用来做界面显示名；本函数给的是**身份事实**（可执行文件路径），
+///   用来和 SMTC 的 AUMID 做匹配（口径见 `audio::media_aumid_matches`）。
+///   混用会把「本地化改名 / 商店版改名」带进身份判定。
+/// ⚠️ 给完整路径（不是只有文件名）是有意的：匹配方要按 `file_stem`（不含
+///   `.exe`）与 `file_name`（含 `.exe`）**分别取两条证据**，只给其中之一
+///   就得在匹配方重复拆路径。
+/// ⚠️ 走 OpenProcess + 查扩展名路径（实测单次毫秒级），故按 pid 缓存。
+pub fn get_process_exe_path(pid: u32) -> Option<Arc<str>> {
+    let cache =
+        EXE_PATH_CACHE.get_or_init(|| Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())));
+    {
+        let mut guard = crate::state::lock_unpoisoned(cache);
+        if let Some(path) = guard.get(&pid) {
+            return Some(Arc::clone(path));
+        }
+    }
+    let path = query_exe_path_by_pid(pid).map(|p| Arc::from(p.to_lowercase().as_str()));
+    if let Some(path) = &path {
+        let mut guard = crate::state::lock_unpoisoned(cache);
+        guard.put(pid, Arc::clone(path));
+    }
+    path
+}
+
+/// 从进程PID获取应用名称（优先读取 exe 文件版本信息的 FileDescription，回退
+/// 到 exe 文件名）。
 pub fn get_process_name_by_pid(pid: u32) -> Option<Arc<str>> {
     let cache =
         NAME_CACHE.get_or_init(|| Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())));

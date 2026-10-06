@@ -353,7 +353,7 @@ pub fn ensure_music_worker(app: &tauri::AppHandle) {
     let first = !crate::taskbar_music::worker_started();
     start_music(app);
     if first {
-        append_log("[widget] 音乐后台线程按需启动（音乐开关开 或 记住的面板是音乐）");
+        append_log("[widget] 音乐后台线程按需启动（音乐开关开）");
     }
 }
 
@@ -1403,10 +1403,23 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         });
         item_rect.right = x + switch_px;
     }
+    // ⭐ tooltip **固定三行**：曲名 / 艺人 / 会话音量。
+    //   第三行是**滚轮的唯一可见反馈**——音乐面板本身不画音量，
+    //   没有它用户会以为滚轮没生效（实测初版正是如此：日志里音量
+    //   0.26→0.27→0.28 一路在涨，界面却毫无变化）。
+    // ⚠️ 音量读不到时**照样占一行**（显示占位符）：让行数随匹配成败
+    //   变化 ⇒ tooltip 高度跳动，比缺一个数字更难读。
+    let vol_line = match snap.session_volume {
+        Some(v) => format!(
+            "音量 {}",
+            format_volume_value(v, crate::config::with_config(|c| c.volume_fine_adjust))
+        ),
+        None => "音量 —".to_string(),
+    };
     let tip_text = if cur.title.is_empty() {
-        "未在播放".to_string()
+        format!("未在播放\n\n{vol_line}")
     } else {
-        format!("{}\n{}", cur.title, cur.artist)
+        format!("{}\n{}\n{vol_line}", cur.title, cur.artist)
     };
     if publish {
         publish_music_layout(MusicLayout {
@@ -2010,17 +2023,29 @@ fn publish_item_rects(rects: &[windows_sys::Win32::Foundation::RECT]) {
 //   按序处理 ⇒ 步进不丢，且**不需要新增全局锁**（也就不必在 `state.rs` 的
 //   锁序表里登记新边）。
 
+/// 一格滚轮要调的目标。**两套数据源各自成一枚变体**——
+/// ⛔ 不许合成 `String` + `String`：设备侧用**端点 id**、音乐侧用
+///   **AUMID**，两者语义完全不同，混在一个 `String` 里迟早被当成同一种
+///   东西读（这正是本仓历次「下标空间别名」事故的同一形状）。
+#[cfg(target_os = "windows")]
+enum WheelTarget {
+    /// 设备面板的某条设备（调**音频端点**音量）。
+    Device { device_id: String, up: bool },
+    /// 音乐面板当前会话（调该应用在默认输出设备上的**会话**音量）。
+    Media { aumid: String, up: bool },
+}
+
 /// 取（并按需启动）音量滚轮工作线程的发送端。
 #[cfg(target_os = "windows")]
-fn volume_worker_sender() -> Option<std::sync::mpsc::Sender<(String, bool)>> {
-    type Chan = std::sync::mpsc::Sender<(String, bool)>;
+fn volume_worker_sender() -> Option<std::sync::mpsc::Sender<WheelTarget>> {
+    type Chan = std::sync::mpsc::Sender<WheelTarget>;
     static SLOT: std::sync::OnceLock<std::sync::Mutex<Option<Chan>>> = std::sync::OnceLock::new();
     let slot = SLOT.get_or_init(|| std::sync::Mutex::new(None));
     // 中毒时恢复：原来 `Err(_) => return None` ⇒ sender **永久**拿不到
     // ⇒ 滚轮调音量彻底失效且无日志。
     let mut guard = crate::state::lock_unpoisoned(slot);
     if guard.is_none() {
-        let (tx, rx) = std::sync::mpsc::channel::<(String, bool)>();
+        let (tx, rx) = std::sync::mpsc::channel::<WheelTarget>();
         let spawned = std::thread::Builder::new()
             .name("pm-wheel-volume".to_string())
             .spawn(move || volume_worker_loop(rx));
@@ -2035,44 +2060,137 @@ fn volume_worker_sender() -> Option<std::sync::mpsc::Sender<(String, bool)>> {
 
 /// 工作线程主循环：按序「读当前值 → 加一格 → 写回」。
 #[cfg(target_os = "windows")]
-fn volume_worker_loop(rx: std::sync::mpsc::Receiver<(String, bool)>) {
-    while let Ok((device_id, up)) = rx.recv() {
+fn volume_worker_loop(rx: std::sync::mpsc::Receiver<WheelTarget>) {
+    while let Ok(target) = rx.recv() {
         // ⚠️ 精细调节**每格现读**：用户可能在设置里中途改开关
         let fine = crate::config::with_config(|c| c.volume_fine_adjust);
-        match crate::audio::get_device_volume(&device_id) {
-            Ok(cur) => {
-                let next = apply_wheel_volume(cur, up, fine);
-                if (next - cur).abs() < f32::EPSILON {
-                    // 已在 0% 或 100%：页面里滑块同样不动，不算失败
-                    if crate::config::verbose_log_enabled() {
-                        append_log(&format!("[widget] 滚轮到边界: {cur} dir={up}"));
-                    }
-                } else if let Err(e) = crate::audio::set_device_volume(&device_id, next) {
-                    append_log(&format!("[widget] 滚轮写音量失败: {e}"));
-                } else {
-                    // ⭐⭐ **乐观更新 + 立即重绘**（滚动时音量信息
-                    //   刷新率太低、不实时）。⛔ 不走 `refresh_async()`：它要先跑
-                    //   完一整轮 WMI 枚举（数百毫秒）才重画 ⇒ 数字明显滞后于滚动。
-                    //   ⇒ 先把**刚写进去的值**就地落到快照，再直接 `post_refresh`
-                    //   让主线程马上重绘这一帧（单帧 0.45ms，见 `snapshot::store`）。
-                    //   真实值仍由随后那轮枚举校正（不会漂移：写的就是真值）。
-                    if snapshot::update_volume(&device_id, next) {
-                        let handle = WIDGET_HWND.load(std::sync::atomic::Ordering::SeqCst);
-                        if widget_alive() {
-                            unsafe { ffi::post_refresh(handle as *mut core::ffi::c_void) };
-                        }
-                    }
-                    if crate::config::verbose_log_enabled() {
-                        append_log(&format!("[widget] 滚轮音量 id={device_id} {cur} -> {next}"));
-                    }
-                }
-            }
-            Err(e) => append_log(&format!("[widget] 滚轮读音量失败: {e}")),
+        match target {
+            WheelTarget::Device { device_id, up } => wheel_write_device(&device_id, up, fine),
+            WheelTarget::Media { aumid, up } => wheel_write_media(&aumid, up, fine),
         }
         // ⭐ 复用「FORCE_REPAINT + refresh_async()」这条**已过实战验证**的重绘路径
         //   （`refresh_async` 自带防抖与「未挂载早退」），不新开通道。
         FORCE_REPAINT.store(true, std::sync::atomic::Ordering::Release);
         refresh_async();
+    }
+}
+
+/// 设备侧那一格：读端点当前音量 → 加一格 → 写回（成功才更新快照并立刻重绘）。
+#[cfg(target_os = "windows")]
+fn wheel_write_device(device_id: &str, up: bool, fine: bool) {
+    match crate::audio::get_device_volume(device_id) {
+        Ok(cur) => {
+            let next = apply_wheel_volume(cur, up, fine);
+            if (next - cur).abs() < f32::EPSILON {
+                // 已在 0% 或 100%：页面里滑块同样不动，不算失败
+                if crate::config::verbose_log_enabled() {
+                    append_log(&format!("[widget] 滚轮到边界: {cur} dir={up}"));
+                }
+            } else if let Err(e) = crate::audio::set_device_volume(device_id, next) {
+                append_log(&format!("[widget] 滚轮写音量失败: {e}"));
+            } else {
+                // ⭐⭐ **乐观更新 + 立即重绘**（滚动时音量信息
+                //   刷新率太低、不实时）。⛔ 不走 `refresh_async()`：它要先跑
+                //   完一整轮 WMI 枚举（数百毫秒）才重画 ⇒ 数字明显滞后于滚动。
+                //   ⇒ 先把**刚写进去的值**就地落到快照，再直接 `post_refresh`
+                //   让主线程马上重绘这一帧（单帧 0.45ms，见 `snapshot::store`）。
+                //   真实值仍由随后那轮枚举校正（不会漂移：写的就是真值）。
+                if snapshot::update_volume(device_id, next) {
+                    let handle = WIDGET_HWND.load(std::sync::atomic::Ordering::SeqCst);
+                    if widget_alive() {
+                        unsafe { ffi::post_refresh(handle as *mut core::ffi::c_void) };
+                    }
+                }
+                if crate::config::verbose_log_enabled() {
+                    append_log(&format!("[widget] 滚轮音量 id={device_id} {cur} -> {next}"));
+                }
+            }
+        }
+        Err(e) => append_log(&format!("[widget] 滚轮读音量失败: {e}")),
+    }
+}
+
+/// 音乐侧那一格：把 AUMID 映射到**默认输出设备上的音频会话** → 读 → 加一格 → 写回。
+///
+/// ⛔ **「默认输出设备上的会话」是唯一口径**：与弹出窗口「应用音量」卡片
+///   列表同源（那张列表也是按设备枚举的），且默认输出就是当前在听的那条链路。
+///   不改成「该应用的全部设备会话」，否则改耳机音量时会顺手改掉扬声器的。
+/// ⛔ **匹配不到就什么都不改、只记 standard 日志**（静默失败比报错更坏：
+///   用户看到数字不动却不知道原因）。
+#[cfg(target_os = "windows")]
+fn wheel_write_media(aumid: &str, up: bool, fine: bool) {
+    let dev = match crate::audio::default_output_device_id() {
+        Ok(id) if !id.is_empty() => id,
+        Ok(_) => {
+            append_log(&format!(
+                "[widget] 滚轮未受理: AUMID={aumid} 原因=取不到默认输出设备"
+            ));
+            return;
+        }
+        Err(e) => {
+            append_log(&format!("[widget] 滚轮未受理: AUMID={aumid} 原因={e}"));
+            return;
+        }
+    };
+    let sessions = match crate::audio::find_media_sessions(aumid, &dev) {
+        Ok(v) => v,
+        Err(e) => {
+            append_log(&format!(
+                "[widget] 滚轮未受理: AUMID={aumid} 原因=枚举会话失败 {e}"
+            ));
+            return;
+        }
+    };
+    if sessions.is_empty() {
+        append_log(&format!(
+            "[widget] 滚轮未受理: AUMID={aumid} 原因=匹配不到该应用的音频会话（不改任何音量）"
+        ));
+        return;
+    }
+    append_log(&format!(
+        "[widget] 滚轮调会话音量: aumid={aumid} 命中={} 条 dir={} step={:.1}%",
+        sessions.len(),
+        if up { "up" } else { "down" },
+        volume_step(fine)
+    ));
+    for s in &sessions {
+        let next = apply_wheel_volume(s.volume, up, fine);
+        if (next - s.volume).abs() < f32::EPSILON {
+            if crate::config::verbose_log_enabled() {
+                append_log(&format!(
+                    "[widget] 会话滚轮到边界: {} {:.3}",
+                    s.name, s.volume
+                ));
+            }
+            continue;
+        }
+        // ⭐ 静音联动与「应用音量」卡片同口径：滑到 0 即静音、从 0 起来即
+        //   解除静音（卡片 JS 的 `targetMuted !== wasMuted` 分支）。
+        //   ⚠️ 卡片侧有 `permanentMute`（静音锁）概念且**只跳过静音联动**，
+        //   音量照写；后端的静音锁目前只作用在**设备**端点上
+        //   （`set_device_volume` 里 `mute_lock && was_muted ⇒ 只许降`），
+        //   会话侧无对应钳制 ⇒ 这里与卡片 JS 逐字对齐，不自行加强。
+        let target_muted = next <= 0.0;
+        if target_muted != s.is_muted {
+            if let Err(e) = crate::audio::set_session_mute(&s.id, &s.device_id, target_muted) {
+                append_log(&format!("[widget] 会话静音联动失败 {}: {e}", s.name));
+            }
+        }
+        if let Err(e) = crate::audio::set_session_volume(&s.id, &s.device_id, next) {
+            append_log(&format!("[widget] 会话滚轮写音量失败 {}: {e}", s.name));
+        } else {
+            append_log(&format!(
+                "[widget] 会话滚轮音量 {} {:.3} -> {next}",
+                s.name, s.volume
+            ));
+            // ⭐ 乐观更新快照 + 立刻重绘：tooltip 的第三行就是这条音量，
+            //   不立即重绘的话用户滚完看到的还是旧数字。
+            crate::taskbar_music::set_session_volume_hint(next);
+            let handle = WIDGET_HWND.load(std::sync::atomic::Ordering::SeqCst);
+            if widget_alive() {
+                unsafe { ffi::post_refresh(handle as *mut core::ffi::c_void) };
+            }
+        }
     }
 }
 
@@ -2093,22 +2211,28 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } == 0 {
         return false;
     }
-    // ⛔⛔ **面板闸**（引入音乐组件时加）：本函数用命中下标去
-    //   `snapshot::load()`（**设备**快照）取要调音量的设备。音乐面板发布的矩形
-    //   下标空间与之**完全不同**（封面+三键=1 项，可能还有切换按钮）⇒ 不设闸就会
-    //   「在音乐面板上滚滚轮，把**别的设备**的音量改了」，而且**不报错、日志正常**
-    //   ——这是本仓最怕的那类静默失效。
-    // ⚠️ 动画期间同样不受理：此刻 `current_panel()` 已是**新**面板，
-    //   而 `LAST_ITEM_RECTS` 还是**旧**面板的矩形 ⇒ 下标空间与数据源错位，
-    //   与上面那条闸是同一类静默失效。
     if switch_anim_active() {
         return false;
     }
-    if !matches!(current_panel(), Some(crate::config::TaskbarPanel::Devices)) {
+    // ⚠️ 动画期间同样不受理：此刻 `current_panel()` 已是**新**面板，
+    //   而 `LAST_ITEM_RECTS` 还是**旧**面板的矩形 ⇒ 下标空间与数据源错位，
+    //   与下面那条分流是同一类静默失效。
+    //
+    // ⛔⛔ **面板分流必须在取命中下标之前**（引入音乐组件时加的那条闸，
+    //   今天从「一律拒绝」放宽为「按面板各走各的」）：
+    //   设备侧用命中下标去 `snapshot::load()`（**设备**快照）取要调音量的设备；
+    //   音乐面板发布的矩形下标空间与之**完全不同**（封面+三键=1 项，可能还有
+    //   切换按钮）⇒ 两条路径若共用一次 `items.get(idx)`，就会
+    //   「在音乐面板上滚滚轮，把**别的设备**的音量改了」，而且**不报错、日志正常**
+    //   ——这是本仓最怕的那类静默失效。
+    let panel = current_panel();
+    if !matches!(
+        panel,
+        Some(crate::config::TaskbarPanel::Devices) | Some(crate::config::TaskbarPanel::Music)
+    ) {
         if crate::config::verbose_log_enabled() {
             append_log(&format!(
-                "[widget] 滚轮未受理: 当前面板={:?}（滚轮调音量只属于设备面板）",
-                current_panel()
+                "[widget] 滚轮未受理: 当前面板={panel:?}（滚轮调音量属于设备/音乐两个面板）"
             ));
         }
         return false;
@@ -2146,6 +2270,26 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
         }
         false
     };
+    // ── 音乐面板：调**当前会话所属应用**的会话音量 ──
+    //
+    // ⭐ **受理范围 = 面板的全部矩形**（面板体 + 切换按钮），与设备侧
+    //   「整条 item 都触发」同口径；三个传输键是子矩形、滚轮在其上不单独处理。
+    if panel == Some(crate::config::TaskbarPanel::Music) {
+        let music = crate::taskbar_music::snapshot();
+        let Some(sess) = music.sessions.get(music.current) else {
+            return reject("音乐快照里没有当前会话");
+        };
+        let Some(tx) = volume_worker_sender() else {
+            return reject("拿不到后台写线程");
+        };
+        append_log(&format!("[widget] 滚轮目标=音乐 会话={}", sess.id));
+        return tx
+            .send(WheelTarget::Media {
+                aumid: sess.id.clone(),
+                up,
+            })
+            .is_ok();
+    }
     // 该项必须**真的有音频端点**（键鼠也能 hover 出 tooltip，但不可调音量）
     let items = match snapshot::load() {
         Some(v) => v,
@@ -2171,7 +2315,7 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
         if up { "up" } else { "down" },
         volume_step(crate::config::with_config(|c| c.volume_fine_adjust))
     ));
-    tx.send((device_id, up)).is_ok()
+    tx.send(WheelTarget::Device { device_id, up }).is_ok()
 }
 
 /// 诊断快照：`hwnd` / `SetParent` 错误码 / `GetParent` 复核结果的原始值。
@@ -3376,6 +3520,24 @@ fn format_battery(it: &WidgetItem) -> String {
 /// ⚠️ 「无音频端点」与「有端点但暂时读不出」**都显示 `N/A`**（用户 口径：
 ///   没有音量就显示 N/A）。两者在数据层仍由 `has_audio` 区分 —— 将来若要改成
 ///   「无端点整段不画」，不必回头动数据。
+/// 音量分数 → 文本（**唯一实现点**，设备角标与音乐 tooltip 共用）。
+///
+/// ⭐ **是否带小数由「音量精细调节」开关决定**（用户）：
+///   · 开 ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了」
+///     看起来像失效；
+///   · 关 ⇒ `40%`：此时滚轮是 1% 步进，多余的小数位是噪音。
+/// ⚠️ **参数传入而不是这里读配置**：本函数被单测直接调用，且
+///   「GDI 调用之前不持锁」（见 `draw_items` 里的配置快照）⇒ 由调用方
+///   从配置快照取。
+#[cfg(target_os = "windows")]
+fn format_volume_value(v: f32, fine_adjust: bool) -> String {
+    if fine_adjust {
+        format!("{:.1}%", v * 100.0)
+    } else {
+        format!("{}%", (v * 100.0).round() as i32)
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn format_volume(it: &WidgetItem, fine_adjust: bool) -> String {
     if !it.has_audio {
@@ -3394,8 +3556,7 @@ fn format_volume(it: &WidgetItem, fine_adjust: bool) -> String {
     // ⚠️ **参数传入而不是这里读配置**：本函数被单测直接调用，且绘制路径要求
     //   「GDI 调用之前不持锁」（见 `draw_items` 里的配置快照）⇒ 由调用方读一次传进来。
     match it.volume {
-        Some(v) if fine_adjust => format!("{:.1}%", v * 100.0),
-        Some(v) => format!("{}%", (v * 100.0).round() as i32),
+        Some(v) => format_volume_value(v, fine_adjust),
         None => "N/A".to_string(),
     }
 }

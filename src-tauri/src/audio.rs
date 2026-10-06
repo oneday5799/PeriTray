@@ -521,6 +521,131 @@ unsafe fn find_session_volume(session_id: &str, device_id: &str) -> Result<ISimp
     })?
 }
 
+/// ⭐⭐⭐ **SMTC 会话 → 音频会话的唯一匹配口径**（两套身份体系之间唯一的桥）。
+///
+/// **为什么需要它**：音乐面板的数据源是 SMTC 会话，它的身份是 `AUMID`
+/// （`SourceAppUserModelId`）；而音量只能写在**音频会话**上
+/// （`ISimpleAudioVolume`），那一侧的身份是 **PID**。
+/// ⚠️ **实测平台事实：SMTC 会话既不给 PID、也不给应用显示名**
+///   ——`IGlobalSystemMediaTransportControlsSession` 的方法面只有
+///   `SourceAppUserModelId` + 媒体元数据 + 播放控制，`MediaProperties` 里
+///   也没有应用名字段。⇒ 只能靠字符串形态匹配。
+/// ⚠️ 实测形态：`com.hoowhoami.echomusic`（Win32 应用自定义 AUMID）、
+///   `Spotify_zpdnekdrzrea0!Spotify`（商店版 PFN + 应用 id）。
+///   两者都**包含**该应用的 exe 文件名（无扩展名）。
+/// ⭐ 因此本仓的口径是「AUMID 包含 exe 基名」——不需要任何硬编码别名表：
+///   同一件事 AF-Media-Bar 只能靠 `KnownSources` 12 条穷举表兜住，因为那边
+///   拿不到 pid；本仓能从 pid 查出 exe 名（`app_icon` 里有现成的 LRU），
+///   动态求出的令牌天然覆盖新应用。
+/// ⛔ **只认「AUMID 包含 exe 基名（不含扩展名）」这一条证据**：exe 基名可能
+///   短到 `go` / `ms` 这种程度，反向包含会把一堆无关应用判成同一个。
+/// ⛔ **过短的 exe 基名一律拒绝匹配**（`< 3` 字符）：实测最短可信的播放器名
+///   恰为 3 字符（`vlc` / `mpv`），而 1-2 字符的名字（`go`、`ms`）命中纯属
+///   巧合，改不了音量只会改错声音。
+/// ⛔ **不要**再加「AUMID 含带 `.exe` 的完整文件名」这类证据：实测 AUMID 里
+///   根本不会出现 `.exe`（`com.hoowhoami.echomusic` 就不含），当成必要条件
+///   会让本机这个唯一在用的应用也匹配不上。
+/// ⭐ **入参是完整 exe 路径**：两条取法（`file_stem`）只在匹配方做一次。
+/// ⛔ **匹配不上就返回空、不改任何音量**：宁可不动，也不要改到别人
+///   ——那是本仓最怕的静默失效（用户以为在调音乐，实际在调别的应用）。
+/// ⭐⭐ **刻意不做「运行期记忆」**（同类项目有）：记忆一旦记错就永久固化，
+///   且记忆键只有 AUMID、无法校验重名；这里宁可每次重算。
+/// ⚠️ **已知覆盖缺口**：AUMID 与 exe 名毫无字面关系的应用（实测本机的
+///   `com.hoowhoami.echomusic` 之所以能工作，是因为它的尾段恰好等于
+///   exe 名）⇒ 匹配失败、滚轮不动、standard 日志写明原因。要覆盖它需要
+///   Win32 侧读应用自有 AUMID（只能从进程内读，外部不可得）。
+///
+/// **纯函数**：便于钉住上面的口径。
+pub fn media_aumid_matches(aumid: &str, exe_path: &str) -> bool {
+    const MIN_STEM_LEN: usize = 3;
+    let a = aumid.trim().to_lowercase();
+    let p = exe_path.trim().to_lowercase();
+    if a.is_empty() || p.is_empty() {
+        return false;
+    }
+    let Some(stem) = std::path::Path::new(&p)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+    else {
+        return false;
+    };
+    let stem = stem.to_lowercase();
+    if stem.len() < MIN_STEM_LEN {
+        return false;
+    }
+    a.contains(&stem)
+}
+
+/// 找出 AUMID 对应的音频会话（限定在某台设备上）。
+///
+/// ⭐ **设备口径与弹出窗口的「应用音量」卡片一致**：卡片列表本身就是
+///   按设备枚举的（`get_audio_sessions(deviceId)`），所以这里也只在该设备
+///   的会话里找，而不是把该应用的**所有**设备会话一起改。
+/// ⚠️ 同一 exe 可能有多条会话（如浏览器多进程共用同一端点），此时**全部**
+///   返回、由调用方写成同一音量——它们本来就是同一个应用。
+pub fn find_media_sessions(aumid: &str, device_id: &str) -> Result<Vec<AudioSession>> {
+    let all = enumerate_audio_sessions(device_id)?;
+    let mut hit = Vec::new();
+    for s in all {
+        // ⚠️ 逐会话把「AUMID ↔ exe 名」两边的原值打出来：匹配不上时**光看
+        //   「未受理」无法区分「AUMID 与 exe 名毫无关系」（平台限制）与
+        //   「exe 路径查不到」（权限/进程已退）——这两种的修法完全不同。
+        let exe = crate::app_icon::get_process_exe_path(s.pid);
+        let matched = exe
+            .as_deref()
+            .map(|p| media_aumid_matches(aumid, p))
+            .unwrap_or(false);
+        verbose_log!(
+            "[audio] 媒体会话匹配: aumid={aumid} 会话={} pid={} exe={} 命中={matched}",
+            s.name,
+            s.pid,
+            exe.as_deref().unwrap_or("<查不到>")
+        );
+        if matched {
+            hit.push(s);
+        }
+    }
+    Ok(hit)
+}
+
+/// 取系统默认**输出**（eRender / eMultimedia）端点 id。
+///
+/// ⭐ 与 `enumerate_devices` 里标记 `is_default` 用的是同一次调用口径
+///   （`eMultimedia` 而非 `eCommunications`）⇒ 任务栏滚轮调的那个会话，
+///   与弹出窗口里 `is_default` 标着的那台设备**必然是同一台**。
+pub fn default_output_device_id() -> Result<String> {
+    unsafe {
+        with_enumerator(|enumerator| {
+            enumerator
+                .GetDefaultAudioEndpoint(eRender, eMultimedia)
+                .ok()
+                .and_then(|d| d.GetId().ok())
+                .map(|id| pwstr_to_string(id).unwrap_or_default())
+                .ok_or_else(|| {
+                    windows::core::Error::new(
+                        windows::Win32::Foundation::E_FAIL,
+                        "取不到默认输出端点",
+                    )
+                })
+        })?
+    }
+}
+
+/// 读「AUMID 对应应用在默认输出设备上的会话音量」（`None` = 取不到）。
+///
+/// ⭐ 口径与「任务栏音乐面板滚轮调音量」**完全同源**（同一个
+///   `default_output_device_id` + 同一个 `find_media_sessions`）⇒ tooltip
+///   上显示的音量与滚轮改动的量**必然是同一个对象**，不会各读各的。
+/// ⛔ 命中多条时取**第一条**：多条意味着该应用在同设备上有多个会话
+///   （进程分裂），它们的音量本应一致；滚轮侧是**全部写成同一值**。
+pub fn media_session_volume(aumid: &str) -> Option<f32> {
+    let dev = default_output_device_id().ok()?;
+    find_media_sessions(aumid, &dev)
+        .ok()?
+        .first()
+        .map(|s| s.volume)
+}
+
 pub fn set_session_volume(session_id: &str, device_id: &str, volume: f32) -> Result<()> {
     verbose_log!(
         "[audio] set_session_volume {} {} {}",
@@ -616,6 +741,64 @@ pub fn toggle_default_mute() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⛔ SMTC 会话没有 PID，**唯一的桥是 AUMID 文本包含 exe 名**。
+    ///
+    /// 判别力在两侧：既要认出两类真实 AUMID 形态（Win32 自定义反向域名 /
+    /// 商店版 PFN+应用 id），也要**拒绝**两种过度匹配 —— ① 反向包含（exe 名
+    /// 更短更泛）；② 过短 exe 名（`go`、`ms` 命中纯属巧合，改不了音量只会
+    /// 改错声音）。空串同样必须拒绝：否则任何空 AUMID 都能命中任意会话。
+    /// ⭐ 入参是**完整 exe 路径**：匹配方按 `file_stem` 取不含 `.exe` 的基名。
+    /// ⚠️ 最后一条钉的是**已知的覆盖缺口**，不是期望行为：AUMID 与 exe 名
+    ///   毫无字面关系时必然匹配不上（本机实测能工作是**侥幸**：AUMID 尾段
+    ///   恰好等于 exe 名），此时拒绝、不动音量。
+    #[test]
+    fn aumid_matches_exe_path_only_in_the_aumid_contains_direction() {
+        // 实测形态：Win32 应用自定义 AUMID
+        assert!(media_aumid_matches(
+            "com.hoowhoami.echomusic",
+            r"c:\program files\echomusic\echomusic.exe"
+        ));
+        // 商店版形态
+        assert!(media_aumid_matches(
+            "Spotify_zpdnekdrzrea0!Spotify",
+            r"c:\users\me\appdata\roaming\spotify\spotify.exe"
+        ));
+        // 大小写不影响判定（两侧都小写化）
+        assert!(media_aumid_matches(
+            "com.hoowhoami.echomusic",
+            r"C:\Program Files\EchoMusic\EchoMusic.exe"
+        ));
+        // 恰好 3 字符的名字仍可用（实测 vlc / mpv 就是这个长度）
+        assert!(media_aumid_matches("com.vendor.vlc", r"c:\tools\vlc.exe"));
+        // ⛔ 反向包含必须不成立（exe 名更短、且更泛）
+        assert!(
+            !media_aumid_matches("go", r"c:\program files\google\chrome.exe"),
+            "反向包含会把 go 判成 chrome"
+        );
+        // ⛔ 过短的 exe 基名：即使字面被包含也拒绝（巧合命中不算证据）
+        assert!(
+            !media_aumid_matches("com.vendor.go", r"c:\program files\go\go.exe"),
+            "2 字符 exe 名不该作为匹配依据"
+        );
+        // 互不相关
+        assert!(!media_aumid_matches(
+            "com.hoowhoami.echomusic",
+            r"c:\program files\tencent\qqmusic.exe"
+        ));
+        // 空串
+        assert!(!media_aumid_matches("", r"c:\x\y.exe"));
+        assert!(!media_aumid_matches("com.hoowhoami.echomusic", "  "));
+        // ⚠️ 已知覆盖缺口：AUMID 与 exe 名毫无字面关系时必然匹配不上
+        //   ⇒ 判否、不动音量。把它钉成判据：改动这条断言前先想清楚缺口是否已修。
+        assert!(
+            !media_aumid_matches(
+                "com.vendor.player",
+                r"c:\program files\echomusic\echomusic.exe"
+            ),
+            "AUMID 与 exe 名无关时不该匹配上"
+        );
+    }
 
     /// P2-5：公寓模型冲突的识别必须**只命中** `RPC_E_CHANGED_MODE`。
     ///

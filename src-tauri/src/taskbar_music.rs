@@ -92,6 +92,17 @@ pub struct MusicSnapshot {
     ///   下标随时可能指向另一个应用。
     ///   ⚠️ 该会话消失时（应用退出）清空 ⇒ 回落跟随系统，这是期望行为。
     pub pinned_session_id: Option<String>,
+    /// ⭐⭐ **当前会话所属应用的会话音量**（分数 `0.0..1.0`；`None` =
+    ///   没有会话、或该应用在默认输出设备上匹配不到音频会话）。
+    ///
+    /// ⚠️ **它来自音频会话侧、不是 SMTC 侧**：SMTC 不含音量（方法面里
+    ///   没有任何音量接口），音量只能经 `IAudioSessionManager` 读
+    ///   `ISimpleAudioVolume` ⇒ 必须先按 §8.5.3c 的 AUMID↔exe 名口径把
+    ///   会话匹配上才读得到。
+    /// ⛔ **存快照而不是现读**：tooltip 与绘制都在绘制线程上，而枚举会话 /
+    ///   读音量是 COM 阻塞调用 ⇒ 现读会把阻塞带进绘制路径。
+    /// 由音乐后台线程按轮询刷新（≤1.5s），滚轮改完由 worker 立即乐观更新。
+    pub session_volume: Option<f32>,
 }
 
 impl MusicSnapshot {
@@ -193,6 +204,7 @@ static SNAPSHOT: Mutex<MusicSnapshot> = Mutex::new(MusicSnapshot {
     cover_hash: 0,
     cover_size: 0,
     pinned_session_id: None,
+    session_volume: None,
 });
 
 /// 后台线程是否已起来（避免重复起线程）。
@@ -216,6 +228,62 @@ pub fn snapshot() -> MusicSnapshot {
 /// 请求后台线程重取一次（SMTC 事件、会话切换后调用）。
 pub fn request_refresh() {
     send_cmd(Cmd::Refresh);
+}
+
+/// 刷新快照里的**会话音量**（tooltip 第三行显示它）。
+///
+/// ⛔ **只在后台线程调**：内部要枚举音频会话 + 读音量（COM 阻塞），
+///   而 `SNAPSHOT` 是绘制线程每帧都要读的锁 ⇒ 绝不能在持锁状态下做。
+/// ⛔ **只在有会话时才做**：没有会话就没有「当前应用的音量」，白花一次
+///   枚举（每次要把全部会话的音量/静音都读一遍）。
+/// ⚠️ 会话音量变化**不触发任何 SMTC 事件** ⇒ 它只能靠这里的轮询
+///   （跟随 worker 的 ≤1.5s 节奏）发现；滚轮造成的变更走
+///   `set_session_volume_hint` 立即生效，不等轮询。
+pub fn refresh_session_volume() {
+    let (aumid, has) = {
+        let s = lock_unpoisoned(&SNAPSHOT);
+        let a = s
+            .sessions
+            .get(s.current)
+            .map(|x| x.id.clone())
+            .unwrap_or_default();
+        (a, !s.sessions.is_empty())
+    };
+    if !has {
+        // ⛔ 无会话时必须显式写 None，不能保留上一轮的值：面板已切走却
+        //   还显示旧音量，比不显示更坏（用户会以为那是当前应用的音量）。
+        let mut s = lock_unpoisoned(&SNAPSHOT);
+        if s.session_volume.is_some() {
+            s.session_volume = None;
+        }
+        return;
+    }
+    let vol = crate::audio::media_session_volume(&aumid);
+    let mut s = lock_unpoisoned(&SNAPSHOT);
+    // ⚠️ 只有**值真的变了**才记日志：这是每 1.5s 一次的轮询，
+    //   逐次打日志会把日志刷爆。
+    if let (Some(a), Some(b)) = (s.session_volume, vol) {
+        if (a - b).abs() < f32::EPSILON {
+            return;
+        }
+    } else if s.session_volume.is_none() && vol.is_none() {
+        return;
+    }
+    crate::process::append_log(&format!(
+        "[music] 会话音量刷新: aumid={aumid} {:?} -> {:?}",
+        s.session_volume, vol
+    ));
+    s.session_volume = vol;
+}
+
+/// 滚轮改完会话音量后**立即**把新值落到快照（乐观更新）。
+///
+/// ⭐ 与设备侧「乐观更新快照 + 立刻 `post_refresh`」是同一招：等下一轮
+///   轮询（≤1.5s）会让 tooltip 里的数字在用户滚完时**还是旧值**，
+///   看起来就是「滚了但没反应」。
+pub fn set_session_volume_hint(volume: f32) {
+    let mut s = lock_unpoisoned(&SNAPSHOT);
+    s.session_volume = Some(volume);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -362,12 +430,14 @@ fn music_worker_loop(rx: Receiver<Cmd>) {
             Err(e) => crate::process::append_verbose_log(&format!("[music] GetSessions 失败: {e}")),
         }
         refresh_snapshot(&mgr);
+        refresh_session_volume();
     }
-    // 线程退出前把快照清空：否则音乐面板会永远停在最后一帧的旧数据上
+    // 线程退出前把快照清空：否则音乐面板会永远停在最后一帧的旧数�
     {
         let mut s = lock_unpoisoned(&SNAPSHOT);
         s.sessions.clear();
         s.cover_hash = 0;
+        s.session_volume = None;
     }
     notify_widget();
 }
@@ -396,6 +466,10 @@ fn list_sessions(
 
 fn read_session_info(s: &GlobalSystemMediaTransportControlsSession) -> Option<SessionInfo> {
     let id = s.SourceAppUserModelId().ok()?.to_string();
+    // ⚠️ 逐会话 id 走 verbose：SMTC 只给 AUMID，**不给 PID**，而音量要落到
+    //   音频会话（唯一带 PID 的一侧）⇒ 两边的匹配依据全在这串文本的形态上，
+    //   换播放器 / 换商店版包形态就可能变，排障必须看得到原值。
+    crate::process::append_verbose_log(&format!("[music] SMTC 会话: id={}", id));
     let (playing, can_prev, can_play_pause, can_next) = match s.GetPlaybackInfo() {
         Ok(info) => {
             let playing = matches!(

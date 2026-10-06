@@ -23,10 +23,19 @@
 # FLOOR	⛔+⭐ 总数下界	904
 # FLOOR	⛔+⭐ 总数下界	913
 # FLOOR	⛔+⭐ 总数下界	912
+# FLOOR	⛔+⭐ 总数下界	913
 
+src-tauri/src/app_icon.rs	const EXE_PATH_CACHE	⭐	1
 src-tauri/src/audio_notify.rs	fn post_sync_callbacks	⛔	1
 src-tauri/src/audio.rs	<file>	⭐	1
+src-tauri/src/audio.rs	const MIN_STEM_LEN	⭐	1
+src-tauri/src/audio.rs	fn aumid_matches_exe_path_only_in_the_aumid_contains_direction	⛔	2
+src-tauri/src/audio.rs	fn find_media_sessions	⭐	1
+src-tauri/src/audio.rs	fn find_session_volume	⛔	4
+src-tauri/src/audio.rs	fn find_session_volume	⭐	4
 src-tauri/src/audio.rs	fn get_device_name	⭐	1
+src-tauri/src/audio.rs	mod tests	⛔	1
+src-tauri/src/audio.rs	mod tests	⭐	1
 src-tauri/src/battery_notify.rs	fn select_pending_notices	⛔	1
 src-tauri/src/battery_notify.rs	fn select_pending_notices	⭐	1
 src-tauri/src/bluetooth.rs	fn find_paired_bluetooth_devices	⛔	1
@@ -474,7 +483,7 @@ src-tauri/src/taskbar_widget.rs	fn pressed_after_hover	⛔	2
 src-tauri/src/taskbar_widget.rs	fn pressed_after_hover	⭐	1
 src-tauri/src/taskbar_widget.rs	fn pressed_state_is_cleared_on_all_release_paths	⭐	1
 src-tauri/src/taskbar_widget.rs	fn probe	⭐	1
-src-tauri/src/taskbar_widget.rs	fn publish_item_rects	⛔	1
+src-tauri/src/taskbar_widget.rs	fn publish_item_rects	⛔	2
 src-tauri/src/taskbar_widget.rs	fn publish_item_rects	⭐	1
 src-tauri/src/taskbar_widget.rs	fn publish_music_layout	⭐	1
 src-tauri/src/taskbar_widget.rs	fn raise_to_top	⛔	1
@@ -550,15 +559,14 @@ src-tauri/src/taskbar_widget.rs	fn unsharp_mask_premul	⭐	1
 src-tauri/src/taskbar_widget.rs	fn volume_decimals_follow_the_fine_adjust_switch	⛔	1
 src-tauri/src/taskbar_widget.rs	fn volume_decimals_follow_the_fine_adjust_switch	⭐	1
 src-tauri/src/taskbar_widget.rs	fn volume_rounds_rather_than_truncates	⭐	1
-src-tauri/src/taskbar_widget.rs	fn volume_worker_loop	⛔	1
-src-tauri/src/taskbar_widget.rs	fn volume_worker_loop	⭐	2
+src-tauri/src/taskbar_widget.rs	fn volume_worker_loop	⭐	1
 src-tauri/src/taskbar_widget.rs	fn want_hover	⛔	1
 src-tauri/src/taskbar_widget.rs	fn want_hover	⭐	1
 src-tauri/src/taskbar_widget.rs	fn want_hover_excludes_exclusive_edges	⭐	1
 src-tauri/src/taskbar_widget.rs	fn want_hover_false_when_input_missing	⭐	1
 src-tauri/src/taskbar_widget.rs	fn want_hover_true_inside_rect	⛔	1
 src-tauri/src/taskbar_widget.rs	fn wheel_adjust_volume	⛔	2
-src-tauri/src/taskbar_widget.rs	fn wheel_adjust_volume	⭐	1
+src-tauri/src/taskbar_widget.rs	fn wheel_adjust_volume	⭐	2
 src-tauri/src/taskbar_widget.rs	fn wheel_adjust_volume impl	⛔	1
 src-tauri/src/taskbar_widget.rs	fn wheel_clamps_at_both_ends	⛔	1
 src-tauri/src/taskbar_widget.rs	fn wheel_clamps_at_both_ends	⭐	1
@@ -567,6 +575,9 @@ src-tauri/src/taskbar_widget.rs	fn wheel_direction_ignores_zero_delta	⭐	1
 src-tauri/src/taskbar_widget.rs	fn wheel_matches_popup_slider_exactly	⛔	1
 src-tauri/src/taskbar_widget.rs	fn wheel_rounds_the_base_like_the_page_slider	⭐	1
 src-tauri/src/taskbar_widget.rs	fn wheel_step_follows_fine_adjust	⛔	1
+src-tauri/src/taskbar_widget.rs	fn wheel_write_device	⛔	3
+src-tauri/src/taskbar_widget.rs	fn wheel_write_device	⭐	1
+src-tauri/src/taskbar_widget.rs	fn wheel_write_media	⭐	1
 src-tauri/src/taskbar_widget.rs	fn widget_absent_when_both_component_switches_off	⛔	3
 src-tauri/src/taskbar_widget.rs	fn widget_alive	⭐	1
 src-tauri/src/taskbar_widget.rs	fn widget_labels_are_wired_to_the_resolver	⭐	1
@@ -604,4 +615,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	913
+# FLOOR	⛔+⭐ 总数下界	933
