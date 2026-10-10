@@ -961,6 +961,28 @@ mod tests {
     ///
     /// ⚠️ 这个 bug 特别贵的地方在于**日志里看不出异常**（线程正常返回、无 panic）。
     ///
+    /// ⛔⭐ 轮询预算必须**严格小于** worker 的 1.5s 兜底间隔。
+    ///
+    /// 依据：`await_playback_flip` 阻塞的是**唯一**的音乐 worker 线程。若预算
+    ///   ≥ 兜底间隔，一次「应用拒不翻转」的切换会把兜底轮询**顶掉一整轮**，
+    ///   图标反而比改前更慢。⇒ 预算必须留出余量，让兜底照常跑。
+    /// ⭐ 调**生产函数**取预算，不重抄公式。
+    #[test]
+    fn playpause_poll_budget_must_stay_below_the_fallback_interval() {
+        let budget = playpause_poll_budget();
+        let fallback = Duration::from_millis(1500);
+        assert!(
+            budget < fallback,
+            "轮询预算 {budget:?} 必须 < 兜底间隔 {fallback:?}，否则兜底会被顶掉"
+        );
+        // ⭐ 预算也不能太小：实测翻转发生在 ~40ms，窗口要罩得住它并留余量，
+        //   否则偶发慢一次就退回「等 1.5s 兜底」的旧行为。
+        assert!(
+            budget >= Duration::from_millis(300),
+            "预算 {budget:?} 至少要罩住实测 ~40ms 的翻转变异 + 余量"
+        );
+    }
+
     /// 判据：向通道发一条消息，接收端**必须继续等**（只有 `Disconnected` 才退出）。
     /// ⛔ 用 `recv`（而非 `try_recv` 轮询）：后者会让第二次等待直接返回 `Disconnected`。
     #[test]
@@ -1111,6 +1133,7 @@ pub fn cmd_previous() {
 pub fn cmd_play_pause() {
     send_cmd(Cmd::PlayPause);
 }
+
 pub fn cmd_next() {
     send_cmd(Cmd::Next);
 }
@@ -1129,6 +1152,10 @@ fn run_cmd(mgr: &GlobalSystemMediaTransportControlsSessionManager, cmd: Cmd) {
         return;
     }
     let Ok(session) = view.GetAt(cur) else { return };
+    // ⭐ 记下命令发出前的播放状态：播放/暂停用它与翻转后的值比对（见 await_playback_flip）
+    let pre_playing = lock_unpoisoned(&SNAPSHOT)
+        .current_session()
+        .map(|c| c.playing);
     let (label, res) = match cmd {
         // 纯唤醒：直接返回，不碰 SMTC 控制接口
         Cmd::Refresh => return,
@@ -1142,12 +1169,69 @@ fn run_cmd(mgr: &GlobalSystemMediaTransportControlsSessionManager, cmd: Cmd) {
                 if crate::config::verbose_log_enabled() {
                     crate::process::append_verbose_log(&format!("[music] {label} -> {ok}"));
                 }
+                // ⭐ 只在系统**受理**了切换时才等翻转；被拒（Ok(false)）不阻塞 worker
+                if cmd == Cmd::PlayPause && ok {
+                    await_playback_flip(mgr, pre_playing);
+                }
             }
             Err(e) => crate::process::append_log(&format!("[music] {label} 失败: {e}")),
         },
         Err(e) => crate::process::append_log(&format!("[music] {label} 调用失败: {e}")),
     }
 }
+
+/// ⭐⭐ 播放/暂停后**等状态真的翻转**再返回（poll-for-effect）。
+///
+/// ⛔⛔ 为什么必须等：SMTC 的 `TryTogglePlayPauseAsync()` 是「**投递即返回**」——
+///   本机实测 `join()` 在 **0.4ms** 就完成，而应用真正把 `PlaybackStatus` 翻过来
+///   要到 **~40ms**。若不等，worker 循环紧接着的那次 `refresh_snapshot`（+10ms）
+///   读到的还是**旧值**，图标就得等 **1.5s 兜底轮询**才变（用户报「图标切换有延迟」
+///   的根因）。⇒ 延迟不是我们的管线慢（整条管线 12ms），是**取数时机早于翻转**。
+///
+/// ⛔⛔ **不能指望 `PlaybackInfoChanged` 事件兜住**：实测这次翻转**不再触发**该事件
+///   （它只对命令投递触发过一次，且那时状态还没变）⇒ 事件路径在此场景不可靠，
+///   只能主动轮询确认。⚠️ 这是本机 + EchoMusic 的实测结论，别当通用规律。
+///
+/// ⭐ 做法：每 `PLAYPAUSE_POLL_MS` 读一次**当前会话**的 `PlaybackStatus`（单字段，
+///   实测 ~0.5ms），与命令发出前的值不同即返回。⭐ 上限 `PLAYPAUSE_POLL_MAX` 次
+///   —— 应用拒不翻转（如被系统拒绝）也不许把 worker 阻死，超时后交还
+///   1.5s 兜底轮询。**预算必须 < 1.5s**（见 `playpause_poll_budget` 的判据）。
+///
+/// ⚠️ `thread::sleep` 在这条**真后台线程**上合法（AGENTS「异步上下文禁止 sleep」
+///   指的是 async 上下文；此处不是）。
+#[cfg(target_os = "windows")]
+fn await_playback_flip(mgr: &GlobalSystemMediaTransportControlsSessionManager, pre: Option<bool>) {
+    use windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus;
+    let deadline = std::time::Instant::now() + playpause_poll_budget();
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(PLAYPAUSE_POLL_MS));
+        let now = mgr.GetSessions().ok().and_then(|view| {
+            let cur = lock_unpoisoned(&SNAPSHOT).current as u32;
+            view.GetAt(cur).ok().and_then(|ss| {
+                ss.GetPlaybackInfo().ok().and_then(|info| {
+                    info.PlaybackStatus().ok().map(|st| {
+                        matches!(
+                            st,
+                            GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing
+                        )
+                    })
+                })
+            })
+        });
+        if now.is_some() && now != pre {
+            return;
+        }
+    }
+}
+
+/// 轮询预算上限：\wait_playback_flip\ 的实际等待窗口（生产用，测试钉它）。
+#[cfg(target_os = "windows")]
+fn playpause_poll_budget() -> Duration {
+    Duration::from_millis(PLAYPAUSE_POLL_MS * PLAYPAUSE_POLL_MAX as u64)
+}
+
+const PLAYPAUSE_POLL_MS: u64 = 30;
+const PLAYPAUSE_POLL_MAX: u32 = 16;
 
 /// 订阅 manager 层的两个事件（**只做一次**，与具体会话无关）。
 ///

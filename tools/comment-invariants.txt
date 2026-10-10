@@ -39,6 +39,7 @@
 # FLOOR	⛔+⭐ 总数下界	1109
 # FLOOR	⛔+⭐ 总数下界	1114
 # FLOOR	⛔+⭐ 总数下界	1119
+# FLOOR	⛔+⭐ 总数下界	1140
 
 src-tauri/src/app_icon.rs	const EXE_PATH_CACHE	⭐	1
 src-tauri/src/app_icon.rs	fn normalize_image_path	⭐	1
@@ -251,6 +252,7 @@ src-tauri/src/taskbar_music.rs	const COVER_CACHE	⭐	1
 src-tauri/src/taskbar_music.rs	const MAX_DECODE_PX	⛔	1
 src-tauri/src/taskbar_music.rs	const N	⛔	1
 src-tauri/src/taskbar_music.rs	const N	⭐	1
+src-tauri/src/taskbar_music.rs	const PLAYPAUSE_POLL_MAX	⛔	1
 src-tauri/src/taskbar_music.rs	const WORKER_STARTED	⭐	1
 src-tauri/src/taskbar_music.rs	fn apply_dev_artist_gate	⛔	1
 src-tauri/src/taskbar_music.rs	fn apply_dev_artist_gate	⭐	1
@@ -264,6 +266,8 @@ src-tauri/src/taskbar_music.rs	fn fnv1a	⭐	1
 src-tauri/src/taskbar_music.rs	fn music_worker_loop	⛔	4
 src-tauri/src/taskbar_music.rs	fn music_worker_loop	⭐	2
 src-tauri/src/taskbar_music.rs	fn notify_widget	⛔	1
+src-tauri/src/taskbar_music.rs	fn playpause_poll_budget_must_stay_below_the_fallback_interval	⛔	1
+src-tauri/src/taskbar_music.rs	fn playpause_poll_budget_must_stay_below_the_fallback_interval	⭐	1
 src-tauri/src/taskbar_music.rs	fn read_session_info	⛔	1
 src-tauri/src/taskbar_music.rs	fn refresh_session_volume	⛔	1
 src-tauri/src/taskbar_music.rs	fn refresh_session_volume	⭐	2
@@ -271,8 +275,9 @@ src-tauri/src/taskbar_music.rs	fn refresh_snapshot	⛔	1
 src-tauri/src/taskbar_music.rs	fn refresh_snapshot	⭐	3
 src-tauri/src/taskbar_music.rs	fn request_refresh	⛔	2
 src-tauri/src/taskbar_music.rs	fn resolution_follows_the_id_not_the_index	⛔	1
-src-tauri/src/taskbar_music.rs	fn resolution_follows_the_id_not_the_index	⭐	1
-src-tauri/src/taskbar_music.rs	fn run_cmd	⛔	1
+src-tauri/src/taskbar_music.rs	fn resolution_follows_the_id_not_the_index	⭐	2
+src-tauri/src/taskbar_music.rs	fn run_cmd	⛔	2
+src-tauri/src/taskbar_music.rs	fn run_cmd	⭐	5
 src-tauri/src/taskbar_music.rs	fn select_session	⛔	1
 src-tauri/src/taskbar_music.rs	fn select_session	⭐	1
 src-tauri/src/taskbar_music.rs	fn start	⭐	1
@@ -737,4 +742,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	1140
+# FLOOR	⛔+⭐ 总数下界	1150
