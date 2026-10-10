@@ -83,6 +83,12 @@ features = [
     "Win32_System_Variant",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
+    # UIA：`taskbar_layout` 的「占用区探针」（自适应位置）要读任务栏上各按钮的
+    # 包围盒。⛔ 少了它 = 该模块编译不过（IUIAutomation 类型不存在）。
+    "Win32_UI_Accessibility",
+    # `VARIANT`（构造 UIA 属性条件用）的类型定义被 `Win32_System_Ole` 门控，
+    # ⛔ 少了它 = `VARIANT_0_0.vt` 等字段不存在，属性条件构造不出来。
+    "Win32_System_Ole",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ]

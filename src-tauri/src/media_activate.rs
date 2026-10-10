@@ -13,7 +13,7 @@
 //!   百毫秒级 ⇒ 会让 widget 明显卡顿。所以 pid 由音乐后台线程预先算好放进
 //!   快照（`MusicSnapshot::session_pid`），这里只做「读快照 → 找窗口 → 激活」。
 //!
-//! 判据全文见 Wiki 15 §8.6.9。
+//! 判据全文见 Wiki 15 §8.6.10。
 
 use windows_sys::core::BOOL;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};

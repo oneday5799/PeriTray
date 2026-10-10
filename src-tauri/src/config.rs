@@ -334,10 +334,14 @@ pub struct Config {
     ///   迁移按「键不存在 且 列表非空」把它翻成 `true` 再落盘。
     #[serde(default)]
     pub taskbar_widget_enabled: bool,
-    /// 任务栏信息窗的**横向贴靠位置**：`"left"` / `"center"` / `"right"`。
+    /// 任务栏信息窗的**横向位置**：`"left"` / `"center"` / `"right"` / `"auto"`。
     ///
-    /// ⚠️ 贴靠发生在**避让后的视觉空白槽内**，不是整个任务栏（见 `taskbar_widget`）：
-    ///   `center` = 槽内居中，不是屏幕居中。
+    /// ⭐ 前三档的可用区 = **整条任务栏**（见 `taskbar_widget::find_widget_slot`）：
+    ///   `left`/`right` 各留 `EDGE_MARGIN_DIP`，`center` 是**任务栏正中**
+    ///   （不是屏幕正中）。与第三方 widget 重叠是允许的。
+    /// ⭐ `"auto"`（自动）= **避开任务栏上已有的按钮**，落进一个真实空隙；
+    ///   取不到可信的占用区时**退回整条任务栏**（等效 `center`）并记日志
+    ///   —— 探针失败绝不猜（判据 → `taskbar_layout` 模块文档、Wiki 15 §8.6.11）。
     ///
     /// ⚠️ 具名 helper：真实默认是 `center`，裸 `#[serde(default)]` 会得到空串
     ///   （空串不在 `VALID_TASKBAR_POSITIONS` 里 ⇒ 加载时被归一化回 `center`，
@@ -497,7 +501,7 @@ const VALID_POPUP_TABS: &[&str] = &["devices", "volume"];
 const VALID_POPUP_SIZES: &[&str] = &["small", "default", "large"];
 const VALID_THEME_MODES: &[&str] = &["follow_system", "light", "dark"];
 const VALID_WINDOW_MATERIALS: &[&str] = &["default", "acrylic", "mica"];
-const VALID_TASKBAR_POSITIONS: &[&str] = &["left", "center", "right"];
+const VALID_TASKBAR_POSITIONS: &[&str] = &["left", "center", "right", "auto"];
 
 /// 低电量阈值个数上限（与前端 `settings-devices.js` 的「最多5个阈值」一致）
 const MAX_BATTERY_THRESHOLDS: usize = 5;
@@ -1980,8 +1984,8 @@ mod tests {
     ///   界面照常显示、不报错，只是「靠左/靠右」永远无效。本条用 `assert!(!changed)`
     ///   把「合法值不被改写」钉住，拼错即转红。
     #[test]
-    fn taskbar_position_accepts_all_three_values_verbatim() {
-        for value in ["left", "center", "right"] {
+    fn taskbar_position_accepts_all_four_values_verbatim() {
+        for value in ["left", "center", "right", "auto"] {
             let mut cfg = Config {
                 taskbar_position: value.to_string(),
                 ..Default::default()
@@ -1996,8 +2000,8 @@ mod tests {
         // 少一个值会让某一档永远选不出来，且没有任何报错。
         assert_eq!(
             VALID_TASKBAR_POSITIONS,
-            &["left", "center", "right"],
-            "合法值集合必须与设置页下拉的三项逐字一致"
+            &["left", "center", "right", "auto"],
+            "合法值集合必须与设置页下拉的四项逐字一致"
         );
     }
 

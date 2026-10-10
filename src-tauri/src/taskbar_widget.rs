@@ -1323,10 +1323,14 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
     };
     let slot_rel_x = SLOT_X.load(Ordering::Acquire) - tb_left;
     let slot_w = SLOT_W.load(Ordering::Acquire);
-    let total_w = desired_w.min(tb_w.max(min_run_w(&m)));
+    // ⭐ 自然宽度上报给自动求空隙用（`fit_width` 只钳最终宽度，不改它）。
+    DESIRED_W.store(desired_w, Ordering::Release);
+    let total_w = fit_width(desired_w, slot_w, tb_w, &m_art);
     // ⛔ 固定（BBB）：否则改设置会**移动整个面板**在任务栏上的落点
     let edge_margin = m_art.dip(EDGE_MARGIN_DIP);
-    let aligned = align_in_slot(slot_rel_x, slot_w, total_w, &position, edge_margin);
+    // ⭐ 贴靠语义随「有没有命中间隙」变（⛔ 兜底必须回 center，判据见 `effective_position`）。
+    let position = effective_position(&position, SLOT_IS_GAP.load(Ordering::Acquire));
+    let aligned = align_in_slot(slot_rel_x, slot_w, total_w, position, edge_margin);
     let rel_x = resolve_rel_x(
         locked,
         aligned,
@@ -1489,10 +1493,23 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                 } else {
                     1.0f32
                 };
+                // ⭐⭐ 圆角遮罩：**半径按底衬比例折算**（`cover_radius`）+ **4×4
+                //   超采样抗锯齿**（`rounded_rect_coverage`）。
+                //   ⛔ 用 `cw/chh`（封面完整边长）而不是下面那两处 `min` 夹紧后的值：
+                //   夹紧会让圆角按「剩下的那一块」重算。
+                let cr = cover_radius(cw as i32, &m);
                 for yy in 0..(chh as i32).min(h - icon_y) {
                     for xx in 0..(cw as i32).min(total_w - item_rect.left) {
+                        let cov = rounded_rect_coverage(xx, yy, cw as i32, chh as i32, cr);
+                        if cov == 0 {
+                            continue;
+                        }
                         let si = ((yy * cw as i32 + xx) * 4) as usize;
-                        let a = (cpx[si + 3] as f32 * cover_press).round() as u32;
+                        // ⛔ 预乘空间里**颜色必须与 alpha 一起缩放**（同「按下变灰」
+                        //   那条）：覆盖率只压 alpha 而 RGB 不动 ⇒ 边缘发白发亮。
+                        //   把 cov 折进 `a` 之后，下面 `cpx[si] * a / 255` 自动
+                        //   同时作用于三个颜色分量 ⇒ 一处改动覆盖两件事。
+                        let a = (cpx[si + 3] as f32 * cover_press).round() as u32 * cov / 255;
                         if a == 0 {
                             continue;
                         }
@@ -2555,9 +2572,11 @@ static REFRESH_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 
 /// 可用区（= 整条任务栏）左端的屏幕 x（物理像素）。
 ///
-/// ⚠️ 自 第二次方案变更后，它**恒等于任务栏左缘**（典型为 0）——
+/// ⚠️ 位置为 `left`/`center`/`right` 时它**恒等于任务栏左缘**（典型为 0）——
 ///   像素扫描被移除（见 `find_widget_slot`），这里保留为原子量只是为了
 ///   让「可用区」与窗口位置在绘制线程上仍走同一套传递路径。
+/// ⚠️ 位置为 `auto` 且探针命中间隙时，它**不等于**任务栏左缘
+///   （= 间隙左端）；判据见 [`SLOT_IS_GAP`]。
 #[cfg(target_os = "windows")]
 static SLOT_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 /// 可用区宽度（= 任务栏宽度）。同上，恒为整条任务栏宽度。
@@ -2566,6 +2585,31 @@ static SLOT_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(
 /// 是否已取到任务栏矩形；取不到时主线程保持 widget 隐藏（防御：Explorer 未就绪）。
 #[cfg(target_os = "windows")]
 static SLOT_VALID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// ⭐ 本帧的可用区是**任务栏上的一个空隙**（`true`）还是**整条任务栏**（`false`）。
+///
+/// ⛔ **这一个布尔量决定宽度兜底口径**（见 [`fit_width`]），绝不能省：
+///   空隙里必须把宽度收进空隙，任务栏上则不许收（旧避让的窄槽截断内容
+///   正是被用户否掉的原因）。两处绘制都读它 ⇒ 用原子量而不是配置查询。
+#[cfg(target_os = "windows")]
+static SLOT_IS_GAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 自动决策是否已记过一次日志（见 `auto_gap`：首次必须记）。
+#[cfg(target_os = "windows")]
+static LOGGED_DECISION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// ⭐ 占用区变了 ⇒ 槽位待重算。由维护线程置位、**绘制线程**消费。
+///
+/// ⛔⛔ **置位方与消费方必须是两个线程，且消费方必须是主线程**（判据见
+///   [`refresh_slot_if_stale`]）—— 若改成「置位方直接改 `SLOT_*`」，三个原子量
+///   会被读到撕裂组合（新的 `X` + 旧的 `W`）⇒ **窗口正好压在图标上**，
+///   也就是本次要修的缺陷换个更隐蔽的方式复发。
+#[cfg(target_os = "windows")]
+static SLOT_STALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 上一次绘制算出的**自然宽度**（未被可用区钳制的内容宽度）。
+///
+/// ⭐ 自动要用它回答「空隙放不放得下」——宽度是内容驱动的（设备数、歌名长短），
+///   拿不到就只能猜。⛔ 存**自然**宽度而非最终宽度：否则「槽窄 ⇒ 宽度小 ⇒
+///   只找更窄的槽」会形成收缩回授。
+#[cfg(target_os = "windows")]
+static DESIRED_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// 「未固定位置」时沿用的上一次窗口左端（**相对任务栏客户区**）。
 ///
@@ -4351,7 +4395,7 @@ mod music_icons {
 /// ⚠️ 返回值是 `isize` 而非 `HWND`：它要跨线程比对（维护线程 vs 主线程），
 ///   裸指针不是 `Send`，而句柄本身只是整数 —— 与 `WIDGET_HWND` 同款处理。
 #[cfg(target_os = "windows")]
-fn taskbar_hwnd() -> isize {
+pub(crate) fn taskbar_hwnd() -> isize {
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
             to_wide("Shell_TrayWnd").as_ptr(),
@@ -4454,20 +4498,22 @@ fn resolve_rel_x(
     clamp_rel_x(wanted, widget_w, taskbar_w)
 }
 
-/// 在任务栏上取「可用区域」——**就是整条任务栏**。
+/// 在任务栏上取「可用区域」。
 ///
-/// ⛔⛔⛔ **彻底移除像素扫描，不得重开**。任何「避让」式实现（枚举任务栏子窗取矩形 /
-///   逐列扫描像素找视觉空白段）的失真机理 → **Wiki 15 §8**。
-///   一句话根因：避让让 `slot_x` 建立在一个**与用户所见无关**的坐标系上
-///   （裁边距 ⇒ 靠左/右各差 100px；只取最宽空白段 ⇒ `center` 不在屏幕中心）。
-///   ⛔ 因此根因不是参数没调对，而是「避让」这个**前提**本身。
+/// ⛔⛔⛔ **像素扫描彻底移除，不得重开**。任何「逐列扫描像素找视觉空白段」的
+///   实现，其失真机理 → **Wiki 15 §8**。一句话根因：它让 `slot_x` 建立在一个
+///   **与用户所见无关**的坐标系上（裁边距 ⇒ 靠左/右各差 100px；只取最宽空白段
+///   ⇒ `center` 不在屏幕中心）⇒ 根因不是参数没调对，而是**这个前提**本身。
 ///
-/// ⭐ **现口径**：可用区域 = `[任务栏左缘, 任务栏右缘]`，
-///   与「任务栏上有什么」**完全无关**。
-///   · `left`  ⇒ 窗口左缘贴任务栏左缘；
-///   · `right` ⇒ 窗口右缘贴任务栏右缘；
-///   · `center`⇒ 窗口在整条任务栏里居中。
-///   与第三方 widget（Lyricify 等）**重叠是允许的** —— 我方内容自带半透明底衬。
+/// ⭐ **可用区有两档，由位置决定**：
+///   · `left`/`center`/`right` ⇒ 可用区 = `[任务栏左缘, 任务栏右缘]`，
+///     与「任务栏上有什么」**完全无关**；与第三方 widget（Lyricify 等）
+///     重叠是允许的 —— 我方内容自带半透明底衬。
+///   · `auto` ⇒ 可用区 = **任务栏上一个真实空隙**（避开已有按钮）。
+///     ⛔ 它问的是「控件自己的矩形」（UI Automation 包围盒），**不是**
+///     「哪里看起来空」⇒ 与上面禁掉的那条**不是同一件事**
+///     （判据与来源 → `taskbar_layout` 模块文档）。取不到可信占用区时
+///     **退回整条任务栏**，不猜。
 ///
 /// ⚠️ 返回 `(可用区左端屏幕 x, 可用区宽)`；取不到任务栏矩形时返回 `None`
 ///   （此时调用方置 `SLOT_VALID=false` 并隐藏窗口）。
@@ -4477,7 +4523,185 @@ fn find_widget_slot() -> Option<(i32, i32)> {
     if w <= 0 {
         return None;
     }
+    if let Some(gap) = auto_gap(left, w) {
+        return Some(gap);
+    }
     Some((left, w))
+}
+
+/// ⭐⭐ 自动空隙的**间距**（DIP，96 DPI 基准）：让组件底衬到邻居图标的距离
+/// **等于原生图标↔图标的距离**。
+///
+/// 依据（本机 2560 宽任务栏逐像素实测，125% DPI，可复核）：
+///   · 应用按钮**槽位节距 55px**（= 44 DIP，UIA 槽位实测）；
+///   · 应用**图标宽度 30px**（= 24 DIP，抓图标区与其正上方的 RGB 偏差得到）；
+///   · ⇒ 图标在槽位内**每侧内缩 13px（= 10 DIP）**，**图标↔图标间距 25px（= 20 DIP）**。
+///
+/// ⭐ 推导：组件底衬要扮演的是「邻居的那个**图标**」的角色（一个画在槽位内的实心块），
+///   所以它距邻居图标的距离应 = 原生图标间距：
+///   `margin + 图标内缩 = 图标间距` ⇒ **`margin = 20 − 10 = 10 DIP`**。
+///
+/// ⚠️ 这两个值都被实测证伪过，改动前先看数字：
+///   · `margin = 0` ⇒ 组件离邻居图标只有 **13px**（用户：「间距不可能为0」）；
+///   · `margin = 20`（曾误用 `EDGE_MARGIN_DIP`）⇒ **33px**（用户：「间距还是有点大」）。
+///
+/// ⛔⛔ **不得复用 `EDGE_MARGIN_DIP`**：那个常量的语义是「距**任务栏边缘**的留白」
+///   （依据是开始按钮 26px / 时钟 24px），与「图标之间的间距」完全无关。
+///   ⛔ 也**不得写成物理像素**：原生这套度量随 DPI 等比缩放，写死 px 会在
+///   高 DPI 下比原生宽、低 DPI 下比原生窄（125% 下 10 DIP = 12.5px）。
+#[cfg(target_os = "windows")]
+const AUTO_GAP_MARGIN_DIP: i32 = 10;
+
+/// ⭐⭐ 间距的 DIP → 像素换算：**按任务栏 DPI**，⛔ 不按内容 DPI。
+///
+/// ⛔⛔ **不得用 `m.dip()`** —— 它按 `content_dpi` 换算，而 `content_dpi` 会被
+///   「任务栏内容缩放」改掉：本机实测 `taskbar_content_scale = "smaller"`
+///   ⇒ `content_dpi = 120 / 1.25 = 96` ⇒ `m.dip(10) == 10`（而不是 12.5）。
+///   ⇒ 用户一改内容缩放，间距就与原生脱钩，且**不报任何错**（实测踩到：
+///   组件落在 799、距邻居图标 23px，而原生是 25px）。
+///
+/// ⭐ 依据：原生那套度量（槽位 44 DIP / 图标 24 DIP）**跟任务栏 DPI 走**
+///   ——它是 Windows 自己画的，不认识我们的内容缩放设置。所以凡是「与原生对齐」
+///   的量都必须走 `m.dpi`（= 底衬 DPI = 系统 DPI）。
+///
+/// ⛔⛔ **取整必须用「下取整」，⛔ 不许用 `dip_of`（它 `round` 进位）。**
+///   依据（本机 125% 逐像素实测，可复核）：原生槽位内缩 = **12.5px**，
+///   我们表示不了半像素 ⇒ `round` 得 **13** ⇒ 总距 `13 + 13 = 26px`，
+///   而原生图标↔图标实测是 **25px**（8 对相邻图标全是 25，非常一致）；
+///   下取整得 **12** ⇒ 总距 `12 + 13 = 25px` ⇒ **正好命中**。
+/// ⚠️ 这不是偏好问题：两个方向都**不会压到槽位**（margin ≥ 0），所以安全性一样，
+///   差别只在「对齐实测值」这一条口径上。
+/// ⛔ 因此**不能改 `Metrics::dip_of` 的取整方式** —— 它服务全部内容度量
+///   （图标边长 / 字号 / 间距），把 0.5 的一次性偏差摊到每一项上是净损失。
+#[cfg(target_os = "windows")]
+fn auto_gap_margin_px(m: &Metrics) -> i32 {
+    let dpi = if m.dpi == 0 { 96 } else { m.dpi } as i32;
+    // 整数除法向零截断；此处两个操作数均为正 ⇒ 等价于 floor
+    AUTO_GAP_MARGIN_DIP * dpi / 96
+}
+
+/// `auto` 档求空隙。返回 `None` = **应退回整条任务栏**（含「没开自动」）。
+///
+/// ⛔ 唯一的降级出口 —— 四条降级条件都汇到这里：没开自动 / 期望宽度未知 /
+///   探针无数据或不可信 / 空隙放不下。**任何一条都退回整条任务栏**，不猜。
+#[cfg(target_os = "windows")]
+fn auto_gap(bar_left: i32, bar_w: i32) -> Option<(i32, i32)> {
+    let wanted = crate::config::with_config(|c| c.taskbar_position == "auto");
+    if !wanted {
+        SLOT_IS_GAP.store(false, Ordering::Release);
+        return None;
+    }
+    // ⚠️ 首帧 `DESIRED_W` 还是 0（这一帧才画出来）⇒ 返回 `None` 走整条任务栏，
+    //   等自然宽度落进 `DESIRED_W` 后，下一轮才可能命中间隙。
+    let want = DESIRED_W.load(Ordering::Acquire);
+    // ⛔ 两次查询**必须分句**：`Metrics::current_content()` 内部也要取 CONFIG 锁，
+    //   嵌进上面那个 `with_config` 闭包里就是同一把锁嵌套 ⇒ 死锁。
+    let margin = auto_gap_margin_px(&Metrics::current_content());
+    let got = if want > 0 {
+        crate::taskbar_layout::auto_slot(bar_left, bar_w, want, margin)
+    } else {
+        None
+    };
+    // ⭐ 只在「决策变了」时记日志：本函数每 2s 跑一次，逐次打会把日志刷爆；
+    //   而「为什么没避让」又必须留痕（否则用户只看到「自动没效果」）。
+    // ⚠️ **首次决策必须记**：初始 `SLOT_IS_GAP = false`，若首轮也判决为
+    //   `false`（很常见：探针还没采到数据/期望宽度未知），「只看变化」就一次
+    //   都不打 ⇒ 用户与排查者都看不到原因（实测踩到）。
+    let before = SLOT_IS_GAP.load(Ordering::Acquire);
+    let now = got.is_some();
+    SLOT_IS_GAP.store(now, Ordering::Release);
+    let first = !LOGGED_DECISION.swap(true, Ordering::AcqRel);
+    if first || before != now {
+        match got {
+            Some((x, w)) => append_log(&format!(
+                "[widget] 自动避让: 命中空隙 x={x} w={w} 期望宽={want} 任务栏宽={bar_w}"
+            )),
+            None => append_log(&format!(
+                "[widget] 自动避让: 退回整条任务栏（期望宽={want} 任务栏宽={bar_w}）\
+                 —— 原因={}",
+                if want <= 0 {
+                    "期望宽度未知（本帧才画出来）"
+                } else if !crate::taskbar_layout::probe_started() {
+                    "探针线程未启动"
+                } else {
+                    "探针无数据/不可信，或空隙放不下"
+                }
+            )),
+        }
+    }
+    got
+}
+
+/// ⭐⭐ 自动的**贴靠语义要随「有没有命中间隙」变**（纯函数，可单测）。
+///
+/// ⛔⛔ **兜底时必须退回 `center`，不许沿用「贴左缘」** —— 这是实测抓到的自伤：
+///   `align_in_slot` 给 `auto` 的 `offset = 0` 之所以成立，靠的是「空隙边界
+///   **已经**含了 `find_free_interval` 的间距」；而**兜底槽 = 整条任务栏**，
+///   它的左缘是**裸的 x = 0**、一点间距都没有 ⇒ 窗口直接压住开始按钮。
+///   实测审计抓到一帧：`窗口 0..342 压住 [(0,69) 开始按钮, (72,347) 搜索框]`
+///   （发生在启动首帧 —— `DESIRED_W` 还是 0、自动必然兜底的那一刻）。
+///
+/// ⭐ 因此口径是**两段**的，别只记「auto 贴左」这一半：
+///   · 命中间隙 ⇒ 空隙内贴左缘（紧邻应用图标那一排）；
+///   · 兜底     ⇒ 与 `center` 同义（整条任务栏正中，= 今天的默认行为）。
+fn effective_position(position: &str, slot_is_gap: bool) -> &str {
+    if position == "auto" && !slot_is_gap {
+        "center"
+    } else {
+        position
+    }
+}
+
+/// 窗口的**最终宽度**。⛔ 两种可用区的兜底口径不同，不能混用：
+///   · **整条任务栏** ⇒ 只兜两个极端（不超过任务栏宽 / 不小于 `min_run_w`）。
+///     ⛔ **不许收进「槽宽」**：那是给「避让后可能只剩 53px 的窄槽」写的补丁，
+///     副作用是内容被截断（用户正是抱怨这点）；
+///   · **自动空隙** ⇒ **必须收进空隙**，否则窗口会盖住相邻图标（避让白做）。
+/// ⚠️ `max(min_run_w)` 是防御分支：空隙比一个图标还窄时宁可略微溢出，也不画出
+///   0 宽窗口（那种窗口看不见、也点不到，比溢出更难排查）。
+#[cfg(target_os = "windows")]
+fn fit_width(desired_w: i32, slot_w: i32, tb_w: i32, m: &Metrics) -> i32 {
+    let floor = min_run_w(m);
+    if SLOT_IS_GAP.load(Ordering::Acquire) {
+        desired_w.min(slot_w.max(floor))
+    } else {
+        desired_w.min(tb_w.max(floor))
+    }
+}
+
+/// 供**探针线程**调用：占用区变了 ⇒ 置「槽位待重算」并请求重绘。
+///
+/// ⛔⛔ **这是 `SLOT_STALE` 唯一的对外入口**（原子量保持模块私有）。
+///   ⛔ 置位与请求重绘**必须成对**：只置位不重绘 ⇒ 永远等不到那一帧；
+///   只重绘不置位 ⇒ 重绘读的仍是旧槽位（看起来像「避让没生效」）。
+#[cfg(target_os = "windows")]
+pub fn mark_slot_stale() {
+    SLOT_STALE.store(true, Ordering::Release);
+    request_repaint();
+}
+
+/// ⭐ 绘制路径的**唯一**「按需重算槽位」入口（自动避让的快节拍）。
+///
+/// ⛔⛔ **必须留在主线程**：窗口在 `apply_from_config` 里于**主线程**创建 ⇒ 绘制
+///   与 `fetch_into_snapshot` **同线程** ⇒ `SLOT_X/W/IS_GAP` 始终是**单写者**。
+///   一旦改成别的线程写，三个原子量会被读到「新的 `X` + 旧的 `W`」的撕裂组合
+///   ⇒ 位置按新槽算、宽度按旧槽算 ⇒ **窗口正好压在图标上**（本次修的缺陷复发）。
+///
+/// ⛔ 与 `fetch_into_snapshot` 里那次是**同一个 [`find_widget_slot`]**（唯一实现点），
+///   区别只在节奏：那里搭 30s 的设备刷新（`REFRESH_EVERY_TICKS`），这里由占用区
+///   变化驱动（探针 2s 一采 ⇒ 最长 2s 内让开）。
+#[cfg(target_os = "windows")]
+fn refresh_slot_if_stale() {
+    if !SLOT_STALE.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    if let Some((slot_x, slot_w)) = find_widget_slot() {
+        SLOT_X.store(slot_x, Ordering::Release);
+        SLOT_W.store(slot_w, Ordering::Release);
+        SLOT_VALID.store(true, Ordering::Release);
+    } else {
+        SLOT_VALID.store(false, Ordering::Release);
+    }
 }
 
 /// 在可用区内按贴靠策略算出窗口左端。
@@ -4489,10 +4713,13 @@ fn find_widget_slot() -> Option<(i32, i32)> {
 ///   ⛔ 抽成**纯函数**是为了能单测：贴靠判据极易写反（`right` 写成 `slot_x` 不报错，
 ///   只是窗口跑到左边），肉眼未必立刻发现。
 ///
-/// ⚠️ 可用区现在是**整条任务栏**（见 `find_widget_slot`），因此：
-///   · `center` **就是**任务栏正中（不再是「某个槽里的居中」）；
-///   · `left`/`right` 相对任务栏的最左/最右，各自再留 `edge_margin`。
-///   ⭐ 参数名沿用 `slot_*` 只是为了不动调用点；语义即「可用区」。
+/// ⚠️ 可用区**分两种**（见 `find_widget_slot`）：
+///   · `left`/`center`/`right` ⇒ 可用区 = **整条任务栏**，于是 `center`
+///     **就是**任务栏正中（不再是「某个槽里的居中」），`left`/`right`
+///     相对任务栏的最左/最右，各自再留 `edge_margin`；
+///   · `auto` ⇒ 可用区 = **任务栏上一个空隙**，`center` 的语义**不适用**
+///     （空隙通常远宽于组件，居中会把组件丢在空地正中）⇒ 单独一档贴左缘。
+/// ⭐ 参数名沿用 `slot_*` 只是为了不动调用点；语义即「可用区」。
 ///
 /// ⭐⭐ **`edge_margin` 的口径来自实测 Windows 自身组件**
 ///   （开始按钮与时间日期组件）。125% DPI 逐像素实测：
@@ -4522,6 +4749,14 @@ fn align_in_slot(
     let offset = match position {
         "left" => margin,
         "right" => max_offset - margin,
+        // ⛔⛔ `auto` ⇒ **贴空隙左缘（offset = 0）**，⛔ 不许居中、⛔ 不许加边距。
+        //   依据（真机实测，本机 2560 宽任务栏）：空隙 `x=869 w=1005`，而音乐面板
+        //   只有 `w=506` ⇒ 空隙是组件的 **2 倍**。居中会把组件扔到空地正中，
+        //   两侧各留 250px —— 用户报「距离应用图标太远，之间有大片空白」。
+        //   贴左缘则是**紧邻应用图标那一排**，多出来的空隙全落在另一侧（观感正常）。
+        //   ⛔ 别再加 `margin`：空隙边界**已经**含了 `find_free_interval` 的间距
+        //   （占用块各向外扩 `margin`），再加一次等于边距翻倍（实测 25 → 50px）。
+        "auto" => 0,
         // `center` 及任何未知值（`normalize_config` 已兜住非法值，此处仅防御）
         _ => max_offset / 2,
     };
@@ -4685,6 +4920,55 @@ fn fill_hover_backdrop(px: &mut [u32], w: i32, h: i32, alpha: u32, radius: i32) 
             }
         }
     }
+}
+
+/// ⭐ 封面圆角半径：**按底衬的「半径/边长」比例**折算，不是照抄底衬的绝对值。
+///
+/// ⚠️⛔⛔ **照抄绝对值会让封面圆得离谱**：本机实测底衬 `r=8` 配 `h=60`
+///   ⇒ 比例 **13.3%**；而封面边长 32 ⇒ 照抄 8px 就是 **25%**，比底衬还圆
+///   **一倍**（用户实测报「圆角太大」）。按比例折算：`32 × 8 / 60 ≈ 4` ⇒ 12.5%。
+/// ⇒ 口径是「同**比例**」，不是同**数值**——两者尺寸差一个数量级。
+/// ⭐ 顺带的好处：封面边长随「内容缩放」变，比例折算自动跟着变，⛔ 不用再单独调。
+///
+/// ⚠️ `m.h <= 0` 时退回 `m.radius`：防御分支，宁可偏圆也不要算出 0 变成直角。
+#[cfg(target_os = "windows")]
+fn cover_radius(cover_edge: i32, m: &Metrics) -> i32 {
+    if m.h <= 0 {
+        return m.radius;
+    }
+    ((cover_edge as i64 * m.radius as i64) / m.h as i64) as i32
+}
+
+/// ⭐⭐ 圆角**覆盖率**（0..255），给封面角做**抗锯齿**。
+///
+/// ⚠️⛔⛔ **必须做抗锯齿**：`inside_rounded_rect` 是**硬判据**（内 / 外），
+///   直接拿它当遮罩 ⇒ 角上就是**阶梯状锯齿**（用户实测报「锯齿感很强」）。
+///   分层窗是 32bpp 预乘，边缘本来就该有过渡带，而不是一刀切。
+///
+/// ⭐ **不另写一份圆角几何**：把坐标、边长、半径**整体乘 `S`** 再喂给**生产用的
+///   `inside_rounded_rect`**，形状完全等价（等比缩放）⇒ 覆盖率与硬判据
+///   **逐像素一致**，杜绝「两套圆角定义漂移」。
+///
+/// ⚠️⛔⛔ **`S` 必须 ≥ 8**：采样点是整数坐标。像素内 4 等分点
+///   `0.125 / 0.375 / 0.625 / 0.875` 在 **8 倍**坐标下才落在整数（`i*8 + 1/3/5/7`）。
+///   用 4 倍只会落在 `0.0625 / 0.1875 / 0.3125 / 0.4375` ⇒ 采样整体偏向左上角
+///   ⇒ 最外角像素拿到 **95/255** 而不是 0（实测踩过），边缘**外扩半像素**。
+/// ⚠️ 覆盖率粒度由**样本数**（16）决定，⛔ 与 `S` 无关：`(hit * 255) / 16`。
+/// ⚠️ 16 次谓词 × 封面 32×32 ≈ **1.6 万次纯算术/帧**；相对一次 UIA 探针
+///   （30~160ms）可忽略，不值得为它引缓存。
+#[cfg(target_os = "windows")]
+fn rounded_rect_coverage(x: i32, y: i32, w: i32, h: i32, r: i32) -> u32 {
+    const S: i32 = 8;
+    const N: i32 = 4; // 每轴样本数 ⇒ 覆盖率粒度 1/16
+    let mut hit = 0u32;
+    for sy in 0..N {
+        for sx in 0..N {
+            if inside_rounded_rect(x * S + sx * 2 + 1, y * S + sy * 2 + 1, w * S, h * S, r * S) {
+                hit += 1;
+            }
+        }
+    }
+    (hit * 255) / (N * N) as u32
 }
 
 /// 按**系统主题**选 hover 底衬的不透明度（纯函数，可单测）。
@@ -5132,17 +5416,18 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     };
     let slot_rel_x = SLOT_X.load(Ordering::Acquire) - tb_left;
     let slot_w = SLOT_W.load(Ordering::Acquire);
-    // ⛔⛔ **窗口宽度不再被「槽」钳制**（第二次方案变更）：
-    //   旧代码是 `desired_w.min(slot_w.max(min_run_w))` —— 那是为「避让后可能只剩
-    //   53px 的窄槽」写的补丁，副作用是**内容被截断**（用户正是抱怨这点）。
-    //   现在可用区 = **整条任务栏**（见 `find_widget_slot`）⇒ 窗口就按内容宽度画，
-    //   只在两个极端上兜底：① 不超过任务栏宽；② 不小于 `min_run_w`。
-    //   ⭐ 两者都**只会放宽**，不会像旧代码那样把窗口压窄 ⇒ 内容不再被裁。
-    let total_w = desired_w.min(tb_w.max(min_run_w(&m)));
+    // ⭐ 自然宽度上报给自动求空隙用（`fit_width` 只钳最终宽度，不改它）。
+    DESIRED_W.store(desired_w, Ordering::Release);
+    // ⛔⛔ **宽度兜底口径由可用区分档**（判据与两档差异 → [`fit_width`]）：
+    //   整条任务栏时不许收进「槽宽」（旧避让的 53px 窄槽会截断内容，用户抱怨过）；
+    //   自动空隙时必须收进空隙，否则会盖住相邻图标。
+    let total_w = fit_width(desired_w, slot_w, tb_w, &m);
     // ⭐ 靠左/靠右的留白：**DIP → 物理像素**（见 `EDGE_MARGIN_DIP`）。
     //   ⚠️ 走 `m`（内容 DPI），与窗口内容同口径 —— 否则高 DPI 下留白会显得过窄。
     let edge_margin = m.dip(EDGE_MARGIN_DIP);
-    let aligned = align_in_slot(slot_rel_x, slot_w, total_w, &position, edge_margin);
+    // ⭐ 贴靠语义随「有没有命中间隙」变（⛔ 兜底必须回 center，判据见 `effective_position`）。
+    let position = effective_position(&position, SLOT_IS_GAP.load(Ordering::Acquire));
+    let aligned = align_in_slot(slot_rel_x, slot_w, total_w, position, edge_margin);
     // 四档优先级（固定 > 拖拽落点 > 上次 > 贴靠）与钳制都在纯函数里，可单测。
     let rel_x = resolve_rel_x(
         locked,
@@ -5434,9 +5719,12 @@ fn repaint_from_snapshot(hwnd: *mut core::ffi::c_void) {
     if switch_anim_active() && draw_switch_transition(hwnd) {
         return;
     }
+    // ⭐ 占用区变了就重算槽位（自动避让的快节拍，2s 内生效）。
+    //   ⛔ 必须**在读 `SLOT_*` 之前**、且在动画早退**之前** —— 否则动画期间
+    //   这一帧会把标志消费掉却没重画，槽位得再等下一帧才更新。
+    refresh_slot_if_stale();
     // ⭐ **按面板分派**：音乐面板的数据来自 SMTC 快照（不是设备快照），
-    //   两者形状完全不同（`WidgetItem` 是「一台设备」，音乐面板是「一块面板」）。
-    //   ⛔ 分派必须与 `should_show` / `advance_switch_target` 用**同一个** `current_panel()`
+    //   两者形状完全不同（`WidgetItem` 是「一台设备」，音乐面板是「一块面板」）。    //   ⛔ 分派必须与 `should_show` / `advance_switch_target` 用**同一个** `current_panel()`
     //   ——三处分叉就会出现「判据说显示音乐、画的却是设备内容」且不报错。
     // ⭐ 记一条**面板判据**日志：出问题时第一件要确认的就是「此刻到底显示的是哪一块」。
     //   回落链有三态（音乐/设备/不显示），没有这行就无法区分
@@ -8489,12 +8777,137 @@ mod tests {
         );
     }
 
+    /// ⛔⛔ 间距换算**必须走任务栏 DPI**，⛔ 不许走 `m.dip()`（内容 DPI）。
+    ///
+    /// 依据（本机实测）：`taskbar_content_scale = "smaller"` ⇒
+    ///   `content_dpi = 120 / 1.25 = 96` ⇒ `m.dip(10) == 10`，而按任务栏 DPI
+    ///   应得 **12**（原生槽位内缩 12.5px 的下取整，见 `auto_gap_margin_px`）。
+    /// ⇒ 用 `m.dip()` 时组件落在 799、距邻居图标 **23px**（原生 25px），
+    ///   且**不报任何错** —— 只靠肉眼才能发现间距与原生脱钩。
+    ///
+    /// ⛔⛔ 取整**必须下取整**：125% 下原生内缩是 12.5px，`round` 得 13 ⇒ 总距
+    ///   `13 + 13 = 26px`，而下取整得 12 ⇒ 总距 **25px**，正好等于原生实测的
+    ///   图标↔图标间距（8 对相邻图标全是 25，非常一致）。
+    ///
+    /// 判别力（两条注入验证均实测转红）：换成 `m.dip(...)`（内容 DPI）或换回
+    ///   `Metrics::dip_of`（round），**都会被上面第 ① 条断言抓住**（期望值 12）。
+    /// ⭐ 第 ③ 条的作用不同：它单独钉住「**不得等于取整值 13**」，防的是
+    ///   「把实现改回 round、同时把 ① 的期望值也改成 13」那种协同改动 ——
+    ///   那种改动 ① 自己抓不到（自己改自己），③ 仍会红。
+    #[test]
+    fn auto_gap_margin_follows_taskbar_dpi_not_content_dpi() {
+        // 本机口径：系统 125%（=120）+ 内容缩放 smaller ⇒ 内容 DPI 被压回 96
+        use crate::config::TaskbarContentScale as Scale;
+        let m = Metrics::for_scales(120, Scale::Smaller);
+        assert_eq!(m.content_dpi, 96, "smaller ⇒ 内容 DPI 96（本判据的前提）");
+        assert_eq!(
+            auto_gap_margin_px(&m),
+            10 * 120 / 96,
+            "间距必须按任务栏 DPI 换算"
+        );
+        // ⛔ 下取整：10 DIP @125% = 12.5 ⇒ **12**（`dip_of` 的 round 会给 13）
+        assert_eq!(
+            auto_gap_margin_px(&m),
+            12,
+            "10 DIP @125% = 12.5 ⇒ 下取整 12"
+        );
+        assert_ne!(
+            auto_gap_margin_px(&m),
+            Metrics::dip_of(120, AUTO_GAP_MARGIN_DIP),
+            "⛔ 不得用 round：13 会让总距变成 26px，而原生是 25px"
+        );
+        // ⚠️ 这条是本判据存在的理由：内容 DPI 一旦被缩放设置改掉，
+        //   `m.dip()` 给出的就是错的间距（实测 10 ⇒ 距图标 23px ≠ 原生 25px）。
+        assert_eq!(
+            m.dip(AUTO_GAP_MARGIN_DIP),
+            10,
+            "内容 DPI = 96 ⇒ m.dip(10) = 10，正是那个错误的间距"
+        );
+        // ⭐ 内容缩放**不得**影响与原生对齐的量（只影响内容本身）
+        assert_eq!(
+            auto_gap_margin_px(&Metrics::for_scales(120, Scale::Default)),
+            auto_gap_margin_px(&m),
+            "换内容缩放档，间距不许变"
+        );
+    }
+
+    /// ⛔⛔ 自动**兜底时贴靠必须退回 `center`**（不许沿用「贴左缘」）。
+    ///
+    /// 依据（实测审计抓到的自伤）：兜底槽 = **整条任务栏**，其左缘是裸的
+    ///   `x = 0`，**不含** `find_free_interval` 的间距 ⇒ `offset = 0` 会让窗口
+    ///   直接压住开始按钮。实测那一帧：`窗口 0..342 压住 [(0,69), (72,347)]`。
+    ///
+    /// 判别力：把 `!slot_is_gap` 分支去掉（兜底也贴左）⇒ 下面第一条断言转红。
+    #[test]
+    fn effective_position_falls_back_to_center_when_no_gap_was_found() {
+        assert_eq!(
+            effective_position("auto", true),
+            "auto",
+            "命中间隙时保持 auto（空隙内贴左缘）"
+        );
+        assert_eq!(
+            effective_position("auto", false),
+            "center",
+            "兜底时必须回 center —— 贴左会压住开始按钮"
+        );
+        // ⭐ 前三档**不受影响**（它们没有「兜底」这回事）
+        for pos in ["left", "center", "right"] {
+            for gap in [true, false] {
+                assert_eq!(effective_position(pos, gap), pos, "{pos} 不该被改写");
+            }
+        }
+    }
+
+    /// ⛔⛔ `auto` 必须**贴空隙左缘**（`offset = 0`）—— 判据来自真机证伪。
+    ///
+    /// 依据（本机 2560 宽任务栏实测）：空隙 `x=869 w=1005`，而音乐面板只有
+    ///   `w=506` ⇒ **空隙是组件的 2 倍**。曾按「缝隙通常刚好等于窗口宽」把
+    ///   `auto` 归入 `center`，真机表现是组件被丢在空地正中、两侧各空 250px
+    ///   ⇒ 用户报「距离应用图标太远，之间有大片空白」。
+    ///
+    /// 判别力：删掉 `"auto" => 0` 这一臂（退回 `_ => max_offset / 2`）
+    ///   ⇒ 本用例的 `auto == slot_x` 立刻转红（会得到 `slot_x + 249`）。
+    #[test]
+    fn align_in_slot_auto_hugs_the_left_edge_of_the_gap() {
+        // 真机那组数字：空隙左缘 869、宽 1005，组件 506
+        let (slot_x, slot_w, content_w, margin) = (869, 1005, 506, 25);
+        assert_eq!(
+            align_in_slot(slot_x, slot_w, content_w, "auto", margin),
+            slot_x,
+            "auto 必须贴空隙左缘，不许居中"
+        );
+        // ⛔ 也不许再加一次边距（空隙边界已含 `find_free_interval` 的间距，
+        //   再加等于翻倍：实测 25 → 50px）。
+        assert_ne!(
+            align_in_slot(slot_x, slot_w, content_w, "auto", margin),
+            slot_x + margin,
+            "空隙已含间距，auto 不得再叠加 edge_margin"
+        );
+        // ⚠️ 宽度恰好等于空隙时各取法结果相同 —— 这正是当初误判
+        //   「缝隙通常刚好等于窗口宽」的原因，故上面必须用**宽空隙**来钉。
+        assert_eq!(
+            align_in_slot(slot_x, content_w, content_w, "auto", margin),
+            slot_x
+        );
+    }
+
+    /// 内容装不下时 `auto` 退化为贴左缘，且**不得**返回负偏移。
+    #[test]
+    fn align_in_slot_auto_never_returns_negative_offset_when_content_overflows() {
+        let (slot_x, slot_w, content_w) = (869, 300, 500);
+        assert_eq!(
+            align_in_slot(slot_x, slot_w, content_w, "auto", 20),
+            slot_x,
+            "组件比空隙还宽时应贴左缘，不得为负偏移"
+        );
+    }
+
     /// 可用区比内容窄时（防御分支）：`max_offset` 归零 ⇒ 边距被夹成 0 ⇒
     /// 三种策略**都**退化为贴可用区左端，且**绝不返回负偏移**（负偏移会把窗口推到任务栏之外）。
     #[test]
     fn align_in_slot_never_returns_negative_offset_when_content_overflows() {
         let (slot_x, slot_w, content_w) = (600, 80, 200);
-        for pos in ["left", "center", "right", "unknown"] {
+        for pos in ["left", "center", "right", "auto", "unknown"] {
             let x = align_in_slot(slot_x, slot_w, content_w, pos, 20);
             assert_eq!(x, slot_x, "可用区装不下时 `{pos}` 应退化为贴左端");
         }
@@ -8714,6 +9127,159 @@ mod tests {
         assert!((out >> 16) & 0xFF < 153, "必须比纯底衬暗 ⇒ 字确实画上去了");
     }
 
+    /// ⭐⭐ 封面圆角：**按底衬的「半径/边长」比例**折算 + **抗锯齿**。
+    ///
+    /// 依据（用户两次实测反馈 + 本机测量）：
+    ///   · 「圆角太大」：底衬 `r=8 / h=60` = **13.3%**，而封面边长 32 照抄 8px
+    ///     就是 **25%** —— 比底衬还圆**一倍**。按比例折算 ⇒ `32×8/60 = 4`（12.5%）。
+    ///   · 「锯齿感很强」：`inside_rounded_rect` 是**硬判据**（内/外）⇒ 角上就是
+    ///     **阶梯**；分层窗是 32bpp 预乘，边缘本该有过渡带。
+    ///
+    /// 判别力：① `cover_radius` 改成照抄 `m.radius` ⇒ 第一条转红；
+    ///   ② 覆盖率退回硬判据（`inside ? 255 : 0`）⇒ 第二条转红。
+    #[test]
+    fn cover_radius_follows_the_backdrop_ratio_not_its_absolute_value() {
+        let m = Metrics::art_fixed_for(120); // 底衬 125%
+        assert_eq!(
+            (m.radius, m.h, m.icon),
+            (8, 50, 40),
+            "125% 下底衬 r8/h50、封面 40px（本判据的前提）"
+        );
+        // ⛔ 照抄绝对值 = 20%，而底衬自身只有 16% ⇒ 封面比底衬还圆（用户报「圆角太大」）
+        assert_eq!(m.radius * 100 / m.icon, 20, "照抄绝对值得 20%");
+        assert_eq!(m.radius * 100 / m.h, 16, "底衬自身比例 = 16%");
+        assert_eq!(
+            cover_radius(m.icon, &m),
+            6,
+            "按比例折算：40 × 8 / 50 = 6.4 → 6 ⇒ 15%，与底衬同比例"
+        );
+        // ⭐ 比例式自动跟随封面边长（内容缩放档）—— 不用为每档单独调
+        assert_eq!(cover_radius(80, &m), 12, "封面翻倍 ⇒ 半径同比翻倍");
+        // ⛔ 防御分支：`m.h <= 0` 时退回底衬半径，不能算出 0（= 直角）
+        let mut bad = Metrics::art_fixed_for(120);
+        bad.h = 0;
+        assert_eq!(cover_radius(40, &bad), bad.radius, "h<=0 ⇒ 退回底衬半径");
+    }
+
+    /// ⛔⛔ 覆盖率必须**分档**，⛔ 不许退回硬判据（否则角上仍是阶梯锯齿）。
+    #[test]
+    fn rounded_rect_coverage_is_graded_not_binary() {
+        let (w, h, r) = (32, 32, 4);
+        assert_eq!(rounded_rect_coverage(0, 0, w, h, r), 0, "最外角必须全透明");
+        assert_eq!(
+            rounded_rect_coverage(w - 1, h - 1, w, h, r),
+            0,
+            "最外角必须全透明"
+        );
+        assert_eq!(
+            rounded_rect_coverage(16, 16, w, h, r),
+            255,
+            "中心必须完全不透明"
+        );
+        // ⛔ 核心：角区必须出现**中间档**（硬判据只会给 0 或 255）
+        let corner: Vec<u32> = (0..8)
+            .flat_map(|y| (0..8).map(move |x| (x, y)))
+            .map(|(x, y)| rounded_rect_coverage(x, y, w, h, r))
+            .collect();
+        let partial = corner.iter().filter(|&&c| c > 0 && c < 255).count();
+        // ⛔ 阈值按**过渡带弧长**定，不是拍脑袋：r=4 的四分之一弧长 ≈ πr/2 ≈ 6.3px
+        //   ⇒ 角区里半覆盖的像素**本就只有 5~6 个**（实测 5）。
+        //   判据只需证「有过渡带」，阈值远低于弧长以免随半径档变化而误报。
+        assert!(
+            partial >= 3,
+            "角区必须有过渡带（实测 {partial} 个中间档像素）；为 0 说明退回硬判据了"
+        );
+        // ⭐ 沿对角线向内覆盖率必须单调不减
+        let mut prev = 0;
+        for i in 0..8 {
+            let c = rounded_rect_coverage(i, i, w, h, r);
+            assert!(
+                c >= prev,
+                "对角线覆盖率必须单调不减（i={i}: {prev} -> {c}）"
+            );
+            prev = c;
+        }
+        // ⚠️ 粒度由**样本数**定（16 档，`hit * 255 / 16`），⛔ 与缩放倍数 `S` 无关
+        assert!(
+            corner
+                .iter()
+                .all(|&c| (0..=16u32).any(|k| k * 255 / 16 == c)),
+            "覆盖率必须落在 16 档之一（换了样本数这里会红）"
+        );
+    }
+
+    /// ⭐ 覆盖率与硬判据**不得漂移**（只钉两个**单向**约束）。
+    ///
+    /// ⛔⛔ **不能断言「`cov == 255` ⇒ 硬判据为真」** —— 我第一版就是这么写的，
+    ///   实测 `(3, 0)` 立刻转红。原因是两者问的**不是同一件事**：覆盖率采样的是
+    ///   像素**面积**（4×4 子点），硬判据取的是**那个像素坐标点**。像素 `(3,0)`
+    ///   的 16 个子点全在圆内、而坐标点 `(3,0)` 在圆外 —— **本就差半像素**，
+    ///   写成等价就恒红且毫无意义。
+    ///
+    /// ⭐ 真正要守的是「⛔ 不另写一份圆角几何」：两套实现各自演化时偏差会
+    ///   **超过一个采样带（≈0.7px）**，肉眼就是「边缘发虚 / 发硬」。故只钉：
+    ///   ① 硬判据为真 ⇒ 覆盖率不为 0（**不许有洞**）
+    ///   ② `cov == 255` ⇒ 硬判据在**该点或四邻域**（**不许外扩超一个采样带**）
+    ///
+    /// ⚠️ ② 的容差**四向都要**，不是拍的：`(3,0)` 整像素都在圆内（`cov=255`），
+    ///   但硬判据在它自己身上为假、只在其**右侧**邻居 `(4,0)` 为真 ⇒ 只给
+    ///   「左上」两个方向会误报。
+    #[test]
+    fn rounded_rect_coverage_never_drifts_from_the_hard_predicate() {
+        let (w, h, r) = (32, 32, 4);
+        let inside = |x: i32, y: i32| inside_rounded_rect(x, y, w, h, r);
+        for y in 0..h {
+            for x in 0..w {
+                let cov = rounded_rect_coverage(x, y, w, h, r);
+                if inside(x, y) {
+                    assert!(
+                        cov > 0,
+                        "({x},{y}) 硬判据说在内 ⇒ 覆盖率不能为 0（不能有洞）"
+                    );
+                }
+                if cov == 255 {
+                    assert!(
+                        inside(x, y)
+                            || inside(x - 1, y)
+                            || inside(x + 1, y)
+                            || inside(x, y - 1)
+                            || inside(x, y + 1),
+                        "cov=255 的 ({x},{y}) 必须在硬判据内或紧邻它 —— \
+                         偏差超过一个采样带 ⇒ 两套几何漂移了"
+                    );
+                }
+            }
+        }
+    }
+
+    /// ⛔⛔ **调用点**：封面遮罩必须走 `cover_radius`，⛔ 不许直接用 `m.radius`。
+    ///
+    /// ⚠️ 为什么只能钉调用点：圆角是逐像素遮罩，`draw_music_render` 需要真 HWND，
+    ///   单测里**看不到画出来的结果** ⇒ 纯函数判据对「调用点传错对象」完全失明。
+    /// ⛔⛔ 必须先把判据自身从待检文本里剔掉（取 `fn_start` 之前的切片）：本函数
+    ///   的断言字符串里就写着那行字面量，不剔除则改坏绘制处后判据自己那份照样命中。
+    #[test]
+    fn cover_mask_takes_its_radius_from_cover_radius() {
+        let src = include_str!("taskbar_widget.rs");
+        let fn_start = src
+            .find("fn cover_mask_takes_its_radius_from_cover_radius")
+            .expect("判据函数自身必须还在");
+        let draw_area = &src[..fn_start];
+        assert!(
+            draw_area.contains("let cr = cover_radius(cw as i32, &m);"),
+            "封面遮罩半径必须走 `cover_radius`（按底衬比例折算），⛔ 不许照抄 `m.radius`"
+        );
+        assert!(
+            !draw_area.contains("cw as i32, chh as i32, m.radius"),
+            "⛔ 封面圆角不得直接用 `m.radius` —— 那是底衬的绝对值，对小封面会圆一倍"
+        );
+        // ⭐ 折算口径 = 底衬的「半径/边长」比例（`m.radius / m.h`）
+        assert!(
+            draw_area.contains("inside_rounded_rect(x * S + sx * 2 + 1"),
+            "⛔ 覆盖率必须把坐标放大后喂给**生产谓词** `inside_rounded_rect`"
+        );
+    }
+
     /// ⛔⛔ **预乘位图「变暗」时，颜色分量必须随新 alpha 等比缩放**。
     ///
     /// 依据：缓存里存的是**预乘**数据（RGB 已乘过 alpha）。只压 alpha 而 RGB
@@ -8726,6 +9292,7 @@ mod tests {
     ///   **读源文件**、断言那三行带 `* a / 255`（与 `inject-*.py` 同款思路）。
     /// ⚠️ 亮度物理量那条纯函数判据在下方，**只回答「为什么错的那个偏亮」**，
     ///   不负责发现调用点改错。两者可并存、缺一不可。
+
     #[test]
     fn cover_press_scales_premultiplied_colors_at_the_call_site() {
         // ⭐ 钉调用点：封面合成那三行必须逐行带 `* a / 255`。

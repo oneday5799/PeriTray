@@ -210,7 +210,9 @@ function initTaskbarPinCard() {
 
   // 「任务栏窗口位置」下拉：初始值取 config（覆盖 HTML 里写死的「居中」文案），
   // 变更即落盘。范式与 `settings-general.js` 的 `combo-theme-mode` 等一致。
-  // ⭐ 语义：贴靠发生在**避让后的视觉空白槽内**，不是整条任务栏 —— 见 config.rs 字段注释。
+  // ⭐ 四档语义（判据 → config.rs 的 `taskbar_position` 字段注释）：
+  //   left/center/right 的可用区 = **整条任务栏**；auto = **避让已有按钮**
+  //   落进真实空隙，取不到可信占用区就退回整条任务栏（等效居中）。
   initComboBox("combo-taskbar-position", config.taskbar_position || "center", async (val) => {
     config.taskbar_position = val;
     await saveConfig();

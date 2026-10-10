@@ -29,6 +29,16 @@
 # FLOOR	⛔+⭐ 总数下界	974
 # FLOOR	⛔+⭐ 总数下界	982
 # FLOOR	⛔+⭐ 总数下界	989
+# FLOOR	⛔+⭐ 总数下界	988
+# FLOOR	⛔+⭐ 总数下界	1031
+# FLOOR	⛔+⭐ 总数下界	1036
+# FLOOR	⛔+⭐ 总数下界	1063
+# FLOOR	⛔+⭐ 总数下界	1070
+# FLOOR	⛔+⭐ 总数下界	1102
+# FLOOR	⛔+⭐ 总数下界	1107
+# FLOOR	⛔+⭐ 总数下界	1109
+# FLOOR	⛔+⭐ 总数下界	1114
+# FLOOR	⛔+⭐ 总数下界	1119
 
 src-tauri/src/app_icon.rs	const EXE_PATH_CACHE	⭐	1
 src-tauri/src/app_icon.rs	fn normalize_image_path	⭐	1
@@ -94,7 +104,7 @@ src-tauri/src/config.rs	fn init_config	⛔	1
 src-tauri/src/config.rs	fn init_config	⭐	1
 src-tauri/src/config.rs	fn matches_pinned_taskbar	⭐	1
 src-tauri/src/config.rs	fn migrate_taskbar_switch	⛔	3
-src-tauri/src/config.rs	fn migrate_taskbar_switch	⭐	1
+src-tauri/src/config.rs	fn migrate_taskbar_switch	⭐	3
 src-tauri/src/config.rs	fn migration_is_noop_for_fresh_install	⭐	1
 src-tauri/src/config.rs	fn migration_opens_switch_for_legacy_config_with_devices	⛔	1
 src-tauri/src/config.rs	fn migration_touches_nothing_but_the_switch	⭐	1
@@ -124,7 +134,7 @@ src-tauri/src/config.rs	fn taskbar_devices_available	⭐	1
 src-tauri/src/config.rs	fn taskbar_panel_candidates	⛔	5
 src-tauri/src/config.rs	fn taskbar_panel_candidates	⭐	1
 src-tauri/src/config.rs	fn taskbar_panel_for	⭐	2
-src-tauri/src/config.rs	fn taskbar_position_accepts_all_three_values_verbatim	⭐	1
+src-tauri/src/config.rs	fn taskbar_position_accepts_all_four_values_verbatim	⭐	1
 src-tauri/src/device_identity.rs	const C	⛔	2
 src-tauri/src/device_identity.rs	const C	⭐	2
 src-tauri/src/device_identity.rs	const CID	⛔	5
@@ -169,8 +179,9 @@ src-tauri/src/main.rs	fn make_panic_hook	⛔	1
 src-tauri/src/main.rs	fn spawn_dev_open_settings	⛔	1
 src-tauri/src/main.rs	fn spawn_dev_open_settings	⭐	1
 src-tauri/src/main.rs	fn spawn_startup_update_check	⛔	1
-src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⛔	3
-src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⭐	5
+src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⛔	4
+src-tauri/src/main.rs	fn spawn_taskbar_widget_dev	⭐	6
+src-tauri/src/main.rs	mod state	⛔	1
 src-tauri/src/media_activate.rs	<file>	⛔	2
 src-tauri/src/media_activate.rs	<file>	⭐	1
 src-tauri/src/media_activate.rs	const MAX_WINDOWS_SCANNED	⭐	1
@@ -187,6 +198,52 @@ src-tauri/src/state.rs	const DEVICES_CACHE_TEST_LOCK	⭐	1
 src-tauri/src/state.rs	fn lock_unpoisoned_takes_over_poisoned_mutex	⛔	1
 src-tauri/src/state.rs	fn storing_unchanged_content_still_refreshes_the_timestamp	⛔	1
 src-tauri/src/state.rs	fn try_begin_animation_with_timeout	⭐	1
+src-tauri/src/taskbar_layout.rs	<file>	⛔	3
+src-tauri/src/taskbar_layout.rs	<file>	⭐	5
+src-tauri/src/taskbar_layout.rs	const CLASSES	⛔	1
+src-tauri/src/taskbar_layout.rs	const DIRTY	⛔	1
+src-tauri/src/taskbar_layout.rs	const EVENT_WAITED_AT	⭐	1
+src-tauri/src/taskbar_layout.rs	const IDLE_INTERVAL_MS	⛔	1
+src-tauri/src/taskbar_layout.rs	const MAX_ELEMENTS	⛔	2
+src-tauri/src/taskbar_layout.rs	const RECT_MATCH_TOL_PX	⛔	1
+src-tauri/src/taskbar_layout.rs	const TTL_MS	⛔	1
+src-tauri/src/taskbar_layout.rs	fn auto_slot	⛔	2
+src-tauri/src/taskbar_layout.rs	fn auto_slot	⭐	1
+src-tauri/src/taskbar_layout.rs	fn auto_slot_requires_a_reliable_fresh_probe	⛔	3
+src-tauri/src/taskbar_layout.rs	fn collect_uia	⛔	4
+src-tauri/src/taskbar_layout.rs	fn container_filter_reveals_the_real_gap_sample	⛔	1
+src-tauri/src/taskbar_layout.rs	fn container_filter_reveals_the_real_gap_sample	⭐	1
+src-tauri/src/taskbar_layout.rs	fn event_hits	⛔	1
+src-tauri/src/taskbar_layout.rs	fn event_hits	⭐	1
+src-tauri/src/taskbar_layout.rs	fn find_free_interval	⛔	1
+src-tauri/src/taskbar_layout.rs	fn find_free_interval	⭐	2
+src-tauri/src/taskbar_layout.rs	fn free_interval_handles_degenerate_inputs	⭐	1
+src-tauri/src/taskbar_layout.rs	fn free_interval_margin_lands_the_backdrop_at_the_native_icon_gap	⛔	1
+src-tauri/src/taskbar_layout.rs	fn free_interval_merges_overlapping_occupied_blocks	⛔	2
+src-tauri/src/taskbar_layout.rs	fn free_interval_refuses_to_shrink_into_a_narrow_gap	⭐	1
+src-tauri/src/taskbar_layout.rs	fn free_interval_respects_margins_on_both_sides	⛔	1
+src-tauri/src/taskbar_layout.rs	fn free_interval_works_in_negative_screen_coordinates	⛔	2
+src-tauri/src/taskbar_layout.rs	fn HandleStructureChangedEvent	⛔	2
+src-tauri/src/taskbar_layout.rs	fn HandleStructureChangedEvent	⭐	1
+src-tauri/src/taskbar_layout.rs	fn interactive_condition	⛔	1
+src-tauri/src/taskbar_layout.rs	fn intersects	⛔	2
+src-tauri/src/taskbar_layout.rs	fn is_layout_change_excludes_invalidated_but_keeps_every_real_change	⛔	2
+src-tauri/src/taskbar_layout.rs	fn keep_innermost_drops_containers_but_keeps_adjacent_buttons	⭐	2
+src-tauri/src/taskbar_layout.rs	fn merge_observed_drops_only_what_recheck_confirms_gone	⛔	1
+src-tauri/src/taskbar_layout.rs	fn merge_observed_refreshes_matched_rect_instead_of_duplicating	⛔	1
+src-tauri/src/taskbar_layout.rs	fn merge_observed_takes_new_blocks_immediately	⭐	1
+src-tauri/src/taskbar_layout.rs	fn probe_loop	⛔	4
+src-tauri/src/taskbar_layout.rs	fn probe_loop	⭐	6
+src-tauri/src/taskbar_layout.rs	fn probe_once	⛔	1
+src-tauri/src/taskbar_layout.rs	fn probe_once	⭐	1
+src-tauri/src/taskbar_layout.rs	fn pump_messages	⛔	1
+src-tauri/src/taskbar_layout.rs	fn pump_messages	⭐	1
+src-tauri/src/taskbar_layout.rs	fn r	⭐	1
+src-tauri/src/taskbar_layout.rs	fn verbose_log_counted	⛔	1
+src-tauri/src/taskbar_layout.rs	fn wait_for_change_or_timeout	⛔	1
+src-tauri/src/taskbar_layout.rs	fn wait_for_change_or_timeout	⭐	3
+src-tauri/src/taskbar_layout.rs	fn watch_structure_changes	⛔	1
+src-tauri/src/taskbar_layout.rs	fn watch_structure_changes	⭐	1
 src-tauri/src/taskbar_music.rs	<file>	⛔	5
 src-tauri/src/taskbar_music.rs	<file>	⭐	4
 src-tauri/src/taskbar_music.rs	const COVER_CACHE	⛔	1
@@ -281,12 +338,15 @@ src-tauri/src/taskbar_widget.rs	<file>	⛔	7
 src-tauri/src/taskbar_widget.rs	<file>	⭐	1
 src-tauri/src/taskbar_widget.rs	const A	⛔	3
 src-tauri/src/taskbar_widget.rs	const A	⭐	2
+src-tauri/src/taskbar_widget.rs	const AUTO_GAP_MARGIN_DIP	⛔	4
+src-tauri/src/taskbar_widget.rs	const AUTO_GAP_MARGIN_DIP	⭐	1
 src-tauri/src/taskbar_widget.rs	const BACKDROP_RADIUS_DIP	⛔	1
 src-tauri/src/taskbar_widget.rs	const BACKDROP_RADIUS_DIP	⭐	1
 src-tauri/src/taskbar_widget.rs	const CACHE	⭐	1
 src-tauri/src/taskbar_widget.rs	const D	⛔	1
 src-tauri/src/taskbar_widget.rs	const D	⭐	2
 src-tauri/src/taskbar_widget.rs	const DATA_EVENTS	⛔	2
+src-tauri/src/taskbar_widget.rs	const DESIRED_W	⛔	1
 src-tauri/src/taskbar_widget.rs	const DEVICE_CACHE_TTL_MS	⛔	1
 src-tauri/src/taskbar_widget.rs	const DRAG_ORIGIN_CURSOR_X	⛔	2
 src-tauri/src/taskbar_widget.rs	const DRAG_ORIGIN_WIN_X	⛔	1
@@ -311,16 +371,22 @@ src-tauri/src/taskbar_widget.rs	const ITEM_MAX_W_DIP	⭐	1
 src-tauri/src/taskbar_widget.rs	const LADDER	⛔	1
 src-tauri/src/taskbar_widget.rs	const LAST_X	⛔	1
 src-tauri/src/taskbar_widget.rs	const LAST_X	⭐	1
+src-tauri/src/taskbar_widget.rs	const LOGGED_DECISION	⛔	1
+src-tauri/src/taskbar_widget.rs	const LOGGED_DECISION	⭐	1
 src-tauri/src/taskbar_widget.rs	const MAINTENANCE_TICK_SECS	⛔	1
-src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⛔	8
-src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⭐	20
+src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⛔	11
+src-tauri/src/taskbar_widget.rs	const MUSIC_TEXT_MAX_W_DIP	⭐	22
+src-tauri/src/taskbar_widget.rs	const N	⭐	1
 src-tauri/src/taskbar_widget.rs	const NS_COVER	⛔	2
 src-tauri/src/taskbar_widget.rs	const PAD_X_DIP	⭐	1
 src-tauri/src/taskbar_widget.rs	const PRESS_CURSOR	⭐	1
 src-tauri/src/taskbar_widget.rs	const REFRESH_EVERY_TICKS	⛔	1
 src-tauri/src/taskbar_widget.rs	const REPARENT_ERR	⛔	2
 src-tauri/src/taskbar_widget.rs	const REPARENT_ERR	⭐	1
+src-tauri/src/taskbar_widget.rs	const SLOT_STALE	⛔	1
+src-tauri/src/taskbar_widget.rs	const SLOT_STALE	⭐	1
 src-tauri/src/taskbar_widget.rs	const SLOT_VALID	⛔	1
+src-tauri/src/taskbar_widget.rs	const SLOT_VALID	⭐	1
 src-tauri/src/taskbar_widget.rs	const SNAPSHOT	⭐	1
 src-tauri/src/taskbar_widget.rs	const STARTED	⛔	5
 src-tauri/src/taskbar_widget.rs	const STARTED	⭐	7
@@ -338,21 +404,29 @@ src-tauri/src/taskbar_widget.rs	fn activate_music	⛔	1
 src-tauri/src/taskbar_widget.rs	fn activate_music	⭐	2
 src-tauri/src/taskbar_widget.rs	fn advance_switch_target	⛔	4
 src-tauri/src/taskbar_widget.rs	fn advance_switch_target	⭐	3
-src-tauri/src/taskbar_widget.rs	fn align_in_slot	⛔	3
+src-tauri/src/taskbar_widget.rs	fn align_in_slot	⛔	5
 src-tauri/src/taskbar_widget.rs	fn align_in_slot	⭐	1
+src-tauri/src/taskbar_widget.rs	fn align_in_slot_auto_hugs_the_left_edge_of_the_gap	⛔	1
 src-tauri/src/taskbar_widget.rs	fn align_in_slot_orders_left_center_right	⛔	1
 src-tauri/src/taskbar_widget.rs	fn align_in_slot_orders_left_center_right	⭐	1
+src-tauri/src/taskbar_widget.rs	fn align_in_slot_unknown_position_falls_back_to_center	⛔	2
+src-tauri/src/taskbar_widget.rs	fn align_in_slot_unknown_position_falls_back_to_center	⭐	1
 src-tauri/src/taskbar_widget.rs	fn apply_from_config	⛔	6
 src-tauri/src/taskbar_widget.rs	fn apply_from_config	⭐	3
 src-tauri/src/taskbar_widget.rs	fn apply_wheel_volume	⛔	1
 src-tauri/src/taskbar_widget.rs	fn apply_wheel_volume	⭐	1
+src-tauri/src/taskbar_widget.rs	fn auto_gap	⛔	2
+src-tauri/src/taskbar_widget.rs	fn auto_gap	⭐	3
+src-tauri/src/taskbar_widget.rs	fn auto_gap_margin_follows_taskbar_dpi_not_content_dpi	⛔	2
+src-tauri/src/taskbar_widget.rs	fn auto_gap_margin_follows_taskbar_dpi_not_content_dpi	⭐	1
+src-tauri/src/taskbar_widget.rs	fn auto_gap_margin_px	⛔	1
 src-tauri/src/taskbar_widget.rs	fn battery_and_volume_degrade_independently	⛔	1
 src-tauri/src/taskbar_widget.rs	fn battery_and_volume_degrade_independently	⭐	1
 src-tauri/src/taskbar_widget.rs	fn begin_switch_anim	⛔	1
 src-tauri/src/taskbar_widget.rs	fn begin_switch_anim	⭐	1
 src-tauri/src/taskbar_widget.rs	fn blend_over	⛔	1
 src-tauri/src/taskbar_widget.rs	fn blend_over	⭐	1
-src-tauri/src/taskbar_widget.rs	fn blend_over_antialiased_edge_is_not_eroded	⛔	2
+src-tauri/src/taskbar_widget.rs	fn blend_over_antialiased_edge_is_not_eroded	⭐	1
 src-tauri/src/taskbar_widget.rs	fn blend_over_opaque_source_replaces_destination	⛔	1
 src-tauri/src/taskbar_widget.rs	fn blit_clips_both_directions_on_horizontal_offset	⭐	1
 src-tauri/src/taskbar_widget.rs	fn blit_premul_scaled	⛔	1
@@ -378,15 +452,21 @@ src-tauri/src/taskbar_widget.rs	fn connected_state_is_carried_to_widget_item	⭐
 src-tauri/src/taskbar_widget.rs	fn content_px	⭐	1
 src-tauri/src/taskbar_widget.rs	fn content_scale_changes_content_but_never_backdrop	⛔	2
 src-tauri/src/taskbar_widget.rs	fn content_scale_changes_content_but_never_backdrop	⭐	1
-src-tauri/src/taskbar_widget.rs	fn content_scale_really_changes_content_metrics	⛔	3
+src-tauri/src/taskbar_widget.rs	fn content_scale_really_changes_content_metrics	⛔	4
 src-tauri/src/taskbar_widget.rs	fn content_scale_really_changes_content_metrics	⭐	2
 src-tauri/src/taskbar_widget.rs	fn cover_gap_is_wider_than_button_gap_and_shared_by_both_forms	⭐	1
 src-tauri/src/taskbar_widget.rs	fn cover_hit_is_its_own_cell_and_never_steals_the_transport_keys	⛔	1
 src-tauri/src/taskbar_widget.rs	fn cover_hit_is_its_own_cell_and_never_steals_the_transport_keys	⭐	1
+src-tauri/src/taskbar_widget.rs	fn cover_mask_takes_its_radius_from_cover_radius	⛔	2
+src-tauri/src/taskbar_widget.rs	fn cover_mask_takes_its_radius_from_cover_radius	⭐	1
 src-tauri/src/taskbar_widget.rs	fn cover_press_result_stays_between_normal_and_backdrop	⛔	3
 src-tauri/src/taskbar_widget.rs	fn cover_press_result_stays_between_normal_and_backdrop	⭐	2
 src-tauri/src/taskbar_widget.rs	fn cover_press_scales_premultiplied_colors_at_the_call_site	⛔	5
 src-tauri/src/taskbar_widget.rs	fn cover_press_scales_premultiplied_colors_at_the_call_site	⭐	2
+src-tauri/src/taskbar_widget.rs	fn cover_radius	⛔	3
+src-tauri/src/taskbar_widget.rs	fn cover_radius	⭐	2
+src-tauri/src/taskbar_widget.rs	fn cover_radius_follows_the_backdrop_ratio_not_its_absolute_value	⛔	3
+src-tauri/src/taskbar_widget.rs	fn cover_radius_follows_the_backdrop_ratio_not_its_absolute_value	⭐	1
 src-tauri/src/taskbar_widget.rs	fn create_dib	⛔	1
 src-tauri/src/taskbar_widget.rs	fn create_font	⛔	2
 src-tauri/src/taskbar_widget.rs	fn create_font	⭐	2
@@ -406,7 +486,7 @@ src-tauri/src/taskbar_widget.rs	fn drag_begin	⭐	1
 src-tauri/src/taskbar_widget.rs	fn drag_finish	⛔	3
 src-tauri/src/taskbar_widget.rs	fn draw_blank	⭐	1
 src-tauri/src/taskbar_widget.rs	fn draw_frame	⭐	1
-src-tauri/src/taskbar_widget.rs	fn draw_items_render	⛔	14
+src-tauri/src/taskbar_widget.rs	fn draw_items_render	⛔	15
 src-tauri/src/taskbar_widget.rs	fn draw_items_render	⭐	18
 src-tauri/src/taskbar_widget.rs	fn draw_music	⛔	1
 src-tauri/src/taskbar_widget.rs	fn draw_music_render	⛔	8
@@ -414,6 +494,9 @@ src-tauri/src/taskbar_widget.rs	fn draw_music_render	⭐	5
 src-tauri/src/taskbar_widget.rs	fn drawn_text_width_equals_the_width_the_layout_reserved	⭐	1
 src-tauri/src/taskbar_widget.rs	fn ease_out_cubic	⭐	1
 src-tauri/src/taskbar_widget.rs	fn ease_out_cubic_hits_both_ends_and_never_regresses	⭐	1
+src-tauri/src/taskbar_widget.rs	fn effective_position	⛔	2
+src-tauri/src/taskbar_widget.rs	fn effective_position_falls_back_to_center_when_no_gap_was_found	⛔	1
+src-tauri/src/taskbar_widget.rs	fn effective_position_falls_back_to_center_when_no_gap_was_found	⭐	1
 src-tauri/src/taskbar_widget.rs	fn eight_items_still_fit_in_a_plausible_slot	⭐	1
 src-tauri/src/taskbar_widget.rs	fn estimate_widget_width	⭐	1
 src-tauri/src/taskbar_widget.rs	fn estimate_width_follows_content_scale	⛔	1
@@ -421,9 +504,11 @@ src-tauri/src/taskbar_widget.rs	fn estimate_width_follows_content_scale	⭐	1
 src-tauri/src/taskbar_widget.rs	fn estimate_width_is_monotonic_and_covers_icon	⛔	2
 src-tauri/src/taskbar_widget.rs	fn fetch_into_snapshot	⛔	1
 src-tauri/src/taskbar_widget.rs	fn fetch_into_snapshot	⭐	3
+src-tauri/src/taskbar_widget.rs	fn fill_hover_backdrop	⛔	2
 src-tauri/src/taskbar_widget.rs	fn fill_hover_backdrop	⭐	1
-src-tauri/src/taskbar_widget.rs	fn find_widget_slot	⛔	3
-src-tauri/src/taskbar_widget.rs	fn find_widget_slot	⭐	3
+src-tauri/src/taskbar_widget.rs	fn find_widget_slot	⛔	2
+src-tauri/src/taskbar_widget.rs	fn find_widget_slot	⭐	2
+src-tauri/src/taskbar_widget.rs	fn fit_width	⛔	2
 src-tauri/src/taskbar_widget.rs	fn font_fits_inside_every_text_row	⭐	1
 src-tauri/src/taskbar_widget.rs	fn for_dpi	⛔	1
 src-tauri/src/taskbar_widget.rs	fn for_dpis	⛔	2
@@ -460,6 +545,8 @@ src-tauri/src/taskbar_widget.rs	fn item_rect_on_screen	⛔	2
 src-tauri/src/taskbar_widget.rs	fn item_rects_are_disjoint	⛔	1
 src-tauri/src/taskbar_widget.rs	fn item_rects_match_draw_loop	⛔	1
 src-tauri/src/taskbar_widget.rs	fn m96	⭐	1
+src-tauri/src/taskbar_widget.rs	fn mark_slot_stale	⛔	2
+src-tauri/src/taskbar_widget.rs	fn mark_slot_stale	⭐	1
 src-tauri/src/taskbar_widget.rs	fn measure_text	⛔	1
 src-tauri/src/taskbar_widget.rs	fn measure_text	⭐	1
 src-tauri/src/taskbar_widget.rs	fn measure_text_on_empty_slice_returns_zero_and_never_touches_gdi	⭐	1
@@ -523,13 +610,15 @@ src-tauri/src/taskbar_widget.rs	fn refresh_async_with	⛔	5
 src-tauri/src/taskbar_widget.rs	fn refresh_async_with	⭐	2
 src-tauri/src/taskbar_widget.rs	fn refresh_count	⛔	2
 src-tauri/src/taskbar_widget.rs	fn refresh_count	⭐	2
+src-tauri/src/taskbar_widget.rs	fn refresh_slot_if_stale	⛔	3
+src-tauri/src/taskbar_widget.rs	fn refresh_slot_if_stale	⭐	3
 src-tauri/src/taskbar_widget.rs	fn register_class	⛔	1
 src-tauri/src/taskbar_widget.rs	fn remembered_panel_wins_over_switch_when_both_enabled	⭐	1
 src-tauri/src/taskbar_widget.rs	fn render_panel	⛔	1
 src-tauri/src/taskbar_widget.rs	fn render_text_mask	⛔	4
 src-tauri/src/taskbar_widget.rs	fn render_text_mask	⭐	2
-src-tauri/src/taskbar_widget.rs	fn repaint_from_snapshot	⛔	2
-src-tauri/src/taskbar_widget.rs	fn repaint_from_snapshot	⭐	4
+src-tauri/src/taskbar_widget.rs	fn repaint_from_snapshot	⛔	3
+src-tauri/src/taskbar_widget.rs	fn repaint_from_snapshot	⭐	5
 src-tauri/src/taskbar_widget.rs	fn reparent	⛔	3
 src-tauri/src/taskbar_widget.rs	fn request_repaint_is_silent_when_widget_not_mounted	⛔	1
 src-tauri/src/taskbar_widget.rs	fn resample	⭐	1
@@ -541,6 +630,9 @@ src-tauri/src/taskbar_widget.rs	fn resolve_rel_x_clamps_the_persisted_drag_posit
 src-tauri/src/taskbar_widget.rs	fn resolve_rel_x_clamps_the_persisted_drag_position	⭐	1
 src-tauri/src/taskbar_widget.rs	fn resolve_rel_x_priority_is_locked_then_custom_then_last_then_aligned	⭐	1
 src-tauri/src/taskbar_widget.rs	fn resolve_widget_labels	⛔	3
+src-tauri/src/taskbar_widget.rs	fn rounded_rect_coverage_is_graded_not_binary	⛔	5
+src-tauri/src/taskbar_widget.rs	fn rounded_rect_coverage_is_graded_not_binary	⭐	2
+src-tauri/src/taskbar_widget.rs	fn rounded_rect_coverage_never_drifts_from_the_hard_predicate	⛔	2
 src-tauri/src/taskbar_widget.rs	fn scale_cached	⛔	1
 src-tauri/src/taskbar_widget.rs	fn scale_cached_premul	⭐	1
 src-tauri/src/taskbar_widget.rs	fn scale_down_averages_source_area	⭐	1
@@ -645,4 +737,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	988
+# FLOOR	⛔+⭐ 总数下界	1140

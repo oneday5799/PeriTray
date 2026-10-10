@@ -768,6 +768,21 @@
                         <span class="win-combo-item-content">靠右</span>
                       </span>
                     </button>
+                    <!-- ⭐ 「自动」：避开任务栏上已有的按钮（开始 / 已固定应用 /
+                         托盘 / 时钟），落进一个真实空隙；放不下就退回整条任务栏。
+                         ⛔ `data-value` 必须与后端 `VALID_TASKBAR_POSITIONS` 逐字一致，
+                         否则该档永远选不出来且不报错（判据在 config.rs 的单测里）。
+                         ⛔⛔ **文案与 `data-value` 不同名是故意的**：值仍是 `auto`。
+                         ⛔ 改文案时**不得顺手改值** —— 老用户配置里存的是 `"auto"`，
+                         换成 `"auto"` 后它不在合法值集合里 ⇒ 加载时被归一化回 `center`
+                         ⇒ 用户**静默丢失设置**（无报错、无提示，正是「选了没生效」类
+                         问题的成因）。要改值必须同时做读取期迁移（判据见 config.rs）。 -->
+                    <button class="win-combo-item" data-value="auto">
+                      <span class="win-combo-item-layout">
+                        <span class="win-combo-item-pill"></span>
+                        <span class="win-combo-item-content">自动</span>
+                      </span>
+                    </button>
                   </div>
                 </div>
               </div>

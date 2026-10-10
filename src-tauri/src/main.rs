@@ -22,6 +22,9 @@ mod popup;
 mod process;
 mod shortcut;
 mod state;
+// ⛔ 必须 `cfg(windows)`：整个模块只做 Win32 + UIA，非 Windows 目标下没有对应绑定。
+#[cfg(target_os = "windows")]
+mod taskbar_layout;
 mod taskbar_music;
 #[cfg(target_os = "windows")]
 mod taskbar_tooltip;
@@ -415,6 +418,11 @@ fn spawn_taskbar_widget_dev(app: &tauri::AppHandle) {
     //    依据：两个组件都关时实测省 11 MB 工作集 / 3 MB 私有内存、7 条线程，
     //    空闲 CPU 从 1.44% 降到 0.10%（口径：生效配置 exe 侧 config.toml，预热 55s 采样 90s）。
     crate::taskbar_widget::ensure_music_worker(app);
+    // ⭐ 自动位置的占用区探针：**无条件安装**（判据同上一段——「位置是不是
+    //    auto」是运行时才知道的事，用户随时可能在设置页切过去）。
+    //   ⛔ 线程起来后只在自动开着时才真的采数（其余时候空转 1s），
+    //     所以「无条件安装」不等于「无条件烧 UIA」。
+    crate::taskbar_layout::ensure_probe();
     crate::taskbar_widget::install_event_listeners(app);
     crate::taskbar_widget::start_refresh_loop(app);
 
