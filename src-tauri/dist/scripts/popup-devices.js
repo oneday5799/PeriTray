@@ -1,8 +1,10 @@
-/* popup-devices.js — 主窗口·设备信息 tab：设备列表对账式渲染/右键菜单/连接与托盘项
+/* popup-devices.js — 主窗口·设备信息 tab：设备列表对账式渲染/右键菜单/连接与托盘项/
+ *            A2DP 音频接收接入（可接收设备的连接/断开改走 Sink 会话 + 「音频接收」标签）
  * 加载序 3/4（common → popup-audio → 本文件 → popup.js）
  * 提供：loadDevices(fresh24g, opts)（供 popup.js 的刷新按钮/focus 刷新调用，
  *       刷新按钮传 true 走 get_devices_fresh 强制现查 2.4G 电量）；
- *       快照水合与 24g-battery-updated/devices-changed 推送订阅（静默重拉）
+ *       loadA2dpSnapshot()（a2dp-changed 订阅内部调用）；
+ *       快照水合与 24g-battery-updated/devices-changed/a2dp-changed 推送订阅（静默重拉）
  * 依赖：common.js（getInvoke/onTauriEvent/CATEGORIES/getDisplayName/showToast/registerContextMenu/
  *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell/reconcileCards）
  */
@@ -13,6 +15,9 @@ let deviceNames = {};
 let deviceGroups = {};
 let useSystemBt = false;
 let trayDevices = [];
+// A2DP 音频接收快照：设备列表（MAC 匹配用）+ 会话状态（标签/按钮文案用）
+let a2dpDevices = [];
+let a2dpStatus = null;
 // ⭐ 右键菜单「钉到任务栏/移出任务栏」的状态源是 **`common.js` 的共用名单**
 //   （`isTaskbarPinnedName` / `refreshTaskbarPinnedNames`）——音量页也要用同一份，
 //   而 `popup-audio.js` 先于本文件加载，故那份状态**必须**在公共层。
@@ -116,6 +121,19 @@ async function loadDevices(fresh24g = false, opts = {}) {
     // 手动刷新走 get_devices_fresh：强制现查 2.4G 电量（绕过缓存，鼠标休眠时较慢）
     allDevices = await invoke(fresh24g ? "get_devices_fresh" : "get_devices");
     const config = await invoke("get_config");
+    // A2DP 快照须先于渲染：设备卡的「音频接收」标签与按钮路由读它。
+    // 设备列表只在手动刷新时重枚举（COM 成本；能力集仅配对增删时变化），
+    // 但出现「不在缓存里的经典蓝牙设备」（刚配对新手机）时补一次枚举，
+    // 否则新配对设备的按钮要等下次手动刷新才能路由到 Sink 会话。
+    await loadA2dpSnapshot({
+      refreshDevices:
+        fresh24g ||
+        allDevices.some(
+          (d) =>
+            d.is_bluetooth && !d.is_ble && d.device_id &&
+            !a2dpDevices.some((a) => a.mac.toUpperCase() === a2dpMacForDeviceId(d.device_id))
+        ),
+    });
     applyDeviceConfig(config);
     renderDevices();
     // ⭐ 真实数据就绪后拉一次「已钉到任务栏」名单（右键菜单文案读它）。
@@ -145,6 +163,54 @@ function getDeviceGroup(dev) {
   return deviceGroups[dev.name] || dev.dt;
 }
 
+// ── A2DP 音频接收（可接收设备的接入层）────────────────────
+
+// 拉取 A2DP 快照。设备列表缓存规则：⛔ 空结果不覆盖非空缓存——蓝牙栈就绪
+// 时序会让单次枚举偶发为空，覆盖住就永远匹配不上了（与设置页同一判据）。
+async function loadA2dpSnapshot({ refreshDevices = false } = {}) {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  try {
+    a2dpStatus = await invoke("a2dp_get_status");
+    if (refreshDevices || a2dpDevices.length === 0) {
+      const list = await invoke("a2dp_get_devices");
+      if (list.length > 0) a2dpDevices = list;
+    }
+  } catch (e) {
+    console.error("Failed to load a2dp snapshot:", e);
+  }
+}
+
+// popup 的 device_id 是 AEP 形态（末段为冒号分隔 MAC）；与后端
+// bluetooth::normalize_mac 同口径（取末个 '-' 段、去冒号、大写），勿单边改动。
+function a2dpMacForDeviceId(deviceId) {
+  if (!deviceId) return "";
+  return deviceId.split("-").pop().replace(/:/g, "").toUpperCase();
+}
+
+// 该设备卡是否为 A2DP 可接收设备（按 MAC 对 a2dp_get_devices 匹配）
+function a2dpDeviceFor(dev) {
+  const mac = a2dpMacForDeviceId(dev.device_id);
+  if (!mac) return null;
+  return a2dpDevices.find((d) => d.mac.toUpperCase() === mac) || null;
+}
+
+// 返回该设备当前的 Sink 会话状态（无会话/目标不是本设备 → null）。
+// ⭐ 目标匹配只认快照 device_mac：设备枚举缓存可能为空（枚举失败窗口），
+// 经缓存找目标再比 MAC 会让「已连接」标签失明。
+function a2dpSessionStateFor(dev) {
+  if (!a2dpStatus || !a2dpStatus.device_mac) return null;
+  if (!A2DP_ACTIVE_STATES.includes(a2dpStatus.state)) return null;
+  return a2dpMacForDeviceId(dev.device_id) === a2dpStatus.device_mac.toUpperCase()
+    ? a2dpStatus.state
+    : null;
+}
+
+// 该设备的 Sink 会话是否占用中（决定按钮文案与「音频接收」标签）
+function a2dpSessionActiveFor(dev) {
+  return a2dpSessionStateFor(dev) !== null;
+}
+
 // ── 设备卡构建与原地更新 ────────────────────────────────
 
 // 设备卡唯一键：同名设备的多形态（蓝牙/2.4G/USB/BLE）并存时可区分
@@ -159,12 +225,16 @@ function fillStatusRow(row, dev) {
   if (dev.is_bluetooth || dev.is_wireless_24g) {
     const statusEl = document.createElement("div");
     statusEl.className = "card-tag status";
-    if (dev.status === "已连接") {
+    // ⭐ 后端设备查询不感知 PC 侧 Sink 会话（只报蓝牙配置文件状态）：会话 armed/link_ready 即音频链路已通，状态标签必须改判「已连接」；connecting/backoff 保持后端原值。
+    const session = a2dpSessionStateFor(dev);
+    const effective =
+      session === "armed" || session === "link_ready" ? "已连接" : dev.status;
+    if (effective === "已连接") {
       statusEl.classList.add("connected");
-    } else if (dev.status === "已配对") {
+    } else if (effective === "已配对") {
       statusEl.classList.add("paired");
     }
-    statusEl.textContent = dev.status;
+    statusEl.textContent = effective;
     row.appendChild(statusEl);
   }
 
@@ -185,6 +255,14 @@ function fillStatusRow(row, dev) {
     batteryEl.className = "card-tag battery";
     batteryEl.textContent = `${dev.battery}%`;
     row.appendChild(batteryEl);
+  }
+
+  // Sink 会话占用中的设备加「音频接收」标签（样式复用蓝牙标签的蓝色基调）
+  if (a2dpSessionActiveFor(dev)) {
+    const a2dpEl = document.createElement("div");
+    a2dpEl.className = "card-tag bluetooth";
+    a2dpEl.textContent = "音频接收";
+    row.appendChild(a2dpEl);
   }
 }
 
@@ -210,6 +288,36 @@ function buildActionsEl(card) {
       } catch (err) {
         console.error("Failed to open BT settings:", err);
       }
+      return;
+    }
+
+    // A2DP 音频接收设备：连接/断开改走 Sink 会话。⛔ 不走 Win32
+    // connect_bluetooth_device（对手机的服务开关无效——原按钮「一直无效」的原因），
+    // 也不轮询 check_bt_connection（它查 ACL 链路，不反映 A2DP 会话）；
+    // 状态由 a2dp-changed 事件驱动更新。
+    // ⭐ 路由判据 = 枚举命中（a2dpDeviceFor）或会话占用中（a2dpSessionActiveFor）：
+    //   枚举缓存为空的窗口里，占用中的设备若不按会话路由，按钮会回落成系统蓝牙「连接」。
+    if (a2dpDeviceFor(dev) || a2dpSessionActiveFor(dev)) {
+      connectBtn.disabled = true;
+      connectBtn.classList.add("btn-loading");
+      const statusEl = card.querySelector(".card-tag.status");
+      if (statusEl && isConnect) {
+        statusEl.textContent = "正在连接...";
+        statusEl.classList.remove("connected", "paired");
+      }
+      try {
+        if (isConnect) {
+          await invoke("a2dp_connect_from_device", { deviceId: dev.device_id, deviceName: dev.name || "" });
+        } else {
+          await invoke("a2dp_disconnect");
+        }
+      } catch (err) {
+        showToast(String(err));
+      }
+      connectBtn.disabled = false;
+      connectBtn.classList.remove("btn-loading");
+      await loadA2dpSnapshot();
+      renderDevices();
       return;
     }
 
@@ -323,6 +431,15 @@ function syncActionsEl(card) {
   }
   const connectBtn = actionsEl.querySelector(".connect-btn");
   if (connectBtn.classList.contains("btn-loading")) return;
+  // A2DP 可接收设备的按钮文案跟 Sink 会话走（不跟 BT 链路状态走）；
+  // 路由判据与 buildActionsEl 同款（枚举命中或会话占用中，防枚举空窗口回落）
+  if (a2dpDeviceFor(dev) || a2dpSessionActiveFor(dev)) {
+    const active = a2dpSessionActiveFor(dev);
+    connectBtn.textContent = active ? "断开" : "连接";
+    connectBtn.dataset.action = active ? "disconnect" : "connect";
+    connectBtn.style.display = "";
+    return;
+  }
   const isConnected = dev.status === "已连接";
   connectBtn.textContent = isConnected ? "断开" : "连接";
   connectBtn.dataset.action = isConnected ? "disconnect" : "connect";
@@ -479,6 +596,11 @@ function scheduleSilentRefresh() {
 onTauriEvent("24g-battery-updated", scheduleSilentRefresh);
 onTauriEvent("bt-battery-updated", scheduleSilentRefresh);
 onTauriEvent("devices-changed", scheduleSilentRefresh);
+// A2DP 会话状态推送：更新命中设备卡的「音频接收」标签与连接/断开按钮
+onTauriEvent("a2dp-changed", async () => {
+  await loadA2dpSnapshot();
+  renderDevices();
+});
 
 // ⛔ 本页原先**完全没有** `config-changed` 订阅 ⇒ `deviceNames` 只在
 //   `loadDevices` / 快照水合时刷新。而「在音量控制页改名/恢复默认」走的是
@@ -523,6 +645,25 @@ function showContextMenu(x, y, dev) {
     });
   });
   menu.appendChild(renameItem);
+
+  // 「通过本机播放」（A2DP Sink）：仅经典蓝牙设备可见（BLE 无音频接收能力）。
+  // 可否接收由后端按 MAC 匹配判定，这里不重复实现设备枚举；
+  // 匹配不上时后端报错，由 toast 兜底说明。
+  if (dev.is_bluetooth && !dev.is_ble && dev.device_id) {
+    const a2dpItem = document.createElement("div");
+    a2dpItem.className = "context-menu-item";
+    a2dpItem.textContent = "通过本机播放";
+    a2dpItem.addEventListener("click", async () => {
+      hideAllContextMenus();
+      try {
+        await invoke("a2dp_connect_from_device", { deviceId: dev.device_id, deviceName: dev.name || "" });
+        showToast("已请求通过本机播放，可在设置页「蓝牙音频接收」中查看状态");
+      } catch (e) {
+        showToast(String(e));
+      }
+    });
+    menu.appendChild(a2dpItem);
+  }
 
   const currentGroup = getDeviceGroup(dev);
 

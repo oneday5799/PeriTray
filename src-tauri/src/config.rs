@@ -415,6 +415,16 @@ pub struct Config {
     pub force_mute_devices: Vec<String>,
     #[serde(default)]
     pub enable_spatial_sound: bool,
+    #[serde(default)]
+    pub a2dp_reconnect_on_start: bool,
+    /// ⚠️ 具名 helper：真实默认是**开**（连接断开/失败自动重试是本功能的预期行为），
+    /// 裸 `#[serde(default)]` 会得到 false ⇒ 升级后重试被静默关闭。
+    #[serde(default = "default_true")]
+    pub a2dp_reconnect_on_drop: bool,
+    /// 上一次成功接收音频的设备（A2DP 选择器空间 id）；供「启动时恢复连接」使用。
+    /// 内部记账字段，写入不触发 `config-changed` 事件（前端不渲染它）。
+    #[serde(default)]
+    pub a2dp_last_device: String,
     #[serde(default = "default_true")]
     pub check_updates: bool,
     #[serde(default)]
@@ -895,6 +905,9 @@ impl Default for Config {
             volume_fine_adjust: false,
             force_mute_devices: vec![],
             enable_spatial_sound: false,
+            a2dp_reconnect_on_start: false,
+            a2dp_reconnect_on_drop: true,
+            a2dp_last_device: String::new(),
             check_updates: true,
             include_prerelease: false,
             simplify_device_names: true,
@@ -1385,6 +1398,9 @@ macro_rules! for_each_config_field {
             volume_fine_adjust,
             force_mute_devices,
             enable_spatial_sound,
+            a2dp_reconnect_on_start,
+            a2dp_reconnect_on_drop,
+            a2dp_last_device,
             check_updates,
             include_prerelease,
             simplify_device_names,

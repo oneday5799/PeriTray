@@ -450,6 +450,42 @@ pub async fn check_bt_connection(device_id: String) -> Result<Option<bool>, Stri
     run_blocking(move || crate::bluetooth::check_device_connection(&device_id)).await
 }
 
+// ── A2DP 音频接收（蓝牙音频 Sink）───────────────────────────────────────
+// 状态读取走 SNAPSHOT（纯内存），连接/断开只投递控制器通道，均可同步命令直呼；
+// 设备枚举有 COM 成本（FindAllAsync 阻塞数百毫秒），走 run_blocking。
+
+#[tauri::command]
+pub fn a2dp_get_status() -> crate::a2dp_sink::A2dpStatus {
+    crate::a2dp_sink::get_status()
+}
+
+#[tauri::command(async)]
+pub async fn a2dp_get_devices() -> Result<Vec<crate::a2dp_sink::A2dpDevice>, String> {
+    run_blocking(crate::a2dp_sink::enumerate_devices).await?
+}
+
+#[tauri::command]
+pub fn a2dp_connect(device_id: String, device_name: Option<String>) -> Result<(), String> {
+    crate::a2dp_sink::request_connect(&device_id, device_name.as_deref())
+}
+
+/// popup「通过本机播放」入口：入参是 popup 设备卡的 WinRT 设备 id，
+/// 后端按 MAC 折算匹配可接收列表后发起连接（含一次设备枚举，禁入主线程）。
+#[tauri::command(async)]
+pub async fn a2dp_connect_from_device(
+    device_id: String,
+    device_name: String,
+) -> Result<(), String> {
+    standard_log!("[cmd] a2dp_connect_from_device");
+    run_blocking(move || crate::a2dp_sink::connect_from_popup_device(&device_id, &device_name))
+        .await?
+}
+
+#[tauri::command]
+pub fn a2dp_disconnect() -> Result<(), String> {
+    crate::a2dp_sink::request_disconnect()
+}
+
 /// 前端行为埋点：写入运行日志（受日志级别门控，标准级可见）
 #[tauri::command]
 pub fn frontend_log(tag: String, msg: String) {

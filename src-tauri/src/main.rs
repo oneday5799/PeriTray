@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![warn(unused_imports, dead_code)]
 
+mod a2dp_sink;
 mod app_icon;
 mod audio;
 mod audio_notify;
@@ -838,6 +839,12 @@ fn main() {
             commands::disconnect_bluetooth_device,
             commands::check_bt_connection,
             commands::open_bt_settings,
+            // A2DP 音频接收（蓝牙音频 Sink）
+            commands::a2dp_get_status,
+            commands::a2dp_get_devices,
+            commands::a2dp_connect,
+            commands::a2dp_connect_from_device,
+            commands::a2dp_disconnect,
             // 杂项入口
             commands::open_url,
             commands::frontend_log,
@@ -892,6 +899,9 @@ fn main() {
             crate::bluetooth::init_radio_watcher(app.handle());
             process::append_log("[main] bt_event_handle initialized");
             process::append_log("[main] radio_watcher initialized");
+            // A2DP 音频接收控制器（蓝牙音频 Sink；单连接模型见模块头注释）
+            crate::a2dp_sink::init(app.handle());
+            process::append_log("[main] a2dp_sink initialized");
             crate::shortcut::register_shortcuts(app.handle());
             if !is_autostart {
                 popup::open_popup(app.handle(), "devices");
@@ -930,6 +940,8 @@ fn main() {
     app.run(|_app_handle, event| match event {
         RunEvent::ExitRequested { .. } => {
             crate::audio_notify::request_shutdown();
+            // A2DP 连接由控制器线程收尾（对象析构可能阻塞，不在此同步等）
+            crate::a2dp_sink::request_shutdown();
         }
         // 兜底 flush：`RunEvent::Exit` 是所有正常退出路径（含托盘菜单 `app.exit`）
         // 的必经点，在此等日志队列排空，避免丢掉关停路径的最后几行——

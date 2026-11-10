@@ -1,10 +1,12 @@
 /* settings-audio.js — 设置页·音量控制 tab：音量控制页设备列表卡/静音锁定/精细调节/
- *            简化设备名称/强制静音设备选择器/空间音效开关/关机重启自动调整音量(NumberBox 编辑器)
+ *            简化设备名称/强制静音设备选择器/空间音效开关/关机重启自动调整音量(NumberBox 编辑器)/
+ *            设备信息 tab：蓝牙音频接收（A2DP Sink：可接收设备列表 + 行内连接/断开 + 选项开关）
  * 加载序 5/8 · 提供：loadAudioDevicesAsync()/initAudioCardToggle()/initMuteLockSettings()/
  *            initFineAdjustSettings()/initSimplifyNamesSettings()/initForceMuteSettings()/
- *            initSpatialSoundSettings()/initShutdownVolumeSettings()/renderShutdownVolumeDevices()
- * 依赖：common.js(getInvoke/showToast) /
- *       settings.js(config/bindToggle/createExpandableCard/saveConfig) */
+ *            initSpatialSoundSettings()/initShutdownVolumeSettings()/renderShutdownVolumeDevices()/
+ *            initA2dpSinkSettings()
+ * 依赖：common.js(getInvoke/showToast/onTauriEvent) /
+ *       settings.js(config/bindToggle/createExpandableCard/createToggle/saveConfig) */
 async function loadAudioDevicesAsync() {
   try {
     acceptConfig(await invoke("get_config"));
@@ -362,4 +364,174 @@ async function renderShutdownVolumeDevices() {
   } catch (e) {
     console.error("Failed to load audio devices for shutdown volume:", e);
   }
+}
+
+// ── 蓝牙音频接收（A2DP Sink）────────────────────────────────────────────
+// 状态完全以后端快照为准（a2dp_get_status / a2dp-changed 事件）；设备列表缓存于
+// a2dpDeviceCache，只在初始化、显式刷新、展开卡片时重新枚举（枚举有 COM 成本，
+// 事件高频到达时不重复拉）。
+
+let a2dpExpanded = false;
+let a2dpDeviceCache = null;
+
+function initA2dpSinkSettings() {
+  initA2dpCardToggle();
+  bindToggle("toggle-a2dp-reconnect-start", {
+    get: () => config.a2dp_reconnect_on_start,
+    set: (v) => { config.a2dp_reconnect_on_start = v; },
+  });
+  bindToggle("toggle-a2dp-reconnect-drop", {
+    get: () => config.a2dp_reconnect_on_drop,
+    set: (v) => { config.a2dp_reconnect_on_drop = v; },
+  });
+  loadA2dpDevices({ refreshDevices: true });
+  onTauriEvent("a2dp-changed", () => loadA2dpDevices());
+}
+
+function initA2dpCardToggle() {
+  const card = document.getElementById("a2dp-card");
+  const items = document.getElementById("a2dp-device-items");
+  const arrow = document.getElementById("arrow-a2dp");
+
+  if (!card || !items || !arrow) return;
+
+  createExpandableCard(items, arrow).bindHeaderClick(card, {
+    expandHeight: "content",
+    onChanged: (expanded) => {
+      a2dpExpanded = expanded;
+      // 展开即刷新：用户看到列表的时机必须配一次新枚举，避免陈旧/空缓存
+      if (expanded) loadA2dpDevices({ refreshDevices: true });
+    },
+  });
+
+  arrow.classList.toggle("expanded", a2dpExpanded);
+}
+
+async function loadA2dpDevices({ refreshDevices = false } = {}) {
+  const items = document.getElementById("a2dp-device-items");
+  if (!items) return;
+  try {
+    const status = await invoke("a2dp_get_status");
+    if (!status.supported) {
+      a2dpDeviceCache = [];
+    } else if (refreshDevices || a2dpDeviceCache === null || !a2dpDeviceCache.length) {
+      // ⛔ 空缓存不算数：蓝牙栈就绪时序可能让单次枚举偶发为空，靠 `!length` 让
+      //   后续每次加载都重拉，直到拿到非空列表；显式刷新（含展开/初始化）的
+      //   空结果如实覆盖（用户主动要求以真实为准）。
+      a2dpDeviceCache = await invoke("a2dp_get_devices");
+    }
+    renderA2dpDevices(items, status, a2dpDeviceCache || []);
+    if (a2dpExpanded) {
+      items.style.maxHeight = items.scrollHeight + "px";
+    }
+  } catch (e) {
+    console.error("Failed to load a2dp status:", e);
+    // 枚举/状态拉取失败必须可见：静默空白会被用户当成「没有设备」
+    renderA2dpError(items, String(e));
+  }
+}
+
+function renderA2dpError(items, text) {
+  items.innerHTML = "";
+  appendA2dpEmptyRow(items, "蓝牙音频接收状态拉取失败：" + text);
+}
+
+function renderA2dpDevices(items, status, devices) {
+  items.innerHTML = "";
+
+  if (!status.supported) {
+    appendA2dpEmptyRow(items, "此系统版本不支持蓝牙音频接收（需 Windows 10 2004+）");
+    return;
+  }
+
+  if (status.hint) appendA2dpHintRow(items, status.hint);
+
+  if (devices.length === 0) {
+    appendA2dpEmptyRow(items, "未发现可接收音频的蓝牙设备，请先在系统蓝牙设置中配对手机");
+  } else {
+    for (const dev of devices) {
+      appendA2dpDeviceRow(items, status, dev);
+    }
+  }
+
+  appendA2dpActionRow(items);
+}
+
+function appendA2dpRow(items, name, controls) {
+  const item = document.createElement("div");
+  item.className = "card-item";
+  const nameEl = document.createElement("div");
+  nameEl.className = name.muted ? "card-item-name card-item-name--empty" : "card-item-name";
+  nameEl.textContent = name.text;
+  if (name.title) nameEl.title = name.title;
+  item.appendChild(nameEl);
+  if (controls) {
+    item.appendChild(controls);
+  }
+  items.appendChild(item);
+  return item;
+}
+
+function appendA2dpEmptyRow(items, text) {
+  appendA2dpRow(items, { text, muted: true });
+}
+
+function appendA2dpHintRow(items, text) {
+  appendA2dpRow(items, { text, muted: true });
+}
+
+function appendA2dpDeviceRow(items, status, dev) {
+  const isActiveTarget = status.device_id === dev.id && A2DP_ACTIVE_STATES.includes(status.state);
+  const controls = document.createElement("div");
+  controls.className = "card-item-controls";
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "connect-btn";
+  btn.textContent = isActiveTarget ? "断开" : "连接";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.classList.add("btn-loading");
+    try {
+      if (isActiveTarget) {
+        await invoke("a2dp_disconnect");
+      } else {
+        await invoke("a2dp_connect", { deviceId: dev.id, deviceName: dev.name || "" });
+      }
+    } catch (e) {
+      showToast(String(e));
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("btn-loading");
+    }
+  });
+  controls.appendChild(btn);
+
+  // 会话反馈折进活动设备行（后端 detail：正在连接…/等待手机播放/音频链路已建立/重试中），
+  // 不再单独占一行；非活动目标或 detail 为空时只显示设备名
+  const baseName = dev.name || dev.id;
+  const nameText =
+    isActiveTarget && status.detail ? `${baseName} · ${status.detail}` : baseName;
+  appendA2dpRow(items, { text: nameText, title: dev.name }, controls);
+}
+
+function appendA2dpActionRow(items) {
+  const controls = document.createElement("div");
+  controls.className = "card-item-controls";
+
+  const refreshBtn = document.createElement("button");
+  refreshBtn.type = "button";
+  refreshBtn.className = "add-device-btn";
+  refreshBtn.textContent = "刷新设备";
+  refreshBtn.addEventListener("click", () => loadA2dpDevices({ refreshDevices: true }));
+  controls.appendChild(refreshBtn);
+
+  const settingsBtn = document.createElement("button");
+  settingsBtn.type = "button";
+  settingsBtn.className = "add-device-btn";
+  settingsBtn.textContent = "打开蓝牙设置";
+  settingsBtn.addEventListener("click", () => invoke("open_bt_settings"));
+  controls.appendChild(settingsBtn);
+
+  appendA2dpRow(items, { text: "配对新设备后点「刷新设备」更新列表", muted: true }, controls);
 }

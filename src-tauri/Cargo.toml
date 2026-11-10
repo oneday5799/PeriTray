@@ -69,6 +69,12 @@ features = [
     # SMTC（音乐控制组件）：GlobalSystemMediaTransportControlsSessionManager。
     # ⚠️ 少了它 = 整个 taskbar_music 模块编译不过（类型不存在）。
     "Media_Control",
+    # A2DP Sink（蓝牙音频接收）：AudioPlaybackConnection 全套类型。
+    # ⛔ 少了它 = 整个 a2dp_sink 模块编译不过（类型不存在）。
+    "Media_Audio",
+    # ApiInformation（Windows.Foundation.Metadata）：A2DP Sink 的系统支持检测
+    # （Win10 2004 前无 AudioPlaybackConnection 类型，须运行时探测）。
+    "Foundation_Metadata",
     "Management_Deployment",
     "Services_Store",
     "Storage_Streams",

@@ -102,8 +102,9 @@ impl Drop for RadioHandle {
     }
 }
 
-/// SetupDiGetClassDevsW 返回的设备信息集句柄；Drop 时释放
-struct DeviceInfoSetHandle(HDEVINFO);
+/// SetupDiGetClassDevsW 返回的设备信息集句柄；Drop 时释放。
+/// `pub(crate)`：a2dp_sink 的端点激活验证走同款 RAII，不复制第二份。
+pub(crate) struct DeviceInfoSetHandle(pub(crate) HDEVINFO);
 impl Drop for DeviceInfoSetHandle {
     fn drop(&mut self) {
         unsafe {
@@ -785,8 +786,12 @@ fn read_btc_batteries(device_ids: &[&str]) -> HashMap<String, u8> {
     out
 }
 
-/// 读取设备实例 ID 字符串（两次调用：先取长度，再取内容）
-fn setupdi_get_device_instance_id(handle: HDEVINFO, devinfo: &SP_DEVINFO_DATA) -> Option<String> {
+/// 读取设备实例 ID 字符串（两次调用：先取长度，再取内容）。
+/// `pub(crate)`：a2dp_sink 的端点激活验证复用同一实现。
+pub(crate) fn setupdi_get_device_instance_id(
+    handle: HDEVINFO,
+    devinfo: &SP_DEVINFO_DATA,
+) -> Option<String> {
     let mut required_size: u32 = 0;
     unsafe {
         SetupDiGetDeviceInstanceIdW(handle, devinfo, std::ptr::null_mut(), 0, &mut required_size);

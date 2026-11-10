@@ -40,7 +40,18 @@
 # FLOOR	⛔+⭐ 总数下界	1114
 # FLOOR	⛔+⭐ 总数下界	1119
 # FLOOR	⛔+⭐ 总数下界	1140
+# FLOOR	⛔+⭐ 总数下界	1150
 
+src-tauri/src/a2dp_sink.rs	<file>	⛔	1
+src-tauri/src/a2dp_sink.rs	const WAIT_POLL	⛔	1
+src-tauri/src/a2dp_sink.rs	fn abort_if_disconnected	⛔	1
+src-tauri/src/a2dp_sink.rs	fn connect_internal	⛔	4
+src-tauri/src/a2dp_sink.rs	fn connect_internal	⭐	1
+src-tauri/src/a2dp_sink.rs	fn fail	⛔	1
+src-tauri/src/a2dp_sink.rs	fn init	⛔	1
+src-tauri/src/a2dp_sink.rs	fn on_connect	⛔	1
+src-tauri/src/a2dp_sink.rs	fn step	⛔	1
+src-tauri/src/a2dp_sink.rs	fn supported	⛔	1
 src-tauri/src/app_icon.rs	const EXE_PATH_CACHE	⭐	1
 src-tauri/src/app_icon.rs	fn normalize_image_path	⭐	1
 src-tauri/src/audio_notify.rs	fn post_sync_callbacks	⛔	1
@@ -742,4 +753,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	1150
+# FLOOR	⛔+⭐ 总数下界	1163

@@ -581,6 +581,45 @@
         <div class="card-items" id="low-battery-items"></div>
       </div>
 
+      <div class="section-title">蓝牙音频接收功能</div>
+      <div class="card expandable" id="a2dp-card">
+        <div class="card-left">
+          <div class="card-title">蓝牙音频接收
+            <span class="tooltip-trigger" data-tip="此功能需要 Windows 10 2004 及以上，手机需先与电脑蓝牙配对。">?</span>
+          </div>
+          <div class="card-desc">实验性功能。把电脑当作蓝牙音箱，接收手机等设备播放的音频</div>
+        </div>
+        <div class="card-actions">
+          <div class="card-arrow" id="arrow-a2dp">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="a2dp-device-items">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">启动时恢复蓝牙音频连接</span>
+          <div class="card-desc">启动后自动连接上一次接收音频的设备</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-a2dp-reconnect-start">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">蓝牙音频连接断开后自动重试</span>
+          <div class="card-desc">手机走远或连接失败时自动重试，最多 3 次后停止并把发起权交还手机</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-a2dp-reconnect-drop">
+          <span class="slider"></span>
+        </label>
+      </div>
+
       <div class="section-title">设备信息页设备列表</div>
       <div class="device-groups" id="device-groups"></div>
     </div>

@@ -1,8 +1,9 @@
 /* common.js — 共享基础层（popup/settings 两页最先加载）：Tauri invoke/主题与材质应用/
  *            右键菜单族（默认菜单屏蔽/注册/钳位/关闭/子菜单外壳 createSubmenuShell/勾选图标 createCheckIcon）/
  *            设备显示名解析（simplifyDeviceName/lookupDeviceAlias/formatDeviceName/getDisplayName）/
- *            对话框与 toast/快捷键录制器（码表为本文件内部实现细节，不对外）
- * 加载序 1/N · 提供：window 全局 API —— CATEGORIES/initTheme/applyThemeMode/applyMaterialMode/
+ *            对话框与 toast/快捷键录制器（码表为本文件内部实现细节，不对外）/
+ *            共享数据（CATEGORIES 设备分类/A2DP_ACTIVE_STATES Sink 占用态）
+ * 加载序 1/N · 提供：window 全局 API —— CATEGORIES/A2DP_ACTIVE_STATES/initTheme/applyThemeMode/applyMaterialMode/
  *             getInvoke/getDisplayName/simplifyDeviceName/lookupDeviceAlias/formatDeviceName/
  *             attachTooltip/
  *             attachSessionTooltip/showSessionTip/hideSessionTip/reconcileCards/registerContextMenu/
@@ -54,6 +55,11 @@ window.CATEGORIES = [
   { key: "Monitor", label: "显示器", subtitle: "显示器设备", icon: "🖥️" },
   { key: "Other", label: "其他设备", subtitle: "未归类的设备", icon: "📦" },
 ];
+
+// A2DP Sink「占用中」状态集合：popup 设备卡（标签/按钮）与设置页设备行共用
+// 同一判据。⛔ 物理只留这一份——两页各写一份必然漂移（审查实测已分叉）；
+// 新增状态时两页行为同步变化，属预期。
+window.A2DP_ACTIVE_STATES = ["connecting", "backoff", "armed", "link_ready"];
 
 // 给元素挂载与「设备快捷键共享切换」一致的样式 tooltip（替代原生 title 提示）
 window.attachTooltip = function (el, text, position) {

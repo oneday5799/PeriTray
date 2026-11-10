@@ -822,6 +822,7 @@ async function init() {
     initSpatialSoundSettings();
     initSimplifyNamesSettings();
     initShutdownVolumeSettings();
+    initA2dpSinkSettings();
     initTaskbarTab();
     initShortcutSettings();
     initDeviceShortcutSettings();
