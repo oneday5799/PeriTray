@@ -192,9 +192,12 @@ cp tools/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
 从 [Releases](https://github.com/oneday5799/PeriTray/releases) 页面下载最新版本，支持 x64 和 ARM64 架构。
 
+- `*-setup.exe`：NSIS 安装包
+- `*_portable.zip`：便携版，解压即用、无需安装；配置/日志写在 exe 同目录，升级时用新 exe 覆盖即可（需系统已有 WebView2 运行时）
+
 ## CI/CD
 
-推送 `v*` 格式的 tag 时自动构建 x64 / ARM64 安装包并创建 GitHub Release（tag 名含 `-` 时标记为 Pre-release）：
+推送 `v*` 格式的 tag 时自动构建 x64 / ARM64 安装包与便携版并创建 GitHub Release（tag 名含 `-` 时标记为 Pre-release）：
 
 ```bash
 git tag v1.1.0 && git push origin v1.1.0

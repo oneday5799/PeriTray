@@ -113,6 +113,22 @@ jobs:
       - name: Build NSIS installer (${{ matrix.target }})
         run: npm run tauri build -- --bundles nsis --target ${{ matrix.rust_target }}
 
+      # 便携版 zip：主 exe 即绿色版——前端资源编译期内嵌（frontendDist 是目录，
+      # 资产在构建期压缩进二进制），非 MSIX 下持久化路径 = exe 同目录
+      # （process::writable_root 的 exe_dir 兜底）⇒ 配置随目录走，无需代码改动。
+      # beta 同样产出（MSIX 那套正式版限制不适用）；WebView2 运行时是唯一系统
+      # 前提，zip 内 README.txt 有说明。
+      - name: Package portable zip (${{ matrix.target }})
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $exe = "src-tauri/target/${{ matrix.rust_target }}/release/PeriTray.exe"
+          if (-not (Test-Path $exe)) {
+            throw "便携版源 exe 不存在: $exe（主产物名变了？核对 tauri.conf.json mainBinaryName）"
+          }
+          $zip = "src-tauri/target/${{ matrix.rust_target }}/release/PeriTray_${version}_${{ matrix.target }}_portable.zip"
+          Compress-Archive -Path $exe, "src-tauri/portable/README.txt" -DestinationPath $zip -Force
+
       # 生成 Store 图标（仅正式版）
       - name: Generate Store icons
         if: ${{ !contains(github.ref_name, '-') }}
@@ -134,6 +150,12 @@ jobs:
         with:
           name: installer-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.rust_target }}/release/bundle/nsis/*.exe
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.rust_target }}/release/PeriTray_*_portable.zip
 
       # 上传 MSIX 产物（仅正式版）
       - name: Upload MSIX artifact
@@ -225,7 +247,7 @@ jobs:
             echo "tag 无附注正文，回退到自动生成的变更列表"
           fi
 
-      # ⚠️ Release 页**只挂 NSIS 安装包**，不带 MSIX。
+      # ⚠️ Release 页**只挂 NSIS 安装包与便携版 zip**，不带 MSIX。
       # MSIX 是给 Microsoft Store / Partner Center 用的包，仍需照常构建并作为
       # **workflow artifact** 留存（见上面的 `Upload MSIX artifact`，名字 `msix-*`），
       # 供维护者手动上传 Partner Center；但**不挂到 Release**，避免用户从发布页
@@ -238,4 +260,5 @@ jobs:
           body_path: ${{ steps.notes.outputs.path }}
           files: |
             artifacts/*.exe
+            artifacts/*.zip
           generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
