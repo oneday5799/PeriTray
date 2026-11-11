@@ -140,7 +140,7 @@ PeriTray/
 |------|------|
 | 雷蛇 | 鼠标、键盘共 76 个 VID/PID（Orochi V2 经实机验证，其余基于同族协议移植） |
 | 罗技 | Unifying / Lightspeed / Bolt / Nano 接收器（PID 范围启发识别，单下游设备时显示名称与电量） |
-| 飞智 | Vader 4 Pro |
+| 飞智 | Vader 4 Pro、Vader 5 Pro（V2 GET_INFO 协议，2.4G 与有线共用） |
 | 狼蛛 | F75 Max（仅 2.4G 接收器模式） |
 
 完整设备清单见 [Wiki · 支持设备列表](https://github.com/oneday5799/PeriTray/wiki/11-%E6%94%AF%E6%8C%81%E8%AE%BE%E5%A4%87%E5%88%97%E8%A1%A8)。

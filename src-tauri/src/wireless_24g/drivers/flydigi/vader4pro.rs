@@ -45,13 +45,7 @@ const DEADLINE_MS: u64 = 1000;
 /// 不分域会读到另一台的电量。`None` = 调用方拿不到容器（不做分域）。
 pub fn read_battery_percent(link: &HidLink, scope: Option<&str>) -> Result<Option<i32>, String> {
     let paths = link.enumerate_paths(VID, PID, scope)?;
-    // 优先 usage page 0xFFA0（vendor 命令通道）；缺失时全候选逐一试探
-    let preferred: Vec<_> = paths.iter().filter(|p| p.usage_page == 0xFFA0).collect();
-    let candidates: Vec<_> = if preferred.is_empty() {
-        paths.iter().collect()
-    } else {
-        preferred
-    };
+    let candidates = super::prefer_vendor_page(&paths);
 
     if crate::config::verbose_log_enabled() {
         let detail = candidates

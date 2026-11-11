@@ -41,6 +41,8 @@
 # FLOOR	⛔+⭐ 总数下界	1119
 # FLOOR	⛔+⭐ 总数下界	1140
 # FLOOR	⛔+⭐ 总数下界	1150
+# FLOOR	⛔+⭐ 总数下界	1163
+# FLOOR	⛔+⭐ 总数下界	1164
 
 src-tauri/src/a2dp_sink.rs	<file>	⛔	1
 src-tauri/src/a2dp_sink.rs	const WAIT_POLL	⛔	1
@@ -740,6 +742,8 @@ src-tauri/src/update.rs	fn real_window	⭐	1
 src-tauri/src/webview.rs	fn create	⛔	1
 src-tauri/src/webview.rs	fn guid_eq	⛔	1
 src-tauri/src/windows.rs	fn system_dark_mode	⭐	1
+src-tauri/src/wireless_24g/drivers/flydigi/vader5pro.rs	fn decode_reply	⛔	1
+src-tauri/src/wireless_24g/drivers/flydigi/vader5pro.rs	fn read_battery_percent	⭐	1
 src-tauri/src/wireless_24g/hid_link.rs	fn no_scope_keeps_everything	⛔	1
 tools/check-comment-invariants.mjs	<file>	⛔	5
 tools/check-rust-warnings.mjs	<file>	⛔	1
@@ -753,4 +757,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	1163
+# FLOOR	⛔+⭐ 总数下界	1165
