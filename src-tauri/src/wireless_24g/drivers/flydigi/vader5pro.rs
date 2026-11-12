@@ -5,7 +5,8 @@
 // 协议事实转录自 vermi5/VaderBatteryTray（实机 USBPcap + 真机验证的 C# 实现）：
 // - 请求 33 字节：[Report ID 0x00] 5A A5 01 02 00 + 零填充
 // - 回复帧在偏移 0/1 处含魔数 5A A5 01（取决于帧有无 Report ID 前缀）
-// - byte[+5]=设备 ID（0x82=Vader 5 Pro），byte[+6]=连接方式（1 有线/2 无线）
+// - byte[+5]=设备类型（0x82=Vader 5 Pro 标准版，0x90/0x91=特别版同族，见
+//   DEVICE_TYPES），byte[+6]=连接方式（1 有线/2 无线）
 // - byte[+15]=固件版本高字节、byte[+16]=低字节（大端序；低于 0x7141 的固件
 //   不保证本协议语义）
 // - byte[+11]：高 nibble=状态（0 放电/1 充电/2 已充满），低 nibble=电量档 0-6
@@ -29,8 +30,11 @@ const MAGIC1: u8 = 0x5A;
 const MAGIC2: u8 = 0xA5;
 /// 命令码：GET_INFO（设备信息查询，含电量）
 const CMD_GET_INFO: u8 = 0x01;
-/// GET_INFO 应答的设备 ID（0x82 = Vader 5 Pro）
-const DEVICE_ID: u8 = 0x82;
+/// GET_INFO 应答的设备类型白名单（openvader PROTOCOL.md 的 heartbeat byte 5 表）：
+/// 0x82=Vader 5 Pro 标准版、0x90=龙珠特别版、0x91=崩坏3特别版，三型帧格式同构。
+/// 判据：只按此集合放行；参考实现 VaderBatteryTray 只认 0x82，在特别版真机上误拒
+/// （2.4G 应答除类型字节外与标准版同构：连接/电量/固件字段均有效）
+const DEVICE_TYPES: [u8; 3] = [0x82, 0x90, 0x91];
 /// 支持本协议的最低固件版本（低版本回复语义不保证，按不支持处理）
 const MIN_FIRMWARE: u16 = 0x7141;
 /// 电量档位 → 百分比映射（7 档，转录自参考实现的 BatteryDisplayScale）
@@ -44,7 +48,7 @@ const STATUS_CHARGED: u8 = 2;
 /// 回复帧负载最小长度（魔数后须覆盖到固件字段，转录自参考实现的偏移 +31 判据）
 const REPLY_MIN: usize = 31;
 /// 回复帧各字段相对魔数帧头的字节偏移（转录自参考实现 DecodeInfoResponse）
-const OFF_DEVICE_ID: usize = 5;
+const OFF_DEVICE_TYPE: usize = 5;
 /// 连接方式字段偏移（1=有线 / 2=无线）
 const OFF_CONNECTION: usize = 6;
 /// 状态+档位复合字节偏移（高 nibble=状态 / 低 nibble=档位）
@@ -155,7 +159,7 @@ pub fn read_battery_percent(link: &HidLink, scope: Option<&str>) -> Result<Optio
     }
     // ⭐ 最终 Err 必须携带 last_err（最后一害的真实原因）：query_and_cache 会把
     //    本返回值打进标准级日志（「查询失败: …」）⇒ 默认日志即可看到
-    //    设备 ID 不符 / 固件过低 / 复查未确认等关键排查信息（razer 域同口径）
+    //    设备类型不符 / 固件过低 / 复查未确认等关键排查信息（razer 域同口径）
     Err(if last_err.is_empty() {
         "无候选集合可查询".to_string()
     } else {
@@ -287,9 +291,9 @@ fn query_once(dev: &HidDevice) -> Result<Option<i32>, String> {
 /// 从回复帧解析电量。恒返回 Some（充电中照报档位，见 read_battery_percent）；
 /// Err=设备/固件/档位不符或帧损坏
 fn decode_reply(buf: &[u8], offset: usize) -> Result<Option<i32>, String> {
-    let device_id = buf[offset + OFF_DEVICE_ID];
-    if device_id != DEVICE_ID {
-        return Err(format!("非 Vader 5 Pro 设备 ID: {:#04X}", device_id));
+    let device_type = buf[offset + OFF_DEVICE_TYPE];
+    if !DEVICE_TYPES.contains(&device_type) {
+        return Err(format!("未收录的设备类型字节: {:#04X}", device_type));
     }
     // 大端：参考实现 DecodeInfoResponse 组装为 [+15]<<8 | [+16]（高字节在前）。
     // ⛔ 不得改回小端——固件 0x7141 线上字节为 [71 41]，小端读得 0x4171 <
@@ -317,9 +321,10 @@ fn decode_reply(buf: &[u8], offset: usize) -> Result<Option<i32>, String> {
             _ => "未知",
         };
         verbose_log!(
-            "[24g:dbg] Flydigi V2 连接方式: {}（{:#04X}），状态: {}，原始字节 {:#04X}，固件 {:#06X}",
+            "[24g:dbg] Flydigi V2 连接方式: {}（{:#04X}），类型: {:#04X}，状态: {}，原始字节 {:#04X}，固件 {:#06X}",
             conn,
             buf[offset + OFF_CONNECTION],
+            device_type,
             state,
             status_level,
             firmware
@@ -353,10 +358,14 @@ fn hex_prefix(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// 标准版类型别名（= 白名单首元 0x82；白名单内容钉子见
+    /// decode_all_known_device_types_accepted）
+    const STANDARD_TYPE: u8 = DEVICE_TYPES[0];
+
     /// 造一帧完整 GET_INFO 回复（测试专用）：前缀 + 魔数 + 可定制字段
     fn make_reply(
         report_id_prefix: bool,
-        device_id: u8,
+        device_type: u8,
         firmware: u16,
         status_level: u8,
     ) -> Vec<u8> {
@@ -367,7 +376,7 @@ mod tests {
         let base = frame.len(); // 回复负载基址：带前缀 1 / 不带 0
         frame.resize(base + REPLY_MIN, 0); // 一次补足最小负载长度，字段按协议偏移填入
         frame[base..base + 3].copy_from_slice(&[MAGIC1, MAGIC2, CMD_GET_INFO]);
-        frame[base + OFF_DEVICE_ID] = device_id;
+        frame[base + OFF_DEVICE_TYPE] = device_type;
         frame[base + OFF_CONNECTION] = 2; // 连接方式 = 无线
         frame[base + OFF_STATUS_LEVEL] = status_level;
         frame[base + OFF_FIRMWARE..base + OFF_FIRMWARE + 2]
@@ -381,7 +390,7 @@ mod tests {
         // 组装为 [+15]<<8 | [+16]，高字节在前）。误读小端得 0x4171 < 0x7141，
         // 恒判「固件版本过低」⇒ 真机永远不出电量。可证伪：from_be_bytes 改回
         // from_le_bytes 本用例必转红
-        let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE, 0x00);
+        let frame = make_reply(false, STANDARD_TYPE, MIN_FIRMWARE, 0x00);
         assert_eq!(frame[OFF_FIRMWARE], 0x71);
         assert_eq!(frame[OFF_FIRMWARE + 1], 0x41);
         assert_eq!(decode_reply(&frame, 0).unwrap(), Some(10));
@@ -401,13 +410,13 @@ mod tests {
 
     #[test]
     fn locate_reply_with_report_id_prefix() {
-        let frame = make_reply(true, DEVICE_ID, MIN_FIRMWARE, 0x00);
+        let frame = make_reply(true, STANDARD_TYPE, MIN_FIRMWARE, 0x00);
         assert_eq!(locate_reply(&frame), Some(1));
     }
 
     #[test]
     fn locate_reply_without_prefix() {
-        let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE, 0x00);
+        let frame = make_reply(false, STANDARD_TYPE, MIN_FIRMWARE, 0x00);
         assert_eq!(locate_reply(&frame), Some(0));
     }
 
@@ -429,7 +438,7 @@ mod tests {
     #[test]
     fn decode_seven_levels_discharging() {
         for (level, expect) in LEVEL_PERCENTS.iter().enumerate() {
-            let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE, level as u8);
+            let frame = make_reply(false, STANDARD_TYPE, MIN_FIRMWARE, level as u8);
             assert_eq!(
                 decode_reply(&frame, 0).unwrap(),
                 Some(*expect),
@@ -443,46 +452,81 @@ mod tests {
     #[test]
     fn decode_charging_reports_level() {
         // 高 nibble=1 充电中：低 nibble 档位照报百分比（本仓语义，不隐藏电量）
-        let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE, (STATUS_CHARGING << 4) | 3);
+        let frame = make_reply(
+            false,
+            STANDARD_TYPE,
+            MIN_FIRMWARE,
+            (STATUS_CHARGING << 4) | 3,
+        );
         assert_eq!(decode_reply(&frame, 0).unwrap(), Some(55));
     }
 
     #[test]
     fn decode_charged_returns_100() {
         // 高 nibble=2 已充满：无论档位，恒 100%
-        let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE, STATUS_CHARGED << 4);
+        let frame = make_reply(false, STANDARD_TYPE, MIN_FIRMWARE, STATUS_CHARGED << 4);
         assert_eq!(decode_reply(&frame, 0).unwrap(), Some(100));
     }
 
     #[test]
-    fn decode_wrong_device_id_rejected() {
+    fn decode_unknown_device_type_rejected() {
+        // 0x81 不在白名单：未收录类型按拒收处理
         let frame = make_reply(false, 0x81, MIN_FIRMWARE, 0x00);
         assert!(decode_reply(&frame, 0).is_err());
     }
 
     #[test]
+    fn decode_all_known_device_types_accepted() {
+        // 白名单三型帧格式同构：0x82 标准版 / 0x90 龙珠特别版 / 0x91 崩坏3特别版。
+        // 内容钉死：白名单收窄或漏型必转红——仅循环 DEVICE_TYPES 自身测不出改动
+        assert_eq!(DEVICE_TYPES, [0x82, 0x90, 0x91]);
+        for &t in DEVICE_TYPES.iter() {
+            let frame = make_reply(false, t, MIN_FIRMWARE, 0x03);
+            assert_eq!(
+                decode_reply(&frame, 0).unwrap(),
+                Some(55),
+                "类型 {:#04X} 应放行",
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn decode_special_edition_field_frame() {
+        // 龙珠特别版（0x90）2.4G 真机应答原帧：与标准版仅类型字节不同，其余字段同构
+        // （放电、档位 5=85%、固件 0x7153）。可证伪：白名单退回单值 0x82 本用例必转红
+        let frame: [u8; 32] = [
+            0x5A, 0xA5, 0x01, 0x01, 0x00, 0x90, 0x02, 0x00, 0x00, 0x00, 0x00, 0x05, 0x45, 0x01,
+            0x00, 0x71, 0x53, 0x04, 0x67, 0x35, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+            0x26, 0x1F, 0x00, 0x44,
+        ];
+        assert_eq!(locate_reply(&frame), Some(0));
+        assert_eq!(decode_reply(&frame, 0).unwrap(), Some(85));
+    }
+
+    #[test]
     fn decode_old_firmware_rejected() {
-        let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE - 1, 0x00);
+        let frame = make_reply(false, STANDARD_TYPE, MIN_FIRMWARE - 1, 0x00);
         assert!(decode_reply(&frame, 0).is_err());
     }
 
     #[test]
     fn decode_invalid_level_rejected() {
         // 低 nibble=7 超出 0-6 档位范围
-        let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE, 0x07);
+        let frame = make_reply(false, STANDARD_TYPE, MIN_FIRMWARE, 0x07);
         assert!(decode_reply(&frame, 0).is_err());
     }
 
     #[test]
     fn decode_unknown_status_rejected() {
-        let frame = make_reply(false, DEVICE_ID, MIN_FIRMWARE, (0x0F << 4) | 3);
+        let frame = make_reply(false, STANDARD_TYPE, MIN_FIRMWARE, (0x0F << 4) | 3);
         assert!(decode_reply(&frame, 0).is_err());
     }
 
     #[test]
     fn decode_with_report_id_prefix() {
         // 带前缀的帧按 offset=1 解码，结果与不带前缀一致
-        let frame = make_reply(true, DEVICE_ID, MIN_FIRMWARE, 2);
+        let frame = make_reply(true, STANDARD_TYPE, MIN_FIRMWARE, 2);
         assert_eq!(decode_reply(&frame, 1).unwrap(), Some(40));
     }
 
