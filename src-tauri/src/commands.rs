@@ -150,11 +150,28 @@ pub(crate) fn devices_for_taskbar_within(
     out
 }
 
+/// 把转发会话音量绑进任务栏条目（`sessions = None` = 枚举失败）。
+///
+/// ⛔ **降级语义**：会话枚举失败只意味着手机条目这一轮没有音量，
+///   不得当作整条取数失败——那会把电量与其它端点一起丢掉（比旧数据更糟）。
+/// 绑定规则全部在 `device_identity::bind_relay_sessions`（唯一实现点），此处只接降级。
+fn bind_relay_volume_with(
+    grouped: &mut [crate::device_identity::PhysicalDevice],
+    sessions: Option<Vec<crate::audio::AudioSession>>,
+) {
+    let Some(sessions) = sessions else {
+        standard_log!("[cmd] 转发会话枚举失败，本轮手机条目无音量（降级，不影响其它数据）");
+        return;
+    };
+    crate::device_identity::bind_relay_sessions(grouped, &sessions);
+}
+
 /// 任务栏信息窗的数据源：把「电量」与「音量」按**物理设备身份**聚合到同一台设备上。
 ///
 /// 设备列表优先取 tray watcher 维护的缓存（避免每轮重跑 WMI）；**缓存为空时本命令
 /// 自己回落现查一次**（见 `devices_for_taskbar`），不依赖调用方记得回落。
-/// 音频端点必须现查 —— 音量是实时值。
+/// 音频端点必须现查 —— 音量是实时值；钉住的手机条目在场时还要现查一次
+/// **A2DP SNK 转发会话**（其音量显示与滚轮的数据源，见 `bind_relay_sessions`）。
 /// 身份键优先级见 `device_identity`：ContainerId → PnP 实例路径 → 名称。
 #[tauri::command(async)]
 pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::PhysicalDevice>, String> {
@@ -163,9 +180,21 @@ pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::Physica
         .await?
         .map_err(|e| e.to_string())?;
     let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
-    Ok(crate::device_identity::group_taskbar_devices(
-        &devices, &audio, &pinned,
-    ))
+    let mut grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
+    // 钉住的手机条目在场才枚举转发会话（守卫免得白付一次会话枚举）；
+    // `enumerate_audio_sessions` 的 device_id 参数当前仅进日志（内部枚举全部输出设备），
+    // 传空串即可。
+    if grouped
+        .iter()
+        .any(|d| d.pinned && d.audio_kind == crate::device_identity::AudioKind::Phone)
+    {
+        let sessions = run_blocking(|| crate::audio::enumerate_audio_sessions(""))
+            .await
+            .ok()
+            .and_then(|r| r.ok());
+        bind_relay_volume_with(&mut grouped, sessions);
+    }
+    Ok(grouped)
 }
 
 /// **同步**版的任务栏设备取数，供任务栏 widget 的后台线程调用。
@@ -193,9 +222,16 @@ pub(crate) fn taskbar_devices_snapshot_within(
     let devices = devices_for_taskbar_within(max_age_ms).ok()?;
     let audio = crate::audio::enumerate_output_devices().ok()?;
     let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
-    Some(crate::device_identity::group_taskbar_devices(
-        &devices, &audio, &pinned,
-    ))
+    let mut grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
+    // 与 `get_taskbar_devices` 同一句守卫 + 同一份绑定（两条取数路径不许分叉）
+    if grouped
+        .iter()
+        .any(|d| d.pinned && d.audio_kind == crate::device_identity::AudioKind::Phone)
+    {
+        let sessions = crate::audio::enumerate_audio_sessions("").ok();
+        bind_relay_volume_with(&mut grouped, sessions);
+    }
+    Some(grouped)
 }
 
 /// 任务栏信息窗「选择设备」列表的数据源：两页**可显示设备的并集**（T3-1）。
@@ -779,6 +815,30 @@ pub async fn get_pinned_taskbar_list() -> Result<Vec<PinnedTaskbarEntry>, String
     Ok(out)
 }
 
+/// 设备页「钉到任务栏」的按名身份解析：**聚合结果优先，原始设备列表回落**。
+///
+/// 判据：聚合结果（`group_taskbar_devices`）里找不到时，必须退回**原始设备列表**
+/// 按名找 `device_key`，而不是直接报错——手机这类设备（BLE 电量读不出、无输出端点、
+/// 尚未钉住）过不了聚合的保留规则（`battery.is_some() || audio_device_id.is_some()`），
+/// 在聚合结果里**整条不存在**，但它就在原始列表里；不回落 ⇒ 钉住必然报「未找到设备」。
+/// ⚠️ 聚合结果仍要排在前：其余设备（键鼠、音箱）走既有路径，别因回落改变行为。
+fn resolve_pin_key_by_name(
+    grouped: &[crate::device_identity::PhysicalDevice],
+    devices: &[crate::device::Device],
+    name: &str,
+) -> Option<String> {
+    grouped
+        .iter()
+        .find(|d| d.name == name)
+        .map(|d| d.key.clone())
+        .or_else(|| {
+            devices
+                .iter()
+                .find(|d| d.name == name)
+                .and_then(|d| d.device_key.clone())
+        })
+}
+
 /// 弹出窗口设备卡片右键菜单：**按设备名**钉到/移出任务栏（用户）。
 ///
 /// ⭐ 为什么**必须由后端解析 `key`/`fallback`**（不能沿用设置页那条命令让前端传参）：
@@ -824,10 +884,7 @@ pub async fn toggle_taskbar_device_pin(
                 .find(|a| a.id == id)
                 .map(crate::device_identity::audio_endpoint_key)
                 .map(|k| k.encode()),
-            None => grouped
-                .iter()
-                .find(|d| d.name == name)
-                .map(|d| d.key.clone()),
+            None => resolve_pin_key_by_name(&grouped, &devices, &name),
         };
         let fallback =
             crate::device_identity::DeviceKey::Name(crate::dedup::core_name(&name)).encode();
@@ -1269,10 +1326,104 @@ pub fn check_material_support(material: String) -> Result<bool, String> {
 mod tests {
     use super::{
         devices_for_taskbar_with, is_allowed_open_url, pinned_taskbar_entry,
-        rollback_device_shortcut, try_toggle_pinned_taskbar_device, try_toggle_tray_device,
-        PINNED_TASKBAR_LIMIT, TRAY_DEVICE_LIMIT,
+        resolve_pin_key_by_name, rollback_device_shortcut, try_toggle_pinned_taskbar_device,
+        try_toggle_tray_device, PINNED_TASKBAR_LIMIT, TRAY_DEVICE_LIMIT,
     };
     use crate::config::{matches_pinned_taskbar, Config, DeviceShortcut, PinnedDevice};
+
+    /// 可证伪：聚合的保留规则滤掉了手机（无电量、无输出端点、未钉住），
+    /// 回落到原始设备列表必须能解析出身份键。删掉 `resolve_pin_key_by_name`
+    /// 里的 `or_else` 分支，本测试立刻转红（这正是报障的「未找到设备」路径）。
+    #[test]
+    fn pin_name_resolution_falls_back_to_the_raw_device_list() {
+        let grouped: Vec<crate::device_identity::PhysicalDevice> = vec![];
+        let phone = crate::device::Device {
+            name: "一天的Xiaomi 17".to_string(),
+            dt: crate::device::DevType::Other,
+            status: "OK".to_string(),
+            battery: None,
+            device_id: None,
+            device_key: Some("c:phone-container".to_string()),
+            is_bluetooth: true,
+            is_wireless_24g: false,
+            wireless_24g_kind: None,
+            is_connected: true,
+            is_ble: false,
+            is_phone: false,
+        };
+        assert_eq!(
+            resolve_pin_key_by_name(&grouped, &[phone], "一天的Xiaomi 17").as_deref(),
+            Some("c:phone-container")
+        );
+    }
+
+    /// 聚合结果仍排在回落之前：已能从聚合解析出的设备不得改走原始列表
+    /// （回归项——既有设备的行为零变化）。
+    #[test]
+    fn pin_name_resolution_prefers_the_grouped_key() {
+        let grouped = vec![crate::device_identity::PhysicalDevice {
+            key: "c:grouped".to_string(),
+            name: "Orochi V2".to_string(),
+            battery: Some(80),
+            audio_device_id: None,
+            volume: None,
+            is_muted: None,
+            is_default: None,
+            audio_endpoint_name: None,
+            audio_kind: crate::device_identity::AudioKind::Pointer,
+            categories: vec![],
+            node_count: 1,
+            connected: true,
+            pinned: false,
+        }];
+        let raw = crate::device::Device {
+            name: "Orochi V2".to_string(),
+            dt: crate::device::DevType::Usb,
+            status: "OK".to_string(),
+            battery: Some(80),
+            device_id: None,
+            device_key: Some("c:raw".to_string()),
+            is_bluetooth: false,
+            is_wireless_24g: true,
+            wireless_24g_kind: Some(crate::device::Wireless24gKind::Mouse),
+            is_connected: true,
+            is_ble: false,
+            is_phone: false,
+        };
+        assert_eq!(
+            resolve_pin_key_by_name(&grouped, &[raw], "Orochi V2").as_deref(),
+            Some("c:grouped")
+        );
+    }
+
+    /// 两边都找不到 ⇒ `None`（命令层据此报「未找到设备」，不许静默成功）。
+    #[test]
+    fn pin_name_resolution_is_none_when_the_device_is_absent_everywhere() {
+        let grouped: Vec<crate::device_identity::PhysicalDevice> = vec![];
+        let raw = crate::device::Device {
+            name: "Orochi V2".to_string(),
+            dt: crate::device::DevType::Usb,
+            status: "OK".to_string(),
+            battery: None,
+            device_id: None,
+            device_key: None,
+            is_bluetooth: false,
+            is_wireless_24g: false,
+            wireless_24g_kind: None,
+            is_connected: false,
+            is_ble: false,
+            is_phone: false,
+        };
+        assert_eq!(
+            resolve_pin_key_by_name(&grouped, std::slice::from_ref(&raw), "不存在的设备"),
+            None
+        );
+        assert_eq!(
+            resolve_pin_key_by_name(&grouped, std::slice::from_ref(&raw), "Orochi V2"),
+            None,
+            "原始行没有 device_key ⇒ 同样解析不出"
+        );
+    }
 
     /// ⭐ 设置页「任务栏组件」清单的 `name` 必须与**任务栏窗口 tooltip 逐字一致**
     /// ⇒ 走同一个 `resolved_display_name`。
@@ -1763,6 +1914,7 @@ mod tests {
             wireless_24g_kind: None,
             is_connected: true,
             is_ble: false,
+            is_phone: false,
         }
     }
 

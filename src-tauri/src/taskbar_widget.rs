@@ -2070,16 +2070,20 @@ fn publish_item_rects(rects: &[windows_sys::Win32::Foundation::RECT]) {
 //   按序处理 ⇒ 步进不丢，且**不需要新增全局锁**（也就不必在 `state.rs` 的
 //   锁序表里登记新边）。
 
-/// 一格滚轮要调的目标。**两套数据源各自成一枚变体**——
+/// 一格滚轮要调的目标。**每套数据源各自成一枚变体**——
 /// ⛔ 不许合成 `String` + `String`：设备侧用**端点 id**、音乐侧用
-///   **AUMID**，两者语义完全不同，混在一个 `String` 里迟早被当成同一种
-///   东西读（这正是本仓历次「下标空间别名」事故的同一形状）。
+///   **AUMID**、手机转发侧用**条目名现查**，三者语义完全不同，混在一个 `String`
+///   里迟早被当成同一种东西读（这正是本仓历次「下标空间别名」事故的同一形状）。
 #[cfg(target_os = "windows")]
 enum WheelTarget {
     /// 设备面板的某条设备（调**音频端点**音量）。
     Device { device_id: String, up: bool },
     /// 音乐面板当前会话（调该应用在默认输出设备上的**会话**音量）。
     Media { aumid: String, up: bool },
+    /// 手机转发条目（调 **A2DP SNK 转发会话**音量）。目标**不带 id**：
+    ///   会话 id 随手机重连变化 ⇒ 写回前按 `device_identity::relay_session_matches`
+    ///   现查（与快照侧绑定同一份判据），不缓存。
+    Relay { item_name: String, up: bool },
 }
 
 /// 取（并按需启动）音量滚轮工作线程的发送端。
@@ -2114,6 +2118,7 @@ fn volume_worker_loop(rx: std::sync::mpsc::Receiver<WheelTarget>) {
         match target {
             WheelTarget::Device { device_id, up } => wheel_write_device(&device_id, up, fine),
             WheelTarget::Media { aumid, up } => wheel_write_media(&aumid, up, fine),
+            WheelTarget::Relay { item_name, up } => wheel_write_relay(&item_name, up, fine),
         }
         // ⭐ 复用「FORCE_REPAINT + refresh_async()」这条**已过实战验证**的重绘路径
         //   （`refresh_async` 自带防抖与「未挂载早退」），不新开通道。
@@ -2241,6 +2246,78 @@ fn wheel_write_media(aumid: &str, up: bool, fine: bool) {
     }
 }
 
+/// 手机转发侧那一格：按名字现查「A2DP SNK 转发会话」→ 读 → 加一格 → 写回。
+///
+/// 匹配判据与快照侧绑定共用 `device_identity::relay_session_matches`
+/// （显示与滚轮必须认**同一条**会话）。转发会话天然落在默认输出设备上
+/// ——与音乐侧「默认输出设备上的会话」唯一口径同源。
+/// ⛔ 匹配不到就什么都不改、只记 standard 日志（手机没在放声时滚轮不动是
+///   预期行为，但用户必须能在日志里看到原因）。
+#[cfg(target_os = "windows")]
+fn wheel_write_relay(item_name: &str, up: bool, fine: bool) {
+    let sessions = match crate::audio::enumerate_audio_sessions("") {
+        Ok(v) => v,
+        Err(e) => {
+            append_log(&format!(
+                "[widget] 滚轮未受理: 手机转发 原因=枚举会话失败 {e}"
+            ));
+            return;
+        }
+    };
+    let hits: Vec<&crate::audio::AudioSession> = sessions
+        .iter()
+        .filter(|s| crate::device_identity::relay_session_matches(item_name, &s.name))
+        .collect();
+    if hits.is_empty() {
+        append_log(&format!(
+            "[widget] 滚轮未受理: 手机转发 item={item_name} 原因=匹配不到转发会话（手机没在放声？）不改任何音量"
+        ));
+        return;
+    }
+    append_log(&format!(
+        "[widget] 滚轮调转发会话音量: item={item_name} 命中={} 条 dir={} step={:.1}%",
+        hits.len(),
+        if up { "up" } else { "down" },
+        volume_step(fine)
+    ));
+    for s in &hits {
+        let next = apply_wheel_volume(s.volume, up, fine);
+        if (next - s.volume).abs() < f32::EPSILON {
+            if crate::config::verbose_log_enabled() {
+                append_log(&format!(
+                    "[widget] 转发会话滚轮到边界: {} {:.3}",
+                    s.name, s.volume
+                ));
+            }
+            continue;
+        }
+        // ⭐ 静音联动与「应用音量」卡片同口径（与音乐侧 `wheel_write_media` 逐字对齐：
+        //   滑到 0 即静音、从 0 起来即解除静音）
+        let target_muted = next <= 0.0;
+        if target_muted != s.is_muted {
+            if let Err(e) = crate::audio::set_session_mute(&s.id, &s.device_id, target_muted) {
+                append_log(&format!("[widget] 转发会话静音联动失败 {}: {e}", s.name));
+            }
+        }
+        if let Err(e) = crate::audio::set_session_volume(&s.id, &s.device_id, next) {
+            append_log(&format!("[widget] 转发会话滚轮写音量失败 {}: {e}", s.name));
+        } else {
+            append_log(&format!(
+                "[widget] 转发会话滚轮音量 {} {:.3} -> {next}",
+                s.name, s.volume
+            ));
+            // ⭐ 乐观更新 + 立即重绘（同设备侧：先把刚写的值落进快照再 post_refresh，
+            //   真实值由随后那轮枚举校正）
+            if snapshot::update_relay_volume(item_name, next) {
+                let handle = WIDGET_HWND.load(std::sync::atomic::Ordering::SeqCst);
+                if widget_alive() {
+                    unsafe { ffi::post_refresh(handle as *mut core::ffi::c_void) };
+                }
+            }
+        }
+    }
+}
+
 /// `WM_MOUSEWHEEL`：光标落在某项的音量行上 ⇒ 受理一次调音量请求。
 ///
 /// 返回 `true` = 命中并已受理（消息必须被吃掉，不能落到 `DefWindowProcW`——
@@ -2347,6 +2424,24 @@ fn wheel_adjust_volume(hwnd: *mut core::ffi::c_void, wp: usize) -> bool {
     };
     if !it.has_audio {
         return reject("该项无音频端点（键鼠类设备不可调音量）");
+    }
+    // 手机转发条目：音量来自 A2DP SNK 转发会话，**没有**输出端点 id 可用
+    //   ⇒ 走 Relay 变体（写回前按名现查，见 `wheel_write_relay`）。
+    if it.icon == crate::device_identity::AudioKind::Phone {
+        let Some(tx) = volume_worker_sender() else {
+            return reject("拿不到后台写线程");
+        };
+        append_log(&format!(
+            "[widget] 滚轮调音量: idx={idx} 目标=手机转发 dir={} step={:.1}%",
+            if up { "up" } else { "down" },
+            volume_step(crate::config::with_config(|c| c.volume_fine_adjust))
+        ));
+        return tx
+            .send(WheelTarget::Relay {
+                item_name: it.name.clone(),
+                up,
+            })
+            .is_ok();
     }
     // 端点 id 随快照带出来（`WidgetItem::audio_device_id`），**不在这里按名字反查**
     //   —— 那是身份判定，必须留在后端同一判据里。
@@ -2478,6 +2573,30 @@ mod snapshot {
         let mut changed = false;
         for it in items.iter_mut() {
             if it.audio_device_id.as_deref() == Some(device_id) && it.volume != Some(volume) {
+                it.volume = Some(volume);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// 就地更新**手机转发条目**的音量（滚轮乐观更新，语义同 [`update_volume`]）。
+    ///
+    /// ⚠️ 匹配判据与端点版相反：手机条目**没有** `audio_device_id`（`None` 是它的
+    ///   身份特征），目标名又恰好来自同一条快照的条目 ⇒ 按「无端点 id ∧ 归一化名
+    ///   相等」匹配（`compact_name` 口径，与 `relay_session_matches` 同源）。
+    pub fn update_relay_volume(item_name: &str, volume: f32) -> bool {
+        let mut guard = crate::state::lock_unpoisoned(&SNAPSHOT);
+        let Some(items) = guard.as_mut() else {
+            return false;
+        };
+        let want = crate::device_identity::compact_name(item_name);
+        let mut changed = false;
+        for it in items.iter_mut() {
+            if it.audio_device_id.is_some() {
+                continue;
+            }
+            if crate::device_identity::compact_name(&it.name) == want && it.volume != Some(volume) {
                 it.volume = Some(volume);
                 changed = true;
             }
@@ -4200,6 +4319,8 @@ mod icons {
     static SPEAKER_DARK: &[u8] = include_bytes!("../icons/tray-speaker-icon-dark.png");
     static HEADPHONE_LIGHT: &[u8] = include_bytes!("../icons/tray-headphone-icon.png");
     static HEADPHONE_DARK: &[u8] = include_bytes!("../icons/tray-headphone-icon-dark.png");
+    static PHONE_LIGHT: &[u8] = include_bytes!("../icons/tray-phone-icon.png");
+    static PHONE_DARK: &[u8] = include_bytes!("../icons/tray-phone-icon-dark.png");
 
     /// 解码后的 RGBA 位图（`(像素, 宽, 高)`）。像素顺序 = RGBA（`image` crate 约定）。
     pub type Rgba = (Vec<u8>, u32, u32);
@@ -4216,6 +4337,8 @@ mod icons {
     static CACHE_SPEAKER_DARK: OnceLock<Option<Rgba>> = OnceLock::new();
     static CACHE_HEADPHONE_LIGHT: OnceLock<Option<Rgba>> = OnceLock::new();
     static CACHE_HEADPHONE_DARK: OnceLock<Option<Rgba>> = OnceLock::new();
+    static CACHE_PHONE_LIGHT: OnceLock<Option<Rgba>> = OnceLock::new();
+    static CACHE_PHONE_DARK: OnceLock<Option<Rgba>> = OnceLock::new();
 
     /// 解码一张 PNG 为 RGBA。失败返回 `None`（**不 panic** —— 缺图标不该拖垮整个 widget）。
     fn decode(bytes: &[u8]) -> Option<Rgba> {
@@ -4240,6 +4363,8 @@ mod icons {
             (AudioKind::Speaker, true) => (&CACHE_SPEAKER_DARK, SPEAKER_DARK),
             (AudioKind::Headphones, false) => (&CACHE_HEADPHONE_LIGHT, HEADPHONE_LIGHT),
             (AudioKind::Headphones, true) => (&CACHE_HEADPHONE_DARK, HEADPHONE_DARK),
+            (AudioKind::Phone, false) => (&CACHE_PHONE_LIGHT, PHONE_LIGHT),
+            (AudioKind::Phone, true) => (&CACHE_PHONE_DARK, PHONE_DARK),
         };
         cell.get_or_init(|| decode(bytes)).as_ref()
     }
@@ -4269,6 +4394,7 @@ mod icons {
                 AudioKind::Gamepad => 2,
                 AudioKind::Speaker => 3,
                 AudioKind::Headphones => 4,
+                AudioKind::Phone => 5,
             }
     }
 
@@ -8589,9 +8715,13 @@ mod tests {
 
     // ── 快照 store/load ──────────────────────────────────
 
+    /// snapshot 是进程级单例 ⇒ 两条快照测试必须互斥（并行测试会互踩内容）。
+    static SNAPSHOT_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// `store` 必须能识别「内容相同」⇒ 返回 false（避免无谓重绘）。
     #[test]
     fn snapshot_store_reports_no_change_for_identical_content() {
+        let _g = SNAPSHOT_TEST_GUARD.lock().unwrap();
         let a = vec![item(Some(80), None, false, None)];
         // 先写一次（无论之前有什么，这次一定"变化"或幂等，取两次比较）
         let _ = snapshot::store(a.clone());
@@ -8601,7 +8731,31 @@ mod tests {
         assert!(snapshot::store(b), "内容变化应返回 true");
     }
 
-    /// ⭐ 图标解码 + 缩放：五种类别 × 两套主题都必须**解码成功**（否则真机上会「什么都不画」
+    /// 手机转发条目的乐观更新按「无端点 id ∧ 归一化名相等」匹配。
+    /// 可证伪：去掉 `update_relay_volume` 里的 `audio_device_id.is_some()` 守卫
+    /// （放宽成只比名字），第 2 条断言立刻转红——同名但有端点的设备会被误改。
+    #[test]
+    fn update_relay_volume_matches_only_endpointless_entries() {
+        let _g = SNAPSHOT_TEST_GUARD.lock().unwrap();
+        let mut relay = item(Some(50), Some(0.5), true, Some(false));
+        relay.name = "一天的Xiaomi 17".to_string();
+        relay.icon = AudioKind::Phone;
+        let mut endpoint = item(Some(30), Some(0.4), true, None);
+        // 与转发条目**同名**但带端点 id——匹配必须靠结构特征而非名字
+        endpoint.name = "一天的Xiaomi 17".to_string();
+        endpoint.audio_device_id = Some("{0.0.0.0}.{abc}".to_string());
+        let _ = snapshot::store(vec![relay, endpoint]);
+        assert!(snapshot::update_relay_volume("一天的Xiaomi 17", 0.75));
+        let items = snapshot::load().unwrap();
+        assert_eq!(items[0].volume, Some(0.75), "转发条目应被就地更新");
+        assert_eq!(
+            items[1].volume,
+            Some(0.4),
+            "有端点 id 的条目不得被转发会话的乐观更新误改"
+        );
+    }
+
+    /// ⭐ 图标解码 + 缩放：六种类别 × 两套主题都必须**解码成功**（否则真机上会「什么都不画」
     /// 且不报错 —— 正是最难发现的静默失效）。可证伪：删掉任一张 PNG，本条立刻转红。
     #[test]
     fn all_icon_assets_decode_and_scale() {
@@ -8611,6 +8765,7 @@ mod tests {
             AudioKind::Gamepad,
             AudioKind::Speaker,
             AudioKind::Headphones,
+            AudioKind::Phone,
         ] {
             for dark in [false, true] {
                 let src = icons::get(kind, dark)

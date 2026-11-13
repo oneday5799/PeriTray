@@ -503,6 +503,7 @@ fn format_item_debug(it: &crate::taskbar_widget::WidgetItem) -> String {
         crate::device_identity::AudioKind::Gamepad => "手柄",
         crate::device_identity::AudioKind::Speaker => "音箱",
         crate::device_identity::AudioKind::Headphones => "耳机",
+        crate::device_identity::AudioKind::Phone => "手机",
     };
     let mut s = format!("[{}] {}", icon, it.name);
     s.push_str(&match it.battery {

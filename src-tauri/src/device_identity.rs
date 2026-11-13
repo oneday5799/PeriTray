@@ -356,6 +356,44 @@ pub fn bluetooth_container_map() -> HashMap<String, String> {
     map
 }
 
+/// 手机专属蓝牙服务的实例路径片段（大写）。扫描 BTHENUM 枚举器时按它识别服务行。
+///
+/// 依据（本机 `Get-PnpDevice -PresentOnly` 实测）：`110A`（AudioSource）只在手机
+/// 容器出现 —— 它是「把声音送给对方」的角色，耳机 / 眼镜 / 音箱全在 Sink（`110B`）
+/// 侧，刻意排除。⛔ AVRCP（`110C` TG / `110E` CT）**不是**手机专属：本机四台
+/// 经典蓝牙设备（手机 / 眼镜 / 耳机 / 音箱）全部两种都暴露，按它判会把
+/// 音频外设误标成手机。
+const PHONE_SERVICE_MARKERS: [&str; 1] = ["{0000110A"];
+
+/// 扫描 BTHENUM 下「手机专属服务」实例行，返回**在场**服务行所属容器的 GUID 集合。
+///
+/// 判据：实例路径含 [`PHONE_SERVICE_MARKERS`] 之一 ∧ [`container_of_instance`]
+/// 定位成功（`CM_LOCATE_DEVNODE_NORMAL` 只对在场 devnode 成功，幻影行必然失败，
+/// 见 [`enumerator_instance_ids`] 文档）⇒ 集合里的容器**此刻有手机在线**。
+///
+/// ⛔ 图标判据为什么不靠组名里的 `A2DP SNK` / `Avrcp 传输` 行名
+///   （[`names_indicate_phone`]）：那些行由 PnP 枚举产生，`wireless_only`、
+///   用户过滤正则、dedup 合并都可能把它们截杀在 Grouper 之前（真机实测：
+///   wireless_only 开启后手机图标退回默认鼠标）。本扫描直接走 cfgmgr32，
+///   与 WMI 数据管线无关，不受上述任何一层影响。
+/// ⚠️ 服务行**不是配对即常驻**：手机离场（关蓝牙/超距）后服务行变幻影、
+///   定位失败 ⇒ 自动退出集合 —— 本集合同时就是手机**连接态**判据，
+///   与 WinRT `ConnectionStatus` 取或：后者对部分手机假阴性（PnP 行全部在场、
+///   状态 OK，却报 Disconnected，本机 Xiaomi 17 实测）。
+pub fn phone_service_containers() -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for instance in enumerator_instance_ids("BTHENUM") {
+        let upper = instance.to_ascii_uppercase();
+        if !PHONE_SERVICE_MARKERS.iter().any(|m| upper.contains(m)) {
+            continue;
+        }
+        if let Some(container) = container_of_instance(&instance) {
+            out.insert(container);
+        }
+    }
+    out
+}
+
 /// 电量来源。**数值越大越可信** —— 同一容器内出现多个来源时取最大的那个。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum BatterySource {
@@ -369,8 +407,9 @@ pub enum BatterySource {
 
 /// 任务栏 widget 上给「这台设备」画哪一类图标。
 ///
-/// 判据优先级：有音频端点时按端点前缀；没有音频端点时，只有已识别的 2.4G
-/// 鼠标 / 键盘 / 手柄才使用对应图标，其余设备使用默认图标。
+/// 判据优先级：有音频端点时按端点前缀；没有音频端点时，手机按服务行判
+/// （[`Grouper::finish`]），已识别的 2.4G 鼠标 / 键盘 / 手柄用对应图标，其余设备
+/// 使用默认图标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioKind {
@@ -385,6 +424,84 @@ pub enum AudioKind {
     Speaker,
     /// 耳机。
     Headphones,
+    /// 手机：无输出端点、但容器上有手机专属服务行 —— 主判据是
+    /// [`phone_service_containers`] 的 cfgmgr32 扫描（`Device::is_phone`），
+    /// 组名行名（[`names_indicate_phone`]）作兜底。
+    Phone,
+}
+
+/// 身份名的归一化形式：去全部空白 + 小写。
+///
+/// ⛔ 凡「名字 A 是否属于名字 B」类的匹配都必须经由这里或基于它实现的判据，
+///   不许各调用点自行 `replace(' ', "")`——归一化口径一旦变化，所有匹配点必须同步。
+pub fn compact_name(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// 判据：组内候选名是否含有**手机专属**的蓝牙服务行名。本通道是
+/// [`phone_service_containers`] 主判据的兜底，只服务「PnP 行恰好进组」的窗口。
+///
+/// 依据（本机 `Get-PnpDevice` 实测）：配对手机的容器下常驻 `A2DP SNK`
+/// （AudioSource 服务，MEDIA 类）行名；⛔ `Avrcp 传输` 行名**不是**手机专属
+/// ——手机 / 眼镜 / 耳机 / 音箱四台经典蓝牙设备全都有（与 [`PHONE_SERVICE_MARKERS`]
+/// 排除 110C/110E 同一份实测），按它判会把无输出端点窗口里的音频外设误标成手机。
+/// ⛔ 判据是「归一化后包含」（[`compact_name`]）：行名的空格/大小写随系统措辞浮动，
+///   用精确等值会在部分机型上漏判。
+pub fn names_indicate_phone(names: &[String]) -> bool {
+    names
+        .iter()
+        .map(|n| compact_name(n))
+        .any(|n| n.contains("a2dpsnk"))
+}
+
+/// 判据：这条音频会话是不是**这台设备**的 A2DP SNK 转发会话。
+///
+/// 依据（本机实测）：手机放声到本机时，默认输出设备上出现一条显示名为
+/// 「麦克风 (<蓝牙名> A2DP SNK)」的转发会话——音量控制页「应用音量」卡片里的
+/// 那条滑块就是它；`A2DP SNK` 记号来自 Windows 蓝牙驱动的命名，非本地化文案。
+/// 两条同时成立：会话名含 `A2DP SNK` 记号 ∧ 含设备名（两侧都过 [`compact_name`]）。
+/// ⛔ 设备名归一化后为空 ⇒ 一律不匹配（空串 `contains` 恒真，会把转发会话
+///   错绑到任何无名条目上）；只含记号不含设备名也不匹配
+///   （两台手机同时放声时不得串台）。
+pub fn relay_session_matches(device_name: &str, session_name: &str) -> bool {
+    let dev = compact_name(device_name);
+    if dev.is_empty() {
+        return false;
+    }
+    let sess = compact_name(session_name);
+    sess.contains("a2dpsnk") && sess.contains(&dev)
+}
+
+/// 把「A2DP SNK 转发会话」的音量绑到钉住的手机条目上
+/// （任务栏手机条目的音量显示与滚轮写回共用这一份数据源）。
+///
+/// 判据：只绑「钉住 ∧ [`AudioKind::Phone`] ∧ 无输出端点 ∧ 音量尚空」的条目——
+/// ⛔ 有输出端点的条目音量来自端点本身（`Grouper::finish` 派生），转发会话**不得覆盖**；
+///   未钉住的条目不进 widget，绑了无人消费，还平白改变 `get_taskbar_devices` 的输出。
+/// 会话命中规则见 [`relay_session_matches`]：显示（快照绑定）与滚轮（写回前现查）
+/// 走**同一份**判据 ⇒ 不会各认各的会话。
+pub fn bind_relay_sessions(
+    devices: &mut [PhysicalDevice],
+    sessions: &[crate::audio::AudioSession],
+) {
+    for d in devices.iter_mut() {
+        if !d.pinned || d.audio_kind != AudioKind::Phone || d.audio_device_id.is_some() {
+            continue;
+        }
+        if d.volume.is_some() || d.is_muted.is_some() {
+            continue;
+        }
+        if let Some(s) = sessions
+            .iter()
+            .find(|s| relay_session_matches(&d.name, &s.name))
+        {
+            d.volume = Some(s.volume);
+            d.is_muted = Some(s.is_muted);
+        }
+    }
 }
 
 /// 从**音频端点原始名**归一化出图标类别。
@@ -452,6 +569,9 @@ pub struct PhysicalDevice {
     pub audio_device_id: Option<String>,
     /// 上面那个端点的音量（`0.0`–`1.0`）；无音频端点时为 `None`。
     ///
+    /// ⚠️ 唯一例外：钉住的手机条目（`audio_device_id` 为 `None` 却有音量），
+    ///   值来自 A2DP SNK 转发会话（`bind_relay_sessions` 绑定）。
+    ///
     /// ⭐ **随设备一起返回，而不是让前端自己去 `get_audio_devices` 里 join** ——
     /// 否则「用 `audio_device_id` 匹配 `AudioDevice.id`」就成了**未文档化的隐式契约**：
     /// 前端写错（例如改用 `name` 匹配）既不报错也不告警，只会静默显示错误的音量。
@@ -516,6 +636,8 @@ struct Group {
     audio: Option<crate::audio::AudioDevice>,
     wireless_24g_kind: Option<crate::device::Wireless24gKind>,
     connected: bool,
+    /// 组内任一行被 [`phone_service_containers`] 判为手机（`Device::is_phone`）。
+    phone: bool,
     categories: Vec<DevType>,
     node_count: usize,
 }
@@ -588,6 +710,15 @@ impl Grouper {
         }
     }
 
+    /// 记录组内出现过手机服务行扫描的命中（`Device::is_phone`）；与
+    /// [`set_connected`](Self::set_connected) 同款「只置真」语义 —— 多行共享
+    /// 一组，任一行命中即整组算手机。
+    pub fn set_phone(&mut self, key: &str, phone: bool) {
+        if phone {
+            self.acc.entry(key.to_string()).or_default().phone = true;
+        }
+    }
+
     pub fn finish(self) -> Vec<PhysicalDevice> {
         self.acc
             .into_iter()
@@ -607,6 +738,10 @@ impl Grouper {
                     audio_endpoint_name: audio.as_ref().map(|a| a.name.clone()),
                     audio_kind: match audio.as_ref() {
                         Some(a) => audio_kind_from_endpoint_name(Some(a.name.as_str())),
+                        // 手机判据双通道：服务行扫描（`Device::is_phone`，主通道，
+                        // 不受 wireless_only / 过滤正则 / dedup 影响）+ 组名行名
+                        // （兜底，PnP 行恰好进组时仍能判出）。有端点 ⇒ 永远走端点分支。
+                        None if g.phone || names_indicate_phone(&g.names) => AudioKind::Phone,
                         None => audio_kind_from_wireless_kind(g.wireless_24g_kind),
                     },
                     categories: g.categories,
@@ -735,6 +870,7 @@ pub fn group_taskbar_devices(
         if let Some(key) = group_key {
             grouper.set_wireless_24g_kind(key, d.wireless_24g_kind);
             grouper.set_connected(key, d.is_connected);
+            grouper.set_phone(key, d.is_phone);
         }
     }
 
@@ -1572,6 +1708,7 @@ mod tests {
             wireless_24g_kind: None,
             is_connected: true,
             is_ble: false,
+            is_phone: false,
         }
     }
 
@@ -2787,5 +2924,212 @@ mod tests {
             audio_kind_from_endpoint_name(Some("Headphones")),
             AudioKind::Headphones
         );
+    }
+
+    /// 手机判据只认**手机专属**服务行名：`A2DP SNK` 算（AudioSource 侧），
+    /// `Avrcp` / `Hands-Free` 不算（眼镜/耳机/音箱同样暴露，与
+    /// [`PHONE_SERVICE_MARKERS`] 排除 110C/110E 同一份实测）；
+    /// 大小写与空格浮动不漏判。可证伪：把 `contains` 改成精确等值，
+    /// 首条立刻转红。
+    #[test]
+    fn phone_marker_only_matches_phone_service_rows() {
+        assert!(names_indicate_phone(&[
+            "一天的Xiaomi 17 A2DP SNK".to_string()
+        ]));
+        assert!(names_indicate_phone(&["一天X a2dp snk".to_string()]));
+        assert!(
+            !names_indicate_phone(&["一天的Xiaomi 17 Avrcp 传输".to_string()]),
+            "Avrcp 不是手机专属（四台经典蓝牙设备全都有），与主判据收窄同一份实测"
+        );
+        assert!(!names_indicate_phone(&["Razer Orochi V2".to_string()]));
+        assert!(!names_indicate_phone(&[]));
+        assert!(
+            !names_indicate_phone(&["一天的Xiaomi 17 Hands-Free HF Audio".to_string()]),
+            "Hands-Free 不是手机专属（耳机同样暴露），不在判据里"
+        );
+    }
+
+    /// 容器里有手机服务行、没有输出端点 ⇒ Phone 图标（手机钉到任务栏的主形态）。
+    /// 可证伪：删掉 `Grouper::finish` 里的 `names_indicate_phone` 分支即转红。
+    #[test]
+    fn grouper_marks_phone_by_service_rows_without_endpoint() {
+        let mut g = Grouper::new();
+        g.add(
+            Some("c:phone"),
+            "一天的Xiaomi 17",
+            DevType::Other,
+            None,
+            None,
+        );
+        g.add(
+            Some("c:phone"),
+            "一天的Xiaomi 17 A2DP SNK",
+            DevType::Audio,
+            None,
+            None,
+        );
+        let out = g.finish();
+        assert_eq!(out[0].audio_kind, AudioKind::Phone);
+    }
+
+    /// 有真实输出端点的设备**永远走端点前缀分支**（蓝牙耳机也暴露 AVRCP 行，
+    /// 但它的 Stereo/耳机端点存在 ⇒ Headphones），手机判据只兜「无端点」这一层。
+    #[test]
+    fn endpoint_derived_kind_wins_over_the_phone_marker() {
+        let mut g = Grouper::new();
+        g.add(
+            Some("c:hp"),
+            "WH-1000XM5 Avrcp 传输",
+            DevType::Other,
+            None,
+            None,
+        );
+        g.add(
+            Some("c:hp"),
+            "耳机 (WH-1000XM5)",
+            DevType::Audio,
+            None,
+            Some(&audio("耳机 (WH-1000XM5)", "{0.0.0.0}.{xm5}", None)),
+        );
+        let out = g.finish();
+        assert_eq!(out[0].audio_kind, AudioKind::Headphones);
+    }
+
+    /// 服务行扫描主判据（`Device::is_phone` → [`Grouper::set_phone`]）**单独**
+    /// 就能给出 Phone 图标，组名里不需要出现 A2DP SNK 行 ——
+    /// `wireless_only` / 过滤正则会把那些 PnP 行截杀在 Grouper 之前（真机实测）。
+    /// 可证伪：删掉 `Grouper::finish` 里的 `g.phone ||` 即转红（退回默认鼠标图标）。
+    #[test]
+    fn grouper_phone_flag_alone_yields_phone_kind() {
+        let mut g = Grouper::new();
+        g.add(
+            Some("c:phone"),
+            "一天的Xiaomi 17",
+            DevType::Other,
+            None,
+            None,
+        );
+        g.set_phone("c:phone", true);
+        let out = g.finish();
+        assert_eq!(out[0].audio_kind, AudioKind::Phone);
+    }
+
+    /// group_taskbar_devices 必须把扫描命中喂进 Grouper（图标）并让连接态复核
+    /// 生效（不置灰）。可证伪：删掉喂入循环里的 `set_phone` 即转红 ——
+    /// 条目还在（钉住强制显示），但图标退回鼠标、`connected` 失真。
+    #[test]
+    fn group_taskbar_devices_keeps_phone_flag_and_connection() {
+        let mut d = dev("一天的Xiaomi 17", Some("c:phone"), None, true, false);
+        d.is_phone = true;
+        d.is_connected = true;
+        // 反控：扫描未命中（手机已离场）⇒ 不给 Phone 图标；
+        // 给电量让它过「保留条件」（否则既没钉住又无数据，会被整条丢弃，反控失效）
+        let mut away = dev("另一台手机", Some("c:away"), Some(60), true, false);
+        away.is_connected = false;
+
+        let pinned = vec![crate::config::PinnedDevice {
+            key: "c:phone".to_string(),
+            fallback: None,
+            alias: None,
+        }];
+        let out = group_taskbar_devices(&[d, away], &[], &pinned);
+        let online = out.iter().find(|p| p.key == "c:phone").unwrap();
+        let offline = out.iter().find(|p| p.key == "c:away").unwrap();
+        assert_eq!(online.audio_kind, AudioKind::Phone);
+        assert!(online.connected && online.pinned);
+        assert_ne!(offline.audio_kind, AudioKind::Phone);
+        assert!(!offline.connected);
+    }
+
+    /// 转发会话匹配判据：会话名必须**同时**含 A2DP SNK 记号与设备名。
+    /// 可证伪：删掉「含设备名」条件，第 3 条立刻转红（另一台手机的会话串台）；
+    /// 删掉空名守卫，第 6 条立刻转红（空串 contains 恒真）。
+    #[test]
+    fn relay_session_matches_requires_marker_and_device_name() {
+        let sess = "麦克风 (一天的Xiaomi 17 A2DP SNK)";
+        assert!(relay_session_matches("一天的Xiaomi 17", sess));
+        // 空格 / 大小写浮动（归一化后等价）
+        assert!(relay_session_matches(
+            "一天Xiaomi17",
+            "麦克风 (一 天 Xiaomi 17 A2DP SNK)"
+        ));
+        // 另一台手机的转发会话：有记号但不含本机设备名 ⇒ 不串台
+        assert!(!relay_session_matches("Razer Orochi V2", sess));
+        assert!(!relay_session_matches(
+            "一天的Xiaomi 17",
+            "麦克风 (别的手机 A2DP SNK)"
+        ));
+        // 含设备名但不是转发会话（普通应用）⇒ 不匹配
+        assert!(!relay_session_matches(
+            "一天的Xiaomi 17",
+            "网易云音乐 (一天的Xiaomi 17)"
+        ));
+        // 设备名归一化后为空 ⇒ 一律不匹配
+        assert!(!relay_session_matches("   ", sess));
+        assert!(!relay_session_matches("", sess));
+    }
+
+    /// 绑定判据：只绑「钉住 ∧ Phone ∧ 无端点 ∧ 音量尚空」的条目。
+    /// 可证伪：删掉 `bind_relay_sessions` 里 `audio_device_id.is_some()` 或
+    /// `volume.is_some()` 任一守卫，对应断言立刻转红。
+    #[test]
+    fn bind_relay_sessions_fills_only_pinned_phone_entries() {
+        let pinned_phone = crate::device_identity::PhysicalDevice {
+            key: "c:phone".to_string(),
+            name: "一天的Xiaomi 17".to_string(),
+            battery: None,
+            audio_device_id: None,
+            volume: None,
+            is_muted: None,
+            is_default: None,
+            audio_endpoint_name: None,
+            audio_kind: AudioKind::Phone,
+            categories: vec![],
+            node_count: 2,
+            connected: true,
+            pinned: true,
+        };
+        // 与手机同名的有端点条目：音量来自端点，不得被转发会话覆盖
+        let endpoint_device = crate::device_identity::PhysicalDevice {
+            key: "c:hp".to_string(),
+            name: "一天的Xiaomi 17".to_string(),
+            battery: Some(60),
+            audio_device_id: Some("{0.0.0.0}.{hp}".to_string()),
+            volume: Some(0.4),
+            is_muted: Some(false),
+            is_default: Some(true),
+            audio_endpoint_name: Some("耳机 (一天的Xiaomi 17)".to_string()),
+            audio_kind: AudioKind::Headphones,
+            categories: vec![DevType::Audio],
+            node_count: 3,
+            connected: true,
+            pinned: true,
+        };
+        let unpinned_phone = crate::device_identity::PhysicalDevice {
+            pinned: false,
+            ..pinned_phone.clone()
+        };
+        let mut devices = vec![pinned_phone, endpoint_device, unpinned_phone];
+        let sessions = vec![crate::audio::AudioSession {
+            id: "42.0x1|0x2".to_string(),
+            name: "麦克风 (一天的Xiaomi 17 A2DP SNK)".to_string(),
+            icon: Default::default(),
+            pid: 42,
+            volume: 0.55,
+            is_muted: true,
+            device_id: "{0.0.0.0}.{def}".to_string(),
+            is_active: true,
+        }];
+        bind_relay_sessions(&mut devices, &sessions);
+        let phone = &devices[0];
+        assert_eq!(phone.volume, Some(0.55), "钉住的手机条目应绑到转发会话音量");
+        assert_eq!(phone.is_muted, Some(true));
+        assert!(phone.audio_device_id.is_none(), "绑会话不等于有端点");
+        assert_eq!(
+            devices[1].volume,
+            Some(0.4),
+            "有输出端点的条目音量来自端点，不得被转发会话覆盖"
+        );
+        assert_eq!(devices[2].volume, None, "未钉住的条目不进 widget，不绑定");
     }
 }

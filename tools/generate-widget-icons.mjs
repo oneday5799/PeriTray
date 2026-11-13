@@ -96,6 +96,33 @@ const SWITCH_STROKE = {
     ' stroke-width="51.2" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 
+/**
+ * 手机图标：**重画**成圆角矩形环 + 底部胶囊的描边（原始参考见同目录
+ * `ICON-SOURCES.md` 第 11 项）。
+ *
+ * 判据：源描边 41.8@1024 **比目标 51.2 还细** ⇒ 矢量法线内偏移（只收粗）不适用，
+ *   走 [`SWITCH_STROKE`] 同款「重画描边」路径，线宽由 `stroke-width` 保证。
+ * 依据：源外框 x∈[203.755,820.245] y∈[94.041,929.959] r=83.592、孔洞
+ *   x∈[245.551,778.449] y∈[135.837,888.163] r=41.796（描边 41.8 = (外−孔)/2）；
+ *   中线 = 外/孔的均值：x∈[224.653,799.347] y∈[114.939,909.061] r=62.694；
+ *   51.2 宽的描边沿中线 ⇒ 外缘 r=88.29、孔缘 r=37.09，环厚恰为 51.2。
+ *   胶囊：源中线 y=794.122、直线段 x∈[407.510,616.490]，圆头由 linecap 提供。
+ *   各角切点（287.347/177.633/736.653/846.367…）与源路径的角点**逐位一致**
+ *   ——因为中线 r 取了两环半径的均值，角点自然落在同一坐标上，可据此复核。
+ */
+const PHONE_STROKE = {
+  name: "phone",
+  base: "tray-phone-icon",
+  svg:
+    '<path d="M287.346939 114.938776 H736.653061 A62.693878 62.693878 0 0 1 799.346939 177.632654 ' +
+    'V846.367346 A62.693878 62.693878 0 0 1 736.653061 909.061224 H287.346939 ' +
+    'A62.693878 62.693878 0 0 1 224.653061 846.367346 V177.632654 ' +
+    'A62.693878 62.693878 0 0 1 287.346939 114.938776 Z" fill="none" stroke="#000000"' +
+    ' stroke-width="51.2" stroke-linejoin="round"/>' +
+    '<path d="M407.510204 794.122449 H616.489796" fill="none" stroke="#000000"' +
+    ' stroke-width="51.2" stroke-linecap="round"/>',
+};
+
 // ── 精确欧氏距离变换（Felzenszwalb & Huttenlocher，两趟 1D 抛物线下包络）──
 
 function edt1d(f, n, d, v, z) {
@@ -343,7 +370,7 @@ async function writeMask(mask, file, [r, g, b]) {
 
 const report = [];
 let failed = false;
-for (const item of [...PLAN, SWITCH_STROKE]) {
+for (const item of [...PLAN, SWITCH_STROKE, PHONE_STROKE]) {
   const { name, base } = item;
   const svgText = item.svg ? svgHeader() + item.svg + "</svg>" : await buildOffsetSvg(name, item.radii);
   const mask = await renderMask(svgText);

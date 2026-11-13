@@ -356,6 +356,7 @@ mod tests {
             wireless_24g_kind: None,
             is_connected: true,
             is_ble: false,
+            is_phone: false,
         }
     }
 

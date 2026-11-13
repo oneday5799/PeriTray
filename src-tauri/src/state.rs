@@ -484,6 +484,7 @@ fn storing_unchanged_content_still_refreshes_the_timestamp() {
         wireless_24g_kind: None,
         is_connected: true,
         is_ble: false,
+        is_phone: false,
     }];
     assert!(store_devices_cache(d.clone()), "首次写入应报告「内容变了」");
     let first = lock_unpoisoned(get_devices_cache()).at_ms;
@@ -556,6 +557,7 @@ fn non_empty_cache_reports_a_monotonic_age() {
         wireless_24g_kind: None,
         is_connected: true,
         is_ble: false,
+        is_phone: false,
     }]);
     let (_, a1) = devices_cache_snapshot();
     let a1 = a1.expect("非空缓存必须报告年龄");

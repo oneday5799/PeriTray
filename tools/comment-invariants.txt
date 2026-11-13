@@ -43,6 +43,8 @@
 # FLOOR	⛔+⭐ 总数下界	1150
 # FLOOR	⛔+⭐ 总数下界	1163
 # FLOOR	⛔+⭐ 总数下界	1164
+# FLOOR	⛔+⭐ 总数下界	1165
+# FLOOR	⛔+⭐ 总数下界	1165
 
 src-tauri/src/a2dp_sink.rs	<file>	⛔	1
 src-tauri/src/a2dp_sink.rs	const WAIT_POLL	⛔	1
@@ -74,18 +76,22 @@ src-tauri/src/bluetooth.rs	fn find_paired_bluetooth_devices	⛔	1
 src-tauri/src/bluetooth.rs	fn read_btc_battery_from_device_id	⛔	1
 src-tauri/src/commands.rs	const TRAY_DEVICE_LIMIT	⛔	1
 src-tauri/src/commands.rs	fn devices_for_taskbar	⛔	1
-src-tauri/src/commands.rs	fn devices_for_taskbar_within	⛔	1
+src-tauri/src/commands.rs	fn devices_for_taskbar_within	⛔	2
 src-tauri/src/commands.rs	fn devices_for_taskbar_within	⭐	1
 src-tauri/src/commands.rs	fn forced_refresh_ignores_a_perfectly_fresh_cache	⛔	1
-src-tauri/src/commands.rs	fn get_pinned_taskbar_list	⛔	2
-src-tauri/src/commands.rs	fn get_pinned_taskbar_list	⭐	2
+src-tauri/src/commands.rs	fn get_pinned_taskbar_list	⛔	1
+src-tauri/src/commands.rs	fn get_pinned_taskbar_list	⭐	1
 src-tauri/src/commands.rs	fn get_taskbar_devices	⛔	1
 src-tauri/src/commands.rs	fn get_taskbar_devices	⭐	1
 src-tauri/src/commands.rs	fn non_empty_device_cache_does_not_requery	⭐	1
+src-tauri/src/commands.rs	fn pin_name_resolution_is_none_when_the_device_is_absent_everywhere	⛔	1
+src-tauri/src/commands.rs	fn pin_name_resolution_is_none_when_the_device_is_absent_everywhere	⭐	1
 src-tauri/src/commands.rs	fn pinned_taskbar_entry	⭐	1
 src-tauri/src/commands.rs	fn pinned_toggle_adds_then_removes	⭐	1
 src-tauri/src/commands.rs	fn pinned_toggle_is_the_inverse_of_the_display_predicate	⭐	1
 src-tauri/src/commands.rs	fn rename_device	⭐	1
+src-tauri/src/commands.rs	fn resolve_pin_key_by_name	⛔	1
+src-tauri/src/commands.rs	fn resolve_pin_key_by_name	⭐	1
 src-tauri/src/commands.rs	fn set_hotkey_config	⛔	1
 src-tauri/src/commands.rs	fn taskbar_devices_snapshot_within	⛔	1
 src-tauri/src/commands.rs	fn toggle_pinned_taskbar_device	⛔	2
@@ -93,8 +99,6 @@ src-tauri/src/commands.rs	fn toggle_pinned_taskbar_device	⭐	4
 src-tauri/src/commands.rs	fn toggle_taskbar_device_pin	⛔	1
 src-tauri/src/commands.rs	fn toggle_taskbar_device_pin	⭐	3
 src-tauri/src/commands.rs	fn ttl_decides_between_cache_and_live_query	⭐	1
-src-tauri/src/commands.rs	mod tests	⛔	1
-src-tauri/src/commands.rs	mod tests	⭐	1
 src-tauri/src/config.rs	fn apply_device_rename	⛔	2
 src-tauri/src/config.rs	fn apply_device_rename	⭐	3
 src-tauri/src/config.rs	fn apply_device_rename_from_device_page_writes_both_forms	⛔	1
@@ -159,8 +163,10 @@ src-tauri/src/device_identity.rs	fn audio_endpoint_key	⛔	1
 src-tauri/src/device_identity.rs	fn audio_kind_from_wireless_kind	⛔	1
 src-tauri/src/device_identity.rs	fn audio_kind_from_wireless_kind	⭐	2
 src-tauri/src/device_identity.rs	fn audio_kind_maps_prefix_to_icon	⛔	1
+src-tauri/src/device_identity.rs	fn bluetooth_container_map	⛔	1
 src-tauri/src/device_identity.rs	fn build_selectable_devices	⛔	1
 src-tauri/src/device_identity.rs	fn build_selectable_devices	⭐	1
+src-tauri/src/device_identity.rs	fn compact_name	⛔	1
 src-tauri/src/device_identity.rs	fn container_of_audio_endpoint	⛔	1
 src-tauri/src/device_identity.rs	fn container_of_audio_endpoint	⭐	1
 src-tauri/src/device_identity.rs	fn devnode_from_hidapi_path	⛔	1
@@ -175,6 +181,7 @@ src-tauri/src/device_identity.rs	fn merge_by_identity_keeps_placeholder_containe
 src-tauri/src/device_identity.rs	fn merge_by_identity_keyless_device_and_containerless_endpoint_stay_separate	⛔	1
 src-tauri/src/device_identity.rs	fn merge_by_identity_never_synthesizes_entries_from_nothing	⛔	1
 src-tauri/src/device_identity.rs	fn merge_by_identity_never_trusts_upstream_null_container_key	⛔	1
+src-tauri/src/device_identity.rs	fn names_indicate_phone	⛔	1
 src-tauri/src/device_identity.rs	fn new	⛔	1
 src-tauri/src/device_identity.rs	fn normalize_encoded_key	⛔	4
 src-tauri/src/device_identity.rs	fn normalize_guid_strips_braces_and_case	⭐	1
@@ -183,6 +190,7 @@ src-tauri/src/device_identity.rs	fn pick_display_name	⭐	2
 src-tauri/src/device_identity.rs	fn pinned_device_without_data_is_kept_for_gray_out	⭐	1
 src-tauri/src/device_identity.rs	fn pinned_placeholder_name	⛔	1
 src-tauri/src/device_identity.rs	fn pinned_placeholder_name	⭐	1
+src-tauri/src/device_identity.rs	fn relay_session_matches	⛔	1
 src-tauri/src/device_identity.rs	fn resolved_display_name	⛔	3
 src-tauri/src/device_identity.rs	fn resolved_display_name	⭐	1
 src-tauri/src/device_identity.rs	fn selectable_devices_keep_entries_without_any_data	⛔	1
@@ -669,7 +677,6 @@ src-tauri/src/taskbar_widget.rs	fn should_show	⛔	2
 src-tauri/src/taskbar_widget.rs	fn should_show	⭐	1
 src-tauri/src/taskbar_widget.rs	fn show	⛔	2
 src-tauri/src/taskbar_widget.rs	fn slot_of	⛔	2
-src-tauri/src/taskbar_widget.rs	fn snapshot_store_reports_no_change_for_identical_content	⭐	1
 src-tauri/src/taskbar_widget.rs	fn spawn_switch_anim	⛔	2
 src-tauri/src/taskbar_widget.rs	fn spawn_widget	⭐	4
 src-tauri/src/taskbar_widget.rs	fn start_music	⛔	2
@@ -696,6 +703,7 @@ src-tauri/src/taskbar_widget.rs	fn tooltip_diag	⛔	1
 src-tauri/src/taskbar_widget.rs	fn tooltip_label_follows_alias_then_rename_then_short_name	⛔	1
 src-tauri/src/taskbar_widget.rs	fn tooltip_label_follows_alias_then_rename_then_short_name	⭐	1
 src-tauri/src/taskbar_widget.rs	fn unsharp_mask_premul	⭐	1
+src-tauri/src/taskbar_widget.rs	fn update_relay_volume_matches_only_endpointless_entries	⭐	1
 src-tauri/src/taskbar_widget.rs	fn volume_decimals_follow_the_fine_adjust_switch	⛔	1
 src-tauri/src/taskbar_widget.rs	fn volume_decimals_follow_the_fine_adjust_switch	⭐	1
 src-tauri/src/taskbar_widget.rs	fn volume_rounds_rather_than_truncates	⭐	1
@@ -717,7 +725,9 @@ src-tauri/src/taskbar_widget.rs	fn wheel_rounds_the_base_like_the_page_slider	�
 src-tauri/src/taskbar_widget.rs	fn wheel_step_follows_fine_adjust	⛔	1
 src-tauri/src/taskbar_widget.rs	fn wheel_write_device	⛔	3
 src-tauri/src/taskbar_widget.rs	fn wheel_write_device	⭐	1
+src-tauri/src/taskbar_widget.rs	fn wheel_write_media	⛔	1
 src-tauri/src/taskbar_widget.rs	fn wheel_write_media	⭐	2
+src-tauri/src/taskbar_widget.rs	fn wheel_write_relay	⭐	2
 src-tauri/src/taskbar_widget.rs	fn widget_absent_when_both_component_switches_off	⛔	3
 src-tauri/src/taskbar_widget.rs	fn widget_alive	⭐	1
 src-tauri/src/taskbar_widget.rs	fn widget_labels_are_wired_to_the_resolver	⭐	1
@@ -757,4 +767,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	1165
+# FLOOR	⛔+⭐ 总数下界	1173

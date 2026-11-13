@@ -107,4 +107,9 @@ pub struct Device {
     pub is_connected: bool,
     #[serde(default)]
     pub is_ble: bool,
+    /// 该蓝牙设备的容器暴露**手机专属**服务（AudioSource，`{0000110A}`）且服务行
+    /// 在场 ⇒ 手机此刻在线。由 `device_identity::phone_service_containers` 扫描判定，
+    /// 与 WinRT `ConnectionStatus` 无关（后者对部分手机假阴性，见该函数文档）。
+    #[serde(default)]
+    pub is_phone: bool,
 }

@@ -169,6 +169,8 @@ pub fn try_insert(
         wireless_24g_kind,
         is_connected: crate::device::status_is_connected(status),
         is_ble,
+        // 手机标记由 wmi_query 的服务行扫描补写（mark_phone_rows），此处恒为否
+        is_phone: false,
     });
     cn_index.entry(cn).or_default().push(idx);
 }

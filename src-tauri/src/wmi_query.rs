@@ -1,6 +1,6 @@
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use wmi::WMIConnection;
 
@@ -122,6 +122,10 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
         &mut cn_index,
         fresh,
     );
+    // 手机服务行扫描：is_phone 标记 + 连接态复核（判据见 mark_phone_rows /
+    // device_identity::phone_service_containers）。
+    let phone_live = device_identity::phone_service_containers();
+    mark_phone_rows(&mut all, &phone_live);
     // 电池查询：wireless_only 时跳过（电池设备均为有线 USB）
     if !wireless_only {
         query_battery_devices(
@@ -151,6 +155,32 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
     );
     standard_log!("[wmi] query_devices: {} devices found", all.len());
     Ok(all)
+}
+
+/// 把手机服务行扫描的命中写回设备行（命中集合来自
+/// `device_identity::phone_service_containers`，它是唯一判定来源）。
+///
+/// 判据：只改**蓝牙行**且身份键是容器键（`c:` 前缀）——
+/// ⛔ 不得扩散到非蓝牙行或 `n:`/`i:` 降级键的行：它们没有容器证据，
+///   命中集合里根本不会有其 GUID，这里再挡一层是防「键前缀口径变化」后误写。
+/// ⛔ 连接态复核只对**已判为手机**的行生效：WinRT `ConnectionStatus` 对部分手机
+///   假阴性（PnP 行全部在场、CM_PROB_NONE，却报 Disconnected，本机 Xiaomi 17
+///   实测）⇒ 服务行在场 ⇒ 在线，直接置真（WinRT 报已连接时本就为真，取或等价）。
+fn mark_phone_rows(devices: &mut [Device], live: &BTreeSet<String>) {
+    for d in devices.iter_mut() {
+        if !d.is_bluetooth {
+            continue;
+        }
+        let Some(key) = d.device_key.as_deref().and_then(|k| k.strip_prefix("c:")) else {
+            continue;
+        };
+        if !live.contains(key) {
+            continue;
+        }
+        d.is_phone = true;
+        d.is_connected = true;
+        d.status = BT_STATUS_CONNECTED.to_string();
+    }
 }
 
 fn query_pnp_devices(
@@ -417,6 +447,7 @@ fn query_battery_devices(
                 wireless_24g_kind: None,
                 is_connected,
                 is_ble: false,
+                is_phone: false,
             });
             cn_index.entry(cn).or_default().push(idx);
         }
@@ -522,6 +553,65 @@ fn fill_24g_battery(all: &mut [Device], targets: Vec<wireless_24g::BatteryTarget
             if let Some(oname) = crate::wireless_24g::display_override_name(&t.vid, &t.pid) {
                 d.name = oname;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mark_phone_rows, BT_STATUS_CONNECTED, BT_STATUS_PAIRED};
+    use crate::device::{DevType, Device};
+    use std::collections::BTreeSet;
+
+    fn row(bt: bool, key: Option<&str>) -> Device {
+        Device {
+            name: "一天的Xiaomi 17".to_string(),
+            dt: DevType::Other,
+            status: BT_STATUS_PAIRED.to_string(),
+            battery: None,
+            device_id: None,
+            device_key: key.map(|k| k.to_string()),
+            is_bluetooth: bt,
+            is_wireless_24g: false,
+            wireless_24g_kind: None,
+            is_connected: false,
+            is_ble: false,
+            is_phone: false,
+        }
+    }
+
+    /// 服务行扫描命中的行必须被置为手机 + 在线（图标与置灰共用这一份状态）。
+    /// 可证伪：删掉 query_devices_with 里的 mark_phone_rows 调用，
+    /// 行保持「已配对 / 未连接」⇒ 真机表现为「已连接却被置灰」。
+    #[test]
+    fn mark_phone_rows_flags_and_reconnects_bt_row_in_live_container() {
+        let mut all = vec![row(true, Some("c:phone"))];
+        let mut live = BTreeSet::new();
+        live.insert("phone".to_string());
+        mark_phone_rows(&mut all, &live);
+        let d = &all[0];
+        assert!(d.is_phone && d.is_connected);
+        assert_eq!(d.status, BT_STATUS_CONNECTED);
+    }
+
+    /// 判据边界：非蓝牙行、无容器键（`i:` / `n:` / None）、容器不在命中集合 ——
+    /// 三者都**不得**被改写（⛔ 复核不得扩散到没有容器证据的行）。
+    #[test]
+    fn mark_phone_rows_never_touches_rows_without_container_evidence() {
+        let mut all = vec![
+            row(false, Some("c:phone")),
+            row(true, Some("i:instance")),
+            row(true, Some("n:name")),
+            row(true, None),
+            row(true, Some("c:other")),
+        ];
+        let mut live = BTreeSet::new();
+        live.insert("phone".to_string());
+        mark_phone_rows(&mut all, &live);
+        for d in &all {
+            assert!(!d.is_phone);
+            assert!(!d.is_connected);
+            assert_eq!(d.status, BT_STATUS_PAIRED);
         }
     }
 }
