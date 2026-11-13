@@ -160,12 +160,12 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
 /// 把手机服务行扫描的命中写回设备行（命中集合来自
 /// `device_identity::phone_service_containers`，它是唯一判定来源）。
 ///
-/// 判据：只改**蓝牙行**且身份键是容器键（`c:` 前缀）——
+/// 判据：只写 `is_phone` 图标标记，且只写**蓝牙行** ∧ 容器键（`c:` 前缀）——
 /// ⛔ 不得扩散到非蓝牙行或 `n:`/`i:` 降级键的行：它们没有容器证据，
 ///   命中集合里根本不会有其 GUID，这里再挡一层是防「键前缀口径变化」后误写。
-/// ⛔ 连接态复核只对**已判为手机**的行生效：WinRT `ConnectionStatus` 对部分手机
-///   假阴性（PnP 行全部在场、CM_PROB_NONE，却报 Disconnected，本机 Xiaomi 17
-///   实测）⇒ 服务行在场 ⇒ 在线，直接置真（WinRT 报已连接时本就为真，取或等价）。
+/// ⛔ **不得在此推断连接态**：服务行 devnode 不随链路断开移除（真机实测手机
+///   关蓝牙后仍全部 Present / OK），「服务行在场 ⇒ 在线」会把离场手机永久误报
+///   已连接；手机在线只能由链路证据合成（`bind_relay_sessions` 绑定转发会话）。
 fn mark_phone_rows(devices: &mut [Device], live: &BTreeSet<String>) {
     for d in devices.iter_mut() {
         if !d.is_bluetooth {
@@ -178,8 +178,6 @@ fn mark_phone_rows(devices: &mut [Device], live: &BTreeSet<String>) {
             continue;
         }
         d.is_phone = true;
-        d.is_connected = true;
-        d.status = BT_STATUS_CONNECTED.to_string();
     }
 }
 
@@ -559,7 +557,7 @@ fn fill_24g_battery(all: &mut [Device], targets: Vec<wireless_24g::BatteryTarget
 
 #[cfg(test)]
 mod tests {
-    use super::{mark_phone_rows, BT_STATUS_CONNECTED, BT_STATUS_PAIRED};
+    use super::{mark_phone_rows, BT_STATUS_PAIRED};
     use crate::device::{DevType, Device};
     use std::collections::BTreeSet;
 
@@ -580,22 +578,24 @@ mod tests {
         }
     }
 
-    /// 服务行扫描命中的行必须被置为手机 + 在线（图标与置灰共用这一份状态）。
-    /// 可证伪：删掉 query_devices_with 里的 mark_phone_rows 调用，
-    /// 行保持「已配对 / 未连接」⇒ 真机表现为「已连接却被置灰」。
+    /// 服务行扫描命中只写 `is_phone` 图标标记，**连接态与状态词不得动**：
+    /// 服务行不随链路断开消失（真机实测手机关蓝牙后仍 Present/OK），
+    /// 「在场 ⇒ 在线」会把离场手机永久误报已连接。
+    /// 可证伪：在 mark_phone_rows 里加回 `is_connected = true` 即转红。
     #[test]
-    fn mark_phone_rows_flags_and_reconnects_bt_row_in_live_container() {
+    fn mark_phone_rows_writes_only_the_icon_flag() {
         let mut all = vec![row(true, Some("c:phone"))];
         let mut live = BTreeSet::new();
         live.insert("phone".to_string());
         mark_phone_rows(&mut all, &live);
         let d = &all[0];
-        assert!(d.is_phone && d.is_connected);
-        assert_eq!(d.status, BT_STATUS_CONNECTED);
+        assert!(d.is_phone);
+        assert!(!d.is_connected, "服务行在场证不了在线");
+        assert_eq!(d.status, BT_STATUS_PAIRED);
     }
 
     /// 判据边界：非蓝牙行、无容器键（`i:` / `n:` / None）、容器不在命中集合 ——
-    /// 三者都**不得**被改写（⛔ 复核不得扩散到没有容器证据的行）。
+    /// 四者都**不得**被改写（⛔ 标记不得扩散到没有容器证据的行）。
     #[test]
     fn mark_phone_rows_never_touches_rows_without_container_evidence() {
         let mut all = vec![

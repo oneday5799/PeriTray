@@ -107,9 +107,10 @@ pub struct Device {
     pub is_connected: bool,
     #[serde(default)]
     pub is_ble: bool,
-    /// 该蓝牙设备的容器暴露**手机专属**服务（AudioSource，`{0000110A}`）且服务行
-    /// 在场 ⇒ 手机此刻在线。由 `device_identity::phone_service_containers` 扫描判定，
-    /// 与 WinRT `ConnectionStatus` 无关（后者对部分手机假阴性，见该函数文档）。
+    /// 该蓝牙设备的容器启用了**手机专属**服务（AudioSource，`{0000110A}`）⇒
+    /// 手机类型标记（任务栏图标判定用）。由 `device_identity::phone_service_containers`
+    /// 扫描判定。⛔ 只证「配过对 ∧ 服务启用」，**不证在线**——服务行不随链路断开
+    /// 消失（真机实测），在线判据见 `bind_relay_sessions`。
     #[serde(default)]
     pub is_phone: bool,
 }

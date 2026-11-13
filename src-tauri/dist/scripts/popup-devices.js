@@ -225,10 +225,12 @@ function fillStatusRow(row, dev) {
   if (dev.is_bluetooth || dev.is_wireless_24g) {
     const statusEl = document.createElement("div");
     statusEl.className = "card-tag status";
-    // ⭐ 后端设备查询不感知 PC 侧 Sink 会话（只报蓝牙配置文件状态）：会话 armed/link_ready 即音频链路已通，状态标签必须改判「已连接」；connecting/backoff 保持后端原值。
+    // ⭐ 后端设备查询不感知 PC 侧 Sink 会话（只报蓝牙配置文件状态）：会话
+    // link_ready（后端见转发会话流量）即音频链路已通，状态标签必须改判
+    // 「已连接」。⛔ armed 只是武装等待——手机离场也停在这（后端 detail「等待手机播放」），
+    // 不得改判「已连接」（离场误报）；connecting/backoff 同样保持后端原值。
     const session = a2dpSessionStateFor(dev);
-    const effective =
-      session === "armed" || session === "link_ready" ? "已连接" : dev.status;
+    const effective = session === "link_ready" ? "已连接" : dev.status;
     if (effective === "已连接") {
       statusEl.classList.add("connected");
     } else if (effective === "已配对") {
@@ -435,7 +437,10 @@ function syncActionsEl(card) {
   // 路由判据与 buildActionsEl 同款（枚举命中或会话占用中，防枚举空窗口回落）
   if (a2dpDeviceFor(dev) || a2dpSessionActiveFor(dev)) {
     const active = a2dpSessionActiveFor(dev);
-    connectBtn.textContent = active ? "断开" : "连接";
+    // 空闲 ∧ 蓝牙链路已通时说「连接」会被状态标签的「已连接」打脸——
+    // 这个动作实际是拉起 Sink 会话接收音频（Win32 连接对手机无效，见点击路由注释），
+    // 故改说「接收音频」；链路未通（已配对）保持「连接」，两种文案动作相同（connect）。
+    connectBtn.textContent = active ? "断开" : (dev.status === "已连接" ? "接收音频" : "连接");
     connectBtn.dataset.action = active ? "disconnect" : "connect";
     connectBtn.style.display = "";
     return;
@@ -554,6 +559,9 @@ function renderDevices() {
 
   // 组内卡片对账 + 按目标顺序归位（appendChild 移动既有节点，
   // 连接状态变化引发的排序调整不触发重建）
+  // ⛔ 归位只在现有顺序与目标不一致时才移动节点：appendChild 即使落点不变也
+  // 是「摘下再插回」，Chromium 会清空子树 :hover 且鼠标不动不重算——顺序没变
+  // 时无条件移动 = 每次 render 打断一次 hover（连接后逐秒渲染即持续闪烁）
   for (const g of layout) {
     const section = list.querySelector(`.category[data-group-id="${CSS.escape(g.id)}"]`);
     reconcileCards(section, ".card.device", "deviceId",
@@ -561,16 +569,26 @@ function renderDevices() {
       createDeviceCard,
       updateDeviceCard
     );
-    for (const d of g.devs) {
-      const card = section.querySelector(`.card.device[data-device-id="${CSS.escape(deviceKey(d))}"]`);
-      if (card) section.appendChild(card);
+    const cards = [...section.querySelectorAll(".card.device")];
+    const inOrder = cards.length === g.devs.length
+      && g.devs.every((d, i) => cards[i].dataset.deviceId === deviceKey(d));
+    if (!inOrder) {
+      for (const d of g.devs) {
+        const card = section.querySelector(`.card.device[data-device-id="${CSS.escape(deviceKey(d))}"]`);
+        if (card) section.appendChild(card);
+      }
     }
   }
 
-  // section 顺序按 CATEGORIES 声明序归位
-  for (const g of layout) {
-    const section = list.querySelector(`.category[data-group-id="${CSS.escape(g.id)}"]`);
-    list.appendChild(section);
+  // section 顺序按 CATEGORIES 声明序归位（同上：顺序没变不移动，防打断 hover）
+  const sections = [...list.querySelectorAll(".category")];
+  const sectionsInOrder = sections.length === layout.length
+    && layout.every((g, i) => sections[i].dataset.groupId === g.id);
+  if (!sectionsInOrder) {
+    for (const g of layout) {
+      const section = list.querySelector(`.category[data-group-id="${CSS.escape(g.id)}"]`);
+      list.appendChild(section);
+    }
   }
 
   saveDevicesSnapshot();

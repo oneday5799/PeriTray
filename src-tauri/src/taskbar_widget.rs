@@ -6655,7 +6655,7 @@ pub fn refresh_count() -> usize {
 /// 订阅**已有的**全局事件，把「数据可能变了」转成一次刷新请求（幂等）。
 ///
 /// ⭐ 为什么监听这些事件而不是自己轮询：这些事件正是**后端已经判定「状态变了」的时机**
-///   （改配置、设备列表变化、音频端点变化、电量推送），比盲目轮询精确得多，
+///   （改配置、设备列表变化、音频端点变化、电量推送、手机连接态），比盲目轮询精确得多，
 ///   也是「事件驱动」这个选择的落地点。
 ///
 /// ⛔ **用 `listen` 而不是 `once`**：需要长期生效。返回的 `EventId` 有意丢弃 ——
@@ -6699,14 +6699,20 @@ pub fn install_event_listeners(app: &tauri::AppHandle) {
         //       所以「靠推送即时刷新 widget」从一开始就不成立。
         //       widget 的电量新鲜度历来由 30s 心跳给（本次改动前后一致），
         //       改成读缓存**不是回归**。
+        //     - `a2dp-changed`：手机的 connected/音量由 relay 绑定在取数时写入
+        //       （判据 = a2dp 状态机 LinkReady，见 `bind_relay_volume_with`），
+        //       图标亮/灰完全跟着它走 —— 读 10 秒缓存 = 图标晚亮/晚灰数秒 ⇒ 强制。
+        //       判重后它只按状态沿触发（Connecting/Armed/LinkReady/Idle 各一次），
+        //       频度与 `devices-changed` 同级，不构成 `volume-changed` 那种雪崩。
         //   ⚠️ 判成「一律强制」也能跑，只是把事件合并窗口又变回
         //     「每次 517~684ms」——而那正是本项要修的卡顿。
-        const DATA_EVENTS: [(&str, bool); 5] = [
+        const DATA_EVENTS: [(&str, bool); 6] = [
             ("volume-changed", false),      // ⭐ 用户改音量（每秒几十次 ⇒ 必须走缓存）
             ("tray-devices-changed", true), // 托盘设备列表变化（含 WMI 重新枚举）
             ("devices-changed", true),      // 设备列表变化
             ("audio-devices-changed", false), // 音频端点增删（端点本身是实时枚举的）
             ("bt-battery-updated", false),  // 蓝牙电量推送（电量归 30s 心跳，理由见上）
+            ("a2dp-changed", true),         // 手机连接态唯一判定源（理由见上）
         ];
         for (ev, force) in DATA_EVENTS {
             // 忽略返回值（EventId）：本应用不取消订阅，见函数注释

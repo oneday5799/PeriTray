@@ -16,8 +16,9 @@
 //!    - OpenAsync 超时被 Cancel、武装（StartAsync）失败、StateChanged=Closed
 //!      ⇒ 对象已污染/终结，重试必须重建。
 //! 4. 控制层成功（OpenAsync=Success）≠ 链路层就绪：蓝牙被系统中断后可能
-//!    「连上了却没声音」（端点未激活）。端点激活验证走 SetupDi 接口类枚举，
-//!    唯一实现点 [`a2dp_endpoint_active`]。
+//!    「连上了却没声音」。链路层判活 = 转发会话峰值电表，唯一实现点
+//!    [`crate::audio::relay_session_flowing`]（A2DP 捕获端点连推流中也不进
+//!    ACTIVE 枚举，SetupDi 接口类方案已被真机证伪，见 step 注释）。
 //! 5. 武装（StartAsync）只在对象首次创建时执行一次，重试不重复武装——
 //!    避免与手机端协商互相打断（BlueAudioSink 实测结论）。
 //!
@@ -46,11 +47,6 @@ use windows::Media::Audio::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows_core::HSTRING;
-use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
-    SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT,
-    SP_DEVINFO_DATA,
-};
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 
 // ── 可调参数（全部为外部项目实测调参值，勿凭直觉改）─────────────────────
 
@@ -64,10 +60,11 @@ const STABILITY_WAIT: Duration = Duration::from_millis(1600);
 /// 单次连接流程内最多自动重试次数，超过转待机、把发起权交还手机。
 /// 依据：BlueAudioSink `MaxRetries = 3`。
 const MAX_AUTO_RETRIES: u32 = 3;
-/// 控制器 tick。依据：BlueAudioSink 采样间隔 1s；SetupDi 枚举对象为接口类内
-/// 全部设备（个位数条目），逐秒枚举成本可忽略。
+/// 控制器 tick。依据：BlueAudioSink 采样间隔 1s；逐 tick 的判活探测为
+/// 全端点会话枚举（实测 13~15ms 量级，见 audio::relay_session_flowing），
+/// 逐秒成本可忽略。
 const TICK: Duration = Duration::from_secs(1);
-/// 武装成功后长时间无端点激活 ⇒ 提示检查手机侧。
+/// 武装成功后长时间未见流 ⇒ 提示检查手机侧。
 /// 依据：BlueAudioSink `LinkWaitHintDelay = 15s`。
 const LINK_HINT_AFTER: Duration = Duration::from_secs(15);
 /// 释放连接对象的限时等待。依据：BlueAudioSink `ReleaseTimeout = 5s`
@@ -89,7 +86,7 @@ pub enum A2dpState {
     Backoff,
     /// 控制层已打开，等待手机播放音频
     Armed,
-    /// A2DP 捕获端点已激活（链路层就绪）
+    /// 转发会话见流（音频链路已建立；见流即闩锁、drop_conn 才清，见 step 注释）
     LinkReady,
     /// 系统不支持 A2DP Sink（防御路径：init 探测不支持时仍到达的连接请求落此态）
     Unsupported,
@@ -169,16 +166,20 @@ fn set_snapshot(mutate: impl FnOnce(&mut A2dpStatus)) {
 }
 
 /// 语义化设置状态行；内容与快照完全一致时**不**重复推送（step 每秒采样，
-/// 不去重会让设置页每秒无意义重渲染一次）。
+/// 不去重会让弹窗/设置页每秒无意义重渲染一次）。
+/// ⛔ 判重必须挡在 emit **之前**：`set_snapshot` 是「写后必推」语义，把判重
+/// 塞进 mutate 闭包只会跳过字段写入、拦不住 publish。
 fn set_detail(state: A2dpState, detail: &str, hint: &str) {
-    set_snapshot(|s| {
+    {
+        let mut s = lock_unpoisoned(&SNAPSHOT);
         if s.state == state && s.detail == detail && s.hint == hint {
             return;
         }
         s.state = state;
         s.detail = detail.to_string();
         s.hint = hint.to_string();
-    });
+    }
+    publish();
 }
 
 fn supported() -> bool {
@@ -203,6 +204,9 @@ struct Machine {
     link_hinted: bool,
     /// 连接对象是否可复用（false ⇒ 重试时重建；判据见模块头注释第 3 条）
     reuse_conn: bool,
+    /// 本条链路上**见过转发会话流量**（电表判活，见 step）。闩锁语义：
+    /// 见流即置真、`drop_conn` 才清 —— 换曲间隙 / 静音段电表归零不得闪断。
+    flow_seen: bool,
     /// 连接流程内打断检查抽走、暂不能立即处理的消息（主循环按原序回灌）
     pending_msgs: Vec<Msg>,
 }
@@ -214,6 +218,9 @@ impl Machine {
             release_conn(conn, reason);
         }
         self.reuse_conn = false;
+        // 链路没了，流量闩锁必须清：否则旧链路的 flow_seen 会把重连后的
+        // 等待期误报成 LinkReady（唯一清点：所有断链路径都经此收口）
+        self.flow_seen = false;
     }
 }
 
@@ -752,41 +759,47 @@ fn step(m: &mut Machine, rx: &Receiver<Msg>) {
         return;
     }
 
-    // 链路层采样：SetupDi 接口类枚举（个位数条目）按 tick 逐秒执行
-    let Some((id, _)) = m.armed_device.clone() else {
+    // 链路层判活：转发会话峰值电表（唯一流量信号，判据见
+    // audio::relay_session_flowing）按 tick 逐秒执行。⭐ 见流即闩锁（flow_seen），
+    // drop_conn 才清 —— 换曲间隙 / 静音段电表归零不得闪断。
+    let Some((_, armed_name)) = m.armed_device.clone() else {
         return;
     };
-    let mac = a2dp_id_mac(&id).unwrap_or_default();
-    let active = a2dp_endpoint_active(&mac);
+    if !m.flow_seen {
+        m.flow_seen = crate::audio::relay_session_flowing(&armed_name);
+        if m.flow_seen {
+            standard_log!("[a2dp] 转发会话见流（音频链路建立）");
+        }
+    }
     let now_state = lock_unpoisoned(&SNAPSHOT).state;
 
-    if active {
+    if m.flow_seen {
         if m.link_since.is_none() {
             m.link_since = Some(Instant::now());
             m.link_hinted = false;
-            standard_log!("[a2dp] A2DP 捕获端点已激活");
         }
         set_detail(A2dpState::LinkReady, "音频链路已建立", "");
     } else {
         if m.link_since.is_some() {
             m.link_since = None;
-            verbose_log!("[a2dp] A2DP 捕获端点已停用");
+            verbose_log!("[a2dp] 转发会话无流量");
         }
-        // 武装成功后长时间无端点激活 ⇒ 提示检查手机侧（一次）
+        // 武装成功后长时间未见流 ⇒ 提示检查手机侧（一次）
         let waiting_long = m
             .armed_at
             .map(|at| Instant::now().duration_since(at) > LINK_HINT_AFTER)
             .unwrap_or(false);
         if waiting_long && !m.link_hinted && now_state == A2dpState::Armed {
             m.link_hinted = true;
-            set_detail(
-                A2dpState::Armed,
-                "等待手机播放",
-                "若手机正在播放却听不到声音，请检查手机蓝牙输出是否指向本电脑",
-            );
-        } else {
-            set_detail(A2dpState::Armed, "等待手机播放", "");
         }
+        // ⛔ 提示一经触发就持续保留（link_hinted 只在下次武装复位）：判重真正
+        // 生效后，else 支路若回空 hint，下一 tick 就会把上一 tick 的提示清掉
+        let hint = if m.link_hinted && now_state == A2dpState::Armed {
+            "若手机正在播放却听不到声音，请检查手机蓝牙输出是否指向本电脑"
+        } else {
+            ""
+        };
+        set_detail(A2dpState::Armed, "等待手机播放", hint);
     }
 }
 
@@ -937,48 +950,6 @@ fn a2dp_id_mac(id: &str) -> Option<String> {
         scan_from = abs;
     }
     None
-}
-
-/// A2DP SNK 捕获端点的接口类 GUID（{e6327cad-dcec-4949-ae8a-991e976a79d2}）。
-/// 依据：AudioPlaybackConnector 实测——该接口类只回报激活中的端点，
-/// 激活端点的 DeviceInstanceId 形如 `BTHENUM\DEV_<MAC>`。
-fn a2dp_capture_guid() -> windows_sys::core::GUID {
-    windows_sys::core::GUID::from_u128(0xE6327CAD_DCEC_4949_AE8A_991E976A79D2)
-}
-
-/// 目标设备的 A2DP 捕获端点是否处于激活状态（链路层判活）。
-/// 列举失败返回 false（视为未激活，走等待提示，不据此拆连接）。
-fn a2dp_endpoint_active(mac_lower: &str) -> bool {
-    if mac_lower.is_empty() {
-        return false;
-    }
-    let handle = unsafe {
-        SetupDiGetClassDevsW(
-            &a2dp_capture_guid(),
-            std::ptr::null(),
-            std::ptr::null_mut(),
-            DIGCF_PRESENT | DIGCF_DEVICEINTERFACE,
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE as isize {
-        return false;
-    }
-    let _info_set = crate::bluetooth::DeviceInfoSetHandle(handle);
-    for index in 0..u32::MAX {
-        let mut devinfo = SP_DEVINFO_DATA {
-            cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
-            ..Default::default()
-        };
-        if unsafe { SetupDiEnumDeviceInfo(handle, index, &mut devinfo) } == 0 {
-            break;
-        }
-        if let Some(instance) = crate::bluetooth::setupdi_get_device_instance_id(handle, &devinfo) {
-            if instance.to_lowercase().contains(mac_lower) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 // ── 对外命令入口 ────────────────────────────────────────────────────────

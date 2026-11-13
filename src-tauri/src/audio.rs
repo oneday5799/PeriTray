@@ -5,7 +5,8 @@ use crate::{standard_log, verbose_log};
 use serde::Serialize;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 use windows::core::*;
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::Endpoints::*;
@@ -477,6 +478,119 @@ pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
         );
     }
     result
+}
+
+/// 电表采样请求：设备名 + 应答通道。
+type FlowProbe = (String, mpsc::Sender<bool>);
+
+/// 电表采样专用 STA 工作线程的请求通道（懒拉起，见 [`spawn_flow_sampler`]）。
+static FLOW_SAMPLER: Mutex<Option<mpsc::Sender<FlowProbe>>> = Mutex::new(None);
+
+/// 单次探测的超时：探测含全端点会话枚举，与 `enumerate_output_devices`
+/// 同路径（实测 13~15ms 量级），300ms ≈ 20 倍余量。
+const FLOW_PROBE_TIMEOUT_MS: u64 = 300;
+
+/// 指定设备的 A2DP SNK 转发会话此刻是否有音频流过（会话峰值电表超阈值）。
+///
+/// 枚举/激活失败一律按「无流」处理（返回 `false`）：调用方只把它当判活采样。
+pub fn relay_session_flowing(device_name: &str) -> bool {
+    // ⛔ 采样必须经专用 STA 工作线程（`spawn_flow_sampler`），不得在 MTA 线程
+    //   直调探测本体：a2dp 控制器线程是故意 MTA（WinRT 回调免泵，见 a2dp_sink
+    //   `controller_main`），而本进程 COM 约定统一 STA —— 直调会让
+    //   `ensure_com_initialized` 的公寓冲突告警逐 tick 刷屏。
+    // ⛔ 不据此拆链路：链路关闭由 WinRT StateChanged 驱动（见 a2dp_sink）；
+    //   工作线程无应答（死亡/卡死）同样按「无流」返回并重建通道，下一 tick 自愈。
+    let tx = {
+        let mut guard = crate::state::lock_unpoisoned(&FLOW_SAMPLER);
+        match guard.clone() {
+            Some(tx) => tx,
+            None => {
+                let tx = spawn_flow_sampler();
+                *guard = Some(tx.clone());
+                tx
+            }
+        }
+    };
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if tx.send((device_name.to_string(), reply_tx)).is_err() {
+        *crate::state::lock_unpoisoned(&FLOW_SAMPLER) = None;
+        return false;
+    }
+    match reply_rx.recv_timeout(Duration::from_millis(FLOW_PROBE_TIMEOUT_MS)) {
+        Ok(flow) => flow,
+        Err(_) => {
+            // 超时 = 工作线程疑似死亡/卡死：丢弃重建（旧线程在请求通道
+            // 全部丢弃后退出），本次按「无流」处理
+            *crate::state::lock_unpoisoned(&FLOW_SAMPLER) = None;
+            false
+        }
+    }
+}
+
+/// 拉起电表采样工作线程并返回其请求通道。新线程首次 `ensure_com_initialized`
+/// 必然命中 STA（无公寓冲突告警），随后按请求串行探测。
+fn spawn_flow_sampler() -> mpsc::Sender<FlowProbe> {
+    let (tx, rx) = mpsc::channel::<FlowProbe>();
+    // 拉起失败时闭包（含 rx）随 Err 丢弃 ⇒ 请求永无应答，走超时重建路径
+    let _ = std::thread::Builder::new()
+        .name("flow-sampler".to_string())
+        .spawn(move || {
+            unsafe { ensure_com_initialized() };
+            while let Ok((name, reply)) = rx.recv() {
+                let flow = relay_session_flow_probe(&name);
+                let _ = reply.send(flow);
+            }
+        });
+    tx
+}
+
+/// 探测本体（COM 走栈，必须在 STA 线程调用——入口见 [`relay_session_flowing`]）。
+///
+/// 判据：会话命中规则与 `device_identity::relay_session_matches` 同款
+/// （名含设备名 ∧ 含 A2DP SNK 记号，捕获端点与转发会话同名形）；电表取
+/// 会话控制的 `IAudioMeterInformation` 峰值。
+/// ⛔ 会话存在 ≠ 有流：Sink 武装后手机离场，转发会话仍以 Active 残留
+/// （真机实测 active=true）；⛔ 捕获端点不进 `DEVICE_STATE_ACTIVE` 枚举
+/// （真机实测）——电表是**唯一**流量信号。
+fn relay_session_flow_probe(device_name: &str) -> bool {
+    /// 数字静音的电表峰值恒为 0，0.001 只过滤浮点噪声
+    const FLOW_PEAK_THRESHOLD: f32 = 0.001;
+    let hit = unsafe {
+        with_enumerator(|enumerator| -> Result<bool> {
+            let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+            let count = collection.GetCount()?;
+            for di in 0..count {
+                let Ok(device) = collection.Item(di) else {
+                    continue;
+                };
+                let Ok(session_manager) = device.Activate(CLSCTX_ALL, None) else {
+                    continue;
+                };
+                let session_manager: IAudioSessionManager2 = session_manager;
+                let Ok(session_enumerator) = session_manager.GetSessionEnumerator() else {
+                    continue;
+                };
+                let count = session_enumerator.GetCount().unwrap_or(0);
+                for i in 0..count {
+                    let Ok(session_control) = session_enumerator.GetSession(i) else {
+                        continue;
+                    };
+                    let name = get_session_display_name(&session_control).unwrap_or_default();
+                    if !crate::device_identity::relay_session_matches(device_name, &name) {
+                        continue;
+                    }
+                    let Ok(meter) = session_control.cast::<IAudioMeterInformation>() else {
+                        continue;
+                    };
+                    if meter.GetPeakValue().unwrap_or(0.0) > FLOW_PEAK_THRESHOLD {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        })
+    };
+    hit.is_ok_and(|inner| inner.unwrap_or(false))
 }
 
 /// 按 session_id 查找并返回 ISimpleAudioVolume 接口

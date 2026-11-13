@@ -154,7 +154,8 @@ pub(crate) fn devices_for_taskbar_within(
 ///
 /// ⛔ **降级语义**：会话枚举失败只意味着手机条目这一轮没有音量，
 ///   不得当作整条取数失败——那会把电量与其它端点一起丢掉（比旧数据更糟）。
-/// 绑定规则全部在 `device_identity::bind_relay_sessions`（唯一实现点），此处只接降级。
+/// 绑定规则全部在 `device_identity::bind_relay_sessions`（唯一实现点），此处只接
+/// 降级与链路闸门取数（Sink 状态机 LinkReady = 捕获端点激活，纯内存读）。
 fn bind_relay_volume_with(
     grouped: &mut [crate::device_identity::PhysicalDevice],
     sessions: Option<Vec<crate::audio::AudioSession>>,
@@ -163,7 +164,8 @@ fn bind_relay_volume_with(
         standard_log!("[cmd] 转发会话枚举失败，本轮手机条目无音量（降级，不影响其它数据）");
         return;
     };
-    crate::device_identity::bind_relay_sessions(grouped, &sessions);
+    let link_up = crate::a2dp_sink::get_status().state == crate::a2dp_sink::A2dpState::LinkReady;
+    crate::device_identity::bind_relay_sessions(grouped, &sessions, link_up);
 }
 
 /// 任务栏信息窗的数据源：把「电量」与「音量」按**物理设备身份**聚合到同一台设备上。

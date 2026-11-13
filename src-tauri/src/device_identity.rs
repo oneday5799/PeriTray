@@ -369,17 +369,20 @@ const PHONE_SERVICE_MARKERS: [&str; 1] = ["{0000110A"];
 ///
 /// 判据：实例路径含 [`PHONE_SERVICE_MARKERS`] 之一 ∧ [`container_of_instance`]
 /// 定位成功（`CM_LOCATE_DEVNODE_NORMAL` 只对在场 devnode 成功，幻影行必然失败，
-/// 见 [`enumerator_instance_ids`] 文档）⇒ 集合里的容器**此刻有手机在线**。
+/// 见 [`enumerator_instance_ids`] 文档）⇒ 该容器的手机专属服务**已启用**。
 ///
 /// ⛔ 图标判据为什么不靠组名里的 `A2DP SNK` / `Avrcp 传输` 行名
 ///   （[`names_indicate_phone`]）：那些行由 PnP 枚举产生，`wireless_only`、
 ///   用户过滤正则、dedup 合并都可能把它们截杀在 Grouper 之前（真机实测：
 ///   wireless_only 开启后手机图标退回默认鼠标）。本扫描直接走 cfgmgr32，
 ///   与 WMI 数据管线无关，不受上述任何一层影响。
-/// ⚠️ 服务行**不是配对即常驻**：手机离场（关蓝牙/超距）后服务行变幻影、
-///   定位失败 ⇒ 自动退出集合 —— 本集合同时就是手机**连接态**判据，
-///   与 WinRT `ConnectionStatus` 取或：后者对部分手机假阴性（PnP 行全部在场、
-///   状态 OK，却报 Disconnected，本机 Xiaomi 17 实测）。
+/// ⛔ **服务行在场 ≠ 手机在线**：已配对手机的服务 devnode **不随链路断开移除**
+///   （本机实测：手机关蓝牙后 BTHENUM 服务行仍全部 Present / CM_PROB_NONE）⇒
+///   本集合只证「配过对 ∧ 服务启用」，可安全用作**图标**判据（离场手机显示
+///   置灰的手机图标优于默认鼠标占位），⛔ 不得用作**连接态**判据——
+///   连接态只能由链路证据合成（Sink 会话 LinkReady / 转发会话在场，
+///   见 `bind_relay_sessions`）；WinRT `ConnectionStatus` 对链中手机假阴性
+///   （本机 Xiaomi 17：转发会话在场却报 Disconnected），离场时才可信。
 pub fn phone_service_containers() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for instance in enumerator_instance_ids("BTHENUM") {
@@ -478,15 +481,26 @@ pub fn relay_session_matches(device_name: &str, session_name: &str) -> bool {
 /// 把「A2DP SNK 转发会话」的音量绑到钉住的手机条目上
 /// （任务栏手机条目的音量显示与滚轮写回共用这一份数据源）。
 ///
-/// 判据：只绑「钉住 ∧ [`AudioKind::Phone`] ∧ 无输出端点 ∧ 音量尚空」的条目——
+/// 判据：只绑「链路就绪 ∧ 会话 active ∧ 钉住 ∧ [`AudioKind::Phone`] ∧ 无输出端点
+/// ∧ 音量尚空」的条目——
+/// ⛔ `link_up`（Sink 状态机 LinkReady，捕获端点激活）是**总闸门**：手机离场后
+///   转发会话仍以 active 挂在渲染设备上（重定向图不随源端点失活拆除，真机实测），
+///   armed（武装等待）也不证链路——不过闸会把陈旧音量与「在线」绑给离场手机；
 /// ⛔ 有输出端点的条目音量来自端点本身（`Grouper::finish` 派生），转发会话**不得覆盖**；
 ///   未钉住的条目不进 widget，绑了无人消费，还平白改变 `get_taskbar_devices` 的输出。
 /// 会话命中规则见 [`relay_session_matches`]：显示（快照绑定）与滚轮（写回前现查）
 /// 走**同一份**判据 ⇒ 不会各认各的会话。
+/// ⭐ 命中即 `connected = true`：链路证据齐备（LinkReady + 会话 active）= 手机在线
+///   —— 服务行在场证不了在线（[`phone_service_containers`]）；WinRT
+///   `ConnectionStatus` 对链中手机假阴性。
 pub fn bind_relay_sessions(
     devices: &mut [PhysicalDevice],
     sessions: &[crate::audio::AudioSession],
+    link_up: bool,
 ) {
+    if !link_up {
+        return;
+    }
     for d in devices.iter_mut() {
         if !d.pinned || d.audio_kind != AudioKind::Phone || d.audio_device_id.is_some() {
             continue;
@@ -496,10 +510,11 @@ pub fn bind_relay_sessions(
         }
         if let Some(s) = sessions
             .iter()
-            .find(|s| relay_session_matches(&d.name, &s.name))
+            .find(|s| s.is_active && relay_session_matches(&d.name, &s.name))
         {
             d.volume = Some(s.volume);
             d.is_muted = Some(s.is_muted);
+            d.connected = true;
         }
     }
 }
@@ -3069,9 +3084,11 @@ mod tests {
         assert!(!relay_session_matches("", sess));
     }
 
-    /// 绑定判据：只绑「钉住 ∧ Phone ∧ 无端点 ∧ 音量尚空」的条目。
-    /// 可证伪：删掉 `bind_relay_sessions` 里 `audio_device_id.is_some()` 或
-    /// `volume.is_some()` 任一守卫，对应断言立刻转红。
+    /// 绑定判据：只绑「LinkReady ∧ 会话 active ∧ 钉住 ∧ Phone ∧ 无端点 ∧ 音量尚空」
+    /// 的条目，且**绑定即在线**（链路证据齐备是手机唯一可信的在线信号）。
+    /// 可证伪：删掉 `audio_device_id.is_some()` / `volume.is_some()` / `s.is_active`
+    /// 任一守卫、或把 `link_up` 闸门删掉，对应断言立刻转红；删掉
+    /// `connected = true`，在线断言转红。
     #[test]
     fn bind_relay_sessions_fills_only_pinned_phone_entries() {
         let pinned_phone = crate::device_identity::PhysicalDevice {
@@ -3086,7 +3103,8 @@ mod tests {
             audio_kind: AudioKind::Phone,
             categories: vec![],
             node_count: 2,
-            connected: true,
+            // 绑定前按离场处理（服务行在场证不了在线）；在线由绑定动作给出
+            connected: false,
             pinned: true,
         };
         // 与手机同名的有端点条目：音量来自端点，不得被转发会话覆盖
@@ -3109,7 +3127,13 @@ mod tests {
             pinned: false,
             ..pinned_phone.clone()
         };
-        let mut devices = vec![pinned_phone, endpoint_device, unpinned_phone];
+        // 钉住但转发会话不是它的（另一台手机在放声）⇒ 不绑、也不许标在线
+        let other_phone = crate::device_identity::PhysicalDevice {
+            key: "c:phone2".to_string(),
+            name: "另一台手机".to_string(),
+            ..pinned_phone.clone()
+        };
+        let mut devices = vec![pinned_phone, endpoint_device, unpinned_phone, other_phone];
         let sessions = vec![crate::audio::AudioSession {
             id: "42.0x1|0x2".to_string(),
             name: "麦克风 (一天的Xiaomi 17 A2DP SNK)".to_string(),
@@ -3120,16 +3144,49 @@ mod tests {
             device_id: "{0.0.0.0}.{def}".to_string(),
             is_active: true,
         }];
-        bind_relay_sessions(&mut devices, &sessions);
+        bind_relay_sessions(&mut devices, &sessions, true);
         let phone = &devices[0];
         assert_eq!(phone.volume, Some(0.55), "钉住的手机条目应绑到转发会话音量");
         assert_eq!(phone.is_muted, Some(true));
         assert!(phone.audio_device_id.is_none(), "绑会话不等于有端点");
+        assert!(phone.connected, "绑定即在线（手机离场不得误报的对称判据）");
         assert_eq!(
             devices[1].volume,
             Some(0.4),
             "有输出端点的条目音量来自端点，不得被转发会话覆盖"
         );
         assert_eq!(devices[2].volume, None, "未钉住的条目不进 widget，不绑定");
+        assert!(
+            !devices[3].connected && devices[3].volume.is_none(),
+            "会话不是它的：不绑定、不标在线（防串台）"
+        );
+
+        // ⛔ 链路闸门：非 LinkReady（armed 等待 / 手机离场）时一个会话都不绑——
+        //   转发会话会以 active 残留在渲染设备上（真机实测），不过闸会把陈旧
+        //   音量与「在线」绑给离场手机。
+        let mut gated = vec![pinned_phone_or_default()];
+        bind_relay_sessions(&mut gated, &sessions, false);
+        assert!(
+            gated[0].volume.is_none() && !gated[0].connected,
+            "链路未就绪：不得绑定、不得标在线"
+        );
+    }
+
+    fn pinned_phone_or_default() -> crate::device_identity::PhysicalDevice {
+        crate::device_identity::PhysicalDevice {
+            key: "c:phone".to_string(),
+            name: "一天的Xiaomi 17".to_string(),
+            battery: None,
+            audio_device_id: None,
+            volume: None,
+            is_muted: None,
+            is_default: None,
+            audio_endpoint_name: None,
+            audio_kind: AudioKind::Phone,
+            categories: vec![],
+            node_count: 2,
+            connected: false,
+            pinned: true,
+        }
     }
 }
