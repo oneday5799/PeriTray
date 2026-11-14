@@ -1,6 +1,6 @@
 [package]
 name = "PeriTray"
-version = "1.4.4-beta.6"
+version = "1.4.4"
 edition = "2021"
 
 [dependencies]
