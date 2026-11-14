@@ -408,6 +408,33 @@ pub enum BatterySource {
     Bluetooth = 2,
 }
 
+/// 设备的**连接类型**（任务栏在电量或音量缺失时用它占下排占位）。
+///
+/// ⛔ 派生判据**只许**在 [`Grouper::finish`] 一处实现，优先级从高到低：
+/// ① 本轮电量合并赢家的来源——经 dongle 应答（`Hid24g`）= 2.4G 在线、
+///    经蓝牙属性读得（`Bluetooth`）= BT 在线，本轮**真读到的**链路应答；
+/// ② 组内存在「蓝牙枚举且在线」的行（[`Grouper::set_bt_link`]）——没有电量
+///    的蓝牙设备（音箱等）靠它判 BT。⛔ 必须带在线状态：仅配对的蓝牙行
+///    只证「配过」；
+/// ③ 识别为 2.4G 设备（dongle 驱动登记的鼠标/键盘/手柄）——电量与在线证据
+///    都读不出时的兜底；
+/// ④ 手机——必经蓝牙；⑤ 其余（有线 DAC、证据全无）→ `Unknown`，
+///    前端保持 `N/A` 不占位（没有可信证据就**不猜**）。
+/// ⚠️ 行级标志（`is_wireless_24g` 等）只证「dongle 在场」，不证「设备正走 dongle」
+///   ——双模式设备离场后 dongle 行仍在枚举里；故 ③ 排在两个在线证据之后，
+///   且双模式设备走蓝牙时蓝牙行在线（②命中）、走 dongle 时蓝牙行离线（②不命中）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnKind {
+    /// 证据全无（有线设备 / 占位条目 / 未知）
+    #[default]
+    Unknown,
+    /// 经典蓝牙 / BLE 链路（音箱、耳机、手机、BT 模式的手柄鼠标）
+    Bluetooth,
+    /// 2.4G 接收器链路（鼠标、键盘、手柄的 dongle 模式）
+    Wireless24g,
+}
+
 /// 任务栏 widget 上给「这台设备」画哪一类图标。
 ///
 /// 判据优先级：有音频端点时按端点前缀；没有音频端点时，手机按服务行判
@@ -622,6 +649,9 @@ pub struct PhysicalDevice {
     pub node_count: usize,
     /// 该物理设备是否在线/已连接；用于区分「已连接但暂时读不到电量」与占位条目。
     pub connected: bool,
+    /// 设备的连接类型（BT / 2.4G）；任务栏在电量或音量缺失时用它占下排占位，
+    /// 派生判据见 [`ConnKind`] 文档（唯一实现点在 [`Grouper::finish`]）。
+    pub conn: ConnKind,
     /// 是否被用户固定（由 config 决定，`Grouper` 本身不关心）。
     ///
     /// ⚠️ 语义是「**强制显示**」：为真的条目即使此刻无数据也会保留
@@ -653,6 +683,8 @@ struct Group {
     connected: bool,
     /// 组内任一行被 [`phone_service_containers`] 判为手机（`Device::is_phone`）。
     phone: bool,
+    /// 组内存在「蓝牙枚举**且在线**」的行。没有电量的蓝牙设备（音箱等）靠它判 BT。
+    bt_link: bool,
     categories: Vec<DevType>,
     node_count: usize,
 }
@@ -734,6 +766,15 @@ impl Grouper {
         }
     }
 
+    /// 记录组内出现过「蓝牙枚举且**在线**」的行；与 [`set_phone`](Self::set_phone)
+    /// 同款「只置真」语义。⛔ 必须带**在线**状态：仅配对（离线）的蓝牙行只证
+    /// 「配过」，不证「此刻走蓝牙」。
+    pub fn set_bt_link(&mut self, key: &str, bt_link: bool) {
+        if bt_link {
+            self.acc.entry(key.to_string()).or_default().bt_link = true;
+        }
+    }
+
     pub fn finish(self) -> Vec<PhysicalDevice> {
         self.acc
             .into_iter()
@@ -762,6 +803,17 @@ impl Grouper {
                     categories: g.categories,
                     node_count: g.node_count,
                     connected: g.connected,
+                    // ⭐ 连接类型派生的**唯一实现点**（判据 → `ConnKind` 文档）：
+                    //    电量合并赢家的来源、在线蓝牙行是当下链路的直接证据，
+                    //    读不出再按 2.4G 登记 / 手机兜底，全无证据保持 Unknown。
+                    conn: match g.battery.map(|(_, s)| s) {
+                        Some(BatterySource::Hid24g) => ConnKind::Wireless24g,
+                        Some(BatterySource::Bluetooth) => ConnKind::Bluetooth,
+                        _ if g.bt_link => ConnKind::Bluetooth,
+                        _ if g.wireless_24g_kind.is_some() => ConnKind::Wireless24g,
+                        _ if g.phone => ConnKind::Bluetooth,
+                        _ => ConnKind::Unknown,
+                    },
                     pinned: false,
                 }
             })
@@ -886,6 +938,7 @@ pub fn group_taskbar_devices(
             grouper.set_wireless_24g_kind(key, d.wireless_24g_kind);
             grouper.set_connected(key, d.is_connected);
             grouper.set_phone(key, d.is_phone);
+            grouper.set_bt_link(key, d.is_connected && (d.is_bluetooth || d.is_ble));
         }
     }
 
@@ -924,6 +977,8 @@ pub fn group_taskbar_devices(
             volume: None,
             is_muted: None,
             is_default: None,
+            // 占位条目此刻枚举不到任何链路证据 ⇒ 连接类型保持 Unknown（不猜）
+            conn: ConnKind::Unknown,
             // 占位条目此刻枚举不到端点 ⇒ 名字/类别皆无（画默认图标），由 widget 置灰
             audio_endpoint_name: None,
             audio_kind: AudioKind::Pointer,
@@ -1202,9 +1257,9 @@ pub struct SelectableDevice {
     /// `fallback` 形同虚设，用户换机/重装驱动后固定项**静默失效**。
     /// 这与 Spec §9「复用同一判据必须参数逐字一致」是同一条纪律。
     pub fallback: String,
-    /// 该设备来自哪一页（T3-3 的「仅设备页 / 仅音量页」标注）
+    /// 该设备来自哪一页（设备页 / 音量页，见 `DeviceSources`）
     ///
-    /// ⛔ **当前前端不使用**（用户 决定「不用标注来源」，T3-3 已取消）。
+    /// ⛔ **当前前端不使用**：来源标注已取消（演进见 Wiki 16 §11）。
     /// 保留字段的理由：它是并集的**固有信息**，后端算好只花一次 `BTreeSet` 查找；
     /// 删掉则将来想加回标注必须重跑一遍合并逻辑。若确定永不需要，可连同
     /// `DeviceSources` 一起删除（届时 `merge_by_identity` 内的两个 `BTreeSet` 也可去掉）。
@@ -1838,6 +1893,126 @@ mod tests {
             None,
         );
         assert_eq!(g2.finish()[0].battery, Some(70));
+    }
+
+    /// ⭐ 连接类型派生的五级优先级（判据 → `ConnKind` 文档；唯一实现点 = `finish`）。
+    /// 可证伪：删掉任一分支或调换优先级，对应断言立刻转红。
+    #[test]
+    fn conn_kind_follows_battery_source_then_fallbacks() {
+        let mut g = Grouper::new();
+        // ① dongle 电量应答 = 2.4G 在线
+        g.add(
+            Some("c:24g"),
+            "鼠标",
+            DevType::Usb,
+            Some((80, BatterySource::Hid24g)),
+            None,
+        );
+        // ① BLE 属性读得 = BT 在线
+        g.add(
+            Some("c:bt"),
+            "耳机",
+            DevType::Battery,
+            Some((60, BatterySource::Bluetooth)),
+            None,
+        );
+        // ③ 电量读不出 → 按 2.4G 登记兜底
+        g.add(Some("c:none"), "键盘", DevType::Usb, None, None);
+        g.set_wireless_24g_kind("c:none", Some(crate::device::Wireless24gKind::Keyboard));
+        // ④ 手机必经蓝牙
+        g.add(Some("c:phone"), "手机", DevType::Other, None, None);
+        g.set_phone("c:phone", true);
+        // ⑤ 证据全无（有线 DAC）→ 不猜
+        g.add(Some("c:wired"), "DAC", DevType::Audio, None, None);
+        let items = g.finish();
+        let conn_of = |k: &str| {
+            items
+                .iter()
+                .find(|p| p.key == k)
+                .unwrap_or_else(|| panic!("组 {k} 应存在"))
+                .conn
+        };
+        assert_eq!(conn_of("c:24g"), ConnKind::Wireless24g);
+        assert_eq!(conn_of("c:bt"), ConnKind::Bluetooth);
+        assert_eq!(conn_of("c:none"), ConnKind::Wireless24g);
+        assert_eq!(conn_of("c:phone"), ConnKind::Bluetooth);
+        assert_eq!(conn_of("c:wired"), ConnKind::Unknown);
+    }
+
+    /// ⭐ 双模式设备（BT + dongle 行并存）：连接类型必须跟**电量合并赢家**走
+    ///   （赢家来源 = 当下链路证据；合并取更可信来源的判据见上一个用例）。
+    #[test]
+    fn conn_kind_follows_battery_merge_winner() {
+        let mut g = Grouper::new();
+        g.add(
+            Some("c:duo"),
+            "Orochi",
+            DevType::Usb,
+            Some((75, BatterySource::Hid24g)),
+            None,
+        );
+        g.add(
+            Some("c:duo"),
+            "Orochi",
+            DevType::Battery,
+            Some((80, BatterySource::Bluetooth)),
+            None,
+        );
+        let p = &g.finish()[0];
+        assert_eq!(p.battery, Some(80));
+        assert_eq!(p.conn, ConnKind::Bluetooth);
+    }
+
+    /// ⭐ 没有电量的蓝牙设备（音箱）：靠「蓝牙行在线」判 BT（真机小爱音箱实例）。
+    /// 在线证据压过 2.4G 产品登记——行级登记只证 dongle 在场，在线行证当下链路。
+    /// 可证伪：删掉 `finish` 的 `bt_link` 分支，两条断言立刻转红。
+    #[test]
+    fn conn_kind_bluetooth_row_online_judges_bluetooth() {
+        let mut g = Grouper::new();
+        // 无电量、无 2.4G 登记、非手机的蓝牙音箱，蓝牙行在线 ⇒ BT
+        g.add(Some("c:spk"), "小爱音箱", DevType::Audio, None, None);
+        g.set_bt_link("c:spk", true);
+        // 2.4G 双模设备此刻走蓝牙：蓝牙行在线 ⇒ 压过产品登记判 BT
+        g.add(Some("c:duo"), "双模鼠标", DevType::Usb, None, None);
+        g.set_wireless_24g_kind("c:duo", Some(crate::device::Wireless24gKind::Mouse));
+        g.set_bt_link("c:duo", true);
+        let items = g.finish();
+        let conn_of = |k: &str| {
+            items
+                .iter()
+                .find(|p| p.key == k)
+                .unwrap_or_else(|| panic!("组 {k} 应存在"))
+                .conn
+        };
+        assert_eq!(conn_of("c:spk"), ConnKind::Bluetooth);
+        assert_eq!(
+            conn_of("c:duo"),
+            ConnKind::Bluetooth,
+            "在线蓝牙证据必须压过 2.4G 产品登记"
+        );
+    }
+
+    /// ⛔ 蓝牙行**离线**（仅配对）不算证据：双模设备走 dongle 时蓝牙行离线 ⇒ 仍判
+    ///   2.4G；音箱离线全无证据 ⇒ Unknown 不猜。
+    /// 可证伪：把 `set_bt_link` 的「只置真」改成「恒置真」，两条断言立刻转红。
+    #[test]
+    fn conn_kind_bluetooth_row_offline_is_not_evidence() {
+        let mut g = Grouper::new();
+        g.add(Some("c:off"), "只配对音箱", DevType::Audio, None, None);
+        g.set_bt_link("c:off", false);
+        g.add(Some("c:kind"), "双模鼠标", DevType::Usb, None, None);
+        g.set_wireless_24g_kind("c:kind", Some(crate::device::Wireless24gKind::Mouse));
+        g.set_bt_link("c:kind", false);
+        let items = g.finish();
+        let conn_of = |k: &str| {
+            items
+                .iter()
+                .find(|p| p.key == k)
+                .unwrap_or_else(|| panic!("组 {k} 应存在"))
+                .conn
+        };
+        assert_eq!(conn_of("c:off"), ConnKind::Unknown, "离线不猜");
+        assert_eq!(conn_of("c:kind"), ConnKind::Wireless24g, "离线回落产品登记");
     }
 
     #[test]
@@ -3105,6 +3280,7 @@ mod tests {
             node_count: 2,
             // 绑定前按离场处理（服务行在场证不了在线）；在线由绑定动作给出
             connected: false,
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned: true,
         };
         // 与手机同名的有端点条目：音量来自端点，不得被转发会话覆盖
@@ -3121,9 +3297,11 @@ mod tests {
             categories: vec![DevType::Audio],
             node_count: 3,
             connected: true,
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned: true,
         };
         let unpinned_phone = crate::device_identity::PhysicalDevice {
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned: false,
             ..pinned_phone.clone()
         };
@@ -3186,6 +3364,7 @@ mod tests {
             categories: vec![],
             node_count: 2,
             connected: false,
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned: true,
         }
     }

@@ -1,4 +1,4 @@
-//! 任务栏「占用区探针」——供**自动**位置（`taskbar_position = "auto"`）使用。
+//! 任务栏「占用区探针」——供**自动**位置（`auto_left` / `auto_right`）使用。
 //!
 //! 加载序 N/N · 提供：`ensure_probe()` / `auto_slot()` / `find_free_interval()`
 //! 依赖：`crate::audio::ensure_com_initialized`（全仓 COM 初始化唯一入口）
@@ -200,7 +200,9 @@ fn probe_loop() {
     // ⛔ `tracked` 是**线程局部**的：它带 COM 元素（非 `Send`），不进 `CACHE`。
     let mut tracked: Vec<Entry> = Vec::new();
     loop {
-        let wanted = crate::config::with_config(|c| c.taskbar_position == "auto");
+        let wanted = crate::config::with_config(|c| {
+            matches!(c.taskbar_position.as_str(), "auto_left" | "auto_right")
+        });
         if wanted {
             if session.is_none() {
                 let raw = crate::taskbar_widget::taskbar_hwnd();
@@ -307,17 +309,30 @@ fn verbose_log_counted(
 /// 查找「自动」可用区的唯一入口。
 ///
 /// 返回 `(可用区左端屏幕 x, 可用区宽)`；`None` = 调用方应退回整条任务栏。
+/// `prefer_right`：靠右档取**最右**的放得下的空隙（靠左档取最左，见
+/// [`find_free_interval`] 的判据）。
 /// ⛔ 只做纯内存读：**主线程会调它**，任何跨进程调用都不许出现在这里。
-pub fn auto_slot(bar_left: i32, bar_w: i32, want_w: i32, margin: i32) -> Option<(i32, i32)> {
+pub fn auto_slot(
+    bar_left: i32,
+    bar_w: i32,
+    want_w: i32,
+    margin: i32,
+    prefer_right: bool,
+) -> Option<(i32, i32)> {
     let guard = crate::state::lock_unpoisoned(&CACHE);
     let p = guard.as_ref()?;
     if !p.reliable || p.stamp.elapsed() > Duration::from_millis(TTL_MS) {
         return None;
     }
-    find_free_interval(bar_left, bar_w, &p.rects, want_w, margin)
+    if prefer_right {
+        find_free_interval_from_right(bar_left, bar_w, &p.rects, want_w, margin)
+    } else {
+        find_free_interval(bar_left, bar_w, &p.rects, want_w, margin)
+    }
 }
 
 /// 在任务栏上找一个「放得下 `want_w` 的空隙」。**纯函数**，可单测。
+/// 本体实现**靠左档**（取最左）；靠右档走 [`find_free_interval_from_right`]（同一套扫描的镜像）。
 ///
 /// ⭐ 判据（与 `EchoMusic` 的 `findHorizontalSpace` 同源）：
 ///   ① 每个占用矩形**向两侧各扩 `margin`** ⇒ 与邻居之间留出视觉间距；
@@ -357,6 +372,38 @@ pub fn find_free_interval(
         return Some((cursor, end - cursor));
     }
     None
+}
+
+/// 靠右档求空隙：取**最右**的、放得下 `want_w` 的那个。**纯函数**，可单测。
+///
+/// ⭐ 实现 = 同一套从左扫的 [`find_free_interval`] 在**镜像坐标系**里跑
+/// （`x ↦ bar_w − x`），再把结果镜像回来 —— ⛔ 不另写一套从右往左的扫描：
+///   那是第二份扫掠逻辑，靠左/靠右一旦各改各的就会只改一半
+///   （间距、窄空隙禁令这些判据都在本体里，镜像天然继承）。
+///
+/// ⭐ 镜像的性质：把占用矩形 `(l, r)` 沿任务栏中线反射成 `(A − r, A − l)`
+///   （`A = 2·bar_left + bar_w`），「镜像里最左的空隙」恰是「真实里最右的空隙」，
+///   宽度不变；真实左端 = `A − g0 − gw`（`g0`/`gw` 是镜像空隙的左端/宽）。
+/// ⛔ 反射轴必须是任务栏中线、**不得以 0 为轴**：占用矩形是屏幕坐标，
+///   副屏任务栏整体为负，以 0 为轴会把矩形映到任务栏框外（镜像后扫描必空）。
+pub fn find_free_interval_from_right(
+    bar_left: i32,
+    bar_w: i32,
+    occupied: &[Rect],
+    want_w: i32,
+    margin: i32,
+) -> Option<(i32, i32)> {
+    let axis = 2 * bar_left + bar_w;
+    let mirrored: Vec<Rect> = occupied
+        .iter()
+        .map(|r| Rect {
+            left: axis - r.right,
+            right: axis - r.left,
+            ..*r
+        })
+        .collect();
+    let (g0, gw) = find_free_interval(bar_left, bar_w, &mirrored, want_w, margin)?;
+    Some((axis - g0 - gw, gw))
 }
 
 // ── 探针本体 ──────────────────────────────────────────────
@@ -1029,6 +1076,45 @@ mod tests {
         );
     }
 
+    /// ⭐⭐ 靠右档 = 同一套扫描的镜像：取**最右**的放得下的空隙，两个空隙都放得下时
+    /// 与靠左档取**不同**的那个（判别力所在）。
+    #[test]
+    fn free_interval_from_right_takes_the_rightmost_gap() {
+        // 两个空隙 [8,292] / [708,992] 都放得下 84 ⇒ 靠左取前者、靠右取后者
+        let occupied = [r(300, 400), r(600, 700)];
+        assert_eq!(
+            find_free_interval(0, 1000, &occupied, 84, 8),
+            Some((8, 284)),
+            "对照：靠左档取最左"
+        );
+        assert_eq!(
+            find_free_interval_from_right(0, 1000, &occupied, 84, 8),
+            Some((708, 284)),
+            "靠右档必须取最右的空隙"
+        );
+        // 最右的放不下 ⇒ 落到左边那个（与靠左档的「左放不下换右」互为镜像）。
+        // 占用要靠**右**放（左空隙 684 宽、右空隙 184 宽）——若右空隙更大，
+        // 「右放不下 ⇒ 左必放不下」，这条就钉不住换侧回退。
+        let occupied = [r(700, 800)];
+        assert_eq!(
+            find_free_interval_from_right(0, 1000, &occupied, 84, 8),
+            Some((808, 184)),
+            "对照：靠右档取最右"
+        );
+        assert_eq!(
+            find_free_interval_from_right(0, 1000, &occupied, 200, 8),
+            Some((8, 684)),
+            "右侧放不下时应落到左侧空隙"
+        );
+        // 负坐标（副屏）同样成立：反射轴 = 2·bar_left + bar_w（任务栏中线），
+        // 结论对任意 bar_left（含负值）成立
+        assert_eq!(
+            find_free_interval_from_right(-1000, 1000, &[r(-900, -800)], 84, 8),
+            Some((-792, 784)),
+            "负坐标下靠右档取最右空隙"
+        );
+    }
+
     /// ⛔ `reliable` 闸门：探针没数据 / 不可信 / 过期时**一律退回整条任务栏**。
     ///
     /// 判别力：`auto_slot` 是唯一入口，这三条任一成立都必须返回 `None`
@@ -1038,7 +1124,7 @@ mod tests {
     fn auto_slot_requires_a_reliable_fresh_probe() {
         // 清空缓存 ⇒ 无数据
         *crate::state::lock_unpoisoned(&CACHE) = None;
-        assert_eq!(auto_slot(0, 1000, 100, 8), None, "无数据必须退回");
+        assert_eq!(auto_slot(0, 1000, 100, 8, false), None, "无数据必须退回");
 
         // 有数据但不可信
         *crate::state::lock_unpoisoned(&CACHE) = Some(Probe {
@@ -1046,7 +1132,7 @@ mod tests {
             reliable: false,
             stamp: Instant::now(),
         });
-        assert_eq!(auto_slot(0, 1000, 100, 8), None, "不可信必须退回");
+        assert_eq!(auto_slot(0, 1000, 100, 8, false), None, "不可信必须退回");
 
         // 可信但已过期
         *crate::state::lock_unpoisoned(&CACHE) = Some(Probe {
@@ -1054,7 +1140,7 @@ mod tests {
             reliable: true,
             stamp: Instant::now() - Duration::from_millis(TTL_MS + 1),
         });
-        assert_eq!(auto_slot(0, 1000, 100, 8), None, "过期必须退回");
+        assert_eq!(auto_slot(0, 1000, 100, 8, false), None, "过期必须退回");
 
         // 可信且新鲜 ⇒ 正常给空隙
         *crate::state::lock_unpoisoned(&CACHE) = Some(Probe {
@@ -1062,7 +1148,12 @@ mod tests {
             reliable: true,
             stamp: Instant::now(),
         });
-        assert_eq!(auto_slot(0, 1000, 100, 8), Some((208, 784)));
+        assert_eq!(auto_slot(0, 1000, 100, 8, false), Some((208, 784)));
+        assert_eq!(
+            auto_slot(0, 1000, 100, 8, true),
+            Some((208, 784)),
+            "靠右档走同一道 reliable/新鲜闸门"
+        );
         // ⛔ 收尾：不留状态给别的用例（用例间共享同一份静态缓存）
         *crate::state::lock_unpoisoned(&CACHE) = None;
     }

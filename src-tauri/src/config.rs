@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for LogRetention {
     }
 }
 
-/// 任务栏信息窗的**内容缩放档位**（用户 新增设置）。
+/// 任务栏信息窗的**内容缩放档位**。
 ///
 /// ⛔ **作用域边界（用户明确要求，实现时不得越界）**：本档位**只改内容**——
 ///   图标边长 / 信息文字字号 / 随内容一起缩放的间距与项宽上限；
@@ -334,34 +334,34 @@ pub struct Config {
     ///   迁移按「键不存在 且 列表非空」把它翻成 `true` 再落盘。
     #[serde(default)]
     pub taskbar_widget_enabled: bool,
-    /// 任务栏信息窗的**横向位置**：`"left"` / `"center"` / `"right"` / `"auto"`。
+    /// 任务栏信息窗的**横向位置**：`"auto_left"` / `"auto_right"` /
+    /// `"fixed_left"` / `"fixed_center"` / `"fixed_right"` / `"drag"`。
     ///
-    /// ⭐ 前三档的可用区 = **整条任务栏**（见 `taskbar_widget::find_widget_slot`）：
-    ///   `left`/`right` 各留 `EDGE_MARGIN_DIP`，`center` 是**任务栏正中**
+    /// ⭐ 三个 `fixed_*` 档的可用区 = **整条任务栏**（见 `taskbar_widget::find_widget_slot`）：
+    ///   `fixed_left`/`fixed_right` 各留 `EDGE_MARGIN_DIP`，`fixed_center` 是**任务栏正中**
     ///   （不是屏幕正中）。与第三方 widget 重叠是允许的。
-    /// ⭐ `"auto"`（自动）= **避开任务栏上已有的按钮**，落进一个真实空隙；
-    ///   取不到可信的占用区时**退回整条任务栏**（等效 `center`）并记日志
+    /// ⭐ `auto_left` / `auto_right`（自动）= **避开任务栏上已有的按钮**，落进一个真实空隙；
+    ///   靠左档取**最左**的放得下的空隙并贴其左缘，靠右档取**最右**的并贴其右缘
+    ///   （两档互为镜像，同一套扫描）。取不到可信的占用区时**退回整条任务栏**
+    ///   （等效 `fixed_center`）并记日志
     ///   —— 探针失败绝不猜（判据 → `taskbar_layout` 模块文档、Wiki 15 §8.6.11）。
+    /// ⭐ `drag`（手动拖拽）= 位置由用户拖着走（落点在 [`Config::taskbar_custom_x`]），
+    ///   不再按任何贴靠规则重算 —— 即「我自己摆，别动它」。
     ///
-    /// ⚠️ 具名 helper：真实默认是 `center`，裸 `#[serde(default)]` 会得到空串
-    ///   （空串不在 `VALID_TASKBAR_POSITIONS` 里 ⇒ 加载时被归一化回 `center`，
+    /// ⭐ 默认 = `auto_right`；旧值迁移见 [`migrate_taskbar_position_value`]（旧四档改名）
+    ///   与 [`migrate_taskbar_drag`]（旧「不固定位置」开关收编为本档）。
+    /// ⚠️ 具名 helper：真实默认是 `auto_right`，裸 `#[serde(default)]` 会得到空串
+    ///   （空串不在 `VALID_TASKBAR_POSITIONS` 里 ⇒ 加载时被归一化回默认档，
     ///   但中间那一瞬的非法值是多余的，故仍用具名默认）。
     #[serde(default = "default_taskbar_position")]
     pub taskbar_position: String,
-    /// 任务栏信息窗是否**固定位置**。
-    ///
-    /// - `true`：位置由 `taskbar_position` 决定，每次刷新按避让规则重算（不会被压住）；
-    /// - `false`：位置由用户**手动拖拽**决定（`taskbar_custom_x`），不再重算
-    ///   —— 即「我自己摆，别动它」。
-    #[serde(default = "default_true")]
-    pub taskbar_position_locked: bool,
     /// 用户**手动拖拽**后放下的窗口左端（相对任务栏客户区的**物理像素**）。
     ///
-    /// - `Some(x)`：用户拖过 ⇒ 「不固定位置」时应回到这个位置；
-    /// - `None`：用户从没拖过 ⇒ 「不固定」沿用上次绘制的位置。
+    /// - `Some(x)`：用户拖过 ⇒ `taskbar_position = "drag"` 时应回到这个位置；
+    /// - `None`：用户从没拖过 ⇒ 沿用上次绘制的位置。
     ///
-    /// ⚠️ 只在 `taskbar_position_locked == false` 时生效。固定位置时**忽略但不清除**
-    ///   —— 用户把开关再关掉，就能回到自己放下的地方。
+    /// ⚠️ 只在 `taskbar_position == "drag"` 时生效。其他档**忽略但不清除**
+    ///   —— 用户切回「手动拖拽」，就能回到自己放下的地方。
     /// ⚠️ 存的是物理像素，换分辨率/改缩放后可能与预期位置有偏差（读取时会按任务栏
     ///   宽度**钳制**，不会跑出任务栏）。
     #[serde(default)]
@@ -375,7 +375,7 @@ pub struct Config {
     ///   反而多一处可能漂移的清单（`taskbar_position` 那套是历史写法）。
     #[serde(default)]
     pub taskbar_content_scale: TaskbarContentScale,
-    /// 「显示音乐控制组件」开关（用户 新增，**默认关闭**）。
+    /// 「显示音乐控制组件」开关（**默认关闭**）。
     ///
     /// ⛔ 与 [`Config::taskbar_widget_enabled`] **是两个独立开关**：
     ///   设备信息组件的开关**不控制**音乐组件，反之亦然。
@@ -388,6 +388,18 @@ pub struct Config {
     ///   回落**不改写**本字段（否则一次「临时没播歌」就把用户的选择抹了）。
     #[serde(default)]
     pub taskbar_panel: TaskbarPanel,
+    /// 「常驻显示未连接的设备」开关（**默认关闭**）。
+    ///
+    /// · 关（默认）：任务栏只画**已连接**的钉住设备；设备连上后由 `device-changed` /
+    ///   `a2dp-changed` 事件驱动刷新自动出现；全未连接时整窗为透明帧（不可见、不命中）。
+    /// · 开：与旧行为一致——钉住设备**常驻**，离线占位条目置灰（`should_dim_item`）。
+    ///
+    /// ⛔ 「全未连接 ⇒ 拆窗」不可行：`refresh_async_with` 在未挂载时早退，而取数是
+    ///   快照的**唯一**生产者 ⇒ 拆窗后快照永不更新、永远重挂不回来。
+    ///   显隐只能落在**过滤层**（取数时不入选）+ 空列表走既有透明帧路径
+    ///   （实现点：`build_items_with_opt_labels` 的过滤与 `draw_blank`）。
+    #[serde(default)]
+    pub taskbar_show_disconnected: bool,
     #[serde(default)]
     pub hidden_audio_devices: Vec<String>,
     /// 日志级别："off"/"standard"/"verbose"
@@ -494,7 +506,7 @@ fn default_window_material() -> String {
 }
 /// `taskbar_position` 的 serde 默认值（复用 `Config::default()` 的口径，单一来源）
 fn default_taskbar_position() -> String {
-    "center".to_string()
+    "auto_right".to_string()
 }
 fn default_battery_thresholds() -> Vec<i32> {
     vec![15, 10, 5]
@@ -511,7 +523,14 @@ const VALID_POPUP_TABS: &[&str] = &["devices", "volume"];
 const VALID_POPUP_SIZES: &[&str] = &["small", "default", "large"];
 const VALID_THEME_MODES: &[&str] = &["follow_system", "light", "dark"];
 const VALID_WINDOW_MATERIALS: &[&str] = &["default", "acrylic", "mica"];
-const VALID_TASKBAR_POSITIONS: &[&str] = &["left", "center", "right", "auto"];
+const VALID_TASKBAR_POSITIONS: &[&str] = &[
+    "auto_left",
+    "auto_right",
+    "fixed_left",
+    "fixed_center",
+    "fixed_right",
+    "drag",
+];
 
 /// 低电量阈值个数上限（与前端 `settings-devices.js` 的「最多5个阈值」一致）
 const MAX_BATTERY_THRESHOLDS: usize = 5;
@@ -816,6 +835,46 @@ pub fn resolve_device_name_in(
     raw_name.to_string()
 }
 
+/// ⭐ `taskbar_position` 的**旧四档值迁移**（改值必须同时做读取期迁移，
+/// 否则老用户的存量值会先被归一化冲回默认档 ⇒ 静默丢设置）。
+///
+/// 映射：`left`/`center`/`right` → `fixed_left`/`fixed_center`/`fixed_right`（只是改名），
+/// `auto` → `auto_left`（旧「自动」的行为 = 找空隙贴左缘，即今天的靠左档）。
+/// 放在 `normalize_choice` **之前**：旧值不在合法集合里，不先迁移就轮不到它。
+fn migrate_taskbar_position_value(value: &mut String) -> bool {
+    let mapped = match value.as_str() {
+        "left" => "fixed_left",
+        "center" => "fixed_center",
+        "right" => "fixed_right",
+        "auto" => "auto_left",
+        _ => return false,
+    };
+    value.clear();
+    value.push_str(mapped);
+    true
+}
+
+/// ⭐ 「手动拖拽」档的升级兼容：旧版「不固定位置」是**独立开关**
+/// （`taskbar_position_locked = false`），新版收编为位置下拉的一档 `drag`。
+///
+/// ⚛️ 判据必须是「该键在**文件里**出现过且值为 `false`」：新版配置不再写这个键
+///   （字段已删除，TOML 解析时未知键被忽略）⇒ 子串匹配天然只命中老配置；
+///   缺键或 `true` = 旧「固定」语义，位置值照常用。
+///   ⚠️ 应用自写的 TOML 键值间**恒有空格**；手写无空格形态（`key=false`）单列一条
+///   兼容——漏迁移的代价是老「手动摆位」用户被静默钉回默认档，宁可贵一点。
+/// ⚠️ 旧「固定时忽略但不清除」的记忆语义不再保留：迁移为 `drag` 后原存的
+///   位置档被覆盖（要回到固定档需重新选一次）—— 单值下拉没有「隐藏的第二选择」
+///   的容身处，这是收编的固有代价；拖过的落点仍由 `taskbar_custom_x` 保留。
+pub fn migrate_taskbar_drag(text: &str, c: &mut Config) -> bool {
+    if !text.contains("taskbar_position_locked = false")
+        && !text.contains("taskbar_position_locked=false")
+    {
+        return false;
+    }
+    c.taskbar_position = "drag".to_string();
+    true
+}
+
 /// 集中归一化：把「可从 `config.toml` / 前端直接写入」的字段收敛到应用支持的取值集合。
 ///
 /// **为什么需要它**：`log_level` / `popup_size` / `theme_mode` / `window_material` /
@@ -842,10 +901,11 @@ fn normalize_config(config: &mut Config) -> bool {
         VALID_WINDOW_MATERIALS,
         "default",
     );
+    changed |= migrate_taskbar_position_value(&mut config.taskbar_position);
     changed |= normalize_choice(
         &mut config.taskbar_position,
         VALID_TASKBAR_POSITIONS,
-        "center",
+        &default_taskbar_position(),
     );
 
     if !battery_thresholds_valid(&config.low_battery_thresholds) {
@@ -889,12 +949,13 @@ impl Default for Config {
             pinned_taskbar_devices: vec![],
             taskbar_widget_enabled: false,
             taskbar_position: default_taskbar_position(),
-            taskbar_position_locked: true,
             taskbar_custom_x: None,
             taskbar_content_scale: TaskbarContentScale::default(),
             // 新增两字段：音乐开关默认**关**、面板默认设备（与 serde default 一致）
             taskbar_music_enabled: false,
             taskbar_panel: TaskbarPanel::default(),
+            // 常驻显示未连接的设备：默认**关**（与 serde default 一致）
+            taskbar_show_disconnected: false,
             hidden_audio_devices: vec![],
             log_level: default_log_level(),
             legacy_log_enabled: None,
@@ -1047,6 +1108,8 @@ fn parse_config_text(text: &str) -> Result<(Config, bool), toml::de::Error> {
     //   ⚠️ 必须在 `normalize_config` **之后**跑：它才刚把非法值修干净，
     //   此时 `pinned_taskbar_devices` 才是可信的最终值。
     normalized |= migrate_taskbar_switch(text, &mut config);
+    // ⭐ 「手动拖拽」收编迁移：旧版「不固定位置」独立开关 → `taskbar_position = "drag"`。
+    normalized |= migrate_taskbar_drag(text, &mut config);
     Ok((config, normalized))
 }
 
@@ -1383,11 +1446,11 @@ macro_rules! for_each_config_field {
             pinned_taskbar_devices,
             taskbar_widget_enabled,
             taskbar_position,
-            taskbar_position_locked,
             taskbar_custom_x,
             taskbar_content_scale,
             taskbar_music_enabled,
             taskbar_panel,
+            taskbar_show_disconnected,
             hidden_audio_devices,
             log_level,
             legacy_log_enabled,
@@ -1606,10 +1669,10 @@ mod tests {
         apply_device_rename, claim_revision, clamp_display_name, config_lock_held, config_path,
         default_battery_refresh_secs, default_battery_thresholds, enqueue_persist,
         finalize_before_persist, flush_persist, fold_pinned_alias_into_device_names, merge_config,
-        migrate_taskbar_switch, normalize_config, parse_config_text, resolve_device_name,
-        resolve_device_name_in, revision_is_latest, taskbar_devices_available, with_config,
-        write_config_atomically, Config, PinnedDevice, MAX_DISPLAY_NAME_CHARS, MERGED_FIELD_NAMES,
-        PERSIST_DONE, PERSIST_QUEUED, VALID_TASKBAR_POSITIONS,
+        migrate_taskbar_drag, migrate_taskbar_switch, normalize_config, parse_config_text,
+        resolve_device_name, resolve_device_name_in, revision_is_latest, taskbar_devices_available,
+        with_config, write_config_atomically, Config, PinnedDevice, MAX_DISPLAY_NAME_CHARS,
+        MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED, VALID_TASKBAR_POSITIONS,
     };
     use std::sync::atomic::Ordering;
 
@@ -1924,7 +1987,7 @@ mod tests {
             popup_size: "huge".to_string(),
             theme_mode: "sepia".to_string(),
             window_material: "blur".to_string(),
-            // ⭐ 任务栏贴靠位置：只认 left/center/right 三值（前端下拉也仅这三项）。
+            // ⭐ 任务栏贴靠位置：只认五档值（前端下拉也仅这五项）。
             //    非法值若不归一化，后端会把它当作 `_` 分支（退化成居中）而**前端下拉
             //    找不到对应项 ⇒ 按钮文案停在旧值**，界面上看着「选好了」实际是错的。
             taskbar_position: "middle".to_string(),
@@ -1942,7 +2005,7 @@ mod tests {
         assert_eq!(cfg.popup_size, "default");
         assert_eq!(cfg.theme_mode, "follow_system");
         assert_eq!(cfg.window_material, "default");
-        assert_eq!(cfg.taskbar_position, "center");
+        assert_eq!(cfg.taskbar_position, "auto_right");
         assert_eq!(cfg.low_battery_thresholds, default_battery_thresholds());
         assert_eq!(cfg.low_battery_refresh_secs, default_battery_refresh_secs());
 
@@ -1966,7 +2029,7 @@ mod tests {
             popup_size: "large".to_string(),
             theme_mode: "dark".to_string(),
             window_material: "mica".to_string(),
-            taskbar_position: "right".to_string(),
+            taskbar_position: "fixed_right".to_string(),
             low_battery_thresholds: vec![100, 0, 50],
             low_battery_refresh_secs: 3600,
             ..Default::default()
@@ -1992,16 +2055,23 @@ mod tests {
         );
     }
 
-    /// `taskbar_position` 的三个合法值**逐个**钉住。
+    /// `taskbar_position` 的六个合法值**逐个**钉住。
     ///
-    /// ⭐ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是 `"center"`，
-    ///   所以 `VALID_TASKBAR_POSITIONS` 里把 `"center"` 拼错**测不出来**（错值也会
-    ///   被改回 center）；但把 `"left"` / `"right"` 拼错就会**静默退化**成居中 ——
-    ///   界面照常显示、不报错，只是「靠左/靠右」永远无效。本条用 `assert!(!changed)`
+    /// ⭐ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是默认档 `auto_right`，
+    ///   所以 `VALID_TASKBAR_POSITIONS` 里把 `"auto_right"` 拼错**测不出来**（错值也会
+    ///   被改回 auto_right）；但把其余五档拼错就会**静默退化**成默认档 ——
+    ///   界面照常显示、不报错，只是那一档永远无效。本条用 `assert!(!changed)`
     ///   把「合法值不被改写」钉住，拼错即转红。
     #[test]
-    fn taskbar_position_accepts_all_four_values_verbatim() {
-        for value in ["left", "center", "right", "auto"] {
+    fn taskbar_position_accepts_all_six_values_verbatim() {
+        for value in [
+            "auto_left",
+            "auto_right",
+            "fixed_left",
+            "fixed_center",
+            "fixed_right",
+            "drag",
+        ] {
             let mut cfg = Config {
                 taskbar_position: value.to_string(),
                 ..Default::default()
@@ -2016,9 +2086,102 @@ mod tests {
         // 少一个值会让某一档永远选不出来，且没有任何报错。
         assert_eq!(
             VALID_TASKBAR_POSITIONS,
-            &["left", "center", "right", "auto"],
-            "合法值集合必须与设置页下拉的四项逐字一致"
+            &[
+                "auto_left",
+                "auto_right",
+                "fixed_left",
+                "fixed_center",
+                "fixed_right",
+                "drag"
+            ],
+            "合法值集合必须与设置页下拉的六项逐字一致"
         );
+    }
+
+    /// ⭐⭐ **旧四档值必须被迁移，且映射不改行为**（改值必须同时做读取期迁移）。
+    ///
+    /// ⛔ 旧值不在合法集合里，没有这条迁移就会先被归一化冲回默认档
+    ///   ⇒ 老用户「我明明选的是靠左/自动，怎么变了」无从排查。
+    /// ⭐ `auto → auto_left` 是**行为保持**映射：旧「自动」= 找空隙贴左缘，
+    ///   即今天靠左档的全部语义（判据 → `taskbar_layout::find_free_interval`）。
+    #[test]
+    fn legacy_taskbar_position_values_map_to_new_names() {
+        for (raw, want) in [
+            ("left", "fixed_left"),
+            ("center", "fixed_center"),
+            ("right", "fixed_right"),
+            ("auto", "auto_left"),
+        ] {
+            // ⚠️ 必须走 `normalize_config` 全路径：迁移若被挪到 `normalize_choice`
+            //   **之后**，旧值会先被冲回默认档、迁移永远看不到它 —— 只直调迁移函数
+            //   是测不出这个顺序错误的。
+            let mut cfg = Config {
+                taskbar_position: raw.to_string(),
+                ..Default::default()
+            };
+            assert!(
+                normalize_config(&mut cfg),
+                "`{raw}` 是旧值，迁移必须报告已改写"
+            );
+            assert_eq!(
+                cfg.taskbar_position, want,
+                "`{raw}` 必须迁移到 `{want}`（行为保持映射）"
+            );
+        }
+        // 新值不得被再次改写：迁移只对旧字面量生效（幂等，重复加载不会漂移）
+        let mut fresh = "auto_right".to_string();
+        assert!(
+            !super::migrate_taskbar_position_value(&mut fresh),
+            "新命名空间的值不是迁移对象"
+        );
+    }
+
+    /// 默认档 = `auto_right`（缺键时取它；非法值的落点已在归一化用例里钉住）。
+    #[test]
+    fn taskbar_position_defaults_to_auto_right() {
+        let cfg: super::Config = toml::from_str("").expect("空配置必须能解析");
+        assert_eq!(cfg.taskbar_position, "auto_right", "缺键时必须取新默认档");
+    }
+
+    /// ⭐⭐ 旧「不固定位置」独立开关必须收编为 `drag` 档（删字段必须同时做读取期迁移）。
+    ///
+    /// 判别力：迁移若漏接，「我之前开了手动摆位」的老用户升级后会被钉回贴靠档
+    /// —— 拖过的落点还在 `taskbar_custom_x`，但不再生效，用户直接感知「设置丢了」。
+    #[test]
+    fn legacy_unlocked_position_migrates_to_drag() {
+        // 旧开关 = false（不管存的位置档是什么）⇒ 收编为 drag
+        let legacy = "taskbar_position = \"left\"\ntaskbar_position_locked = false\n";
+        let mut c = Config::default();
+        assert!(
+            migrate_taskbar_drag(legacy, &mut c),
+            "旧开关关着必须触发迁移"
+        );
+        assert_eq!(c.taskbar_position, "drag");
+
+        // 手写无空格形态（`key=false`）同样必须命中（漏了 = 手动摆位用户静默丢设置）
+        let mut c = Config::default();
+        assert!(
+            migrate_taskbar_drag("taskbar_position_locked=false\n", &mut c),
+            "无空格形态也必须触发迁移"
+        );
+
+        // 旧开关开着（`true`）或键不存在（默认固定）⇒ 不迁移，位置档照常
+        for text in ["taskbar_position_locked = true\n", "auto_start = true\n"] {
+            let mut c = Config::default();
+            assert!(
+                !migrate_taskbar_drag(text, &mut c),
+                "「固定」语义不得被收编"
+            );
+            assert_eq!(c.taskbar_position, "auto_right", "未触发迁移时不得改写");
+        }
+
+        // ⭐ 全路径（`parse_config_text`）：旧四档改名与 drag 收编**先后都要走到**，
+        //   且迁移结果 `drag` 必须在合法集合里（不被归一化冲掉）。
+        let (cfg, changed) =
+            parse_config_text("taskbar_position = \"left\"\ntaskbar_position_locked = false\n")
+                .expect("旧配置必须能解析");
+        assert!(changed, "发生了迁移必须报告（落盘时才会把新值写回）");
+        assert_eq!(cfg.taskbar_position, "drag");
     }
 
     /// `taskbar_content_scale` 的两个合法值**逐个**钉住（逐字保留）。

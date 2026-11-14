@@ -1539,7 +1539,7 @@ mod tests {
         let lh = line_h_px();
         assert!(
             lh >= need,
-            "行高 {lh} < 字体单行占位高度 {need}（tmHeight={} + 外边距={}）             ⇒ DrawTextW 画进比它矮的带子里，底部被裁（用户 2026-09-29 实测报）",
+            "行高 {lh} < 字体单行占位高度 {need}（tmHeight={} + 外边距={}）             ⇒ DrawTextW 画进比它矮的带子里，底部被裁",
             tm.tmHeight, tm.tmExternalLeading
         );
         // ⛔ 反向：也不能大到离谱（气泡会松垮）

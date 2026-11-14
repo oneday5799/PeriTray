@@ -5,10 +5,11 @@
  * ⭐ 本页控件全部接线真实数据：
  *    · 「显示设备信息组件」开关 → `config.taskbar_widget_enabled`（默认关）
  *    · 「显示音乐控制组件」开关 → `config.taskbar_music_enabled`（默认关，**独立**）
+ *    · 「常驻显示未连接的设备」开关 → `config.taskbar_show_disconnected`（默认关）
  *    · 已添加设备清单 + 「移除」 → `get_pinned_taskbar_list` / `toggle_pinned_taskbar_device`
- *    · 「固定任务栏窗口位置」开关 → `config.taskbar_position_locked`
- *    · 「任务栏窗口位置」下拉     → `config.taskbar_position`（left/center/right）
- *    · 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default/follow_system）
+ *    · 「任务栏窗口位置」下拉     → `config.taskbar_position`
+ *      （auto_left / auto_right / fixed_left / fixed_center / fixed_right / drag）
+ *    · 「任务栏内容缩放大小」下拉 → `config.taskbar_content_scale`（default/smaller）
  *
  * ⭐ 两个组件开关**互相独立**：关掉「显示设备信息组件」**不会**
  *    关掉「显示音乐控制组件」，反之亦然。两个都开时，任务栏组件最右侧出现
@@ -25,7 +26,8 @@
 function initTaskbarTab() {
   initTaskbarWidgetCard();
   initTaskbarMusicCard();
-  initTaskbarPinCard();
+  initTaskbarShowDisconnectedCard();
+  initTaskbarPositionCard();
   initTaskbarContentScale();
 }
 // ── 任务栏组件：总开关 + 已添加设备清单 ────────────────────────────
@@ -172,48 +174,35 @@ function initTaskbarMusicCard() {
   // ⛔ **刻意不加展开区**：音乐组件没有「已添加清单」这类内容。
 }
 
-function initTaskbarPinCard() {
-  const card = document.getElementById("taskbar-pin-card");
-  const toggle = document.getElementById("toggle-taskbar-pin");
-  const items = document.getElementById("taskbar-pin-items");
-  const arrow = document.getElementById("arrow-taskbar-pin");
-  if (!card || !toggle || !items) return;
+/** 「常驻显示未连接的设备」单开关卡（默认关）。
+ *
+ * ⭐ 判据写 `=== true`（与「显示音乐控制组件」同向）：本项默认也是关，
+ *    但 `!!undefined` 的歧义读法照抄不得——两边各按「字段缺键时的默认值」选方向。
+ * ⚠️ 落盘是**必须的**：后端 `fetch_into_snapshot` 直接读本字段决定「未连接设备要不要
+ *    入选」，不落盘 = 开关点了没反应。生效链 = `config-changed` → `apply_from_config`
+ *    → 强制刷新重取数（无需重启）。
+ */
+function initTaskbarShowDisconnectedCard() {
+  const card = document.getElementById("taskbar-show-disconnected-card");
+  const toggle = document.getElementById("toggle-taskbar-show-disconnected");
+  if (!card || !toggle) return;
 
-  const expandable = createExpandableCard(items, arrow);
-
-  // ⭐ 开关落盘（`bindToggle` 内部 `saveConfig()`）——**必须放在读 `toggle.checked`
-  //    做初始展开之前**：`bindToggle` 会先把 `checked` 同步成 config 值（覆盖 HTML 里
-  //    写死的 `checked`）。若顺序反了，用户上次关掉开关后，卡片每次打开仍是展开的
-  //    （HTML 默认值 ≠ 配置值）——正是「UI 看着正常、实际没生效」的静默形态。
-  // ⚠️ 判据写 `!== false` 而不是直接取值：本字段语义是「默认 true」，
-  //    老配置文件里可能缺键 ⇒ `!!undefined` 会得到 `false`，把默认值反转。
-  bindToggle("toggle-taskbar-pin", {
-    get: () => config.taskbar_position_locked !== false,
-    set: (v) => { config.taskbar_position_locked = v; },
+  bindToggle("toggle-taskbar-show-disconnected", {
+    get: () => config.taskbar_show_disconnected === true,
+    set: (v) => { config.taskbar_show_disconnected = !!v; },
   });
+}
 
-  // 开关联动展开。此处 tab 可能不可见，用 "content" 会读到 scrollHeight=0
-  // （.tab-content 基础态 display:none）⇒ 交互路径一律显式给固定上限。
-  toggle.addEventListener("change", () => {
-    expandable.set(toggle.checked, "999px");
-  });
-
-  // 初始化落位：按**配置值**（已由上面的 bindToggle 同步进 `toggle.checked`）决定展开。
-  // ⭐ 必须用固定值而非 "content"：初始化时本 tab 尚未 active，scrollHeight 恒为 0，
-  //    用 "content" 会算出 max-height:0 ⇒ 首次切到本页时卡片看起来没展开。
-  expandable.setInstant(toggle.checked, "999px");
-
-  expandable.bindHeaderClick(card, {
-    extraGuards: [".toggle", "input"],
-    expandHeight: "999px",
-  });
-
-  // 「任务栏窗口位置」下拉：初始值取 config（覆盖 HTML 里写死的「居中」文案），
-  // 变更即落盘。范式与 `settings-general.js` 的 `combo-theme-mode` 等一致。
-  // ⭐ 四档语义（判据 → config.rs 的 `taskbar_position` 字段注释）：
-  //   left/center/right 的可用区 = **整条任务栏**；auto = **避让已有按钮**
-  //   落进真实空隙，取不到可信占用区就退回整条任务栏（等效居中）。
-  initComboBox("combo-taskbar-position", config.taskbar_position || "center", async (val) => {
+/** 「任务栏窗口位置」下拉卡（六档：自动两档 / 固定三档 / 手动拖拽）。 */
+function initTaskbarPositionCard() {
+  // 初始值取 config（覆盖 HTML 里写死的「自动靠右」文案），变更即落盘。
+  // 范式与 `settings-general.js` 的 `combo-theme-mode` 等一致。
+  // ⭐ 六档语义（判据 → config.rs 的 `taskbar_position` 字段注释）：
+  //   fixed_* 的可用区 = **整条任务栏**；auto_* = **避让已有按钮**落进真实空隙
+  //   （靠左取最左、靠右取最右），取不到可信占用区就退回整条任务栏（等效居中）；
+  //   drag = 用户拖着摆（落点在后端 `taskbar_custom_x`，本页不管）。
+  // ⚠️ 缺键回落 "auto_right"：后端默认档也是它，两侧口径一致（旧配置文件无此键）。
+  initComboBox("combo-taskbar-position", config.taskbar_position || "auto_right", async (val) => {
     config.taskbar_position = val;
     await saveConfig();
   });
@@ -224,9 +213,6 @@ function initTaskbarPinCard() {
 // ⛔ **作用域**：只改**内容**（图标边长 / 信息文字字号 /
 //    随内容缩放的间距与项宽上限），**底衬恒按系统 DPI**（窗口高度、圆角不受本项影响）。
 //    落地在 `taskbar_widget::Metrics`：内容走 `content_dpi`，底衬走 `dpi`，两者分开换算。
-//
-// ⭐ 为什么单列一张卡而不是塞进上面的折叠卡：本项与「固定位置」开关**无关**，
-//    放进折叠卡会在开关关闭时被一起收起 —— 用户会以为这个设置消失了。
 function initTaskbarContentScale() {
   // ⭐ 初始值取 config（覆盖 HTML 里写死的「默认」文案）；变更即落盘。
   //    ⚠️ 落盘后由后端 `config-changed` → `apply_from_config` → `FORCE_REPAINT` +

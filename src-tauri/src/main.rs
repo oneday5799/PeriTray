@@ -517,6 +517,13 @@ fn format_item_debug(it: &crate::taskbar_widget::WidgetItem) -> String {
             _ => " --".to_string(),
         });
     }
+    // 连接类型标签：probe 观测「派生判据在真机上落了哪一档」的直接读数
+    // （Unknown 不打，避免噪音；判据 → device_identity::ConnKind）
+    s.push_str(match it.conn {
+        crate::device_identity::ConnKind::Bluetooth => " [BT]",
+        crate::device_identity::ConnKind::Wireless24g => " [2.4G]",
+        crate::device_identity::ConnKind::Unknown => "",
+    });
     if it.pinned {
         s.push_str(" [固定]");
     }

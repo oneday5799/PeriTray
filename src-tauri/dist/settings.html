@@ -760,71 +760,81 @@
         </div>
       </div>
 
-      <div class="card expandable" id="taskbar-pin-card">
+      <!-- 「常驻显示未连接的设备」单开关卡（默认关）：关 = 任务栏只显示已连接的设备，
+           设备连上后自动出现；开 = 已添加设备以置灰形式常驻（旧行为）。
+           ⛔ 与「显示音乐控制组件」同理：单开关卡、无展开区。 -->
+      <div class="card" id="taskbar-show-disconnected-card">
         <div class="card-left">
-          <div class="card-title">固定任务栏窗口位置</div>
-          <div class="card-desc">关闭后可用鼠标拖拽窗口位置，拖放结果会被记住</div>
+          <div class="card-title">常驻显示未连接的设备</div>
+          <div class="card-desc">关闭时任务栏仅显示已连接的设备，设备连接后自动出现；开启后已添加的设备以置灰形式常驻显示</div>
         </div>
         <div class="card-actions">
           <label class="toggle">
-            <input type="checkbox" id="toggle-taskbar-pin" checked>
+            <!-- ⛔ **不写 `checked`**：默认关闭，真实初值由 bindToggle 从 config 同步进来。 -->
+            <input type="checkbox" id="toggle-taskbar-show-disconnected">
             <span class="slider"></span>
           </label>
-          <div class="card-arrow" id="arrow-taskbar-pin">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </div>
         </div>
-        <div class="card-items" id="taskbar-pin-items">
-          <div class="card-item">
-            <div class="card-item-name">任务栏窗口位置</div>
-            <div class="card-item-controls">
-              <div class="win-combo-box" id="combo-taskbar-position">
-                <button class="win-combo-btn" role="combobox" aria-expanded="false">
-                  <span class="win-combo-content">居中</span>
-                  <span class="win-combo-chevron">
-                    <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
-                    </svg>
-                  </span>
-                </button>
-                <div class="win-combo-flyout">
-                  <div class="win-combo-items-presenter">
-                    <button class="win-combo-item" data-value="left">
-                      <span class="win-combo-item-layout">
-                        <span class="win-combo-item-pill"></span>
-                        <span class="win-combo-item-content">靠左</span>
-                      </span>
-                    </button>
-                    <button class="win-combo-item" data-value="center">
-                      <span class="win-combo-item-layout">
-                        <span class="win-combo-item-pill"></span>
-                        <span class="win-combo-item-content">居中</span>
-                      </span>
-                    </button>
-                    <button class="win-combo-item" data-value="right">
-                      <span class="win-combo-item-layout">
-                        <span class="win-combo-item-pill"></span>
-                        <span class="win-combo-item-content">靠右</span>
-                      </span>
-                    </button>
-                    <!-- ⭐ 「自动」：避开任务栏上已有的按钮（开始 / 已固定应用 /
-                         托盘 / 时钟），落进一个真实空隙；放不下就退回整条任务栏。
-                         ⛔ `data-value` 必须与后端 `VALID_TASKBAR_POSITIONS` 逐字一致，
-                         否则该档永远选不出来且不报错（判据在 config.rs 的单测里）。
-                         ⛔⛔ **文案与 `data-value` 不同名是故意的**：值仍是 `auto`。
-                         ⛔ 改文案时**不得顺手改值** —— 老用户配置里存的是 `"auto"`，
-                         换成 `"auto"` 后它不在合法值集合里 ⇒ 加载时被归一化回 `center`
-                         ⇒ 用户**静默丢失设置**（无报错、无提示，正是「选了没生效」类
-                         问题的成因）。要改值必须同时做读取期迁移（判据见 config.rs）。 -->
-                    <button class="win-combo-item" data-value="auto">
-                      <span class="win-combo-item-layout">
-                        <span class="win-combo-item-pill"></span>
-                        <span class="win-combo-item-content">自动</span>
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </div>
+      </div>
+
+      <div class="card" id="taskbar-position-card">
+        <div class="card-left">
+          <div class="card-title">任务栏窗口位置</div>
+          <div class="card-desc">自动档避开任务栏上已有的按钮；「手动拖拽」档可直接拖动窗口摆放</div>
+        </div>
+        <!-- ⭐ 六档 `data-value` 必须与后端 `VALID_TASKBAR_POSITIONS` 逐字一致
+             （`config.rs`），否则该档永远选不出来且不报错（判据在 config.rs 的单测里）。
+             ⛔ 改档位值必须同时改读取期迁移（`migrate_taskbar_position_value` /
+             `migrate_taskbar_drag`）—— 老用户配置里存的是旧字面量，只改值不迁移
+             会被归一化冲回默认档 ⇒ 用户**静默丢失设置**（无报错、无提示）。
+             ⭐ 顺序对齐 EchoMusicNext 的位置下拉：自动两档在前，拖拽收尾。 -->
+        <div class="win-combo-box" id="combo-taskbar-position">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">自动靠右</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="auto_left">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">自动靠左</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="auto_right">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">自动靠右</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="fixed_left">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">固定靠左</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="fixed_center">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">固定居中</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="fixed_right">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">固定靠右</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="drag">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">手动拖拽</span>
+                </span>
+              </button>
             </div>
           </div>
         </div>

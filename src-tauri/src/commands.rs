@@ -716,7 +716,7 @@ pub async fn toggle_pinned_taskbar_device(
     Ok(())
 }
 
-/// 设置页「任务栏组件」折叠区的**已钉设备清单**（用户）。
+/// 设置页「任务栏组件」折叠区的**已钉设备清单**。
 ///
 /// ⭐ 与 `get_selectable_devices` 的分工（**刻意不同，勿合并**）：
 /// · 那个是「**可勾选**的候选」（两页并集、**不做** pin 补建）⇒ 给「选择器」用；
@@ -841,7 +841,7 @@ fn resolve_pin_key_by_name(
         })
 }
 
-/// 弹出窗口设备卡片右键菜单：**按设备名**钉到/移出任务栏（用户）。
+/// 弹出窗口设备卡片右键菜单：**按设备名**钉到/移出任务栏。
 ///
 /// ⭐ 为什么**必须由后端解析 `key`/`fallback`**（不能沿用设置页那条命令让前端传参）：
 ///   设置页的选择器拿的是 `SelectableDevice`，**后端已把 `key` 与 `fallback` 算好**；
@@ -1376,6 +1376,7 @@ mod tests {
             categories: vec![],
             node_count: 1,
             connected: true,
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned: false,
         }];
         let raw = crate::device::Device {
@@ -1447,6 +1448,7 @@ mod tests {
             categories: vec![],
             node_count: 1,
             connected: true,
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned: true,
         };
         let mut cfg = Config::default();
@@ -1477,6 +1479,7 @@ mod tests {
             categories: vec![],
             node_count: 1,
             connected: true,
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned: true,
         };
         let mut cfg = Config::default();

@@ -1027,7 +1027,7 @@ pub fn current_panel() -> Option<crate::config::TaskbarPanel> {
 
 /// 「切换」按钮本帧是否该显示。
 ///
-/// ⭐ 判据（用户）：**有东西可切才显示**
+/// ⭐ 判据：**有东西可切才显示**
 ///   · 两个开关都开            ⇒ 能在「设备 / 音乐」之间切
 ///   · 音乐面板 ∧ 会话数 > 1   ⇒ 能在多个媒体会话之间切
 ///   · 只开一个开关且只有一个会话 ⇒ 无处可切 ⇒ **不显示**（占位也是噪音）
@@ -1064,7 +1064,7 @@ fn dev_switch_hit(local: (i32, i32)) -> bool {
     hit_rect(*crate::state::lock_unpoisoned(&DEV_SWITCH_RECT), local)
 }
 
-/// ⭐⭐ 「切换」按钮只在 **hover** 时显示（用户）。
+/// ⭐⭐ 「切换」按钮只在 **hover** 时显示。
 ///
 /// 抽成纯函数是为了让「显示」与「可点」**由同一判据驱动**——
 ///
@@ -1191,9 +1191,8 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
 
     // ── 建字体 + 测量（与设备面板同一套度量/测量入口）────────────────
     let (font, memdc) = unsafe {
-        // ⚠️ **不加粗**（用户）。设备面板的「电量 / 音量」曾按
-        //   的要求加粗，同日用户又要求设备面板一并取消 ⇒ 现在两侧同为常规字重；
-        //   但歌名 / 歌手是**连续文字**，加粗后 Segoe UI Variable Text 在 15px 下
+        // ⚠️ **不加粗**：设备面板与音乐面板同为常规字重（加粗的旧方案已取消，
+        //   演进见 Wiki 15「字重：三处统一为常规」小节）；但歌名 / 歌手是**连续文字**，加粗后 Segoe UI Variable Text 在 15px 下
         //   笔画粘连、字腔变窄，观感偏「糊成一团」。
         //   ⭐ 顺带与 **tooltip 对齐**了：tooltip 走 `create_font_cleartype(.., false)`
         //   本来就是常规字重，之前面板加粗 / tooltip 常规 ⇒ 同一首歌在两处粗细不一。
@@ -1310,13 +1309,9 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         };
         return Painted::Committed(true);
     }
-    let (position, locked, custom_x) = crate::config::with_config(|c| {
-        (
-            c.taskbar_position.clone(),
-            c.taskbar_position_locked,
-            c.taskbar_custom_x,
-        )
-    });
+    let (position, custom_x) =
+        crate::config::with_config(|c| (c.taskbar_position.clone(), c.taskbar_custom_x));
+    let locked = position_locked(&position);
     let (tb_left, tb_w) = match taskbar_rect() {
         Some((left, _, w, _)) => (left, w),
         None => (0, i32::MAX),
@@ -1549,7 +1544,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                     1 => cur.can_play_pause,
                     _ => cur.can_next,
                 };
-                // ⭐ 「按下变灰」（用户）：不可用档 0.5，按下再乘 0.55。
+                // ⭐ 「按下变灰」：不可用档 0.5，按下再乘 0.55。
                 //   两个维度**相乘**而不是二选一 —— 不可用的键同时按下时仍然更暗，
                 //   不会出现「按下反而变亮」。
                 let scale = if enabled { 1.0f32 } else { 0.5f32 }
@@ -1639,7 +1634,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                 for yy in 0..(ih as i32).min(h - sb.top) {
                     for xx in 0..(iw as i32).min(total_w - sb.left) {
                         let si = ((yy * iw as i32 + xx) * 4) as usize;
-                        // ⭐ 按下变灰（用户）
+                        // ⭐ 按下变灰
                         let press = if pressed_id() == PRESS_MUSIC_SWITCH {
                             0.55f32
                         } else {
@@ -1738,8 +1733,8 @@ const ITEM_GAP_DIP: i32 = 10;
 
 /// 音乐面板：**封面右缘 → 正文**（文字 / 三键）的间隙（DIP）。
 ///
-/// ⭐ 独立于设备面板的 `ICON_TEXT_GAP_DIP`：那个是「封面↔电量/音量文字」共用的，
-///   改它会连带改到设备面板（用户 只要求改音乐面板）。
+/// ⭐ 独立于设备面板的 `ICON_TEXT_GAP_DIP`：两者语义不同——一个只管音乐封面
+///   →正文，一个管设备面板图标↔文字；共用一个常量会让改动**联动误伤**另一面板。
 /// ⛔ 静态形态（文字）与 hover 形态（三键）**必须同值**，否则来回移指针时
 ///   内容会横向跳一下。
 const MUSIC_COVER_GAP_DIP: i32 = 8;
@@ -1747,6 +1742,19 @@ const MUSIC_COVER_GAP_DIP: i32 = 8;
 /// 单段文本的宽度上限（DIP）—— 极端长文本截断显示，避免挤压其它设备。
 #[cfg(target_os = "windows")]
 const ITEM_MAX_W_DIP: i32 = 150;
+
+/// 设备面板徽章（两排信息的圆角矩形框）的字号（**DIP**，96 基准）。
+///
+/// ⭐ 比双排信息原字号（12 DIP）**缩一档**：行高 ≈ 字号 × 1.3 ≈ 13 DIP，
+///   必须装进徽章内高（见 `badge_geometry`，14 DIP）⇒ 12 DIP 字号放不下、
+///   10 DIP 留 1px 余量。
+/// ⛔ 与 `m.font`（12 DIP，音乐面板 / tooltip 共用）**分开**：徽章内高（14 DIP）
+///   比正文行带（16 DIP）小，字号跟随**徽章内高**走，不跟随正文行高。
+const BADGE_FONT_DIP: i32 = 10;
+/// 徽章内文字左右留白（DIP）。与 `PAD_X_DIP`（6）分开：徽章是小部件，留白按比例减半。
+const BADGE_PAD_X_DIP: i32 = 3;
+/// 上下两枚徽章之间的纵向间隙（DIP）。
+const BADGE_STACK_GAP_DIP: i32 = 2;
 
 /// hover 底衬的圆角半径（DIP）。
 ///
@@ -1817,12 +1825,12 @@ impl Metrics {
         Self::for_dpis(bd, cd)
     }
 
-    /// 「偏小」档的内容 DPI = **比系统低一档**（用户 定义：
-    /// 「把内容的大小降一档，例如当前系统缩放是 125%，则使用 100% 的缩放」）。
+    /// 「偏小」档的内容 DPI = **比系统低一档**：内容整体降一档
+    /// （如系统缩放 125% ⇒ 内容用 100%）。
     ///
     /// ⭐ 走 **Windows 标准缩放阶梯**（100/125/150/175/200/225/250/300/350/400/
     ///   500/600/800/1000）取**上一档**，而不是「乘 0.75」——
-    ///   后者在 125% 上会得到 93.75%（不是任何一档），而用户要的是**100%**。
+    ///   后者在 125% 上会得到 93.75%（不是任何一档），**降一档必须落在阶梯上**（100%）。
     ///
     /// ⛔ **已在最小档（100%）时保持 100%，不再往下** —— 再降就是 75%，
     ///   那会让内容小于设计基准（图标 24px），与「偏小」的字面含义不符。
@@ -1924,12 +1932,12 @@ impl Metrics {
     /// 「任务栏内容缩放大小」改变（明确要求）。
     ///
     /// ⭐ 只作用于音乐面板里的**这两样**；同一面板的**三键 / 切换键 / 各项间距 /
-    ///   左右留白**仍跟随设置（用户同轮逐条确认「都按 A」＝跟随）。
+    ///   左右留白**仍跟随设置。
     ///
     /// ⚠️⚠️ **为什么这两样要钉住、其余跟随**（别再合并成一个档位）：
     ///   封面是**正方形图片**、双排信息是**两行连续文字**，它们与设备面板那种
     ///   「一串电量/音量数字」对尺寸缩放的敏感度完全不同 ⇒ 一起缩放会让
-    ///   **封面与文字的比例**失真（用户 实测后要求拆开）。
+    ///   **封面与文字的比例**失真。
     ///   而按键是**图标控件**，与设备面板的图标同性质 ⇒ 跟着设备那档走才对。
     ///
     /// ⚛️ 连带一处必须一起钉住：**文字宽度上限** `MUSIC_TEXT_MAX_W_DIP` 的换算。
@@ -2532,6 +2540,9 @@ pub struct WidgetItem {
     pub pinned: bool,
     /// 是否有设备页枚举到的在线节点；用于避免已连接但暂时无电量数据的设备被置灰。
     pub connected: bool,
+    /// 设备的连接类型（BT / 2.4G）；电量或音量缺失时固定占**下排**占位
+    /// （布局判据 → [`item_row_texts`]，派生判据 → `device_identity::ConnKind`）。
+    pub conn: crate::device_identity::ConnKind,
 }
 
 // ⚠️ 快照**只在 Windows 上有消费方**（非 Windows 的 `spawn_widget` 是空桩），
@@ -2691,11 +2702,11 @@ static REFRESH_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 
 /// 可用区（= 整条任务栏）左端的屏幕 x（物理像素）。
 ///
-/// ⚠️ 位置为 `left`/`center`/`right` 时它**恒等于任务栏左缘**（典型为 0）——
+/// ⚠️ 位置为三个 `fixed_*` 档时它**恒等于任务栏左缘**（典型为 0）——
 ///   像素扫描被移除（见 `find_widget_slot`），这里保留为原子量只是为了
 ///   让「可用区」与窗口位置在绘制线程上仍走同一套传递路径。
-/// ⚠️ 位置为 `auto` 且探针命中间隙时，它**不等于**任务栏左缘
-///   （= 间隙左端）；判据见 [`SLOT_IS_GAP`]。
+/// ⚠️ 位置为 `auto_left` / `auto_right` 且探针命中间隙时，它**不等于**
+///   任务栏左缘（= 间隙左端）；判据见 [`SLOT_IS_GAP`]。
 #[cfg(target_os = "windows")]
 static SLOT_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 /// 可用区宽度（= 任务栏宽度）。同上，恒为整条任务栏宽度。
@@ -2730,7 +2741,7 @@ static SLOT_STALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 #[cfg(target_os = "windows")]
 static DESIRED_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-/// 「未固定位置」时沿用的上一次窗口左端（**相对任务栏客户区**）。
+/// 「手动拖拽」档且还没拖过时沿用的上一次窗口左端（**相对任务栏客户区**）。
 ///
 /// ⛔ `0` 作**哨兵值**表示「还没画过」：任务栏左端恒为 0、槽起点恒 ≥ 100
 ///   ⇒ 真实的相对 x 不可能是 0，故哨兵不会与合法值撞车。
@@ -3348,7 +3359,7 @@ pub(crate) mod ffi {
     /// ⛔ 前提是**必须实色背景**：ClearType 的彩色边缘依赖「底色已知且不透明」，
     ///   一旦叠到半透明底衬上就会脏（`taskbar_widget` 头部记着这条）。
     pub unsafe fn create_font_cleartype(px_height: i32, bold: bool) -> HFONT {
-        // ⭐ 与面板**同一个字体族**（用户）：tooltip 是面板的延续，
+        // ⭐ 与面板**同一个字体族**：tooltip 是面板的延续，
         // 族名若与面板不同，同一首歌在两处的字形/字距就不一样（此前是
         // 面板 Segoe UI + tooltip 也 Segoe UI，但字重不同 ⇒ 观感仍不一致）。
         let face: &[u16] = widget_face();
@@ -3444,7 +3455,7 @@ pub(crate) mod ffi {
             return 0;
         }
         if msg == WM_MOUSEWHEEL {
-            // ⭐ 音量滚轮（用户）。命中判定与记账都在**窗口线程**完成
+            // ⭐ 音量滚轮。命中判定与记账都在**窗口线程**完成
             //   （纯内存：读上一帧发布的矩形 + 取方向），**实际写音量在后台线程**。
             // ⛔ 必须 `return 0` 吃掉这条消息：落到 `DefWindowProcW` 会被转发给
             //   父窗口（任务栏）⇒ 变成「滚动整个任务栏」。
@@ -3452,8 +3463,8 @@ pub(crate) mod ffi {
                 return 0;
             }
         }
-        // ⚠️ 只在「固定位置」关掉时接管（`drag_begin` 内部判 `drag_enabled()`）；
-        //   固定位置时**不拦截**，交回 `DefWindowProcW` 保持原行为。
+        // ⚠️ 只在「手动拖拽」档接管（`drag_begin` 内部判 `drag_enabled()`）；
+        //   其余位置档**不拦截**，交回 `DefWindowProcW` 保持原行为。
         if msg == WM_LBUTTONDOWN {
             // ⭐ 记按下点与时刻（供 UP 时区分「点击」与「拖拽」——音乐面板的按钮
             //   靠点击触发，而 `drag_begin` 是**无条件** SetCapture 的）
@@ -3487,7 +3498,7 @@ pub(crate) mod ffi {
             // 捕获被别处抢走（任务栏抢焦点、其它窗口 `SetCapture`…）：
             // 窗口停在哪就记哪 —— 总比丢掉位置强。非拖拽期间到达则直接返回。
             //
-            // ⭐⭐ 这里**必须**清按下态（用户 的「按下变灰」）：
+            // ⭐⭐ 这里**必须**清按下态（「按下变灰」判据）：
             //   捕获被抢走时**不会**有 `WM_LBUTTONUP` 到来 ⇒ 漏清的话按钮会
             //   **永久停在按下态**，而画面上没有任何东西会再去纠正它。
             super::set_pressed(super::PRESS_NONE, hwnd);
@@ -3706,16 +3717,16 @@ fn format_battery(it: &WidgetItem) -> String {
     }
 }
 
-/// 音量文本（画在图标**右下角**）。
+/// 音量文本。默认画在图标**右下角**；电量缺失时由布局**上移上排**
+/// （布局判据 → [`item_row_texts`]，本函数只管「值 → 文本」）。
 ///
 /// 静音 → `"静音"`；`Some(v)` → `"85%"`；**没有音量可显示 → `"N/A"`**。
 ///
-/// ⚠️ 「无音频端点」与「有端点但暂时读不出」**都显示 `N/A`**（用户 口径：
-///   没有音量就显示 N/A）。两者在数据层仍由 `has_audio` 区分 —— 将来若要改成
+/// ⚠️ 「无音频端点」与「有端点但暂时读不出」**都显示 `N/A`**。两者在数据层仍由 `has_audio` 区分 —— 将来若要改成
 ///   「无端点整段不画」，不必回头动数据。
 /// 音量分数 → 文本（**唯一实现点**，设备角标与音乐 tooltip 共用）。
 ///
-/// ⭐ **是否带小数由「音量精细调节」开关决定**（用户）：
+/// ⭐ **是否带小数由「音量精细调节」开关决定**：
 ///   · 开 ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了」
 ///     看起来像失效；
 ///   · 关 ⇒ `40%`：此时滚轮是 1% 步进，多余的小数位是噪音。
@@ -3742,7 +3753,7 @@ fn format_volume(it: &WidgetItem, fine_adjust: bool) -> String {
     if it.is_muted == Some(true) {
         return "静音".to_string();
     }
-    // ⭐ **是否带小数由「音量精细调节」开关决定**（用户）：
+    // ⭐ **是否带小数由「音量精细调节」开关决定**：
     //   · 开 ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了但数字没变」
     //     看起来像失效；
     //   · 关 ⇒ `40%`：此时滚轮是 1% 步进，多余的小数位是噪音。
@@ -3752,6 +3763,122 @@ fn format_volume(it: &WidgetItem, fine_adjust: bool) -> String {
         Some(v) => format_volume_value(v, fine_adjust),
         None => "N/A".to_string(),
     }
+}
+
+/// 单排的**内容种类**：tooltip 信息行要在每段前加标签（电量：/音量：/连接：），
+/// 光凭格式化串分不出「50%」是电量还是音量 ⇒ 布局核心必须把种类随排带出。
+///
+/// ⭐ 两排布局的**唯一实现点** = [`item_row_contents`]：widget 行与 tooltip 行
+///   都从它派生，⛔ 任何一方不得再写一份 `(bat_shown, vol_shown)` 分支。
+#[cfg(target_os = "windows")]
+enum RowContent {
+    /// 空排（电量音量都缺时上排留空；widget 不画空框，tooltip 不出标签）
+    Empty,
+    /// 电量文本（[`format_battery`] 产物；`battery=None` 时排位让给连接类型
+    ///   ⇒ 这里到不了 `"N/A"`）
+    Battery(String),
+    /// 音量文本（[`format_volume`] 产物；静音优先于百分比 ⇒ `"静音"`；
+    ///   同理 `None` / 无端点时排位让给连接类型 ⇒ `"N/A"` 到不了这里）
+    Volume(String),
+    /// 连接类型：widget 画 `BT`/`2.4G`/`N/A`，tooltip 画 `蓝牙`/`2.4G`/`未知`
+    ///   （派生判据 → `device_identity::ConnKind`）
+    Conn(crate::device_identity::ConnKind),
+}
+
+/// 设备条目的**两排内容**（每排带种类）：`(上排, 下排)`。**纯函数**，
+/// widget 行（[`item_row_texts`]）与设备 tooltip 行（[`tooltip_item_text`]）
+/// 共用同一份布局 ⇒ 三处显示不可能分叉。
+///
+/// ⭐ 布局判据：两个信息齐全 = 上电量 / 下音量（默认布局，行为零变化）；
+/// **缺一个** = 在场信息**上移上排**、连接类型（`BT` / `2.4G`）**固定占下排**；
+/// 都缺 = 上排留空、下排连接类型。连接类型证据全无（`ConnKind::Unknown`，
+/// 如有线 DAC）⇒ 占位回退 `"N/A"`（没有可信证据就不猜）。
+///
+/// ⭐ 为什么「在场信息上移」而不是「缺哪补哪」：连接类型固定下排是**布局规则**，
+/// 补在原位会把 `BT`/`2.4G` 画到上排。⭐ 音量「在场」与 [`format_volume`]
+/// 的显示分支一致：静音也算在场（有内容可画）。
+#[cfg(target_os = "windows")]
+fn item_row_contents(it: &WidgetItem, fine_adjust: bool) -> (RowContent, RowContent) {
+    let bat_shown = it.battery.is_some();
+    let vol_shown = it.volume.is_some() || it.is_muted == Some(true);
+    match (bat_shown, vol_shown) {
+        (true, true) => (
+            RowContent::Battery(format_battery(it)),
+            RowContent::Volume(format_volume(it, fine_adjust)),
+        ),
+        (false, true) => (
+            RowContent::Volume(format_volume(it, fine_adjust)),
+            RowContent::Conn(it.conn),
+        ),
+        (true, false) => (
+            RowContent::Battery(format_battery(it)),
+            RowContent::Conn(it.conn),
+        ),
+        (false, false) => (RowContent::Empty, RowContent::Conn(it.conn)),
+    }
+}
+
+/// 设备条目的**两排文本**：`(上排, 下排)`。**纯函数**，绘制与测宽共用同一份
+/// （同「绘制与测宽必须同走一个口径」纪律，`estimate_widget_width` 也走它）。
+/// 布局判据与「在场信息上移」的理由 → [`item_row_contents`]（唯一实现点）。
+#[cfg(target_os = "windows")]
+fn item_row_texts(it: &WidgetItem, fine_adjust: bool) -> (String, String) {
+    let (top, bottom) = item_row_contents(it, fine_adjust);
+    (row_widget_text(top), row_widget_text(bottom))
+}
+
+/// 单排 → widget 显示词：连接类型 = `BT`/`2.4G`/`N/A`，空排 = 空串。
+#[cfg(target_os = "windows")]
+fn row_widget_text(c: RowContent) -> String {
+    match c {
+        RowContent::Empty => String::new(),
+        RowContent::Battery(s) | RowContent::Volume(s) => s,
+        RowContent::Conn(k) => match k {
+            crate::device_identity::ConnKind::Bluetooth => "BT".to_string(),
+            crate::device_identity::ConnKind::Wireless24g => "2.4G".to_string(),
+            crate::device_identity::ConnKind::Unknown => "N/A".to_string(),
+        },
+    }
+}
+
+/// 单排 → tooltip 信息行的**带标签**段（用户：设备名下方新增一行显示两排信息）。
+///
+/// ⭐ 标签映射：电量/音量直接前置；连接类型 = `蓝牙` / `2.4G` / **`未知`**
+///   （用户：有 `N/A` 显示为未知）。⭐ 电量/音量的 `N/A` **到不了**这里：
+///   值缺失时排位由连接类型占（→ [`item_row_contents`] 的判据），所以
+///   「未知」只映射连接类型一处，不许再写「串里搜 N/A 再替换」的补丁。
+/// 位置：唯一调用点 = [`tooltip_item_text`]；段间分隔 = 两个空格（用户示例）。
+#[cfg(target_os = "windows")]
+fn row_tooltip_text(c: RowContent) -> Option<String> {
+    match c {
+        RowContent::Empty => None,
+        RowContent::Battery(s) => Some(format!("电量：{s}")),
+        RowContent::Volume(s) => Some(format!("音量：{s}")),
+        RowContent::Conn(k) => Some(format!(
+            "连接：{}",
+            match k {
+                crate::device_identity::ConnKind::Bluetooth => "蓝牙",
+                crate::device_identity::ConnKind::Wireless24g => "2.4G",
+                crate::device_identity::ConnKind::Unknown => "未知",
+            }
+        )),
+    }
+}
+
+/// 设备 tooltip 的完整文本：设备名 + 换行 + 两排信息的带标签版本。**纯函数**。
+///
+/// ⭐ 两排**走同一份布局核心**（[`item_row_contents`]，唯一实现点）⇒ tooltip
+///   与徽章里画的两排不可能分叉；布局改判据时 tooltip 自动跟着走。
+/// ⚠️ 换行符走 tooltip `wrap_lines` 的**硬换行**（音乐面板 tooltip 同机制，
+///   测框与绘制都已按行数展开，无需改 tooltip 侧）。
+#[cfg(target_os = "windows")]
+fn tooltip_item_text(it: &WidgetItem, fine_adjust: bool) -> String {
+    let (top, bottom) = item_row_contents(it, fine_adjust);
+    let parts: Vec<String> = [top, bottom]
+        .into_iter()
+        .filter_map(row_tooltip_text)
+        .collect();
+    format!("{}\n{}", it.name, parts.join("  "))
 }
 
 // ── 滚轮调音量：纯函数（可单测）────────────────────────────────
@@ -3841,14 +3968,10 @@ fn hit_test_item_rects(
 #[cfg(target_os = "windows")]
 /// 图标重采样（**预乘空间**）+ 结果缓存。
 ///
-/// ⛔⛔ **为什么需要它**：
-///   母图只有 **32×32**，而 `m.icon = 32 × content_dpi/96`（125% ⇒ 40、150% ⇒ 48……）。
-///   100% 时 32→32 走**恒等分支、零重采样** ⇒ 锐利；一旦 >100% 就变成
-///   **32→N 的放大**——放大**不可能凭空造出细节**，双线性只能把每个源像素摊成
-///   渐变块，于是 1px 笔画（暂停双竖条只有 25.6/1024）糊成灰带，**缩放越大越糊**。
-///   ⇒ 解法不是换一个更好的**放大**滤波器，而是**换母图**：生成脚本输出
-///   **256×256** 母图，于是任何现实目标尺寸（≤128px，即 400%）都走**缩小**，
-///   而缩小是重采样**准确**的方向（面积平均 = 超采样渲染）。
+/// ⛔ **母图必须 ≥ 任何现实目标尺寸**：设备 / 音乐图标统一 **256×256** 母图，
+///   现实目标 ≤128px（400% DPI）⇒ 全部走**缩小**分支。放大**不可能凭空造出
+///   细节**——1px 笔画只能摊成渐变块，**缩放越大越糊**；缩小才是重采样
+///   **准确**的方向（面积平均 = 先按母图分辨率渲染再降采样的超采样）。
 #[cfg(target_os = "windows")]
 mod resample {
     use super::RgbaAlias;
@@ -4204,9 +4327,9 @@ mod resample {
 
     /// **Catmull-Rom 双三次**放大（母图小于目标时才会走到）。
     ///
-    /// ⚠️ 母图换成 256 之后**正常设备上走不到这条路**（任何现实 DPI 都 ≤128px），
-    ///   保留它只为兜底：那 3 张没有矢量源的设备图标仍是 32px 母图，
-    ///   双三次比双线性**锐利得多**（负瓣带来的边缘对比度），是退而求其次的改善。
+    /// ⚠️ 设备 / 音乐图标母图统一 256×256 后，现实 DPI（≤128px）走不到这条路，
+    ///   只作兜底（母图约束失效时不至于糊成灰带）：双三次比双线性**锐利得多**
+    ///   （负瓣带来的边缘对比度），是退而求其次的改善。
     fn catmull_rom_upscale(px: &[u8], sw: u32, sh: u32, side: u32, out: &mut [u8]) {
         catmull_rom_upscale_ex(px, sw, sh, side, out, false)
     }
@@ -4371,18 +4494,13 @@ mod icons {
 
     /// 缩放一张 RGBA 到 `side × side`。
     ///
-    /// ⭐ **放大用双线性、缩小用最近邻** —— 两者要解决的问题相反：
-    ///   · **缩小**（如 32 → 16，任务栏尺寸图标）：线稿的细笔画只有 1–2px，
-    ///     双线性会把它们**糊成灰带** ⇒ 必须最近邻，保住锐利。
-    ///   · **放大**（如 32 → 40，125% 缩放下的 DPI 换算）：最近邻会让 1px 笔画
-    ///     变成「忽 1px 忽 2px」，曲线出现**台阶**（真机 8 倍放大图实测确认）
-    ///     ⇒ 必须双线性，让边缘平滑过渡。
-    ///   ⛔ 早期版本一律最近邻 —— 那时只有「缩到 16」一种用途，看不出问题；
-    ///     引入 DPI 换算（见 `Metrics`）后 125% 会走到放大分支，才暴露出来。
-    ///
-    /// ⛔ 双线性**必须先预乘再插值**：图标 PNG 是 straight alpha，透明像素的 RGB
-    ///   常为 0（或 255），直接插值会把那个颜色混进半透明边缘 ⇒ 图标外圈出现
-    ///   **黑晕/白边**。插完再反预乘回 straight（`A == 0` 时 RGB 无意义，置 0）。
+    /// ⭐ **缩小走面积平均、放大走 Catmull-Rom 双三次**（判据全文与可证伪测试
+    ///   在模块内：`scale_down_averages_source_area` / `scale_up_interpolates`）：
+    ///   面积平均 = 先按母图分辨率渲染再降采样的超采样，细笔画不断裂、斜边无
+    ///   台阶；双三次负瓣带来边缘对比度，放大路径里比双线性锐利得多。
+    /// ⛔ 插值**必须先预乘再插值、插完再反预乘**：图标 PNG 是 straight alpha，
+    ///   透明像素的 RGB 常为 0（或 255），直接插值会把那个颜色混进半透明边缘
+    ///   ⇒ 图标外圈出现**黑晕/白边**（`A == 0` 时 RGB 无意义，置 0）。
     ///
     /// ⭐ 返回预乘前的 straight RGBA —— 合成到 DIB 时由调用方按需预乘。
     /// 设备图标的**缓存槽位**（`NS_DEVICE` 命名空间内唯一，与 [`AudioKind`] 一一对应）。
@@ -4594,10 +4712,10 @@ fn clamp_rel_x(x: i32, widget_w: i32, taskbar_w: i32) -> i32 {
 /// 决定这一帧窗口画在哪个 x（父窗客户区坐标）。**纯函数**，可单测。
 ///
 /// 优先级（用户意图 > 历史 > 自动）：
-///   1. `locked == true` ⇒ **永远**用贴靠结果（用户在设置页选了左/中/右）；
-///   2. `locked == false` 且用户拖过（`custom_x = Some`）⇒ 用**用户放下的位置**
-///      —— 这是显式意图，必须压过其它一切；
-///   3. `locked == false` 且没拖过、但画过（`last != 0`）⇒ 沿用上次（「不固定」的旧语义）；
+///   1. `locked == true`（任何贴靠档）⇒ **永远**用贴靠结果（用户在设置页选了档位）；
+///   2. 「手动拖拽」档（`locked == false`）且用户拖过（`custom_x = Some`）⇒
+///      用**用户放下的位置** —— 这是显式意图，必须压过其它一切；
+///   3. 「手动拖拽」档且没拖过、但画过（`last != 0`）⇒ 沿用上次；
 ///   4. 都没用过 ⇒ 退回贴靠结果（首帧）。
 ///
 /// ⛔ 为什么要抽出来单测：这四条判据的失效方式**全是静默的** —— 优先级写反只会让
@@ -4632,10 +4750,10 @@ fn resolve_rel_x(
 ///   ⇒ `center` 不在屏幕中心）⇒ 根因不是参数没调对，而是**这个前提**本身。
 ///
 /// ⭐ **可用区有两档，由位置决定**：
-///   · `left`/`center`/`right` ⇒ 可用区 = `[任务栏左缘, 任务栏右缘]`，
+///   · `fixed_left`/`fixed_center`/`fixed_right` ⇒ 可用区 = `[任务栏左缘, 任务栏右缘]`，
 ///     与「任务栏上有什么」**完全无关**；与第三方 widget（Lyricify 等）
 ///     重叠是允许的 —— 我方内容自带半透明底衬。
-///   · `auto` ⇒ 可用区 = **任务栏上一个真实空隙**（避开已有按钮）。
+///   · `auto_left` / `auto_right` ⇒ 可用区 = **任务栏上一个真实空隙**（避开已有按钮）。
 ///     ⛔ 它问的是「控件自己的矩形」（UI Automation 包围盒），**不是**
 ///     「哪里看起来空」⇒ 与上面禁掉的那条**不是同一件事**
 ///     （判据与来源 → `taskbar_layout` 模块文档）。取不到可信占用区时
@@ -4712,7 +4830,13 @@ fn auto_gap_margin_px(m: &Metrics) -> i32 {
 ///   探针无数据或不可信 / 空隙放不下。**任何一条都退回整条任务栏**，不猜。
 #[cfg(target_os = "windows")]
 fn auto_gap(bar_left: i32, bar_w: i32) -> Option<(i32, i32)> {
-    let wanted = crate::config::with_config(|c| c.taskbar_position == "auto");
+    // ⭐ 两个自动档共用同一套探针与空隙判定，只差「取最左还是最右」（侧偏好）。
+    let (wanted, prefer_right) = crate::config::with_config(|c| {
+        (
+            matches!(c.taskbar_position.as_str(), "auto_left" | "auto_right"),
+            c.taskbar_position == "auto_right",
+        )
+    });
     if !wanted {
         SLOT_IS_GAP.store(false, Ordering::Release);
         return None;
@@ -4724,7 +4848,7 @@ fn auto_gap(bar_left: i32, bar_w: i32) -> Option<(i32, i32)> {
     //   嵌进上面那个 `with_config` 闭包里就是同一把锁嵌套 ⇒ 死锁。
     let margin = auto_gap_margin_px(&Metrics::current_content());
     let got = if want > 0 {
-        crate::taskbar_layout::auto_slot(bar_left, bar_w, want, margin)
+        crate::taskbar_layout::auto_slot(bar_left, bar_w, want, margin, prefer_right)
     } else {
         None
     };
@@ -4738,12 +4862,15 @@ fn auto_gap(bar_left: i32, bar_w: i32) -> Option<(i32, i32)> {
     SLOT_IS_GAP.store(now, Ordering::Release);
     let first = !LOGGED_DECISION.swap(true, Ordering::AcqRel);
     if first || before != now {
+        // ⭐ 日志带档位：两个自动档共享这段决策日志，不带侧的话排查时
+        //   「选了靠右却落在靠左档的空隙」无从分辨。
+        let side = if prefer_right { "靠右" } else { "靠左" };
         match got {
             Some((x, w)) => append_log(&format!(
-                "[widget] 自动避让: 命中空隙 x={x} w={w} 期望宽={want} 任务栏宽={bar_w}"
+                "[widget] 自动避让({side}): 命中空隙 x={x} w={w} 期望宽={want} 任务栏宽={bar_w}"
             )),
             None => append_log(&format!(
-                "[widget] 自动避让: 退回整条任务栏（期望宽={want} 任务栏宽={bar_w}）\
+                "[widget] 自动避让({side}): 退回整条任务栏（期望宽={want} 任务栏宽={bar_w}）\
                  —— 原因={}",
                 if want <= 0 {
                     "期望宽度未知（本帧才画出来）"
@@ -4758,21 +4885,30 @@ fn auto_gap(bar_left: i32, bar_w: i32) -> Option<(i32, i32)> {
     got
 }
 
+/// 「手动拖拽」档 ⇔ 旧「不固定位置」开关：拖拽落点优先于贴靠（优先级 → `resolve_rel_x`）。
+/// ⭐ 判据的**唯一实现点**：两个绘制路径都用它算 `locked`，⛔ 不得在调用点各写一遍
+/// `!= "drag"` —— 拖拽档的判据改了只改这一处（`drag_enabled` 是它的配置侧入口）。
+fn position_locked(position: &str) -> bool {
+    position != "drag"
+}
+
 /// ⭐⭐ 自动的**贴靠语义要随「有没有命中间隙」变**（纯函数，可单测）。
 ///
-/// ⛔⛔ **兜底时必须退回 `center`，不许沿用「贴左缘」** —— 这是实测抓到的自伤：
-///   `align_in_slot` 给 `auto` 的 `offset = 0` 之所以成立，靠的是「空隙边界
-///   **已经**含了 `find_free_interval` 的间距」；而**兜底槽 = 整条任务栏**，
-///   它的左缘是**裸的 x = 0**、一点间距都没有 ⇒ 窗口直接压住开始按钮。
+/// ⛔⛔ **兜底时必须退回 `center`，不许沿用空隙贴靠** —— 这是实测抓到的自伤：
+///   `align_in_slot` 给 `auto_left` 的 `offset = 0`（`auto_right` 同理贴右缘）
+///   之所以成立，靠的是「空隙边界**已经**含了 `find_free_interval` 的间距」；
+///   而**兜底槽 = 整条任务栏**，它的左缘是**裸的 x = 0**、一点间距都没有
+///   ⇒ 窗口直接压住开始按钮（靠右档的裸右缘 = 托盘/时钟区，同理）。
 ///   实测审计抓到一帧：`窗口 0..342 压住 [(0,69) 开始按钮, (72,347) 搜索框]`
 ///   （发生在启动首帧 —— `DESIRED_W` 还是 0、自动必然兜底的那一刻）。
 ///
-/// ⭐ 因此口径是**两段**的，别只记「auto 贴左」这一半：
-///   · 命中间隙 ⇒ 空隙内贴左缘（紧邻应用图标那一排）；
-///   · 兜底     ⇒ 与 `center` 同义（整条任务栏正中，= 今天的默认行为）。
+/// ⭐ 因此口径是**两段**的，别只记「auto 贴靠」这一半：
+///   · 命中间隙 ⇒ 空隙内贴靠（靠左档贴左缘 / 靠右档贴右缘，紧邻应用图标那一排）；
+///   · 兜底     ⇒ 与 `fixed_center` 同义（整条任务栏正中 —— 两个自动档共用，
+///     右缘同样压不到安全位置：托盘/时钟就在那儿）。
 fn effective_position(position: &str, slot_is_gap: bool) -> &str {
-    if position == "auto" && !slot_is_gap {
-        "center"
+    if matches!(position, "auto_left" | "auto_right") && !slot_is_gap {
+        "fixed_center"
     } else {
         position
     }
@@ -4832,19 +4968,20 @@ fn refresh_slot_if_stale() {
 
 /// 在可用区内按贴靠策略算出窗口左端。
 ///
-/// ⭐ **位置口径的核心，必须保留**：`left`/`center`/`right` 三档全靠它。
-///   · `left`  ⇒ 距可用区左缘 `EDGE_MARGIN`；
-///   · `center`⇒ 居中（`max_offset / 2`，**不留边距**）；
-///   · `right` ⇒ 距可用区右缘 `EDGE_MARGIN`。
+/// ⭐ **位置口径的核心，必须保留**：五个档全靠它。
+///   · `fixed_left`  ⇒ 距可用区左缘 `EDGE_MARGIN`；
+///   · `fixed_center`⇒ 居中（`max_offset / 2`，**不留边距**）；
+///   · `fixed_right` ⇒ 距可用区右缘 `EDGE_MARGIN`；
+///   · `auto_left` / `auto_right` ⇒ 贴空隙左/右缘（**不留边距**，判据见 match 臂）。
 ///   ⛔ 抽成**纯函数**是为了能单测：贴靠判据极易写反（`right` 写成 `slot_x` 不报错，
 ///   只是窗口跑到左边），肉眼未必立刻发现。
 ///
 /// ⚠️ 可用区**分两种**（见 `find_widget_slot`）：
-///   · `left`/`center`/`right` ⇒ 可用区 = **整条任务栏**，于是 `center`
-///     **就是**任务栏正中（不再是「某个槽里的居中」），`left`/`right`
-///     相对任务栏的最左/最右，各自再留 `edge_margin`；
-///   · `auto` ⇒ 可用区 = **任务栏上一个空隙**，`center` 的语义**不适用**
-///     （空隙通常远宽于组件，居中会把组件丢在空地正中）⇒ 单独一档贴左缘。
+///   · `fixed_left`/`fixed_center`/`fixed_right` ⇒ 可用区 = **整条任务栏**，于是
+///     `fixed_center` **就是**任务栏正中（不再是「某个槽里的居中」），
+///     `fixed_left`/`fixed_right` 相对任务栏的最左/最右，各自再留 `edge_margin`；
+///   · `auto_left` / `auto_right` ⇒ 可用区 = **任务栏上一个空隙**，`center` 的语义
+///     **不适用**（空隙通常远宽于组件，居中会把组件丢在空地正中）⇒ 各贴空隙一缘。
 /// ⭐ 参数名沿用 `slot_*` 只是为了不动调用点；语义即「可用区」。
 ///
 /// ⭐⭐ **`edge_margin` 的口径来自实测 Windows 自身组件**
@@ -4873,17 +5010,20 @@ fn align_in_slot(
     // ⛔ 边距不得把窗口挤出可用区：窄屏/超宽内容时退化为贴边（见文档）。
     let margin = edge_margin.clamp(0, max_offset / 2);
     let offset = match position {
-        "left" => margin,
-        "right" => max_offset - margin,
-        // ⛔⛔ `auto` ⇒ **贴空隙左缘（offset = 0）**，⛔ 不许居中、⛔ 不许加边距。
+        "fixed_left" => margin,
+        "fixed_right" => max_offset - margin,
+        // ⛔⛔ `auto_left` ⇒ **贴空隙左缘（offset = 0）**，⛔ 不许居中、⛔ 不许加边距。
         //   依据（真机实测，本机 2560 宽任务栏）：空隙 `x=869 w=1005`，而音乐面板
         //   只有 `w=506` ⇒ 空隙是组件的 **2 倍**。居中会把组件扔到空地正中，
         //   两侧各留 250px —— 用户报「距离应用图标太远，之间有大片空白」。
         //   贴左缘则是**紧邻应用图标那一排**，多出来的空隙全落在另一侧（观感正常）。
         //   ⛔ 别再加 `margin`：空隙边界**已经**含了 `find_free_interval` 的间距
         //   （占用块各向外扩 `margin`），再加一次等于边距翻倍（实测 25 → 50px）。
-        "auto" => 0,
-        // `center` 及任何未知值（`normalize_config` 已兜住非法值，此处仅防御）
+        "auto_left" => 0,
+        // `auto_right` ⇒ 与靠左档**镜像**：贴空隙右缘（offset = max_offset）。
+        //   ⛔ 同样不许居中、不许加边距（判据同上，两侧对称）。
+        "auto_right" => max_offset,
+        // `fixed_center` 及任何未知值（`normalize_config` 已兜住非法值，此处仅防御）
         _ => max_offset / 2,
     };
     slot_x + offset
@@ -4921,12 +5061,13 @@ fn min_run_w(m: &Metrics) -> i32 {
 
 /// 单段文本宽度的**保守**估算（物理像素）。
 ///
-/// ⚠️ 为什么按码位分类、而不是统一乘一个系数：ASCII 数字/`%`/`N/A` 在 11 DIP Segoe UI
-///   下约 6–7px，而中文（全角）约 11px。若统一按 8px 估，**中文会被低估**
+/// ⚠️ 为什么按码位分类、而不是统一乘一个系数：ASCII 数字/`%`/`N/A` 在 10 DIP Segoe UI
+///   （徽章字号）下约 6px，而中文（全角）约 10px。若统一按 8px 估，**中文会被低估**
 ///   ⇒ 绘制宽度估算偏小 ⇒ 内容溢出窗口右缘被裁掉。
 ///   宽度估算的**方向性要求**：宁可高估（多留一点空间），不可低估（截断内容）。
 ///
 /// ⭐ 8/14 是 **DIP** 基准值 ⇒ 经 `m.dip()` 按 DPI 缩放（字号也跟着缩放，比例不变）。
+///   徽章字号缩到 10 DIP 后实际字宽略小于基准 ⇒ 估算整体**偏高**，方向安全。
 /// ⭐ 可证伪：把非 ASCII 的 14 改回 8，`cjk_is_not_underestimated` 会立刻转红。
 #[cfg(all(target_os = "windows", test))]
 fn estimate_text_px(s: &str, m: &Metrics) -> i32 {
@@ -4938,17 +5079,69 @@ fn estimate_text_px(s: &str, m: &Metrics) -> i32 {
 
 #[cfg(all(target_os = "windows", test))]
 fn estimate_widget_width(items: &[WidgetItem], m: &Metrics, fine_adjust: bool) -> i32 {
-    // ⚠️ 每台设备占「两段文本里更宽的那一段」—— 与 `draw_items` 的 `per_item` 同口径。
-    let text_px: i32 = items
+    // ⚠️ 徽章**统一宽** = 全帧所有行文本的最大估算宽 + 左右内边距 —— 与
+    //   `draw_items_render` 的 `badge_w` **同一口径**：两处都走 [`item_row_texts`]，
+    //   分叉即静默测错宽。
+    let badge_w = items
         .iter()
         .map(|it| {
-            let bat = estimate_text_px(&format_battery(it), m);
-            let vol = estimate_text_px(&format_volume(it, fine_adjust), m);
-            bat.max(vol)
+            let (top, bottom) = item_row_texts(it, fine_adjust);
+            estimate_text_px(&top, m).max(estimate_text_px(&bottom, m))
         })
-        .sum();
+        .max()
+        .unwrap_or(0)
+        + m.dip(BADGE_PAD_X_DIP) * 2;
     let gaps = m.item_gap * (items.len().saturating_sub(1) as i32);
-    m.pad_x * 2 + text_px + items.len() as i32 * (m.icon + m.icon_text_gap) + gaps
+    m.pad_x * 2 + items.len() as i32 * (m.icon + m.icon_text_gap + badge_w) + gaps
+}
+
+/// 设备面板徽章的**纵向几何**（物理像素）：`h` = 单枚徽章高；`top_dy` / `bottom_dy`
+/// = 上 / 下枚徽章相对 `icon_y` 的纵向偏移，由 [`badge_geometry`] 垂直居中得出。
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BadgeGeometry {
+    h: i32,
+    top_dy: i32,
+    bottom_dy: i32,
+}
+
+/// ⭐ 判据：两枚徽章 + 间隙的总块高在图标边长内**垂直居中**；单枚高 = 行带高
+/// （`text_row_h` = 图标/2）− 间隙 ⇒ 徽章上下各让出约半格，两枚之间留 `stack_gap`。
+/// 全部走内容 DPI 换算（线性）⇒ 「字号行高装进徽章」的比例关系在任何 DPI 下成立。
+/// ⛔ 徽章宽的估与画**同口径**（都从 `item_row_texts` + `BADGE_PAD_X_DIP` 推，
+///   见 `estimate_widget_width`）；纵向几何只有绘制走，本函数是**唯一实现点**。
+#[cfg(target_os = "windows")]
+fn badge_geometry(m: &Metrics) -> BadgeGeometry {
+    let gap = m.dip(BADGE_STACK_GAP_DIP);
+    // 防御：徽章内高必须装得下行盒（行高 ≈ 字号 × 1.3），否则字形会压到边框
+    let h = (m.text_row_h - gap).max(m.dip(BADGE_FONT_DIP) * 13 / 10);
+    let top = ((m.icon - (h * 2 + gap)) / 2).max(0);
+    BadgeGeometry {
+        h,
+        top_dy: top,
+        bottom_dy: top + h + gap,
+    }
+}
+
+/// 徽章圆角半径（纯函数）：**按徽章高的比例**折算（约 1/3），不照抄绝对值。
+///
+/// ⭐ 与 `cover_radius` 同一条口径：小部件照抄大部件的绝对半径会「圆得离谱」。
+/// 1/3 介于「直角方块」与「胶囊」（1/2）之间——用户要的是**圆角矩形**，不是胶囊。
+/// ⛔ 下限 2：小于 2px 的圆角在抗锯齿采样下退化成直角。
+#[cfg(target_os = "windows")]
+fn badge_radius(badge_h: i32) -> i32 {
+    (badge_h / 3).max(2)
+}
+
+/// 徽章边框粗细（纯函数，物理像素）。
+///
+/// ⭐ 判据：边框粗细**尽量与信息文字的字体粗细一致**。依据：Segoe UI
+///   常规字重的竖笔宽 ≈ 字号的 1/10（四舍五入）⇒ 10px 字 ⇒ 1px、15px ⇒ 2px。
+///   字号走**徽章字号**（`BADGE_FONT_DIP` 经内容 DPI 换算），与徽章内文字同源。
+/// ⛔ 下限 1：0px 边框 = 没有框。
+#[cfg(target_os = "windows")]
+fn badge_stroke(font_px: i32) -> i32 {
+    (((font_px as f32) / 10.0).round() as i32).max(1)
 }
 
 /// 逐项的**客户区矩形**（物理像素）：`(left, top, right, bottom)`。
@@ -5082,19 +5275,35 @@ fn cover_radius(cover_edge: i32, m: &Metrics) -> i32 {
 /// ⚠️ 覆盖率粒度由**样本数**（16）决定，⛔ 与 `S` 无关：`(hit * 255) / 16`。
 /// ⚠️ 16 次谓词 × 封面 32×32 ≈ **1.6 万次纯算术/帧**；相对一次 UIA 探针
 ///   （30~160ms）可忽略，不值得为它引缓存。
+///
+/// ⭐ 这是**封面**用的采样密度（4/轴）。需要更细灰度的是**徽章描边**（→
+///   [`rounded_rect_coverage_n`]），两者各取所需，⛔ 不要为封面升密度（白花钱）。
 #[cfg(target_os = "windows")]
 fn rounded_rect_coverage(x: i32, y: i32, w: i32, h: i32, r: i32) -> u32 {
-    const S: i32 = 8;
     const N: i32 = 4; // 每轴样本数 ⇒ 覆盖率粒度 1/16
+    rounded_rect_coverage_n(x, y, w, h, r, N)
+}
+
+/// [`rounded_rect_coverage`] 的**采样密度参数化**版：`n` = 每轴样本数，
+///   覆盖率粒度 1/n²，几何仍整体乘 `S = 2n` 喂同一份 [`inside_rounded_rect`]。
+///
+/// ⭐ 徽章描边用 **8/轴（64 级）**：r≈5 物理px 的小圆角上 4/轴只有 16 级，
+///   梯度跳变（79/191/255 两档）显得角部「不够圆滑」（真机截图实测）；8/轴
+///   出 8/12/76/195/247 的渐变。粒度 1/64 与边界精度 1/16px 由 n 唯一决定。
+/// ⚠️ 成本：描边一枚徽章 ≈ 2 份覆盖率 × 64 谓词 × ~700px ≈ 9 万次纯算术，
+///   十枚 ≈ 百万级仍远低于一次 UIA 探针，不值得缓存。
+#[cfg(target_os = "windows")]
+fn rounded_rect_coverage_n(x: i32, y: i32, w: i32, h: i32, r: i32, n: i32) -> u32 {
+    let s = 2 * n; // 样本点 (2i+1)/(2n) 落在 S 空间整数 ⇒ 像素内均匀、不偏左上
     let mut hit = 0u32;
-    for sy in 0..N {
-        for sx in 0..N {
-            if inside_rounded_rect(x * S + sx * 2 + 1, y * S + sy * 2 + 1, w * S, h * S, r * S) {
+    for sy in 0..n {
+        for sx in 0..n {
+            if inside_rounded_rect(x * s + sx * 2 + 1, y * s + sy * 2 + 1, w * s, h * s, r * s) {
                 hit += 1;
             }
         }
     }
-    (hit * 255) / (N * N) as u32
+    (hit * 255) / (n * n) as u32
 }
 
 /// 按**系统主题**选 hover 底衬的不透明度（纯函数，可单测）。
@@ -5184,6 +5393,48 @@ fn blend_over(dst: u32, a: u32, pr: u32, pg: u32, pb: u32) -> u32 {
     (ao << 24) | (ro << 16) | (go << 8) | bo
 }
 
+/// 扫描文本掩码里**有墨的首/末行号**（含抗锯齿边），全白掩码返回 `None`。**纯函数**。
+///
+/// ⭐ 徽章文字的**光学居中**靠它：GDI `DT_SINGLELINE` 对齐的是**行盒**（含内部隔），
+///   数字字形的墨压在行盒下半部 —— 掩码高 17 行时墨带在 8..16（真机截图实测），
+///   按「掩码顶 = 徽章顶」blit 会让墨中心（行 12）偏离徽章中心（行 8）约 4px，
+///   即用户报的「文字偏下」。⇒ 必须按**墨的上下界**重排，不许按行盒。
+/// 判据口径：有墨 = 绿通道 < 255（与 [`blit_text_mask`] 同一份覆盖度定义）。
+/// ⚠️ 全白掩码（空文本路径）返回 `None` ⇒ 调用方回落行盒顶对齐（行为与旧版一致）。
+#[cfg(target_os = "windows")]
+fn mask_ink_rows(mask: &(Vec<u8>, i32, i32)) -> Option<(i32, i32)> {
+    let (buf, mw, mh) = mask;
+    let mut first = None;
+    let mut last = None;
+    for yy in 0..*mh {
+        for xx in 0..*mw {
+            // 绿通道 < 255 即有墨（BGRA 顺序 → `blit_text_mask` 的覆盖度口径）
+            if buf[((yy * mw + xx) * 4 + 1) as usize] < 255 {
+                if first.is_none() {
+                    first = Some(yy);
+                }
+                last = Some(yy);
+                break; // 本行已确认有墨，扫下一行
+            }
+        }
+    }
+    match (first, last) {
+        (Some(f), Some(l)) => Some((f, l)),
+        _ => None,
+    }
+}
+
+/// 徽章文字的 blit 目标 y：把**墨带**在徽章内垂直居中（光学居中）。**纯函数**。
+///
+/// 判据：`dst_y = by + (badge_h − ink_h) / 2 − ink_top` ⇒ 墨带中心恒等于徽章中心。
+/// ⛔ 不是 `by`（行盒顶对齐会把数字墨压到下半部，依据 → [`mask_ink_rows`]）。
+/// 位置：唯一调用点 = `draw_items_render` 的徽章分支；上下界来自 [`mask_ink_rows`]。
+#[cfg(target_os = "windows")]
+fn badge_text_y(by: i32, badge_h: i32, ink_top: i32, ink_bottom: i32) -> i32 {
+    let ink_h = ink_bottom - ink_top + 1;
+    by + (badge_h - ink_h) / 2 - ink_top
+}
+
 /// 把一段**文本掩码**按覆盖度预乘合成进主缓冲（`(dst_x, dst_y)` = 目标左上角）。
 ///
 /// ⛔ 为什么不能把 GDI 文本直接画进主缓冲：`DrawTextW` 在 32bpp DIB 上写的是
@@ -5243,20 +5494,102 @@ fn blit_text_mask(
     }
 }
 
+/// ⭐ 环带 alpha 的**幂次压缩**指数（γ=1.6）。判据：sRGB 空间直混会把部分覆盖
+///   画得过墨 —— 45° 角带上相邻像素 66%~83% 连成约 2px 的实心带，视觉比直边的
+///   1px 实心粗一圈（真机截图实测「圆角比四条边粗」）。
+/// 依据：α^1.6 把 216→196、195→166、143→101、75→36（细采样下同一几何的实测值），
+///   对角带收敛到 ~1px 核 + 淡裙边，与直边观感一致；α=255 不动（实心不变细）。
+/// ⛔ 只作用于**环带**：文字掩码（GDI 灰度）与封面角不共享这个口径。
+#[cfg(target_os = "windows")]
+const BADGE_RING_ALPHA_GAMMA: f32 = 1.6;
+
+/// 给徽章描一圈**圆角矩形边框**（抗锯齿），颜色与信息文字同墨。
+///
+/// ⭐ 实现 = 「外形状覆盖率 − 内缩 `stroke` 的内形状覆盖率」的**环带**：
+///   两份覆盖率都走 [`rounded_rect_coverage_n`] 的 **8/轴采样**（64 级灰度，
+///   判据 → 该函数文档），⛔ 不另写一份圆角几何（与封面角同一条纪律）。
+///   `saturating_sub` 保证内部整块 alpha=0（环带之外的负数被钳回 0）。
+/// ⭐ 覆盖率再过 [`BADGE_RING_ALPHA_GAMMA`] 幂次压缩后才乘 `alpha_scale`：
+///   顺序必须是「先 γ 后缩放」，否则悬停减淡会绕过压缩口径。
+/// ⛔ 预乘 + `blend_over`（source-over）：与 [`blit_text_mask`] 同一份合成语义，
+///   「取最大 alpha」会侵蚀底衬之上的抗锯齿边缘。
+/// ⚠️ 退化两型，行为都有定义：① `w - 2s ≤ 0` / `h - 2s ≤ 0` ⇒ 内形状为空 ⇒
+///   `inside_rounded_rect` 对所有像素判假 ⇒ cov_in 恒 0 ⇒ 整块实心（小徽章下
+///   的自然兜底）；② `r - s ≤ 0` ⇒ 内形状圆角被 `max(0)` 钳平 ⇒ 内角变直角、
+///   环带照常。现实参数下两型都不可达：`badge_geometry` 的下限（徽章高 ≥
+///   字号 × 1.3）保证 `r = 徽章高/3 > stroke = 字号/10`。
+#[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
+fn stroke_rounded_rect(
+    px: &mut [u32],
+    total_w: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    r: i32,
+    stroke: i32,
+    color: (u8, u8, u8),
+    alpha_scale: f32,
+) {
+    let (cr, cg, cb) = color;
+    let iw = w - stroke * 2;
+    let ih = h - stroke * 2;
+    let ir = r - stroke;
+    for yy in 0..h.max(0) {
+        let dy = y + yy;
+        if dy < 0 {
+            continue;
+        }
+        for xx in 0..w.max(0) {
+            let dx = x + xx;
+            // ⛔ 与 blit_text_mask 同款越界守卫：行内偏移溢出会绕行到下一行
+            if dx < 0 || dx >= total_w {
+                continue;
+            }
+            let cov_out = rounded_rect_coverage_n(xx, yy, w, h, r, 8);
+            if cov_out == 0 {
+                continue;
+            }
+            let cov_in = if iw <= 0 || ih <= 0 {
+                0
+            } else {
+                rounded_rect_coverage_n(xx - stroke, yy - stroke, iw, ih, ir, 8)
+            };
+            let a = cov_out.saturating_sub(cov_in);
+            if a == 0 {
+                continue;
+            }
+            let a = (((a as f32) / 255.0).powf(BADGE_RING_ALPHA_GAMMA) * 255.0).round() as u32;
+            let a = ((a as f32) * alpha_scale).round() as u32;
+            if a == 0 {
+                continue;
+            }
+            let pr = cr as u32 * a / 255;
+            let pg = cg as u32 * a / 255;
+            let pb = cb as u32 * a / 255;
+            let di = (dy * total_w + dx) as usize;
+            if di < px.len() {
+                px[di] = blend_over(px[di], a, pr, pg, pb);
+            }
+        }
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // 拖拽（全部在**主线程**：鼠标消息只投递给创建窗口的那个线程）
 // ══════════════════════════════════════════════════════════════════════════
 //
-// ⭐ 交互口径（用户）：设置页「固定位置」**关掉**后，任务栏窗口可以用
+// ⭐ 交互口径：设置页选**「手动拖拽」档**后，任务栏窗口可以用
 //   鼠标拖着走；松开即记住位置，重启后仍在原处。
 //
 // ⛔ **为什么必须画底衬**：`ULW` 分层窗按 alpha 命中测试，透明像素把鼠标放行给下层
 //   ⇒ 只有可见笔画能接住按下（真机实测 68 采样点只中 11 点）。见 `fill_hover_backdrop`。
 
-/// 拖拽是否可用 —— 「固定位置」关掉时才允许。
+/// 拖拽是否可用 —— 「手动拖拽」档才允许。
 #[cfg(target_os = "windows")]
 fn drag_enabled() -> bool {
-    crate::config::with_config(|c| !c.taskbar_position_locked)
+    crate::config::with_config(|c| c.taskbar_position == "drag")
 }
 
 /// 读窗口当前的**屏幕**矩形 `(left, top, width, height)`（物理像素）。
@@ -5441,7 +5774,9 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
         //   任务栏上偏虚」，但换过 Segoe UI Variable Text 之后细体并不虚，
         //   加粗反而让数字与 `%` 在 15px 下显得糊、且整块面板比 tooltip 更重。
         //   ⇒ 现在**三处口径统一为常规字重**：设备面板 / 音乐面板 / tooltip。
-        let f = ffi::create_font(m.font, false);
+        // ⭐ 字号走**徽章字号**（`BADGE_FONT_DIP`，比音乐面板 / tooltip 的
+        //   `m.font` 缩一档）：文字要装进圆角矩形，判据见常量文档。
+        let f = ffi::create_font(m.dip(BADGE_FONT_DIP), false);
         if f.is_null() {
             append_log("[widget] CreateFontW 失败，退回空白帧");
             return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
@@ -5456,18 +5791,24 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
         return Painted::Committed(draw_blank(hwnd, m.pad_x * 2));
     }
 
-    // ── 每项：图标 + 两段文本（右上电量 / 右下音量），各自测量宽度 ──────
-    let bat_texts: Vec<Vec<u16>> = items
-        .iter()
-        .map(|it| format_battery(it).encode_utf16().collect())
-        .collect();
+    // ── 每项：图标 + 两排文本，各自测量宽度 ────────────────────────────
     // ⭐ 「音量精细调节」只在这里读一次：决定音量文本**要不要小数位**。
     //   读配置只取 bool、立刻释放锁（不跨任何 GDI 调用）——符合本文件
     //   「GDI 之前不持锁」的纪律。
     let fine_adjust = crate::config::with_config(|c| c.volume_fine_adjust);
-    let vol_texts: Vec<Vec<u16>> = items
+    // ⭐ 两排文本走 [`item_row_texts`]**单一口径**（布局判据见该函数）：
+    //   齐全 = 上电量 / 下音量；缺失信息由连接类型固定占**下排**、在场信息上移
+    //   上排；空上排（都缺）不会进 GDI——`bw > 0` 守卫与 measure/render 的
+    //   空串闸双保险。
+    let row_texts: Vec<(Vec<u16>, Vec<u16>)> = items
         .iter()
-        .map(|it| format_volume(it, fine_adjust).encode_utf16().collect())
+        .map(|it| {
+            let (top, bottom) = item_row_texts(it, fine_adjust);
+            (
+                top.encode_utf16().collect(),
+                bottom.encode_utf16().collect(),
+            )
+        })
         .collect();
     // 每段记 `(文本实际宽, 是否需要省略号)`：实际宽 = `min(自然宽, item_max_w)`；
     // 自然宽 > 上限 ⇒ 该段要画 `…`（否则会**硬切半个字形**）。
@@ -5477,18 +5818,38 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
         let clamped = natural.min(m.item_max_w);
         (clamped, natural > clamped)
     };
-    let bat_w: Vec<(i32, bool)> = bat_texts.iter().map(|t| measure(t)).collect();
-    let vol_w: Vec<(i32, bool)> = vol_texts.iter().map(|t| measure(t)).collect();
+    let top_w: Vec<(i32, bool)> = row_texts.iter().map(|(t, _)| measure(t)).collect();
+    let bottom_w: Vec<(i32, bool)> = row_texts.iter().map(|(_, b)| measure(b)).collect();
 
     unsafe {
         windows_sys::Win32::Graphics::Gdi::DeleteDC(memdc);
     }
 
+    // ── 徽章几何：全部条目的所有徽章同宽同高 ──────────────────────────
+    // ⭐ 统一宽 = 本帧**所有行**文本测量宽的最大值 + 左右内边距——以最宽的文本
+    //   定宽，其余文本在框内**水平居中**；⛔ 逐项取「自己两排的较大者」会让
+    //   各项徽章宽窄不一（与统一宽判据直接冲突）。
+    let badge_pad_x = m.dip(BADGE_PAD_X_DIP);
+    let badge_w = top_w
+        .iter()
+        .chain(bottom_w.iter())
+        .map(|(w, _)| *w)
+        .max()
+        .unwrap_or(0)
+        + badge_pad_x * 2;
+    let BadgeGeometry {
+        h: badge_h,
+        top_dy: badge_dy_top,
+        bottom_dy: badge_dy_bottom,
+    } = badge_geometry(&m);
+    let badge_r = badge_radius(badge_h);
+    let badge_stroke_px = badge_stroke(m.dip(BADGE_FONT_DIP));
+
     // ── 计算总宽并建主 DIB ────────────────────────────────────────────
-    // 每项宽 = 图标 + 间隙 + **两段文本里更宽的那段**（两段共用同一列起画点）；
+    // 每项宽 = 图标 + 间隙 + **统一徽章宽**（所有项相同；两排共用同一列徽章）；
     // 项与项之间再加 `m.item_gap`，两端加 `pad_x`。
     let per_item: Vec<i32> = (0..items.len())
-        .map(|i| m.icon + m.icon_text_gap + bat_w[i].0.max(vol_w[i].0))
+        .map(|_| m.icon + m.icon_text_gap + badge_w)
         .collect();
     // ⭐ 逐项 x 起点**物化成纯函数**（`item_rects`）：绘制与 tooltip 注册**共用同一份**。
     //   旧代码只用 running `cursor` 现算、用完即弃 ⇒ tooltip 若自行重算就是
@@ -5527,13 +5888,9 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     }
     // ⚠️ 位置配置**在绘制前一次性取快照**（返回 owned 值）⇒ 锁在 GDI 调用之前就已释放，
     //    不会「持配置锁去做窗口操作」（AGENTS.md 的 AB/BA 死锁纪律）。
-    let (position, locked, custom_x) = crate::config::with_config(|c| {
-        (
-            c.taskbar_position.clone(),
-            c.taskbar_position_locked,
-            c.taskbar_custom_x,
-        )
-    });
+    let (position, custom_x) =
+        crate::config::with_config(|c| (c.taskbar_position.clone(), c.taskbar_custom_x));
+    let locked = position_locked(&position);
     // ⚠️ `taskbar_rect()` 取一次同时拿到左端与宽度（宽度供 `resolve_rel_x` 钳制用）。
     //    取不到时给一个「钳制不起作用」的宽度，退回旧行为而不是把窗口钉死在 0。
     let (tb_left, tb_w) = match taskbar_rect() {
@@ -5569,8 +5926,9 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
     //   ⛔ 重绘是事件驱动的低频操作（非每帧），此处打日志不会淹没有用信息。
     // ⛔ `pos` 与 `rel_x` **必须成对观察**：三档 `rel_x` 若相同，说明贴靠未生效，
     //   不是「设置没保存」。⭐ `余量` 把这一判据显式打出来。
-    //   ⭐ 可用区现为**整条任务栏**，正常应看到 `area=(0,w=任务栏宽)` 且
-    //      `left→0`、`right→余量`、`center→余量/2`。
+    //   ⭐ 可用区为**整条任务栏**时（固定档 / 自动兜底），正常应看到
+    //      `area=(0,w=任务栏宽)` 且 `fixed_left→0`、`fixed_right→余量`、
+    //      `fixed_center→余量/2`（自动命中间隙时 area 是那个空隙）。
     // ⚠️ 降到**详细级**：本函数会在 hover 时被反复调用（实测 23 分钟 51 行），
     //    属「每次重绘都打」的逐帧信息；而它真正要服务的是**排查**（贴靠问题）。
     if crate::config::verbose_log_enabled() {
@@ -5602,12 +5960,11 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
 
         // 内容色（预乘前的原色）：浅色主题黑、深色主题白
         let (cr, cg, cb): (u8, u8, u8) = if dark { (255, 255, 255) } else { (0, 0, 0) };
-        // ⭐ hover 底衬（白色半透明，**鼠标悬停时才有**）—— 口径与 一致。
-        //    ⛔ 判据是 `HOVERED`（由轮询光标得出），**不再看 `locked`**：
-        //       要求「和 一致 + hover 时才出现」，
-        //       而 没有「固定位置」概念 ⇒ hover 即显示。
+        // ⭐ hover 底衬（白色半透明，**鼠标悬停时才有**）—— 口径与音乐面板一致。
+        //    ⛔ 判据是 `HOVERED`（由轮询光标得出），**不看位置档** —— hover 即显示。
         //    ⚠️ 它同时是**拖拽命中区**（分层窗按 alpha 命中测试）：hover 成立 ⇒ 底衬铺上
-        //       ⇒ 命中测试开始生效 ⇒ 此刻按下左键能收到 `WM_LBUTTONDOWN`。自洽性论证见
+        //       ⇒ 命中测试开始生效 ⇒ 此刻按下左键能收到 `WM_LBUTTONDOWN`
+        //       （「手动拖拽」档才接管按下，判据见 `drag_enabled`）。自洽性论证见
         //       `fill_hover_backdrop` 与 `HOVERED` 的文档。
         //    ⛔ 底衬必须**先**画（后续内容按 source-over 叠在它之上 ⇒ 只会盖住它、不会抹掉它）。
         if HOVERED.load(Ordering::Acquire) {
@@ -5625,7 +5982,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
             //    与「有数据」区分；这是「pin = 强制显示 + 置灰」在 widget 上的落地。
             let alpha_scale: f32 = if should_dim_item(it) { 0.45 } else { 1.0 };
 
-            // ① 图标：解码（带缓存）→ 最近邻缩放到 `m.icon` → 预乘合成
+            // ① 图标：解码（带缓存）→ 面积平均缩放到 `m.icon` → 预乘合成
             if let Some(scaled) = icons::get(it.icon, dark)
                 .and_then(|rgba| icons::scale_to(icons::slot_of(it.icon), rgba, m.icon as u32))
             {
@@ -5654,38 +6011,52 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
                     }
                 }
             }
-            let text_x = cursor + m.icon + m.icon_text_gap;
+            let badge_x = cursor + m.icon + m.icon_text_gap;
 
-            // ② 电量：图标**右上角**（两行文本的**上半行**）
-            let (bw, b_ell) = bat_w[i];
-            if bw > 0 {
-                if let Some(mask) =
-                    ffi::render_text_mask(bw, m.text_row_h, font, &bat_texts[i], b_ell)
-                {
-                    blit_text_mask(
-                        px,
-                        total_w,
-                        &mask,
-                        text_x,
-                        icon_y,
-                        (cr, cg, cb),
-                        alpha_scale,
-                    );
+            // ②③ 两排：各画一枚**同尺寸圆角矩形徽章**，文字在框内居中。
+            //   ⭐ 先描框再画字：字按 source-over 叠在框之上，同墨不互相侵蚀。
+            //   ⛔ 空串守卫照旧（bw=0 整枚跳过）：上排留空 = 不画空框
+            //     （「都缺 = 上排留空」的布局判据 → `item_row_texts`），
+            //     也是 measure/render 的 GDI 空串闸双保险。
+            let rows = [
+                (badge_dy_top, &top_w[i], &row_texts[i].0),
+                (badge_dy_bottom, &bottom_w[i], &row_texts[i].1),
+            ];
+            for (dy, (bw, ell), text) in rows {
+                let bw = *bw;
+                if bw <= 0 {
+                    continue;
                 }
-            }
-
-            // ③ 音量：图标**右下角**（两行文本的**下半行**）
-            let (vw, v_ell) = vol_w[i];
-            if vw > 0 {
-                if let Some(mask) =
-                    ffi::render_text_mask(vw, m.text_row_h, font, &vol_texts[i], v_ell)
-                {
+                let by = icon_y + dy;
+                stroke_rounded_rect(
+                    px,
+                    total_w,
+                    badge_x,
+                    by,
+                    badge_w,
+                    badge_h,
+                    badge_r,
+                    badge_stroke_px,
+                    (cr, cg, cb),
+                    alpha_scale,
+                );
+                if let Some(mask) = ffi::render_text_mask(bw, badge_h, font, text, *ell) {
+                    // 垂直位置按**墨带**居中（光学居中）：行盒顶对齐会把数字墨压到
+                    //   下半部（真机实测「文字偏下」→ `mask_ink_rows` 的依据）；
+                    //   全白掩码回落行盒顶对齐（旧行为，空文本路径）。
+                    let ty = match mask_ink_rows(&mask) {
+                        Some((ink_top, ink_bottom)) => {
+                            badge_text_y(by, badge_h, ink_top, ink_bottom)
+                        }
+                        None => by,
+                    };
                     blit_text_mask(
                         px,
                         total_w,
                         &mask,
-                        text_x,
-                        icon_y + m.text_row_h,
+                        // 水平居中：框内剩余空间左右各半
+                        badge_x + (badge_w - bw) / 2,
+                        ty,
                         (cr, cg, cb),
                         alpha_scale,
                     );
@@ -5793,7 +6164,9 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
             .iter()
             .zip(item_rects.iter())
             .map(|(it, r)| crate::taskbar_tooltip::TipEntry {
-                text: it.name.clone(),
+                // ⭐ 文本 = 设备名 + 换行 + 两排信息（同一布局核心 → `tooltip_item_text`），
+                //   ⛔ 不许回到 `it.name.clone()` 单行口径或在此各自拼分支。
+                text: tooltip_item_text(it, fine_adjust),
                 rect: *r,
             })
             .collect();
@@ -5826,6 +6199,14 @@ fn draw_blank(hwnd: *mut core::ffi::c_void, w: i32) -> bool {
         let px = std::slice::from_raw_parts_mut(dib.bits, (w * h) as usize);
         px.fill(0);
     }
+    // ⭐ **blank 帧 = 无命中面**：清逐项矩形 + 销毁 tooltip。
+    //   依据：两者都来自**上一张实帧**；blank 后窗口全透明，旧矩形会让 hover 轮询 /
+    //   滚轮命中 / tip 显示打到**看不见的条目**上。「常驻显示未连接的设备」关 +
+    //   全未连接时 widget 会**长期**处于 blank 态，残留窗口从「一帧」变成「数小时」。
+    //   位置：`draw_blank` 是唯一 blank 帧实现点（首帧 / 面板竞态 / 隐藏态三路共用），
+    //   清理写在这里即三路全覆盖，调用点不得各写一份。
+    publish_item_rects(&[]);
+    crate::taskbar_tooltip::sync(hwnd as _, &[]);
     let ok = unsafe { ffi::commit(hwnd as _, &dib, 0, widget_y_offset()) };
     unsafe { ffi::free_dib(&dib) };
     // ⭐ 开发门控**在 blank 阶段也要跑**：`draw_blank` 用 `commit(.., 0, ..)`
@@ -6039,34 +6420,44 @@ fn resolve_widget_labels(devices: &[crate::device_identity::PhysicalDevice]) -> 
 #[cfg(all(target_os = "windows", test))]
 fn build_items(devices: &[crate::device_identity::PhysicalDevice]) -> Vec<WidgetItem> {
     let labels: Vec<Option<String>> = vec![None; devices.len()];
-    build_items_with_opt_labels(devices, &labels)
+    // ⭐ 既有用例全部按「常驻开关**开**」（旧语义）造样本；「常驻显示未连接的设备」
+    //    关闭路径的用例显式走 [`build_items_with_labels`] 传 `false`。
+    build_items_with_opt_labels(devices, &labels, true)
 }
 
 /// 从后端聚合结果构造 widget 条目列表（**纯函数**，可单测）。
 ///
 /// ⭐ `labels` 是**已经解析好的显示名**（[`resolve_widget_labels`] 的输出）。
-/// ⛔ 本函数**刻意不读配置**——它要保持纯函数可单测；解析放在调用方。
+/// ⭐ `show_disconnected` = `config.taskbar_show_disconnected`（判据见该字段文档）：
+///   关（默认）⇒ 未连接的钉住设备**不入选**，连上后由事件驱动刷新自动出现；
+///   开 ⇒ 保持「pin = 强制显示」语义（离线占位条目置灰常驻）。
+/// ⛔ 本函数**刻意不读配置**——它要保持纯函数可单测；解析与开关读取放在调用方。
 /// ⛔ 别退回到「在 build_items 里读配置」：那会让它不再可单测，且与选择器侧分叉。
 #[cfg(target_os = "windows")]
 fn build_items_with_labels(
     devices: &[crate::device_identity::PhysicalDevice],
     labels: &[String],
+    show_disconnected: bool,
 ) -> Vec<WidgetItem> {
     let owned: Vec<Option<String>> = labels.iter().map(|s| Some(s.clone())).collect();
-    build_items_with_opt_labels(devices, &owned)
+    build_items_with_opt_labels(devices, &owned, show_disconnected)
 }
 
 #[cfg(target_os = "windows")]
 fn build_items_with_opt_labels(
     devices: &[crate::device_identity::PhysicalDevice],
     labels: &[Option<String>],
+    show_disconnected: bool,
 ) -> Vec<WidgetItem> {
     let mut items: Vec<WidgetItem> = devices
         // ⛔ 过滤必须在 map 之前：`pinned` 是「用户勾选」的唯一标记，
         //    它在 `group_taskbar_devices` 里同时覆盖「命中已选」与「反向补建的空占位」。
+        // ⭐ `show_disconnected` 关（默认）时再叠一层「已连接」：离线占位条目不入选
+        //    ⇒ 空列表走 `draw_items` 的透明帧路径 = 整窗不可见（判据 →
+        //    `config::taskbar_show_disconnected` 字段文档）。
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.pinned)
+        .filter(|(_, d)| d.pinned && (show_disconnected || d.connected))
         .map(|(i, d)| WidgetItem {
             name: labels
                 .get(i)
@@ -6083,6 +6474,7 @@ fn build_items_with_opt_labels(
             is_default: d.is_default == Some(true),
             pinned: d.pinned,
             connected: d.connected,
+            conn: d.conn,
         })
         .collect();
     // 稳定排序：有数据的（电量或音频）优先
@@ -6222,7 +6614,15 @@ fn fetch_into_snapshot(force: bool) -> bool {
             return false;
         }
     };
-    let items = build_items_with_labels(&devices, &resolve_widget_labels(&devices));
+    // ⭐ 「常驻显示未连接的设备」在**取数时**过滤（而不是绘制时）：快照里只留
+    //    该显示的条目 ⇒ tooltip / 滚轮命中 / 诊断读数天然同口径（判据 →
+    //    `config::taskbar_show_disconnected` 字段文档）。
+    let show_disconnected = crate::config::with_config(|c| c.taskbar_show_disconnected);
+    let items = build_items_with_labels(
+        &devices,
+        &resolve_widget_labels(&devices),
+        show_disconnected,
+    );
     // ⛔ **不再做像素扫描 / 宽度估算**（第二次方案变更，见 `find_widget_slot`）：
     //    可用区恒为**整条任务栏**，与内容宽度无关 ⇒ 设备数变化不再让位置漂移。
     //    ⚠️ `estimate_widget_width` 现仅用于**单测**核对绘制侧的 `desired_w` 口径；
@@ -6768,7 +7168,7 @@ pub fn destroy_widget() {}
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
 
-    /// ⭐⭐ **「文字被截断但右侧留大片空白」的判据**（用户）。
+    /// ⭐⭐ **「文字被截断但右侧留大片空白」的判据**。
     ///
     /// 缺陷形态：布局侧按音乐面板自己的上限（`MUSIC_TEXT_MAX_W_DIP` = 320 DIP ⇒
     /// 125% 下 400px）算面板宽度，而**绘制侧仍在用 `m.item_max_w`**
@@ -6818,7 +7218,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **「切换按钮只在 hover 时显示」这条需求本身**（用户）。
+    /// ⭐⭐ **「切换按钮只在 hover 时显示」这条需求本身**。
     ///
     /// 判据钉的是**显示与可点同源**这个性质：不可见 ⇒ 必定不可点。
     /// ⛔ 两处若各写一份判据，迟早漂移成「看不见但点得到」——
@@ -7125,7 +7525,7 @@ mod tests {
         assert_eq!(super::press_target_at((5, 5)), super::PRESS_NONE);
         super::SWITCH_ANIM_STARTED.store(saved, Ordering::SeqCst);
     }
-    /// ⭐⭐ **按下态绝不能「卡住」**（用户 的「按下变灰」）。
+    /// ⭐⭐ **按下态绝不能「卡住」**（「按下变灰」判据）。
     ///
     /// 风险点在 `WM_CAPTURECHANGED`：捕获被任务栏/别的窗口抢走时
     /// **不会**有 `WM_LBUTTONUP` 到来 ⇒ 漏清的话按钮会**永久停在灰态**，
@@ -7713,6 +8113,8 @@ mod tests {
             categories: Vec::new(),
             node_count: 1,
             connected: true,
+            // ⭐ 既有用例默认 Unknown（旧语义）；连接类型相关的用例显式覆盖本字段
+            conn: crate::device_identity::ConnKind::Unknown,
             pinned,
         }
     }
@@ -7734,14 +8136,16 @@ mod tests {
             is_default: false,
             pinned: false,
             connected: false,
+            conn: crate::device_identity::ConnKind::Unknown,
         }
     }
 
     // ── format_battery / format_volume：两行文本的语义 ────────
     //
-    // ⭐ 布局口径（用户）：电量画在图标**右上角**、音量画在图标**右下角**，
-    //   **没有可显示的值一律 `N/A`**。两个格式化函数是这两条口径的**唯一落地点**，
-    //   故必须各自有用例钉住（绘制路径依赖 GDI，无法单测）。
+    // ⭐ 两个格式化函数钉住「值 → 文本」的语义：0% 与读不出显示不同、
+    //   **没有可显示的值 = `N/A`**。**布局**（缺信息时连接类型固定占下排、
+    //   在场信息上移）在 [`item_row_texts`]，另有专属用例（绘制路径依赖 GDI，
+    //   无法单测 ⇒ 全部走这两个纯函数层）。
 
     /// ⭐ 核心判据：`Some(0)`（电量耗尽）与 `None`（读不出）**必须显示不同**。
     /// 写反了会看不出错 —— 界面只是少一个百分号。
@@ -7802,7 +8206,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **音量文本是否带小数，由「音量精细调节」开关决定**（用户）。
+    /// ⭐⭐ **音量文本是否带小数，由「音量精细调节」开关决定**。
     ///
     /// · **开** ⇒ `12.5%`：此时滚轮是 0.1% 步进，显示整数会让「滚轮动了但数字
     ///   没变」看起来像失效；
@@ -7853,6 +8257,190 @@ mod tests {
             "静音",
             "静音优先于百分比，与开关无关"
         );
+    }
+
+    // ── item_row_texts：两排文本的布局口径 ────────────────────
+    //
+    // ⭐ 布局判据：齐全 = 上电量 / 下音量（默认，行为零变化）；
+    //   缺一个 = 在场信息**上移上排**、连接类型**固定占下排**；都缺 = 上排留空、
+    //   下排连接类型；连接类型证据全无（Unknown）⇒ 占位回退 `N/A`。
+    //   可证伪：把换位逻辑改回「缺哪补哪」（电量缺失时上排仍画 N/A），
+    //   缺电用例立刻转红。
+
+    /// 构造指定连接类型的条目（音量在场 ⇔ `volume` 为 `Some`）。
+    fn conn_item(
+        conn: crate::device_identity::ConnKind,
+        battery: Option<i32>,
+        volume: Option<f32>,
+    ) -> WidgetItem {
+        let mut it = item(battery, volume, volume.is_some(), None);
+        it.conn = conn;
+        it
+    }
+
+    #[test]
+    fn rows_default_when_both_present() {
+        let it = conn_item(
+            crate::device_identity::ConnKind::Bluetooth,
+            Some(85),
+            Some(0.4),
+        );
+        assert_eq!(
+            item_row_texts(&it, false),
+            ("85%".to_string(), "40%".to_string()),
+            "两个信息齐全必须保持默认布局（上电量 / 下音量）"
+        );
+    }
+
+    #[test]
+    fn rows_battery_missing_moves_volume_up_and_pins_conn() {
+        let it = conn_item(crate::device_identity::ConnKind::Bluetooth, None, Some(0.4));
+        assert_eq!(
+            item_row_texts(&it, false),
+            ("40%".to_string(), "BT".to_string()),
+            "电量缺失：音量上移上排，BT 固定下排"
+        );
+    }
+
+    #[test]
+    fn rows_volume_missing_pins_conn_bottom() {
+        let it = conn_item(
+            crate::device_identity::ConnKind::Wireless24g,
+            Some(85),
+            None,
+        );
+        assert_eq!(
+            item_row_texts(&it, false),
+            ("85%".to_string(), "2.4G".to_string()),
+            "音量缺失：电量留在上排，2.4G 占下排"
+        );
+    }
+
+    #[test]
+    fn rows_both_missing_leave_top_empty() {
+        let it = conn_item(crate::device_identity::ConnKind::Bluetooth, None, None);
+        assert_eq!(
+            item_row_texts(&it, false),
+            (String::new(), "BT".to_string()),
+            "都缺：上排留空（不画），下排连接类型"
+        );
+    }
+
+    #[test]
+    fn rows_unknown_conn_falls_back_to_na() {
+        let it = conn_item(crate::device_identity::ConnKind::Unknown, None, Some(0.4));
+        assert_eq!(
+            item_row_texts(&it, false),
+            ("40%".to_string(), "N/A".to_string()),
+            "连接类型证据全无（有线 DAC 等）⇒ 占位回退 N/A，不猜"
+        );
+    }
+
+    #[test]
+    fn rows_muted_volume_counts_as_present() {
+        let mut it = item(None, None, true, Some(true));
+        it.conn = crate::device_identity::ConnKind::Bluetooth;
+        assert_eq!(
+            item_row_texts(&it, false),
+            ("静音".to_string(), "BT".to_string()),
+            "静音是有内容可画，按「音量在场」参与布局"
+        );
+    }
+
+    /// ⭐ 设备 tooltip 信息行与徽章两排**同走一份布局核心**（用户：设备名下方
+    ///   新增一行显示两排信息）：齐全 = 「电量：…  音量：…」（连接类型不上）；
+    ///   缺一 = 在场信息 + 连接类型；都缺 = 只有连接类型。
+    /// 可证伪（注入实测）：把 `tooltip_item_text` 改成独立拼一份 (bat, vol)
+    ///   分支（旧的两份口径）⇒ 布局判据改动只落在核心时 tooltip 静默漂移
+    ///   ⇒ 本条期望值与上面的 rows_* 用例**成对钉死同一核心**。
+    #[test]
+    fn tooltip_item_text_labels_follow_the_row_layout() {
+        // 齐全：连接类型不上 tooltip（它不在两排里）
+        let it = conn_item(
+            crate::device_identity::ConnKind::Bluetooth,
+            Some(85),
+            Some(0.4),
+        );
+        assert_eq!(
+            tooltip_item_text(&it, false),
+            "设备\n电量：85%  音量：40%",
+            "齐全 = 电量 + 音量，各带标签，两空格分隔"
+        );
+        // 缺电量（用户示例一）：音量上移 + 蓝牙占下排
+        let it = conn_item(crate::device_identity::ConnKind::Bluetooth, None, Some(0.4));
+        assert_eq!(tooltip_item_text(&it, false), "设备\n音量：40%  连接：蓝牙");
+        // 缺音量（无端点）：电量 + 2.4G（连接词保留产品名）
+        let it = conn_item(
+            crate::device_identity::ConnKind::Wireless24g,
+            Some(85),
+            None,
+        );
+        assert_eq!(tooltip_item_text(&it, false), "设备\n电量：85%  连接：2.4G");
+        // 都缺：只剩连接类型；Unknown ⇒ 未知（用户：N/A 显示为未知）
+        let it = conn_item(crate::device_identity::ConnKind::Unknown, None, None);
+        assert_eq!(
+            tooltip_item_text(&it, false),
+            "设备\n连接：未知",
+            "证据全无的连接类型在 tooltip 显示「未知」，不显示 N/A"
+        );
+        // 缺电量且连接派生不出证据（用户示例二）：音量 + 未知
+        let it = conn_item(crate::device_identity::ConnKind::Unknown, None, Some(0.4));
+        assert_eq!(tooltip_item_text(&it, false), "设备\n音量：40%  连接：未知");
+        // 静音：与徽章同口径显示「静音」
+        let mut it = item(None, None, true, Some(true));
+        it.conn = crate::device_identity::ConnKind::Bluetooth;
+        assert_eq!(
+            tooltip_item_text(&it, false),
+            "设备\n音量：静音  连接：蓝牙"
+        );
+    }
+
+    /// ⛔⛔ **调用点钉死**：设备 tooltip 的文本必须走 [`tooltip_item_text`]
+    ///   （设备名 + 换行 + 两排信息行）。tooltip 渲染单测**看不到** ⇒ 只能钉
+    ///   调用点文本（同 `cover_mask_takes_its_radius_from_cover_radius` 的做法，
+    ///   判据切片先剔掉本函数自身，防「断言字符串自己命中」）。
+    /// 可证伪（注入实测）：把调用点改回 `it.name.clone()`（旧单行口径）⇒ 转红。
+    #[test]
+    fn device_tooltip_text_takes_the_shared_core() {
+        let src = include_str!("taskbar_widget.rs");
+        let fn_start = src
+            .find("fn device_tooltip_text_takes_the_shared_core")
+            .expect("判据函数自身必须还在");
+        let draw_area = &src[..fn_start];
+        assert!(
+            draw_area.contains("text: tooltip_item_text(it, fine_adjust),"),
+            "设备 tooltip 文本必须走 tooltip_item_text（共享布局核心）"
+        );
+        assert!(
+            !draw_area.contains("text: it.name.clone(),"),
+            "⛔ 设备 tooltip 不得退回单行设备名口径"
+        );
+    }
+
+    /// ⭐ 测宽必须对连接类型**不失明**：`2.4G`（4 字符）比 `N/A`（3 字符）宽，
+    ///   测宽若退回旧口径（直接 format_battery/volume）本条立刻转红。
+    #[test]
+    fn estimate_width_sees_conn_placeholder() {
+        let m = Metrics::for_dpi(100);
+        let w24 = estimate_widget_width(
+            std::slice::from_ref(&conn_item(
+                crate::device_identity::ConnKind::Wireless24g,
+                None,
+                None,
+            )),
+            &m,
+            false,
+        );
+        let wna = estimate_widget_width(
+            std::slice::from_ref(&conn_item(
+                crate::device_identity::ConnKind::Unknown,
+                None,
+                None,
+            )),
+            &m,
+            false,
+        );
+        assert!(w24 > wna, "2.4G 估宽必须大于 N/A：{w24} vs {wna}");
     }
 
     // ── 滚轮调音量：与弹出窗口逐字对齐 ────────────────────────
@@ -8114,7 +8702,7 @@ mod tests {
         let devices = vec![d];
         // 假装解析出了另一个名字
         let labels = vec!["我的耳机".to_string()];
-        let items = build_items_with_labels(&devices, &labels);
+        let items = build_items_with_labels(&devices, &labels, true);
         assert_eq!(items.len(), 1);
         assert_eq!(
             items[0].name, "我的耳机",
@@ -8238,7 +8826,7 @@ mod tests {
     /// ⛔⛔ 本设置的**作用域边界**（明确要求）：
     ///   内容随档位变，**底衬必须恒定**。
     ///
-    /// ⭐⭐⭐ 音乐面板内部还要**再分一次**（用户 逐条确认「都按 A」）：
+    /// ⭐⭐⭐ 音乐面板内部还要**再分一次**：
     /// ```text
     /// 固定（不随本设置变）：封面边长 · 双排信息字号 · 文字宽度上限 · 第二行位置
     /// 跟随本设置：播放三键 · 切换键 · 各项间距 · 左右留白
@@ -8339,7 +8927,7 @@ mod tests {
             assert!(
                 btn_y > cover_y,
                 "h={h}：三键({btn})比封面({cover})小 ⇒ 上边距({btn_y})必须大于封面({cover_y})，\
-             否则三键偏上（用户 2026-09-30 实测）"
+             否则三键偏上"
             );
         }
         // ③ 反向：两者**相等**时两者坐标也相等（借坐标此时恰好没错，但不能推广）
@@ -8366,7 +8954,7 @@ mod tests {
         assert_eq!(big.content_dpi, 120);
         assert_eq!((big.icon, big.font, big.text_row_h), (40, 15, 20));
 
-        // ── 内容：「偏小」= **降一档** ⇒ 125% 系统下用 100%（用户 的原话）──
+        // ── 内容：「偏小」= **降一档** ⇒ 125% 系统下用 100% ──
         assert_eq!(
             small.content_dpi, 96,
             "系统 125% 时「偏小」必须降到 100%（不是 93.75%）"
@@ -8387,7 +8975,7 @@ mod tests {
         }
     }
 
-    /// ⭐⭐ **「偏小」= 沿 Windows 标准缩放阶梯降一档**（用户 定义）。
+    /// ⭐⭐ **「偏小」= 沿 Windows 标准缩放阶梯降一档**。
     ///
     /// 判据把用户的原话逐条钉住：`125% ⇒ 100%`、`150% ⇒ 125%`、`200% ⇒ 175%`。
     /// ⛔ **不是「乘 0.75」**：那在 125% 上会得到 93.75%，不是任何一档。
@@ -8504,30 +9092,150 @@ mod tests {
         assert!(w2 > w1, "多一台必须更宽: {w1} vs {w2}");
     }
 
-    /// ⛔ 每台设备的宽度必须按**两段里更宽的那段**算。
-    ///
-    /// 按较窄的那段算 ⇒ 估算宽度小于实际绘制宽度 ⇒ `find_widget_slot` 选出的槽偏窄
-    /// ⇒ 内容溢出压到邻居上（且不报错，只能靠肉眼看出来）。
-    ///
-    /// ⛔ **样本必须让两段宽度不等**：若样本里两段一样宽（如都用 `50%`），
-    ///   `min` 与 `max` 同解 ⇒ 本条用例**失去区分力**（注入 `min` 仍绿，实测过）。
-    /// 可证伪：把 `estimate_widget_width` 里的 `bat.max(vol)` 改成 `bat.min(vol)`，本条转红。
+    /// ⭐ 徽章**统一宽**：所有条目共用同一枚宽——
+    ///   宽 = 全帧所有行文本估算宽的**最大值** + 左右内边距；窄文本条目也占满宽
+    ///   （文字在框内水平居中补齐视觉差）。
+    /// ⛔ **样本必须让条目之间宽窄不等**：若各项文本一样宽，「统一宽」与
+    ///   「逐项各自宽」同解 ⇒ 本条用例失去区分力。
+    /// 可证伪：把 `estimate_widget_width` 的「全帧取最大」改回「逐项取自己两排
+    ///   的较大者」（旧口径），窄条目立刻变窄 ⇒ 本条转红。
     #[test]
-    fn per_item_width_uses_the_wider_of_the_two_texts() {
+    fn badge_width_is_uniform_across_items() {
         let m = m96();
-        // 电量 `5%`（2 字符 → 16px）比音量 `50%`（3 字符 → 24px）窄
-        let it = item(Some(5), Some(0.5), true, Some(false));
-        let wider = estimate_text_px("50%", &m);
-        let narrower = estimate_text_px("5%", &m);
+        // 窄条目：`5%`（16px）/ `N/A`（24px）；宽条目：`100%`（32px）两排
+        let narrow = item(Some(5), None, false, None);
+        let wide = item(Some(100), Some(1.0), true, Some(false));
+        let wide_w = estimate_text_px("100%", &m);
+        let narrow_w = estimate_text_px("N/A", &m);
         assert!(
-            wider > narrower,
-            "样本本身要能区分宽窄，否则本条无区分力（{wider} vs {narrower}）"
+            wide_w > narrow_w,
+            "样本本身要能区分宽窄，否则本条无区分力（{wide_w} vs {narrow_w}）"
         );
-        let w = estimate_widget_width(&[it], &m, false);
+        let badge_w = wide_w + m.dip(BADGE_PAD_X_DIP) * 2;
+        let per_item = m.icon + m.icon_text_gap + badge_w;
+        let w = estimate_widget_width(&[narrow, wide], &m, false);
+        let expected = m.pad_x * 2 + per_item * 2 + m.item_gap;
+        assert_eq!(
+            w, expected,
+            "两条目必须同宽（统一徽章）：总宽 = 内边距×2 + 2×(图标+间隙+统一徽章宽) + 项间隙"
+        );
+    }
+
+    /// ⭐ 徽章纵向几何：两枚 + 间隙的块在图标边长内**垂直居中**；单枚高 = 行带 − 间隙。
+    /// 可证伪：把 `badge_geometry` 的居中偏移改成 0（顶对齐），`top` 断言立刻转红。
+    #[test]
+    fn badge_geometry_centers_the_block_in_the_icon() {
+        let m = m96();
+        let BadgeGeometry {
+            h: bh,
+            top_dy: top,
+            bottom_dy: bottom,
+        } = badge_geometry(&m);
+        assert_eq!(bh, 14, "徽章高 = 行带 16 − 间隙 2");
+        assert_eq!(top, 1, "块高 30 在图标 32 内居中 ⇒ 偏移 1");
+        assert_eq!(bottom, 17, "下枚偏移 = 上枚偏移 + 徽章高 + 间隙");
+        assert!(bottom + bh <= m.icon, "下枚不得超出图标底缘");
+        // 125% 下同比缩放（比例关系不随 DPI 漂移）
+        let m120 = Metrics::for_dpi(120);
+        let BadgeGeometry {
+            h: bh120,
+            top_dy: top120,
+            bottom_dy: bottom120,
+        } = badge_geometry(&m120);
+        assert!(bottom120 + bh120 <= m120.icon, "125% 下同样不得越界");
+        assert_eq!(
+            top120,
+            ((m120.icon - (bh120 * 2 + m120.dip(BADGE_STACK_GAP_DIP))) / 2).max(0)
+        );
+    }
+
+    /// ⭐ 徽章圆角半径按徽章高的**比例**折算（约 1/3，介于直角方块与胶囊之间），
+    ///   下限 2。可证伪：改成 `badge_h / 2`（胶囊）或 `/ 6`（近直角）⇒ 转红。
+    #[test]
+    fn badge_radius_is_proportional_to_height() {
+        assert_eq!(badge_radius(14), 4);
+        assert_eq!(badge_radius(30), 10);
+        assert_eq!(badge_radius(6), 2, "下限 2：更小的圆角会退化成直角");
+    }
+
+    /// ⭐ 边框粗细 ≈ 信息文字笔画粗细：常规字重竖笔 ≈ 字号/10（四舍五入），
+    ///   下限 1。可证伪：把分母改成 5 ⇒ 96 DPI 下 10px 字给 2px（比笔画粗一倍）⇒ 转红。
+    #[test]
+    fn badge_stroke_matches_font_weight() {
+        assert_eq!(badge_stroke(10), 1);
+        assert_eq!(badge_stroke(13), 1, "1.3 四舍五入仍是 1");
+        assert_eq!(badge_stroke(15), 2);
+        assert_eq!(badge_stroke(4), 1, "下限 1");
+    }
+
+    /// ⭐ 描边 = **空心环带**：边框有墨、内部无墨、圆角外侧无墨、弧线上有墨。
+    /// 可证伪：把 `saturating_sub` 改成「取最大 alpha」，内部整块上色 ⇒ 转红。
+    #[test]
+    fn stroke_rounded_rect_draws_a_hollow_ring() {
+        let (w, h) = (30_i32, 20);
+        let mut px = vec![0u32; (w * h) as usize];
+        stroke_rounded_rect(&mut px, w, 0, 0, w, h, 6, 2, (0, 0, 0), 1.0);
+        let alpha_at = |x: i32, y: i32| (px[(y * w + x) as usize] >> 24) & 0xFF;
+        assert_eq!(alpha_at(15, 10), 0, "内部必须空心（环带之外不上色）");
+        assert!(alpha_at(0, 10) > 0, "左边框必须有墨");
+        assert!(alpha_at(29, 10) > 0, "右边框必须有墨");
+        assert_eq!(alpha_at(0, 0), 0, "圆角外侧必须无墨");
+        assert!(alpha_at(2, 2) > 0, "圆角弧线上必须有墨");
+    }
+
+    /// ⭐ 角部 alpha 必须 = **8/轴细采样 + γ=1.6 压缩**的联合结果。32×17、r=5、s=1
+    ///   下两枚钉子：核心 (2,1) 裸覆盖 216 → γ 后 201；裙边 (1,1) 裸覆盖 143 → γ 后 101。
+    /// 可证伪（注入实测）：内形状退回 4/轴 ⇒ (2,1)=184 转红；外形状退回 ⇒ (1,1)=120
+    ///   转红；都退 ⇒ 两个都红；去掉 γ ⇒ 216/143 全部出区间。⇒ 部分回退也逃不掉。
+    /// ⚠️ 区间而非 `==`：给 f32 `powf` 的尾数误差留量（±5 足够）。
+    #[test]
+    fn stroke_ring_corner_alpha_is_gamma_compressed() {
+        let (w, h) = (32_i32, 17);
+        let mut px = vec![0u32; (w * h) as usize];
+        stroke_rounded_rect(&mut px, w, 0, 0, w, h, 5, 1, (0, 0, 0), 1.0);
+        let alpha_at = |x: i32, y: i32| (px[(y * w + x) as usize] >> 24) & 0xFF;
+        let core = alpha_at(2, 1);
         assert!(
-            w >= m.pad_x * 2 + m.icon + m.icon_text_gap + wider,
-            "宽度必须覆盖更宽的那段文本：{w} < 内边距 + 图标 + 间隙 + {wider}"
+            (190..=205).contains(&core),
+            "角部核心 alpha 必须落在细采样+γ压缩的区间: {core}"
         );
+        let skirt = alpha_at(1, 1);
+        assert!(
+            (95..=110).contains(&skirt),
+            "角部裙边 alpha 必须落在细采样+γ压缩的区间（粗采样会到 120+）: {skirt}"
+        );
+    }
+
+    /// ⭐ 墨界扫描：有墨的首/末行（含抗锯齿边，绿通道 < 255 即算），
+    ///   全白掩码返回 `None`。可证伪：把扫描改成按列（返回列号）或把
+    ///   「有墨」判成 `> 255` 的反义，断言立刻转红。
+    #[test]
+    fn mask_ink_rows_finds_first_and_last_inked_row() {
+        let (mw, mh) = (3_i32, 4_i32);
+        let mut buf = vec![0xFFu8; (mw * mh * 4) as usize]; // 全白 = 无墨
+                                                            // 行 1 整行全墨、行 2 只有一个**部分覆盖**像素（抗锯齿边也算墨）
+        for xx in 0..mw {
+            buf[((mw + xx) * 4 + 1) as usize] = 0; // 行 1 = mw + xx
+        }
+        buf[((2 * mw + 1) * 4 + 1) as usize] = 128;
+        assert_eq!(mask_ink_rows(&(buf, mw, mh)), Some((1, 2)));
+        assert_eq!(
+            mask_ink_rows(&(vec![0xFFu8; (mw * mh * 4) as usize], mw, mh)),
+            None,
+            "全白掩码必须回落 None（调用方退回行盒顶对齐）"
+        );
+    }
+
+    /// ⭐ 光学居中：墨带（8..16，高 9）在徽章（top=6，高 17）内上下留白各 4px。
+    /// 可证伪：把 `badge_text_y` 改成返回 `by`（旧行为 = 行盒顶对齐），
+    ///   墨带中心落位 18 ≠ 徽章中心 14 ⇒ 转红。
+    #[test]
+    fn badge_text_y_centers_the_ink_band() {
+        let (by, badge_h) = (6_i32, 17_i32);
+        let y = badge_text_y(by, badge_h, 8, 16);
+        assert_eq!(y, 2, "dst = by + (badge_h − ink_h)/2 − ink_top");
+        let ink_center = (y + 8 + y + 16) / 2;
+        assert_eq!(ink_center, by + badge_h / 2, "墨带中心必须等于徽章中心");
     }
 
     /// 8 台（显示上限）的估算必须仍能塞进避让后的可用区 ——
@@ -8564,7 +9272,7 @@ mod tests {
         dev(name, battery, volume, is_muted, audio_id, true)
     }
 
-    /// ⛔⛔ **核心口径**（用户 拍板）：任务栏窗口**只画已勾选的设备**。
+    /// ⛔⛔ **核心口径**：任务栏窗口**只画已勾选的设备**。
     ///
     /// ⭐ 为什么单列一条：`group_taskbar_devices` 的保留规则是「有数据的设备一律留」，
     ///   若直接照抄它的输出，用户勾 1 台却看到 8 台 ⇒ **设置页形同虚设**（真机实测）。
@@ -8643,6 +9351,36 @@ mod tests {
         let items = build_items(&[ear, spk]);
         assert_eq!(items[0].icon, AudioKind::Headphones);
         assert_eq!(items[1].icon, AudioKind::Speaker);
+    }
+
+    /// 「常驻显示未连接的设备」开关的两条口径（判据在各自函数体内）。
+    #[test]
+    fn disconnected_pinned_hidden_when_not_persistent() {
+        // ⛔ **核心口径**（「常驻显示未连接的设备」默认**关**）：未连接的钉住设备**不入选**，
+        //    连上后由事件驱动刷新自动出现（判据 → `config::taskbar_show_disconnected`）。
+        //    可证伪：把 `build_items_with_opt_labels` 过滤器改回 `d.pinned`
+        //    （去掉 connected 判据）⇒ 占位条目重新出现 ⇒ 本条转红。
+        let mut off = pinned_dev("离场手机", None, None, None, None);
+        off.connected = false;
+        let on = pinned_dev("在线耳机", Some(60), Some(0.4), None, Some("ep"));
+        let names = vec![off.name.clone(), on.name.clone()];
+        let items = build_items_with_labels(&[off, on], &names, false);
+        assert_eq!(
+            items.len(),
+            1,
+            "开关关时未连接的钉住设备不得入选，实际 {items:?}"
+        );
+        assert_eq!(items[0].name, "在线耳机");
+    }
+
+    /// 开关**开** = 旧语义（回归项）：离线占位条目保留且置灰。
+    #[test]
+    fn disconnected_pinned_kept_when_persistent() {
+        let mut off = pinned_dev("离场手机", None, None, None, None);
+        off.connected = false;
+        let items = build_items(&[off]);
+        assert_eq!(items.len(), 1, "开关开时钉住设备必须常驻");
+        assert!(should_dim_item(&items[0]));
     }
 
     /// 「有数据的排前面」：pin 但无任何数据的条目必须沉底，
@@ -8869,16 +9607,16 @@ mod tests {
     //   最危险的形态是「`right` 写成 `slot_x + slot_w`」—— 不越界检查的话，
     //   窗口右端会**越过槽右端**压到邻居身上，而视觉上只表现为「贴得紧一点」。
 
-    /// 三种策略在同一可用区内的相对位置必须**互不相同**且顺序正确。
+    /// 三种固定策略在同一可用区内的相对位置必须**互不相同**且顺序正确。
     ///
-    /// 可证伪：把 `right` 的 `max_offset - margin` 写成 `max_offset`（丢掉边距）本条转红。
+    /// 可证伪：把 `fixed_right` 的 `max_offset - margin` 写成 `max_offset`（丢掉边距）本条转红。
     #[test]
     fn align_in_slot_orders_left_center_right() {
         let (slot_x, slot_w, content_w) = (600, 300, 100);
         let m = 20;
-        let left = align_in_slot(slot_x, slot_w, content_w, "left", m);
-        let center = align_in_slot(slot_x, slot_w, content_w, "center", m);
-        let right = align_in_slot(slot_x, slot_w, content_w, "right", m);
+        let left = align_in_slot(slot_x, slot_w, content_w, "fixed_left", m);
+        let center = align_in_slot(slot_x, slot_w, content_w, "fixed_center", m);
+        let right = align_in_slot(slot_x, slot_w, content_w, "fixed_right", m);
         assert_eq!(left, slot_x + m, "靠左 = 可用区左端 + 留白");
         assert!(left < center && center < right, "三者必须严格递增");
         assert_eq!(
@@ -8895,8 +9633,8 @@ mod tests {
     ///   开始按钮/时钟的留白（实测 24~26px @125%）。
     ///
     /// 可证伪：
-    ///   ① 把 `"left" => margin` 改回 `0` ⇒ 第 1 条断言转红；
-    ///   ② 把 `"right" => max_offset - margin` 改成 `max_offset` ⇒ 第 2 条转红；
+    ///   ① 把 `"fixed_left" => margin` 改回 `0` ⇒ 第 1 条断言转红；
+    ///   ② 把 `"fixed_right" => max_offset - margin` 改成 `max_offset` ⇒ 第 2 条转红；
     ///   ③ 反过来把 `max_offset - margin` 写成 `max_offset + margin` ⇒ 越界 ⇒ 第 2 条转红。
     #[test]
     fn align_in_slot_keeps_edge_margin_on_both_sides() {
@@ -8906,14 +9644,14 @@ mod tests {
             // 换个尺寸确保不是巧合
             (100, 800, 200, 20),
         ] {
-            let left = align_in_slot(slot_x, slot_w, content_w, "left", m);
+            let left = align_in_slot(slot_x, slot_w, content_w, "fixed_left", m);
             assert_eq!(
                 left,
                 slot_x + m,
                 "靠左必须距可用区左缘恰好 {m}px（不得紧贴）"
             );
 
-            let right = align_in_slot(slot_x, slot_w, content_w, "right", m);
+            let right = align_in_slot(slot_x, slot_w, content_w, "fixed_right", m);
             assert_eq!(
                 (slot_x + slot_w) - (right + content_w),
                 m,
@@ -8926,14 +9664,14 @@ mod tests {
         }
     }
 
-    /// 未知值（防御分支）与 `center` 同解 —— `normalize_config` 已兜住非法值，
+    /// 未知值（防御分支）与 `fixed_center` 同解 —— `normalize_config` 已兜住非法值，
     /// 这里只保证「万一漏进来一个奇怪的值，也不会算出可用区外坐标」。
     #[test]
     fn align_in_slot_unknown_position_falls_back_to_center() {
         let args = (600, 300, 100, 20);
         assert_eq!(
             align_in_slot(args.0, args.1, args.2, "middle", args.3),
-            align_in_slot(args.0, args.1, args.2, "center", args.3),
+            align_in_slot(args.0, args.1, args.2, "fixed_center", args.3),
             "未知贴靠值必须退化为居中（而不是越界或 panic）"
         );
     }
@@ -8998,77 +9736,120 @@ mod tests {
     ///   `x = 0`，**不含** `find_free_interval` 的间距 ⇒ `offset = 0` 会让窗口
     ///   直接压住开始按钮。实测那一帧：`窗口 0..342 压住 [(0,69), (72,347)]`。
     ///
-    /// 判别力：把 `!slot_is_gap` 分支去掉（兜底也贴左）⇒ 下面第一条断言转红。
+    /// 判别力：把 `!slot_is_gap` 分支去掉（兜底也贴靠）⇒ 下面第二条断言转红。
     #[test]
     fn effective_position_falls_back_to_center_when_no_gap_was_found() {
-        assert_eq!(
-            effective_position("auto", true),
-            "auto",
-            "命中间隙时保持 auto（空隙内贴左缘）"
-        );
-        assert_eq!(
-            effective_position("auto", false),
-            "center",
-            "兜底时必须回 center —— 贴左会压住开始按钮"
-        );
-        // ⭐ 前三档**不受影响**（它们没有「兜底」这回事）
-        for pos in ["left", "center", "right"] {
+        for pos in ["auto_left", "auto_right"] {
+            assert_eq!(
+                effective_position(pos, true),
+                pos,
+                "命中间隙时保持 {pos}（空隙内贴靠）"
+            );
+            assert_eq!(
+                effective_position(pos, false),
+                "fixed_center",
+                "兜底时必须回 fixed_center —— 贴空隙侧的裸缘会压住开始按钮/托盘"
+            );
+        }
+        // ⭐ 三个固定档**不受影响**（它们没有「兜底」这回事）
+        for pos in ["fixed_left", "fixed_center", "fixed_right"] {
             for gap in [true, false] {
                 assert_eq!(effective_position(pos, gap), pos, "{pos} 不该被改写");
             }
         }
     }
 
-    /// ⛔⛔ `auto` 必须**贴空隙左缘**（`offset = 0`）—— 判据来自真机证伪。
+    /// ⛔⛔ `auto_left` 必须**贴空隙左缘**（`offset = 0`）—— 判据来自真机证伪。
     ///
     /// 依据（本机 2560 宽任务栏实测）：空隙 `x=869 w=1005`，而音乐面板只有
     ///   `w=506` ⇒ **空隙是组件的 2 倍**。曾按「缝隙通常刚好等于窗口宽」把
-    ///   `auto` 归入 `center`，真机表现是组件被丢在空地正中、两侧各空 250px
+    ///   自动档归入居中，真机表现是组件被丢在空地正中、两侧各空 250px
     ///   ⇒ 用户报「距离应用图标太远，之间有大片空白」。
     ///
-    /// 判别力：删掉 `"auto" => 0` 这一臂（退回 `_ => max_offset / 2`）
-    ///   ⇒ 本用例的 `auto == slot_x` 立刻转红（会得到 `slot_x + 249`）。
+    /// 判别力：删掉 `"auto_left" => 0` 这一臂（退回 `_ => max_offset / 2`）
+    ///   ⇒ 本用例的 `auto_left == slot_x` 立刻转红（会得到 `slot_x + 249`）。
     #[test]
     fn align_in_slot_auto_hugs_the_left_edge_of_the_gap() {
         // 真机那组数字：空隙左缘 869、宽 1005，组件 506
         let (slot_x, slot_w, content_w, margin) = (869, 1005, 506, 25);
         assert_eq!(
-            align_in_slot(slot_x, slot_w, content_w, "auto", margin),
+            align_in_slot(slot_x, slot_w, content_w, "auto_left", margin),
             slot_x,
-            "auto 必须贴空隙左缘，不许居中"
+            "auto_left 必须贴空隙左缘，不许居中"
         );
         // ⛔ 也不许再加一次边距（空隙边界已含 `find_free_interval` 的间距，
         //   再加等于翻倍：实测 25 → 50px）。
         assert_ne!(
-            align_in_slot(slot_x, slot_w, content_w, "auto", margin),
+            align_in_slot(slot_x, slot_w, content_w, "auto_left", margin),
             slot_x + margin,
-            "空隙已含间距，auto 不得再叠加 edge_margin"
+            "空隙已含间距，auto_left 不得再叠加 edge_margin"
         );
         // ⚠️ 宽度恰好等于空隙时各取法结果相同 —— 这正是当初误判
         //   「缝隙通常刚好等于窗口宽」的原因，故上面必须用**宽空隙**来钉。
         assert_eq!(
-            align_in_slot(slot_x, content_w, content_w, "auto", margin),
+            align_in_slot(slot_x, content_w, content_w, "auto_left", margin),
             slot_x
         );
     }
 
-    /// 内容装不下时 `auto` 退化为贴左缘，且**不得**返回负偏移。
+    /// ⛔⛔ `auto_right` 必须**贴空隙右缘**（`offset = max_offset`）—— 与靠左档互为镜像。
+    ///
+    /// 判别力：把这一臂写成 `0`（漏改的镜像）或 `max_offset / 2`（退回居中）
+    ///   ⇒ 本用例的「右缘 == slot_x + 余量」立刻转红。
+    #[test]
+    fn align_in_slot_auto_right_hugs_the_right_edge_of_the_gap() {
+        let (slot_x, slot_w, content_w, margin) = (869, 1005, 506, 25);
+        assert_eq!(
+            align_in_slot(slot_x, slot_w, content_w, "auto_right", margin),
+            slot_x + slot_w - content_w,
+            "auto_right 必须贴空隙右缘，不许居中"
+        );
+        // ⛔ 与靠左档同款：不得再叠加 edge_margin（空隙边界已含间距）。
+        assert_ne!(
+            align_in_slot(slot_x, slot_w, content_w, "auto_right", margin),
+            slot_x + slot_w - content_w - margin,
+            "空隙已含间距，auto_right 不得再叠加 edge_margin"
+        );
+        // 镜像对称：同一空隙里两档的落点关于空隙中心对称
+        let left = align_in_slot(slot_x, slot_w, content_w, "auto_left", margin);
+        let right = align_in_slot(slot_x, slot_w, content_w, "auto_right", margin);
+        assert_eq!(
+            (left - slot_x) + (right - slot_x),
+            slot_w - content_w,
+            "两档落点必须关于空隙中心对称"
+        );
+    }
+
+    /// 内容装不下时自动档退化为贴空隙对应缘，且**不得**返回负偏移。
     #[test]
     fn align_in_slot_auto_never_returns_negative_offset_when_content_overflows() {
         let (slot_x, slot_w, content_w) = (869, 300, 500);
         assert_eq!(
-            align_in_slot(slot_x, slot_w, content_w, "auto", 20),
+            align_in_slot(slot_x, slot_w, content_w, "auto_left", 20),
             slot_x,
-            "组件比空隙还宽时应贴左缘，不得为负偏移"
+            "组件比空隙还宽时靠左档应贴左缘，不得为负偏移"
+        );
+        // `max_offset` 已被 `.max(0)` 归零 ⇒ 靠右档同样不得越出空隙左端
+        assert_eq!(
+            align_in_slot(slot_x, slot_w, content_w, "auto_right", 20),
+            slot_x,
+            "组件比空隙还宽时靠右档不得算出负偏移"
         );
     }
 
     /// 可用区比内容窄时（防御分支）：`max_offset` 归零 ⇒ 边距被夹成 0 ⇒
-    /// 三种策略**都**退化为贴可用区左端，且**绝不返回负偏移**（负偏移会把窗口推到任务栏之外）。
+    /// 各策略**都**退化为贴可用区左端，且**绝不返回负偏移**（负偏移会把窗口推到任务栏之外）。
     #[test]
     fn align_in_slot_never_returns_negative_offset_when_content_overflows() {
         let (slot_x, slot_w, content_w) = (600, 80, 200);
-        for pos in ["left", "center", "right", "auto", "unknown"] {
+        for pos in [
+            "fixed_left",
+            "fixed_center",
+            "fixed_right",
+            "auto_left",
+            "auto_right",
+            "unknown",
+        ] {
             let x = align_in_slot(slot_x, slot_w, content_w, pos, 20);
             assert_eq!(x, slot_x, "可用区装不下时 `{pos}` 应退化为贴左端");
         }
@@ -9105,25 +9886,25 @@ mod tests {
     #[test]
     fn resolve_rel_x_priority_is_locked_then_custom_then_last_then_aligned() {
         let (w, tb) = (100, 1000);
-        // ① 固定位置：压过一切（拖拽落点还在配置里，但此刻不该生效）
+        // ① 贴靠档（locked）：压过一切（拖拽落点还在配置里，但此刻不该生效）
         assert_eq!(
             resolve_rel_x(true, 700, Some(300), 500, w, tb),
             700,
-            "固定位置时必须用贴靠结果，即使有拖拽落点"
+            "贴靠档必须用贴靠结果，即使有拖拽落点"
         );
-        // ② 不固定 + 拖过：用用户放下的位置
+        // ② 手动拖拽 + 拖过：用用户放下的位置
         assert_eq!(
             resolve_rel_x(false, 700, Some(300), 500, w, tb),
             300,
             "用户显式拖拽的位置必须压过「上次画过的地方」"
         );
-        // ③ 不固定 + 没拖过 + 画过：沿用上次
+        // ③ 手动拖拽 + 没拖过 + 画过：沿用上次
         assert_eq!(
             resolve_rel_x(false, 700, None, 500, w, tb),
             500,
-            "没拖过时应沿用上次位置（「不固定」的旧语义）"
+            "没拖过时应沿用上次位置"
         );
-        // ④ 不固定 + 没拖过 + 首帧（哨兵 0）：退回贴靠
+        // ④ 手动拖拽 + 没拖过 + 首帧（哨兵 0）：退回贴靠
         assert_eq!(
             resolve_rel_x(false, 700, None, 0, w, tb),
             700,
@@ -9151,14 +9932,14 @@ mod tests {
     }
 
     /// ⭐⭐ **位置语义的可证伪测试**：可用区 = 整条任务栏时，
-    /// `left`/`center`/`right` 必须分别落在**左侧留白后 / 正中 / 右侧留白前**。
+    /// `fixed_left`/`fixed_center`/`fixed_right` 必须分别落在**左侧留白后 / 正中 / 右侧留白前**。
     ///
-    /// ── 为什么这条是三档位置的**核心回归** ────────────────
+    /// ── 为什么这条是三个固定档的**核心回归** ────────────────
     /// 本条以**整条任务栏**（`slot_x = 0`、`slot_w = 屏幕宽`）为口径断言三档位置：
     /// 居中不留边距，左右各留 Windows 风格边距。
     /// ⛔ 若有人把「避让扫描」加回来 ⇒ 本条**转红**（两代避让为何退役 → Wiki 15 §8）。
-    /// 可证伪：把 `align_in_slot` 的 `"left" => 0` 改成 `100`（旧安全边距）
-    /// ⇒ 第 1 条断言转红；把 `"right" => max_offset` 改成 `slot_w`
+    /// 可证伪：把 `align_in_slot` 的 `"fixed_left" => 0` 改成 `100`（旧安全边距）
+    /// ⇒ 第 1 条断言转红；把 `"fixed_right" => max_offset` 改成 `slot_w`
     /// ⇒ 第 3 条断言转红（右缘溢出）。
     #[test]
     fn align_in_slot_uses_the_whole_taskbar_as_area() {
@@ -9168,26 +9949,26 @@ mod tests {
 
         const EDGE_MARGIN: i32 = 25; // 20 DIP @ 125% DPI
         assert_eq!(
-            align_in_slot(area_x, area_w, content_w, "left", EDGE_MARGIN),
+            align_in_slot(area_x, area_w, content_w, "fixed_left", EDGE_MARGIN),
             EDGE_MARGIN,
             "靠左必须保留 Windows 风格边距"
         );
         assert_eq!(
-            align_in_slot(area_x, area_w, content_w, "center", EDGE_MARGIN),
+            align_in_slot(area_x, area_w, content_w, "fixed_center", EDGE_MARGIN),
             max_offset / 2,
             "居中必须在整条任务栏里居中（左右不额外留边距）"
         );
         assert_eq!(
-            align_in_slot(area_x, area_w, content_w, "right", EDGE_MARGIN),
+            align_in_slot(area_x, area_w, content_w, "fixed_right", EDGE_MARGIN),
             max_offset - EDGE_MARGIN,
             "靠右必须在右缘前保留 Windows 风格边距"
         );
 
         // ⛔⛔ 最重要的性质：三档**必须严格递增** —— 相等就意味着贴靠失效
         //   （把窗口钳成固定宽度时正是三档同解）。
-        let l = align_in_slot(area_x, area_w, content_w, "left", EDGE_MARGIN);
-        let c = align_in_slot(area_x, area_w, content_w, "center", EDGE_MARGIN);
-        let r = align_in_slot(area_x, area_w, content_w, "right", EDGE_MARGIN);
+        let l = align_in_slot(area_x, area_w, content_w, "fixed_left", EDGE_MARGIN);
+        let c = align_in_slot(area_x, area_w, content_w, "fixed_center", EDGE_MARGIN);
+        let r = align_in_slot(area_x, area_w, content_w, "fixed_right", EDGE_MARGIN);
         assert!(
             l < c && c < r,
             "三档必须严格递增（left={l} < center={c} < right={r}）"
@@ -9436,7 +10217,7 @@ mod tests {
         );
         // ⭐ 折算口径 = 底衬的「半径/边长」比例（`m.radius / m.h`）
         assert!(
-            draw_area.contains("inside_rounded_rect(x * S + sx * 2 + 1"),
+            draw_area.contains("inside_rounded_rect(x * s + sx * 2 + 1"),
             "⛔ 覆盖率必须把坐标放大后喂给**生产谓词** `inside_rounded_rect`"
         );
     }
