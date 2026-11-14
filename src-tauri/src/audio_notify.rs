@@ -311,6 +311,11 @@ impl AudioMonitor {
 
     fn sync_callbacks(&mut self) {
         unsafe {
+            // 取证锚：进入即落盘。死亡若落在枚举/注册途中，最后行钉在
+            // 「sync 进行中」；完成行（sync_callbacks: 枚举 …）与之夹住整个窗口。
+            // flush 不持配置锁（本函数在 STA 线程持的 &mut self 不经全局 Mutex）。
+            verbose_log!("[audio_notify] sync begin");
+            crate::process::flush_log();
             let collection = match self
                 .enumerator
                 .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
@@ -452,6 +457,9 @@ impl AudioMonitor {
                 self.session_callbacks
                     .insert(id.to_string(), (control.clone(), callback));
                 standard_log!("[audio_notify] registered session volume callback: {}", id);
+                // 取证锚：注册完成后系统才开始向回调派发事件——先落盘，
+                // 死亡若落在「已注册、派发中」区间可由此行钉住。
+                crate::process::flush_log();
             }
             Err(e) => {
                 standard_log!(
@@ -483,6 +491,8 @@ impl AudioMonitor {
             Ok(()) => {
                 self.callbacks.insert(id.to_string(), (endpoint, callback));
                 standard_log!("[audio_notify] 已注册设备音量回调: {}", id);
+                // 取证锚：与 register_session 同款——注册完成后系统才开始派发。
+                crate::process::flush_log();
             }
             Err(e) => {
                 standard_log!(

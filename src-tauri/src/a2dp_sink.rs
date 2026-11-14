@@ -228,8 +228,12 @@ impl Machine {
 /// 移交一次性线程并限时等待；超时后控制器继续推进，析构由该线程自行收尾。
 fn release_conn(conn: AudioPlaybackConnection, reason: &str) {
     let (tx, rx) = channel();
+    let reason_owned = reason.to_string();
     std::thread::spawn(move || {
         drop(conn);
+        // 取证锚：析构线程的完成时刻。析构卡死时日志停在「释放超时」、
+        // 此行缺失 ⇒ 钉死「析构线程未返回」。
+        verbose_log!("[a2dp] 连接对象析构完成（{}）", reason_owned);
         let _ = tx.send(());
     });
     if rx.recv_timeout(RELEASE_TIMEOUT).is_err() {
@@ -532,6 +536,9 @@ fn connect_internal(m: &mut Machine, rx: &Receiver<Msg>) {
                 AudioPlaybackConnection,
                 windows_core::IInspectable,
             >::new(move |sender, _args| {
+                // 取证锚：回调在任意线程触发、低频（链路建立/断开各一次）。
+                // 死亡若发生在回调线程上，此行是现场的第一线索。
+                verbose_log!("[a2dp] StateChanged 回调触发");
                 // sender 经 windows_core::Ref 可空包装；None 视为非 Closed 不投递
                 let closed = sender
                     .as_ref()
@@ -769,6 +776,9 @@ fn step(m: &mut Machine, rx: &Receiver<Msg>) {
         m.flow_seen = crate::audio::relay_session_flowing(&armed_name);
         if m.flow_seen {
             standard_log!("[a2dp] 转发会话见流（音频链路建立）");
+            // 取证锚：见流即手机开始播放、音频会话事件风暴开始——先落盘，
+            // 死亡若落在风暴区间，尾部不丢即可钉住「见流之后」。
+            crate::process::flush_log();
         }
     }
     let now_state = lock_unpoisoned(&SNAPSHOT).state;
@@ -801,6 +811,14 @@ fn step(m: &mut Machine, rx: &Receiver<Msg>) {
         };
         set_detail(A2dpState::Armed, "等待手机播放", hint);
     }
+    // 取证哨兵：闩锁后的 step 是零日志静默区，闪退日志在此后的静默期里
+    // 「最后一行 = 见流行」其实只证明「死亡在静默期」。每 tick 一行 verbose
+    // 让控制器线程的存活时刻可从日志直接读出（详细日志下每秒 1 行）。
+    verbose_log!(
+        "[a2dp] tick state={:?} flow_seen={}",
+        now_state,
+        m.flow_seen
+    );
 }
 
 /// 单条消息分发。返回 true = 请求退出控制器。

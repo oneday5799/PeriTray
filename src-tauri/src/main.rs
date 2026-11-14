@@ -670,6 +670,13 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
             let responded = queued.is_ok() && await_event_loop_reply(&rx, PROBE_REPLY_TIMEOUT);
             if responded {
                 stuck_streak = 0;
+                // 取证哨兵：主线程响应正常的最细粒度证据（每轮一行 verbose）。
+                // 闪退落在静默期时，「谁的心跳最后出现」就是死亡时刻的下界。
+                verbose_log!(
+                    "[watchdog] tick ok round={} tick={}",
+                    round,
+                    EVENT_LOOP_TICK.load(std::sync::atomic::Ordering::SeqCst)
+                );
             } else {
                 stuck_streak += 1;
                 standard_log!(
