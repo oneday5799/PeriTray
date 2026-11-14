@@ -426,13 +426,73 @@ pub enum BatterySource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnKind {
-    /// 证据全无（有线设备 / 占位条目 / 未知）
+    /// 证据全无（占位条目 / 未知）。⚠️ **有线设备的用户覆盖**是 `Wired`，
+    ///   不是这里——自动派生没有「有线」证据可用（USB 在线不证传输方式）。
     #[default]
     Unknown,
     /// 经典蓝牙 / BLE 链路（音箱、耳机、手机、BT 模式的手柄鼠标）
     Bluetooth,
     /// 2.4G 接收器链路（鼠标、键盘、手柄的 dongle 模式）
     Wireless24g,
+    /// 用户在「修改信息」里指定的**有线**。⛔ 自动派生**永不产生**本变体
+    ///   （派生唯一实现点 `Grouper::finish` 只在证据不足时给 `Unknown`）；
+    ///   它只经 `apply_user_overrides` 从用户覆盖进入显示链。
+    Wired,
+}
+
+/// 「修改信息」指定的设备类型 → 任务栏图标（[`AudioKind`]）。
+///
+/// ⛔ 映射只存在于这一处：类型枚举是 UI 层语义（用户心智），`AudioKind` 是
+///   图标层语义（绘制资源），两层靠本函数对齐；平板与手机共用手机图标
+///   （图标资源里没有平板形态，手机图标是最接近项）。
+pub fn audio_kind_from_user_type(v: &str) -> Option<AudioKind> {
+    match v {
+        "phone" | "tablet" => Some(AudioKind::Phone),
+        "headphones" => Some(AudioKind::Headphones),
+        "speaker" => Some(AudioKind::Speaker),
+        "gamepad" => Some(AudioKind::Gamepad),
+        "keyboard" => Some(AudioKind::Keyboard),
+        "mouse" => Some(AudioKind::Pointer),
+        _ => None,
+    }
+}
+
+/// 「修改信息」指定的连接方式 → [`ConnKind`]（`wired` → `Wired`）。
+pub fn conn_kind_from_user(v: &str) -> Option<ConnKind> {
+    match v {
+        "wired" => Some(ConnKind::Wired),
+        "bluetooth" => Some(ConnKind::Bluetooth),
+        "wireless_24g" => Some(ConnKind::Wireless24g),
+        _ => None,
+    }
+}
+
+/// 把「修改信息」的用户覆盖应用到**聚合后的**物理设备列表上
+/// （优先级：用户指定 > 自动探测；未指定的设备保持派生结果不动）。
+///
+/// ⛔ 只能用在 `group_taskbar_devices` **之后**、任何消费之前——它覆写的是
+///   `conn` / `audio_kind` 两个字段，而不是重新派生；`Grouper::finish` 的
+///   派生判据（唯一实现点）保持原样不被穿透。
+/// ⛔ 两条取数路径（`get_taskbar_devices` 异步 / `taskbar_devices_snapshot_within`
+///   同步）都必须走本函数，否则 widget 与弹窗显示分叉（同一判据同一函数）。
+/// ⭐ 未指定的键完全不动：覆盖表是**例外表**，不是第二套派生。
+pub fn apply_user_overrides(
+    devices: &mut [PhysicalDevice],
+    types: &std::collections::HashMap<String, String>,
+    conns: &std::collections::HashMap<String, String>,
+) {
+    for d in devices.iter_mut() {
+        if let Some(t) = crate::config::resolve_device_type_in(&d.key, types) {
+            if let Some(kind) = audio_kind_from_user_type(t) {
+                d.audio_kind = kind;
+            }
+        }
+        if let Some(k) = crate::config::resolve_conn_kind_in(&d.key, conns) {
+            if let Some(conn) = conn_kind_from_user(k) {
+                d.conn = conn;
+            }
+        }
+    }
 }
 
 /// 任务栏 widget 上给「这台设备」画哪一类图标。
@@ -866,13 +926,16 @@ fn pick_display_name(names: &[String]) -> String {
 //   而唯一权威公式就在这里 —— 提成 pub 是为了让命令**复用**它，
 //   而不是在前端或命令里另写一份（另写必然与 grouper 漂移）。
 pub fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
-    match audio
-        .container_id
-        .as_deref()
-        .and_then(|c| usable_container(Some(c)))
-    {
+    audio_endpoint_key_from(audio.container_id.as_deref(), &audio.id)
+}
+
+/// [`audio_endpoint_key`] 的**无结构体形态**（公式唯一实现点）：
+/// `AudioDevice` 构造点（`audio.rs`）还没有结构体可传，用它避免在构造点
+/// 另写一份 match —— 两处各写一份，键对不上 ⇒ 音量页改的信息任务栏不认。
+pub fn audio_endpoint_key_from(container_id: Option<&str>, endpoint_id: &str) -> DeviceKey {
+    match container_id.and_then(|c| usable_container(Some(c))) {
         Some(c) => DeviceKey::Container(c),
-        None => DeviceKey::Instance(format!("SWD\\MMDEVAPI\\{}", audio.id)),
+        None => DeviceKey::Instance(format!("SWD\\MMDEVAPI\\{endpoint_id}")),
     }
 }
 
@@ -1790,6 +1853,8 @@ mod tests {
             volume: 0.5,
             is_muted: false,
             is_default: false,
+            // 与生产构造点同一公式（audio_endpoint_key_from），不让测试数据带错键
+            device_key: audio_endpoint_key_from(container, id).encode(),
             container_id: container.map(|c| c.to_string()),
         }
     }
@@ -3367,5 +3432,94 @@ mod tests {
             conn: crate::device_identity::ConnKind::Unknown,
             pinned: true,
         }
+    }
+
+    /// 可证伪：映射表若漏项 / 串值（如 tablet 误落到 Speaker），对应断言转红。
+    #[test]
+    fn user_type_maps_every_device_type_to_audio_kind() {
+        assert_eq!(audio_kind_from_user_type("phone"), Some(AudioKind::Phone));
+        // 平板无专属图标资源，与手机共用（映射唯一实现点的注释判据）
+        assert_eq!(audio_kind_from_user_type("tablet"), Some(AudioKind::Phone));
+        assert_eq!(
+            audio_kind_from_user_type("headphones"),
+            Some(AudioKind::Headphones)
+        );
+        assert_eq!(
+            audio_kind_from_user_type("speaker"),
+            Some(AudioKind::Speaker)
+        );
+        assert_eq!(
+            audio_kind_from_user_type("gamepad"),
+            Some(AudioKind::Gamepad)
+        );
+        assert_eq!(
+            audio_kind_from_user_type("keyboard"),
+            Some(AudioKind::Keyboard)
+        );
+        assert_eq!(audio_kind_from_user_type("mouse"), Some(AudioKind::Pointer));
+        // 集合外的值（含空串）一律 None ⇒ 未指定走自动探测
+        assert_eq!(audio_kind_from_user_type(""), None);
+        assert_eq!(audio_kind_from_user_type("bluetooth"), None);
+    }
+
+    /// `wired` 必须映射到 `Wired`——自动派生**永不产生** Wired（判据在
+    /// `ConnKind::Wired` 文档），它只能经这条路进入显示链；映射错了用户
+    /// 就永远选不出「有线」。
+    #[test]
+    fn user_conn_kind_maps_wired_and_rejects_unknown_values() {
+        assert_eq!(conn_kind_from_user("wired"), Some(ConnKind::Wired));
+        assert_eq!(conn_kind_from_user("bluetooth"), Some(ConnKind::Bluetooth));
+        assert_eq!(
+            conn_kind_from_user("wireless_24g"),
+            Some(ConnKind::Wireless24g)
+        );
+        assert_eq!(conn_kind_from_user(""), None);
+        assert_eq!(conn_kind_from_user("unknown"), None);
+    }
+
+    /// 判据：用户覆盖**覆写字段**而非重新派生——命中的条目 conn / audio_kind
+    /// 以覆盖为准，未指定的条目保持派生结果不动（覆盖表是例外表，不是第二套派生）。
+    /// 可证伪：把 `apply_user_overrides` 改成无差别重置、漏字段、或读侧不滤脏值，
+    /// 对应断言转红。
+    #[test]
+    fn apply_user_overrides_overwrites_only_listed_keys() {
+        let mut derived = pinned_phone_or_default();
+        // 派生层的原值（自动探测给的）：覆盖后必须被改写
+        derived.conn = ConnKind::Bluetooth;
+        derived.audio_kind = AudioKind::Headphones;
+        let unspecified = crate::device_identity::PhysicalDevice {
+            key: "c:other".to_string(),
+            conn: ConnKind::Wireless24g,
+            audio_kind: AudioKind::Keyboard,
+            ..derived.clone()
+        };
+        let mut devices = vec![derived, unspecified];
+        let types = std::iter::once(("c:phone".to_string(), "speaker".to_string())).collect();
+        let conns = std::iter::once(("c:phone".to_string(), "wired".to_string())).collect();
+        apply_user_overrides(&mut devices, &types, &conns);
+        assert_eq!(
+            devices[0].conn,
+            ConnKind::Wired,
+            "连接方式覆盖必须生效（含 Wired）"
+        );
+        assert_eq!(
+            devices[0].audio_kind,
+            AudioKind::Speaker,
+            "设备类型覆盖必须生效"
+        );
+        assert_eq!(
+            devices[1].conn,
+            ConnKind::Wireless24g,
+            "未指定的条目不许被覆盖层改动"
+        );
+        assert_eq!(devices[1].audio_kind, AudioKind::Keyboard);
+
+        // 脏值（不在白名单）等价于未指定：不得把映射带偏
+        let dirty_types = std::iter::once(("c:phone".to_string(), "hacker".to_string())).collect();
+        let dirty_conns = std::iter::once(("c:phone".to_string(), "usb".to_string())).collect();
+        let mut devices = vec![pinned_phone_or_default()];
+        apply_user_overrides(&mut devices, &dirty_types, &dirty_conns);
+        assert_eq!(devices[0].conn, ConnKind::Unknown, "脏值必须等价于未指定");
+        assert_eq!(devices[0].audio_kind, AudioKind::Phone);
     }
 }

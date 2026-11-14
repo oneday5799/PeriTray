@@ -6,12 +6,22 @@
  *       loadA2dpSnapshot()（a2dp-changed 订阅内部调用）；
  *       快照水合与 24g-battery-updated/devices-changed/a2dp-changed 推送订阅（静默重拉）
  * 依赖：common.js（getInvoke/onTauriEvent/CATEGORIES/getDisplayName/showToast/registerContextMenu/
- *       clampMenuPosition/hideAllContextMenus/showRenameDialog/createSubmenuShell/reconcileCards）
+ *       clampMenuPosition/hideAllContextMenus/showDeviceInfoDialog/createSubmenuShell/reconcileCards）
  */
 let allDevices = [];
 let hiddenDevices = [];
 let hiddenGroups = [];
 let deviceNames = {};
+// 「修改信息」的覆盖表（键为后端下发的身份键）：本页消费 conn_kinds 画卡片连接标签，
+// types 仅用于对话框预填
+let deviceTypes = {};
+let deviceConnKinds = {};
+// 连接覆盖枚举串 → 卡片标签（文案/配色）；wired 无专属配色，落 .card-tag 默认灰
+const CONN_TAG_OVERRIDES = {
+  wired: { text: "有线", cls: "" },
+  bluetooth: { text: "蓝牙", cls: "bluetooth" },
+  wireless_24g: { text: "2.4G", cls: "wireless" },
+};
 let deviceGroups = {};
 let useSystemBt = false;
 let trayDevices = [];
@@ -30,6 +40,8 @@ let a2dpStatus = null;
 //   无条件 `renderDevices()` 是白做功，还会打断 hover 态。
 function applyDeviceConfig(config) {
   const names = config.device_names || {};
+  const types = config.device_types || {};
+  const connKinds = config.conn_kinds || {};
   const groups = config.device_groups || {};
   const hidden = config.hidden_devices || [];
   const hiddenG = config.hidden_groups || [];
@@ -37,6 +49,8 @@ function applyDeviceConfig(config) {
   const tray = config.tray_devices || [];
   const changed =
     JSON.stringify(names) !== JSON.stringify(deviceNames) ||
+    JSON.stringify(types) !== JSON.stringify(deviceTypes) ||
+    JSON.stringify(connKinds) !== JSON.stringify(deviceConnKinds) ||
     JSON.stringify(groups) !== JSON.stringify(deviceGroups) ||
     JSON.stringify(hidden) !== JSON.stringify(hiddenDevices) ||
     JSON.stringify(hiddenG) !== JSON.stringify(hiddenGroups) ||
@@ -44,6 +58,8 @@ function applyDeviceConfig(config) {
     JSON.stringify(tray) !== JSON.stringify(trayDevices);
   if (!changed) return false;
   deviceNames = names;
+  deviceTypes = types;
+  deviceConnKinds = connKinds;
   deviceGroups = groups;
   hiddenDevices = hidden;
   hiddenGroups = hiddenG;
@@ -240,7 +256,16 @@ function fillStatusRow(row, dev) {
     row.appendChild(statusEl);
   }
 
-  if (dev.is_bluetooth) {
+  // 连接标签：「修改信息」的覆盖（按身份键）优先于 is_bluetooth / is_wireless_24g
+  // 自动标志 —— 覆盖存在即显示覆盖值，连「无标签」也能被覆盖成有标签（反之亦然）。
+  // ⛔ 键取后端下发的 device_key，前端不自己推身份键。
+  const connOverride = CONN_TAG_OVERRIDES[deviceConnKinds[dev.device_key]];
+  if (connOverride) {
+    const tagEl = document.createElement("div");
+    tagEl.className = `card-tag ${connOverride.cls}`.trimEnd();
+    tagEl.textContent = connOverride.text;
+    row.appendChild(tagEl);
+  } else if (dev.is_bluetooth) {
     const tagEl = document.createElement("div");
     tagEl.className = "card-tag bluetooth";
     tagEl.textContent = "蓝牙";
@@ -624,7 +649,7 @@ onTauriEvent("a2dp-changed", async () => {
 
 // ⛔ 本页原先**完全没有** `config-changed` 订阅 ⇒ `deviceNames` 只在
 //   `loadDevices` / 快照水合时刷新。而「在音量控制页改名/恢复默认」走的是
-//   `rename_device` 命令，它只**发事件**、不回调本页 ⇒ 本页标题停留在旧名，
+//   `set_device_info` 命令，它只**发事件**、不回调本页 ⇒ 本页标题停留在旧名，
 //   要等下次整表重拉（重开弹窗/手动刷新/设备增删推送）才更新。
 //   ⛔ 这正是「只有设备页 → 音量页能同步，反过来不行」的原因：音量页订阅了
 //   `audio-devices-changed`，本页没有对应订阅。
@@ -650,40 +675,28 @@ function showContextMenu(x, y, dev) {
 
   const renameItem = document.createElement("div");
   renameItem.className = "context-menu-item";
-  renameItem.textContent = "重命名";
+  renameItem.textContent = "修改信息";
   renameItem.addEventListener("click", () => {
     hideAllContextMenus();
-    showRenameDialog({
+    showDeviceInfoDialog({
       deviceName: dev.name,
       // ☽ “”恢复默认”按钮的可见性走两级查找：别名可能只落在长形态键上
       //    （从音量页改名的情形），否则按钮不出现、
       //    用户没法清掉出别名。
       displayName: getDisplayName(dev, deviceNames),
       nameSource: window.lookupDeviceAlias(deviceNames, dev.name),
-      onUpdate: (names) => { deviceNames = names; },
+      deviceKey: dev.device_key,
+      deviceType: deviceTypes[dev.device_key],
+      connKind: deviceConnKinds[dev.device_key],
+      onUpdate: (config) => { applyDeviceConfig(config); },
       onRender: renderDevices,
     });
   });
   menu.appendChild(renameItem);
 
-  // 「通过本机播放」（A2DP Sink）：仅经典蓝牙设备可见（BLE 无音频接收能力）。
-  // 可否接收由后端按 MAC 匹配判定，这里不重复实现设备枚举；
-  // 匹配不上时后端报错，由 toast 兜底说明。
-  if (dev.is_bluetooth && !dev.is_ble && dev.device_id) {
-    const a2dpItem = document.createElement("div");
-    a2dpItem.className = "context-menu-item";
-    a2dpItem.textContent = "通过本机播放";
-    a2dpItem.addEventListener("click", async () => {
-      hideAllContextMenus();
-      try {
-        await invoke("a2dp_connect_from_device", { deviceId: dev.device_id, deviceName: dev.name || "" });
-        showToast("已请求通过本机播放，可在设置页「蓝牙音频接收」中查看状态");
-      } catch (e) {
-        showToast(String(e));
-      }
-    });
-    menu.appendChild(a2dpItem);
-  }
+  // 「通过本机播放」入口只保留设备卡片上的「连接」按钮（A2DP 设备已按
+  // Sink 会话路由）：右键项与按钮重复，且判据宽于按钮（经典蓝牙即显示），
+  // 会对无音频接收能力的设备给出无效入口。
 
   const currentGroup = getDeviceGroup(dev);
 

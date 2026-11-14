@@ -8,7 +8,8 @@
  *             attachTooltip/
  *             attachSessionTooltip/showSessionTip/hideSessionTip/reconcileCards/registerContextMenu/
  *             clampMenuPosition/hideAllContextMenus/createSubmenuShell/createCheckIcon/
- *             showRenameDialog/createDialog/closeDialog/showToast/describeShortcutError/
+ *             showDeviceInfoDialog/createComboBox/bindComboBox/
+ *             createDialog/closeDialog/showToast/describeShortcutError/
  *             bindShortcutRecorder
  * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖
  *       ⚠️ 本文件顶层的 `const invoke` 同时是 **settings 页全部脚本的 invoke 来源**
@@ -581,38 +582,372 @@ window.createSubmenuShell = function (menu, label, positionFn) {
 }
 
 
-// ── 重命名对话框 ─────────────────────────────────────────
+// ── ComboBox（WinUI 风格下拉的行为核心，设置页与「修改信息」对话框共用） ──
 
-window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpdate, onRender }) {
+// 绑定一个 .win-combo-box 子树（静态 HTML 或 createComboBox 动态构造皆可）。
+// 由 settings.js 的 initComboBox **逐字上移**而来 —— ⛔ 开合/定位/动画判据只此一份，
+// 两页不许各写一份（漂移即两页下拉行为不一致）。
+// 返回 { getValue }：取当前选中值（对话框「确定」要在收尾时读值）。
+window.bindComboBox = function (combo, selectedValue, onChange) {
+  const btn = combo.querySelector(".win-combo-btn");
+  const flyout = combo.querySelector(".win-combo-flyout");
+  const content = btn.querySelector(".win-combo-content");
+  const items = combo.querySelectorAll(".win-combo-item");
+  const ITEM_HEIGHT = 36;
+
+  let currentValue = selectedValue;
+  let overlay = null;
+  let flyoutAnimation = null;
+
+  function getSelectedIndex() {
+    let idx = 0;
+    items.forEach((item, i) => {
+      if (item.dataset.value === currentValue) idx = i;
+    });
+    return idx;
+  }
+
+  function selectItem(value) {
+    currentValue = value;
+    items.forEach(item => {
+      const isSelected = item.dataset.value === value;
+      item.classList.toggle("selected", isSelected);
+      if (isSelected) {
+        content.textContent = item.querySelector(".win-combo-item-content").textContent;
+      }
+    });
+  }
+
+  function removeOverlay() {
+    if (overlay && overlay.parentElement) {
+      overlay.parentElement.removeChild(overlay);
+    }
+    overlay = null;
+  }
+
+  function cancelFlyoutAnimation() {
+    if (flyoutAnimation) {
+      flyoutAnimation.cancel();
+      flyoutAnimation = null;
+    }
+    flyout.style.clipPath = "";
+  }
+
+  function playFlyoutAnimation() {
+    cancelFlyoutAnimation();
+
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReducedMotion) return;
+
+    const rect = flyout.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+
+    // Edge strip at top (where button is), expand downward
+    const stripSize = 36;
+    const margin = 15;
+    const startRect = { left: 0, right: rect.width, top: 0, bottom: stripSize };
+    const endRect = { left: -margin, right: rect.width + margin, top: -margin, bottom: rect.height + margin };
+
+    const toPolygon = (r) => `polygon(${r.left}px ${r.top}px, ${r.right}px ${r.top}px, ${r.right}px ${r.bottom}px, ${r.left}px ${r.bottom}px)`;
+
+    flyoutAnimation = flyout.animate(
+      [
+        { clipPath: toPolygon(startRect) },
+        { clipPath: toPolygon(endRect) }
+      ],
+      { duration: 800, easing: "cubic-bezier(0.092, 1.003, 0.028, 0.997)", fill: "none" }
+    );
+
+    flyoutAnimation.onfinish = () => {
+      flyoutAnimation = null;
+      flyout.style.clipPath = "";
+    };
+    flyoutAnimation.oncancel = () => {
+      flyoutAnimation = null;
+    };
+  }
+
+  function closeFlyout() {
+    flyout.style.display = "none";
+    flyout.style.visibility = "hidden";
+    btn.setAttribute("aria-expanded", "false");
+    combo.classList.remove("is-open");
+    cancelFlyoutAnimation();
+    removeOverlay();
+    document.removeEventListener("pointerdown", onDocPointerDown);
+    window.removeEventListener("scroll", onScroll, true);
+    window.removeEventListener("resize", onScroll);
+  }
+
+  function positionFlyout() {
+    const btnRect = btn.getBoundingClientRect();
+    const viewportW = window.innerWidth;
+    const viewportH = window.innerHeight;
+    const itemCount = items.length;
+    const selectedIndex = getSelectedIndex();
+
+    flyout.style.visibility = "hidden";
+    flyout.style.display = "block";
+    flyout.style.top = "0px";
+    flyout.style.left = "0px";
+    flyout.style.width = "auto";
+    flyout.style.maxWidth = viewportW + "px";
+
+    const flyoutRect = flyout.getBoundingClientRect();
+    const flyoutW = Math.max(btnRect.width, flyoutRect.width);
+
+    const maxItems = Math.min(9, itemCount);
+    const flyoutH = maxItems * ITEM_HEIGHT + 8;
+    const selectedItemCenter = selectedIndex * ITEM_HEIGHT + ITEM_HEIGHT / 2 + 4;
+    const btnCenter = btnRect.top + btnRect.height / 2;
+
+    let popupTop = btnCenter - selectedItemCenter;
+    if (popupTop + flyoutH > viewportH - 4) popupTop = viewportH - flyoutH - 4;
+    if (popupTop < 4) popupTop = 4;
+
+    let popupLeft = btnRect.left;
+    if (popupLeft + flyoutW > viewportW - 4) popupLeft = Math.max(4, viewportW - flyoutW - 4);
+
+    flyout.style.top = Math.round(popupTop) + "px";
+    flyout.style.left = Math.round(popupLeft) + "px";
+    flyout.style.width = Math.round(flyoutW) + "px";
+    flyout.style.maxHeight = flyoutH + "px";
+    flyout.style.visibility = "visible";
+
+    const scrollTop = Math.max(0, selectedItemCenter - btnCenter + popupTop);
+    flyout.scrollTop = scrollTop;
+  }
+
+  function onDocPointerDown(e) {
+    if (!combo.contains(e.target) && !flyout.contains(e.target)) closeFlyout();
+  }
+
+  function onScroll() {
+    if (combo.classList.contains("is-open")) positionFlyout();
+  }
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    // 状态源是类，不是内联样式：`is-open` 由下方开/closeFlyout 完整维护。
+    // 原先回读 `flyout.style.display`，而初始态一旦改由样式表给出（CSP 收紧后必须如此），
+    // 内联值就是空串、该表达式恒为 true，首点会走 closeFlyout()（关一个本来就关着的浮层）。
+    const isOpen = combo.classList.contains("is-open");
+    if (isOpen) {
+      closeFlyout();
+    } else {
+      removeOverlay();
+      overlay = document.createElement("div");
+      overlay.className = "win-combo-overlay";
+      document.body.appendChild(overlay);
+
+      document.body.appendChild(flyout);
+
+      btn.setAttribute("aria-expanded", "true");
+      combo.classList.add("is-open");
+      selectItem(currentValue);
+      positionFlyout();
+      playFlyoutAnimation();
+
+      window.addEventListener("scroll", onScroll, true);
+      window.addEventListener("resize", onScroll);
+      setTimeout(() => document.addEventListener("pointerdown", onDocPointerDown), 0);
+    }
+  });
+
+  items.forEach(item => {
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const oldValue = currentValue;
+      selectItem(item.dataset.value);
+      closeFlyout();
+      if (onChange) {
+        const result = onChange(currentValue);
+        if (result && typeof result.then === "function") {
+          result.catch(() => selectItem(oldValue));
+        }
+      }
+    });
+  });
+
+  selectItem(currentValue);
+
+  return {
+    getValue: () => currentValue,
+    // ⭐ 宿主关闭时必须调用：开启浮层会把 flyout **搬到 document.body**、并挂上
+    //   document 级 pointerdown / scroll / resize 监听 —— 对话框 remove 掉自身
+    //   DOM 时够不到这些，不销毁就泄漏（设置页静态下拉与页面同寿命，无需调用）。
+    destroy: () => {
+      if (combo.classList.contains("is-open")) closeFlyout();
+      if (flyout.parentElement) flyout.parentElement.removeChild(flyout);
+    },
+  };
+};
+
+// 造一个 win-combo 下拉（结构与 settings.html 静态标记逐字段一致：btn/content/
+// chevron svg/flyout/items-presenter/item-layout/pill/item-content），
+// 行为交给 bindComboBox。options = [[value, label], ...]。
+window.createComboBox = function ({ options, value, onChange }) {
+  const combo = document.createElement("div");
+  combo.className = "win-combo-box";
+
+  const btn = document.createElement("button");
+  btn.className = "win-combo-btn";
+  btn.setAttribute("role", "combobox");
+  btn.setAttribute("aria-expanded", "false");
+
+  const content = document.createElement("span");
+  content.className = "win-combo-content";
+  btn.appendChild(content);
+
+  const chevron = document.createElement("span");
+  chevron.className = "win-combo-chevron";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", "12");
+  svg.setAttribute("height", "12");
+  svg.setAttribute("viewBox", "0 0 8.098 4.598");
+  svg.setAttribute("fill", "none");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d",
+    "M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195"
+    + "C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403"
+    + "L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z");
+  path.setAttribute("fill", "currentColor");
+  svg.appendChild(path);
+  chevron.appendChild(svg);
+  btn.appendChild(chevron);
+
+  const flyout = document.createElement("div");
+  flyout.className = "win-combo-flyout";
+  const presenter = document.createElement("div");
+  presenter.className = "win-combo-items-presenter";
+  for (const [val, label] of options) {
+    const item = document.createElement("button");
+    item.className = "win-combo-item";
+    item.dataset.value = val;
+    const layout = document.createElement("span");
+    layout.className = "win-combo-item-layout";
+    const pill = document.createElement("span");
+    pill.className = "win-combo-item-pill";
+    const itemContent = document.createElement("span");
+    itemContent.className = "win-combo-item-content";
+    itemContent.textContent = label;
+    layout.appendChild(pill);
+    layout.appendChild(itemContent);
+    item.appendChild(layout);
+    presenter.appendChild(item);
+  }
+  flyout.appendChild(presenter);
+
+  combo.appendChild(btn);
+  combo.appendChild(flyout);
+
+  const binding = window.bindComboBox(combo, value, onChange);
+  return { root: combo, getValue: binding.getValue, destroy: binding.destroy };
+};
+
+// ── 修改信息对话框 ─────────────────────────────────────────
+
+// 下拉选项与后端白名单（config::DEVICE_TYPES / CONN_KINDS）一一对应；
+// 空值 = 自动探测（后端把空值当清除键，恢复自动派生）。
+// ⛔ 选项增删必须与后端两个常量数组同步，前端不单方面扩集合。
+const DEVICE_TYPE_OPTIONS = [
+  ["", "默认"],
+  ["phone", "手机"],
+  ["tablet", "平板"],
+  ["headphones", "耳机"],
+  ["speaker", "音箱"],
+  ["gamepad", "手柄"],
+  ["keyboard", "键盘"],
+  ["mouse", "鼠标"],
+];
+
+const CONN_KIND_OPTIONS = [
+  ["", "默认"],
+  ["wired", "有线"],
+  ["bluetooth", "蓝牙"],
+  ["wireless_24g", "2.4G"],
+];
+
+window.showDeviceInfoDialog = function ({
+  deviceName,
+  displayName,
+  nameSource,
+  deviceKey,
+  deviceType,
+  connKind,
+  onUpdate,
+  onRender,
+}) {
   const input = document.createElement("input");
   input.type = "text";
   input.className = "dialog-input";
   input.value = displayName;
   input.placeholder = "输入新名称";
 
-  const isRenamed = nameSource !== undefined;
+  const typeCombo = createComboBox({ options: DEVICE_TYPE_OPTIONS, value: deviceType || "" });
+  const connCombo = createComboBox({ options: CONN_KIND_OPTIONS, value: connKind || "" });
+
+  // 三行「标签 + 控件」复用 .card-item 行样式 —— 与设置页低电量通知·电量阈值
+  // 行同一套类（同一视觉口径，不另写一套行样式）
+  const makeFieldRow = (labelText, control) => {
+    const row = document.createElement("div");
+    row.className = "card-item";
+    const label = document.createElement("div");
+    label.className = "card-item-name";
+    label.textContent = labelText;
+    const controls = document.createElement("div");
+    controls.className = "card-item-controls";
+    controls.appendChild(control);
+    row.appendChild(label);
+    row.appendChild(controls);
+    return row;
+  };
+
+  const fields = document.createElement("div");
+  fields.className = "dialog-fields";
+  // 设备命名行不带标签（用户点名只留输入框）：input 直挂 .card-item，width:100% 占满整行
+  const nameRow = document.createElement("div");
+  nameRow.className = "card-item";
+  nameRow.appendChild(input);
+  fields.appendChild(nameRow);
+  fields.appendChild(makeFieldRow("设备类型", typeCombo.root));
+  fields.appendChild(makeFieldRow("连接方式", connCombo.root));
 
   const buttons = [];
 
+  // 统一关闭：先销毁两个下拉（flyout 在 body 下 + document 级监听，见 destroy 注释）
+  const close = () => {
+    typeCombo.destroy();
+    connCombo.destroy();
+    closeDialog(overlay);
+  };
+
+  // 「恢复默认」= 三项全部清空：命名清空走后端归并删除，类型/连接清空走覆盖表删键
   buttons.push({
     text: "恢复默认",
     className: "danger",
     onClick: async () => {
       const invoke = getInvoke();
       if (invoke) {
-        await invoke("rename_device", { original: deviceName, newName: "" });
+        await invoke("set_device_info", {
+          original: deviceName,
+          deviceKey: deviceKey || "",
+          newName: "",
+          deviceType: "",
+          connKind: "",
+        });
         const config = await invoke("get_config");
-        onUpdate(config.device_names || {});
+        onUpdate(config);
         onRender();
       }
-      closeDialog(overlay);
+      close();
     },
   });
 
   buttons.push({
     text: "取消",
     className: "cancel",
-    onClick: () => closeDialog(overlay),
+    onClick: () => close(),
   });
 
   buttons.push({
@@ -622,23 +957,39 @@ window.showRenameDialog = function ({ deviceName, displayName, nameSource, onUpd
       const newName = input.value.trim();
       const invoke = getInvoke();
       if (invoke) {
-        await invoke("rename_device", { original: deviceName, newName });
+        await invoke("set_device_info", {
+          original: deviceName,
+          deviceKey: deviceKey || "",
+          newName,
+          deviceType: typeCombo.getValue(),
+          connKind: connCombo.getValue(),
+        });
         const config = await invoke("get_config");
-        onUpdate(config.device_names || {});
+        onUpdate(config);
         onRender();
       }
-      closeDialog(overlay);
+      close();
     },
   });
 
   const overlay = createDialog({
-    title: "重命名设备",
-    content: [input],
+    title: "修改信息",
+    content: [fields],
     buttons,
   });
 
+  // Escape 关闭走 createDialog 内置的 overlay.remove()，绕过 close() ⇒ 这里补销毁
+  overlay.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      typeCombo.destroy();
+      connCombo.destroy();
+    }
+  });
+
+  // 有任一自定义信息（别名 / 类型 / 连接）才亮「恢复默认」
+  const hasOverride = nameSource !== undefined || deviceType || connKind;
   const restoreBtn = overlay.querySelector(".dialog-btn.danger");
-  if (restoreBtn) restoreBtn.disabled = !isRenamed;
+  if (restoreBtn) restoreBtn.disabled = !hasOverride;
 
   input.focus();
   input.select();

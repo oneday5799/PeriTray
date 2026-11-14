@@ -527,6 +527,8 @@ fn format_item_debug(it: &crate::taskbar_widget::WidgetItem) -> String {
     s.push_str(match it.conn {
         crate::device_identity::ConnKind::Bluetooth => " [BT]",
         crate::device_identity::ConnKind::Wireless24g => " [2.4G]",
+        // Wired 只来自用户覆盖；probe 里打出它能证明覆盖确实到达了 widget 数据
+        crate::device_identity::ConnKind::Wired => " [Wired]",
         crate::device_identity::ConnKind::Unknown => "",
     });
     if it.pinned {
@@ -859,7 +861,7 @@ fn main() {
             commands::toggle_device_hidden,
             commands::toggle_audio_device_hidden,
             commands::open_settings,
-            commands::rename_device,
+            commands::set_device_info,
             commands::change_device_group,
             commands::toggle_group_hidden,
             // 蓝牙

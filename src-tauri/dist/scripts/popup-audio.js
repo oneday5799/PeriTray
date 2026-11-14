@@ -3,12 +3,16 @@
  * 加载序 2/4 · 提供：loadAudioDevices()/loadAudioSessions()（render* 为内部函数）
  * 依赖：common.js(getInvoke/onTauriEvent/describeShortcutError/attachSessionTooltip/showToast/createSubmenuShell/
  *       formatDeviceName/registerContextMenu/clampMenuPosition/hideAllContextMenus/
- *       showRenameDialog/createDialog/closeDialog/bindShortcutRecorder/attachTooltip) */
+ *       showDeviceInfoDialog/createDialog/closeDialog/bindShortcutRecorder/attachTooltip) */
 let audioDevices = [];
 let audioSessions = [];
 let selectedDeviceId = null;
 let hiddenAudioDevices = [];
 let audioDeviceNames = {};
+// 「修改信息」的覆盖表（键为后端下发的身份键）：仅用于对话框预填；
+// 本页卡片不画连接标签
+let audioDeviceTypes = {};
+let audioConnKinds = {};
 let deviceShortcuts = {};
 let muteLockEnabled = false;
 let fineAdjustEnabled = false;
@@ -43,6 +47,8 @@ function applyAudioRuntimeConfig(cfg) {
   spatialSoundEnabled = !!cfg.enable_spatial_sound;
   simplifyDeviceNames = cfg.simplify_device_names !== false;
   forceMuteDevices = cfg.force_mute_devices || [];
+  audioDeviceTypes = cfg.device_types || {};
+  audioConnKinds = cfg.conn_kinds || {};
 }
 registerContextMenu({ get menu() { return activeAudioMenu; }, set menu(v) { activeAudioMenu = v; } });
 
@@ -307,17 +313,23 @@ async function showAudioContextMenu(x, y, device) {
 
   const renameItem = document.createElement("div");
   renameItem.className = "context-menu-item";
-  renameItem.textContent = "重命名";
+  renameItem.textContent = "修改信息";
   renameItem.addEventListener("click", () => {
     hideAllContextMenus();
-    showRenameDialog({
+    showDeviceInfoDialog({
       deviceName: device.name,
       // ⭐ 预填与「恢复默认」按钮的可见性都走两级查找：别名可能只落在短名键上
       //    （从设备页改名的情形），否则输入框会预填成端点名、且「恢复默认」不出现。
       displayName: window.lookupDeviceAlias(audioDeviceNames, device.name, device.core_name)
         || device.name,
       nameSource: window.lookupDeviceAlias(audioDeviceNames, device.name, device.core_name),
-      onUpdate: (names) => { audioDeviceNames = names; },
+      deviceKey: device.device_key,
+      deviceType: audioDeviceTypes[device.device_key],
+      connKind: audioConnKinds[device.device_key],
+      onUpdate: (config) => {
+        applyAudioRuntimeConfig(config);
+        audioDeviceNames = config.device_names || {};
+      },
       onRender: renderAudioDevices,
     });
   });

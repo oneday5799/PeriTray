@@ -3836,7 +3836,9 @@ fn item_row_texts(it: &WidgetItem, fine_adjust: bool) -> (String, String) {
     (row_widget_text(top), row_widget_text(bottom))
 }
 
-/// 单排 → widget 显示词：连接类型 = `BT`/`2.4G`/`N/A`，空排 = 空串。
+/// 单排 → widget 显示词：连接类型 = `BT`/`2.4G`/`USB`/`N/A`，空排 = 空串。
+/// ⛔ 用户指定 `Wired` 在**这里**显示 `USB`（用户点名）；tooltip 与弹窗卡片
+/// 仍显示「有线」，别跟着改。
 #[cfg(target_os = "windows")]
 fn row_widget_text(c: RowContent) -> String {
     match c {
@@ -3845,6 +3847,8 @@ fn row_widget_text(c: RowContent) -> String {
         RowContent::Conn(k) => match k {
             crate::device_identity::ConnKind::Bluetooth => "BT".to_string(),
             crate::device_identity::ConnKind::Wireless24g => "2.4G".to_string(),
+            // 用户覆盖的「有线」；自动派生到不了这里（Unknown 仍是 N/A）
+            crate::device_identity::ConnKind::Wired => "USB".to_string(),
             crate::device_identity::ConnKind::Unknown => "N/A".to_string(),
         },
     }
@@ -3868,6 +3872,7 @@ fn row_tooltip_text(c: RowContent) -> Option<String> {
             match k {
                 crate::device_identity::ConnKind::Bluetooth => "蓝牙",
                 crate::device_identity::ConnKind::Wireless24g => "2.4G",
+                crate::device_identity::ConnKind::Wired => "有线",
                 crate::device_identity::ConnKind::Unknown => "未知",
             }
         )),

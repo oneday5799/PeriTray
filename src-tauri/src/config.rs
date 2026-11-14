@@ -292,6 +292,19 @@ pub struct Config {
     pub hidden_groups: Vec<String>,
     #[serde(default)]
     pub device_names: std::collections::HashMap<String, String>,
+    /// 用户指定的设备类型（覆盖自动探测）：身份键（`DeviceKey::encode`，`c:`/`i:`/`n:`
+    /// 前缀）→ 类型枚举串（[`DEVICE_TYPES`]）。空表 = 全部走自动探测。
+    ///
+    /// ⛔ 键必须是**身份键**而非名字形态：名字会随改名漂移（别名、端点形态），
+    ///   身份键跨改名稳定；popup 设备页（`Device.device_key`）、音量页
+    ///   （`AudioDevice.device_key`，由 container_id 构）、任务栏（`PhysicalDevice.key`）
+    ///   三处下发的是**同一个编码** ⇒ 读写两侧天然对齐，无需任何形态归并。
+    #[serde(default)]
+    pub device_types: std::collections::HashMap<String, String>,
+    /// 用户指定的连接方式（覆盖自动探测）：身份键 → 连接枚举串（[`CONN_KINDS`]）。
+    /// 键口径判据同 [`device_types`]。
+    #[serde(default)]
+    pub conn_kinds: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub device_groups: std::collections::HashMap<String, String>,
     #[serde(default = "default_true")]
@@ -568,13 +581,13 @@ fn battery_thresholds_valid(thresholds: &[i32]) -> bool {
 /// 把 `device_names` 里「带括号原串」的条目**归并**一条 `core_name` 短名键（原地、纯内存）。
 ///
 /// **为什么需要它**（方案 D 的读取侧前提）：
-/// `rename_device` 从今以后**同时**写「原名」与「`core_name` 短名」两条键（归并双写），
+/// `set_device_info` 从今以后**同时**写「原名」与「`core_name` 短名」两条键（归并双写），
 /// 因此新产生的改名天然三处一致。少了这一步归并，只有「原名」一条键的条目在
 /// 设备页 / 任务栏（按短名查）**查不到**，用户会看到「改了名的地方没变」。
 ///
 /// **为什么放在这里**：`normalize_config` 是**纯函数**（不读全局状态、不持锁、不做 I/O），
 /// 且被**加载路径**（`parse_config_text`）与**写入路径**（`finalize_before_persist`）共用 ⇒
-/// 加载时生效、写入时不回潮。放在 `rename_device` 里只能覆盖「新建改名」，历史条目永远补不上；
+/// 加载时生效、写入时不回潮。放在 `set_device_info` 里只能覆盖「新建改名」，历史条目永远补不上；
 /// 放在 `load_config` 里会绕开写入路径（下一次 `update_config` 可能把它写没）。
 ///
 /// **不覆盖已存在的短名键**（先到者为准）：避免归并顺序引入不确定性 ——
@@ -676,7 +689,7 @@ fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
 ///
 /// `original` 是前端传来的**名字**（音量页 = 带括号原串 `扬声器 (DUNU DTC100pro)`；
 /// 设备页 = `core_name` 短名 `DUNU DTC100pro`），**不带身份键** ——
-/// 改名对话框只传名字（`common.js:421 showRenameDialog`），后端无从得知它属于哪台设备。
+/// 改名对话框只传名字（`common.js showDeviceInfoDialog`），后端无从得知它属于哪台设备。
 ///
 /// ⇒ 于是「同一台设备在两个页面名字形态不同」这件事，只能靠**把两种形态都写上**来抹平：
 /// 读取侧 `resolve_device_name` 三级回退，两处都能命中。
@@ -688,11 +701,11 @@ fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
 /// · `new_name` 为空、或与原名相同 ⇒ 视为「恢复默认」，**两种形态都删净**；
 /// · 否则两种形态都写入同一个自定义名。
 ///
-/// ⛔ **必须抽成独立纯函数**：`rename_device` 是 `#[tauri::command]`、需要 `AppHandle`
+/// ⛔ **必须抽成独立纯函数**：`set_device_info` 是 `#[tauri::command]`、需要 `AppHandle`
 /// 才能 `emit`，直接单测代价高；而这段归并逻辑恰恰**必须**被单测钉住（它是静默失效的来源）。
 /// 抽成纯函数后既可直接测，也与本仓 `normalize_config` 的既有风格一致。
 pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) -> bool {
-    // ⭐ **后端也要 trim**（P4）：前端 `showRenameDialog` 虽有 `input.value.trim()`，
+    // ⭐ **后端也要 trim**（P4）：前端 `showDeviceInfoDialog` 虽有 `input.value.trim()`，
     //   但命令是公开入口，直接调用可存进 `"  "` ⇒ 各表面的 `if (custom)` 判空
     //   失败、静默回落原名，表现为「改名没生效」且无处可查。
     let new_name = new_name.trim();
@@ -744,6 +757,101 @@ pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) 
     changed
 }
 
+// ── 设备类型 / 连接方式的用户覆盖 ────────────────────────────
+
+/// 「修改信息」对话框可选的设备类型枚举串（snake_case，前端下拉与后端校验共用）。
+/// 消费映射（类型 → 任务栏图标）见 `device_identity::audio_kind_from_user_type`。
+pub const DEVICE_TYPES: [&str; 7] = [
+    "phone",
+    "tablet",
+    "headphones",
+    "speaker",
+    "gamepad",
+    "keyboard",
+    "mouse",
+];
+
+/// 「修改信息」对话框可选的连接方式枚举串。消费映射见
+/// `device_identity::conn_kind_from_user`（`wired` → `ConnKind::Wired`，
+/// 自动派生**永不产生** Wired——它只来自用户覆盖）。
+pub const CONN_KINDS: [&str; 3] = ["wired", "bluetooth", "wireless_24g"];
+
+/// 判据：`v` 是否是合法的类型/连接枚举串（空白与集合外的值一律视为「未指定」）。
+fn is_known_kind(v: &str, table: &[&str]) -> bool {
+    table.contains(&v.trim())
+}
+
+/// 写入/清除一条**设备类型**覆盖（判据同 [`apply_device_rename`] 的恢复默认分支）。
+///
+/// ⛔ 键是**身份键**（`DeviceKey::encode`），非空即唯一形态 ⇒ 不需要 rename 那套
+///   「入口键 + 短名键 + 同源键」归并——那是名字形态漂移的产物，身份键天然单键。
+/// ⛔ `value` 空白或不在 [`DEVICE_TYPES`] 内 = **清除**该键：命令入口只收白名单值，
+///   这里再拦一道是为了让「手改配置写进脏值」也能被一次覆盖修复。
+/// 返回是否发生变更（供单测钉住幂等）。
+pub fn apply_device_type(config: &mut Config, device_key: &str, value: &str) -> bool {
+    apply_kind_entry(&mut config.device_types, device_key, value, &DEVICE_TYPES)
+}
+
+/// 写入/清除一条**连接方式**覆盖（判据同 [`apply_device_type`]）。
+pub fn apply_conn_kind(config: &mut Config, device_key: &str, value: &str) -> bool {
+    apply_kind_entry(&mut config.conn_kinds, device_key, value, &CONN_KINDS)
+}
+
+/// 两张覆盖表共用的单键写/删核心（类型表与连接表只差值白名单）。
+fn apply_kind_entry(
+    table: &mut std::collections::HashMap<String, String>,
+    device_key: &str,
+    value: &str,
+    allowed: &[&str],
+) -> bool {
+    let key = device_key.trim();
+    let value = value.trim();
+    if key.is_empty() || !is_known_kind(value, allowed) {
+        // 无身份键（物理设备拿不到 key 的降级形态）无处可写；
+        // 非法值按清除语义处理（一次覆盖修复脏值）
+        return table.remove(key).is_some();
+    }
+    if table.get(key).map(String::as_str) == Some(value) {
+        return false;
+    }
+    table.insert(key.to_string(), value.to_string());
+    true
+}
+
+/// 读取一条**设备类型**覆盖：命中且合法返回枚举串，否则 `None`（走自动探测）。
+///
+/// ⛔ 读侧也过滤白名单：脏值（手改配置）必须等价于「未指定」，不能让它把
+///   `audio_kind_from_user_type` 的映射带偏。
+/// 只提供吃**表本身**的 `_in` 形态（与 [`resolve_device_name_in`] 同款拆分）：
+/// 生产消费者（`apply_user_overrides`）都在持锁区外拿单表，不存在吃整个
+/// `Config` 的调用点 —— Config 包装版会变成死代码，零警告闸门拦它。
+pub fn resolve_device_type_in(
+    device_key: &str,
+    table: &std::collections::HashMap<String, String>,
+) -> Option<&'static str> {
+    resolve_kind_entry(table, device_key, &DEVICE_TYPES)
+}
+
+/// 读取一条**连接方式**覆盖（判据同 [`resolve_device_type_in`]）。
+pub fn resolve_conn_kind_in(
+    device_key: &str,
+    table: &std::collections::HashMap<String, String>,
+) -> Option<&'static str> {
+    resolve_kind_entry(table, device_key, &CONN_KINDS)
+}
+
+fn resolve_kind_entry(
+    table: &std::collections::HashMap<String, String>,
+    device_key: &str,
+    // &'static：白名单只有 DEVICE_TYPES / CONN_KINDS 两个常量数组，
+    // 返回值才能带 'static（与两个 resolve_*_in 的签名对齐）
+    allowed: &'static [&'static str],
+) -> Option<&'static str> {
+    let v = table.get(device_key.trim())?;
+    let found = allowed.iter().find(|k| **k == v.trim())?;
+    Some(*found)
+}
+
 /// 显示名长度上限（**只管显示，不管数据**）。
 ///
 /// ⭐ 为什么需要：任务栏窗口是**原生分层窗**，宽度由文字估算撑开（`current_content()`
@@ -782,7 +890,7 @@ pub fn clamp_display_name(name: &str) -> String {
 /// ⚠️ **为什么必须有第 1 级**：音量页用的 `AudioDevice.name` 是**未归一化原串**
 /// （`扬声器 (DUNU DTC100pro)`），而设备页用的 `Device.name` 是 `core_name` **短名**
 /// （`DUNU DTC100pro`）。改名入口**只传名字字符串、不传身份键**
-/// （`common.js:421 showRenameDialog`）⇒ 后端无法知道这个名字属于哪台设备。
+/// （`common.js showDeviceInfoDialog`）⇒ 后端无法知道这个名字属于哪台设备。
 /// 归并双写 + 三级回退是**唯一能零改前端**把两侧统一起来的路径。
 ///
 /// ⛔ **不要用 `Device.name` 反推身份**（见 `device_identity.rs` 同名纪律）——
@@ -938,6 +1046,8 @@ impl Default for Config {
             hidden_devices: vec![],
             hidden_groups: default_hidden_groups(),
             device_names: std::collections::HashMap::new(),
+            device_types: std::collections::HashMap::new(),
+            conn_kinds: std::collections::HashMap::new(),
             device_groups: std::collections::HashMap::new(),
             filter_enabled: true,
             filter_regex: default_filter_regex(),
@@ -1266,7 +1376,7 @@ struct PersistJob {
 /// ⛔ **为什么要有它**：落盘**不得**留在**调用线程**上（`File::create` +
 /// `write_all` + `sync_all` + `rename`）。P1-3 已把落盘移出**配置锁**（那一步是对的），
 /// 但没移出**调用线程** —— 而 11 个调用点里有 10 个就在**主线程**上：
-/// 9 个同步命令（`update_config` / `toggle_device_hidden` / `rename_device` /
+/// 9 个同步命令（`update_config` / `toggle_device_hidden` / `set_device_info` /
 /// `change_device_group` / `toggle_group_hidden` / `toggle_audio_device_hidden` /
 /// `set_hotkey_config` / `set_device_shortcut` / `remove_device_shortcut`）
 /// 与 1 个托盘菜单事件（`tray.rs` 的「开机自启」勾选）。
@@ -1435,6 +1545,8 @@ macro_rules! for_each_config_field {
             hidden_devices,
             hidden_groups,
             device_names,
+            device_types,
+            conn_kinds,
             device_groups,
             filter_enabled,
             filter_regex,
@@ -1494,7 +1606,7 @@ macro_rules! merge_config_impl {
         ///
         /// **为什么需要它**：设置页的 `saveConfig()` 发送**整份**配置并整体覆盖，
         /// 而弹窗侧的改名/隐藏/分组/托盘固定等操作走的是**字段级**命令
-        /// （`rename_device` / `toggle_device_hidden` / `change_device_group` / …）。
+        /// （`set_device_info` / `toggle_device_hidden` / `change_device_group` / …）。
         /// 设置页手里的快照一旦早于那些操作，整份覆盖就会把它们一并抹掉——
         /// 典型 lost update：**改名的同时切一个开关，名字被改回去**。
         ///
@@ -1666,13 +1778,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_device_rename, claim_revision, clamp_display_name, config_lock_held, config_path,
-        default_battery_refresh_secs, default_battery_thresholds, enqueue_persist,
-        finalize_before_persist, flush_persist, fold_pinned_alias_into_device_names, merge_config,
-        migrate_taskbar_drag, migrate_taskbar_switch, normalize_config, parse_config_text,
-        resolve_device_name, resolve_device_name_in, revision_is_latest, taskbar_devices_available,
-        with_config, write_config_atomically, Config, PinnedDevice, MAX_DISPLAY_NAME_CHARS,
-        MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED, VALID_TASKBAR_POSITIONS,
+        apply_conn_kind, apply_device_rename, apply_device_type, claim_revision,
+        clamp_display_name, config_lock_held, config_path, default_battery_refresh_secs,
+        default_battery_thresholds, enqueue_persist, finalize_before_persist, flush_persist,
+        fold_pinned_alias_into_device_names, merge_config, migrate_taskbar_drag,
+        migrate_taskbar_switch, normalize_config, parse_config_text, resolve_conn_kind_in,
+        resolve_device_name, resolve_device_name_in, resolve_device_type_in, revision_is_latest,
+        taskbar_devices_available, with_config, write_config_atomically, Config, PinnedDevice,
+        MAX_DISPLAY_NAME_CHARS, MERGED_FIELD_NAMES, PERSIST_DONE, PERSIST_QUEUED,
+        VALID_TASKBAR_POSITIONS,
     };
     use std::sync::atomic::Ordering;
 
@@ -2882,6 +2996,53 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
             "扬声器 (DUNU DTC100pro)"
         ));
         assert!(cfg.device_names.is_empty(), "实际 {cfg:?}");
+    }
+
+    // ── 设备类型 / 连接方式的用户覆盖 ──────────────────────────
+
+    /// 覆盖写读闭环：写入合法值幂等、白名单外与空值清除、读侧对脏值视为未指定。
+    #[test]
+    fn device_type_and_conn_kind_overrides_roundtrip() {
+        let mut cfg = Config::default();
+        let key = "c:abc-123";
+
+        // 写入 + 读回
+        assert!(apply_device_type(&mut cfg, key, "phone"));
+        assert_eq!(
+            resolve_device_type_in(key, &cfg.device_types),
+            Some("phone")
+        );
+        assert!(apply_conn_kind(&mut cfg, key, "wired"));
+        assert_eq!(resolve_conn_kind_in(key, &cfg.conn_kinds), Some("wired"));
+
+        // 幂等：同值重写不报变更
+        assert!(!apply_device_type(&mut cfg, key, "phone"));
+
+        // 白名单外的值 = 清除（含手改配置写进脏值的修复路径）
+        assert!(apply_device_type(&mut cfg, key, "alien"));
+        assert_eq!(resolve_device_type_in(key, &cfg.device_types), None);
+        assert!(cfg.device_types.is_empty(), "脏键必须被删净 实际 {cfg:?}");
+
+        // 空白值 = 清除
+        assert!(apply_device_type(&mut cfg, key, "phone"));
+        assert!(apply_device_type(&mut cfg, key, "  "));
+        assert!(cfg.device_types.is_empty());
+
+        // 无身份键（降级形态）＝无处可写、也无从清除
+        assert!(!apply_device_type(&mut cfg, "", "phone"));
+        assert!(cfg.device_types.is_empty());
+
+        // 独立键互不干扰
+        assert!(apply_device_type(&mut cfg, "c:a", "mouse"));
+        assert!(apply_device_type(&mut cfg, "c:b", "keyboard"));
+        assert_eq!(
+            resolve_device_type_in("c:a", &cfg.device_types),
+            Some("mouse")
+        );
+        assert_eq!(
+            resolve_device_type_in("c:b", &cfg.device_types),
+            Some("keyboard")
+        );
     }
 
     // ── 固定项自带别名（`PinnedDevice.alias`）折进全局改名表 ──────────

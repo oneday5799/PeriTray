@@ -183,6 +183,11 @@ pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::Physica
         .map_err(|e| e.to_string())?;
     let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
     let mut grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
+    // 「修改信息」的用户覆盖（连接方式 / 设备类型图标）优先于自动探测；
+    // ⛔ 同步路径 taskbar_devices_snapshot_within 里有逐句对应的同款调用，勿只改这里
+    config::with_config(|c| {
+        crate::device_identity::apply_user_overrides(&mut grouped, &c.device_types, &c.conn_kinds)
+    });
     // 钉住的手机条目在场才枚举转发会话（守卫免得白付一次会话枚举）；
     // `enumerate_audio_sessions` 的 device_id 参数当前仅进日志（内部枚举全部输出设备），
     // 传空串即可。
@@ -225,6 +230,10 @@ pub(crate) fn taskbar_devices_snapshot_within(
     let audio = crate::audio::enumerate_output_devices().ok()?;
     let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
     let mut grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
+    // 与 `get_taskbar_devices` 同款用户覆盖（两条取数路径不许分叉）
+    config::with_config(|c| {
+        crate::device_identity::apply_user_overrides(&mut grouped, &c.device_types, &c.conn_kinds)
+    });
     // 与 `get_taskbar_devices` 同一句守卫 + 同一份绑定（两条取数路径不许分叉）
     if grouped
         .iter()
@@ -432,15 +441,41 @@ pub async fn open_url(url: String) -> Result<(), String> {
     run_blocking(move || process::shell_open(&url, None)).await?
 }
 
+/// 「修改信息」命令：一次提交设备命名 + 设备类型 + 连接方式三项覆盖。
+///
+/// - 命名走**归并写入 / 归并删除**（方案 D，逻辑在 `config::apply_device_rename`，
+///   抽成纯函数是为了能被单测钉住 —— 它的失效方式是**静默**的）；
+/// - 类型/连接走**身份键单键写**（`apply_device_type` / `apply_conn_kind`，
+///   空值 = 清除该键恢复自动探测）。
+/// ⭐ 三个键的稳定性来源不同：命名表是**名字形态**（随显示名漂移，所以要归并），
+///   覆盖两表是**身份键**（跨改名稳定，无需归并）。
+/// ⭐ 改名会漂的是 `device_names` 的键，覆盖两表不受影响 —— 同一提交里
+///   先改名后写覆盖，键口径互不干扰。
 #[tauri::command]
-pub fn rename_device(app: tauri::AppHandle, original: String, new_name: String) {
-    standard_log!("[cmd] rename_device: '{}' -> '{}'", original, new_name);
-    // ⭐ 方案 D：**归并写入 / 归并删除**（逻辑在 `config::apply_device_rename`，
-    // 抽成纯函数是为了能被单测钉住 —— 它的失效方式是**静默**的）。
+pub fn set_device_info(
+    app: tauri::AppHandle,
+    original: String,
+    device_key: String,
+    new_name: String,
+    device_type: String,
+    conn_kind: String,
+) {
+    standard_log!(
+        "[cmd] set_device_info: key='{}' name='{}'->'{}' type='{}' conn='{}'",
+        device_key,
+        original,
+        new_name,
+        device_type,
+        conn_kind
+    );
     config::with_config_mut(|c| {
         config::apply_device_rename(c, &original, &new_name);
+        config::apply_device_type(c, &device_key, &device_type);
+        config::apply_conn_kind(c, &device_key, &conn_kind);
     });
     let config_snapshot = config::with_config(|c| c.clone());
+    // audio-devices-changed：类型/连接覆盖改变任务栏 widget 的图标与连接标注，
+    // widget 拉快照要靠这个事件驱动（config-changed 只喂前端派生量）
     let _ = app.emit("config-changed", config_snapshot);
     let _ = app.emit("audio-devices-changed", ());
 }

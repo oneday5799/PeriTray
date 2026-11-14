@@ -42,6 +42,11 @@ pub struct AudioDevice {
     /// 虚拟音频设备落在占位容器上 ⇒ 此处为 `None`（调用方须降级）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_id: Option<String>,
+    /// 本端点的**编码身份键**（`audio_endpoint_key_from`，容器可用取 `c:`，
+    /// 否则退 `i:SWD\MMDEVAPI\{id}`）。音量页右键「修改信息」要把它传给后端，
+    /// 让类型/连接覆盖落进与设备页、任务栏**同一套**身份键空间。
+    /// ⛔ 前端不得自己推键（与 `core_name` 由后端下发同一条纪律）。
+    pub device_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +187,10 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
                             .unwrap_or_else(|_| "Unknown Device".to_string());
                         let (volume, is_muted) =
                             get_device_volume_state(&device).unwrap_or((0.0, false));
+                        // 端点 devnode 实例名就是 `SWD\MMDEVAPI\{id}`，容器直接可读；
+                        // 解析失败/占位容器返回 None，不影响端点本身的枚举。
+                        let container_id =
+                            crate::device_identity::container_of_audio_endpoint(&id_str);
                         devices.push(AudioDevice {
                             id: id_str.clone(),
                             core_name: crate::dedup::core_name(&name),
@@ -189,11 +198,14 @@ fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
                             volume,
                             is_muted,
                             is_default: id_str == default_id,
-                            // 端点 devnode 实例名就是 `SWD\MMDEVAPI\{id}`，容器直接可读；
-                            // 解析失败/占位容器返回 None，不影响端点本身的枚举。
-                            container_id: crate::device_identity::container_of_audio_endpoint(
+                            // 与设备页/任务栏同一套身份键公式（唯一实现点在
+                            // audio_endpoint_key_from），构造点不许自己另写 match
+                            device_key: crate::device_identity::audio_endpoint_key_from(
+                                container_id.as_deref(),
                                 &id_str,
-                            ),
+                            )
+                            .encode(),
+                            container_id,
                         });
                     }
                 }
