@@ -45,6 +45,14 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_System_Com",
+    # 原生崩溃自取证：EXCEPTION_POINTERS/CONTEXT/MiniDumpWriteDump（Debug）依赖
+    # Kernel / Storage_FileSystem / Memory feature；ProcessStatus 提供出错模块定位
+    # （EnumProcessModules 全家）。
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_Storage_FileSystem",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",

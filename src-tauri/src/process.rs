@@ -781,6 +781,187 @@ unsafe extern "system" fn session_watch_wnd_proc(
     DefWindowProcW(hwnd, msg, wp, lp)
 }
 
+// ── 原生崩溃自取证 ──────────────────────────────────────────
+
+/// 原生崩溃取证目录的安装期快照。安装时机在 setup（主线程、早期），
+/// 故此处只缓存 [`logs_dir`] 的结果，过滤器内不再派生任何路径。
+#[cfg(target_os = "windows")]
+static CRASH_LOG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// 原生层未处理异常的崩溃过滤器：安装点在 main.rs setup。
+///
+/// ⛔ 过滤器内**只许**直接系统调用与直写文件：不许走日志队列（写线程可能已死）、
+///   不许碰任何锁（崩溃线程可能正持着 audio/config/taskbar 的锁，等锁 = 取证
+///   线程自己挂死，最后什么都不剩）。
+/// ⭐ 依据：本仓 release 为 `panic = "abort"`，Rust panic 走 `__fastfail` **绕过**
+///   SEH 过滤器（panic 已由既有钩子写 panic_*.txt）；能到达这里的只有原生
+///   硬异常（AV / 非法指令等）——正是用户侧「无 panic 文件的闪退」缺的那块证据。
+/// ⭐ 落盘顺序：先 txt（异常码 / 出错模块 / IP / 线程，最小必成），再 minidump
+///   （尽力而为——堆若已损坏转储会失败，txt 仍在）。文件命名按 pid：一个进程
+///   至多触发一次（返回后进程即终止），不会互相覆盖；`is_managed_log_name`
+///   不含此命名 ⇒ 保留策略不清扫，与 panic_*.txt 同口径。
+/// ⭐ 返回 `EXCEPTION_CONTINUE_SEARCH`(0)：取证后交还系统默认流程（WER 照常），
+///   对 WebView2 / 杀软回调等其它组件零干扰。
+#[cfg(target_os = "windows")]
+pub fn install_native_crash_capture() {
+    static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if INSTALLED.set(()).is_err() {
+        return;
+    }
+    let _ = CRASH_LOG_DIR.set(logs_dir());
+    use windows_sys::Win32::System::Diagnostics::Debug::SetUnhandledExceptionFilter;
+    unsafe { SetUnhandledExceptionFilter(Some(native_crash_filter)) };
+}
+
+/// SEH 过滤器本体（判据见 [`install_native_crash_capture`]）。
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn native_crash_filter(
+    info: *const windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+) -> i32 {
+    use std::io::Write as _;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        MiniDumpNormal, MiniDumpWriteDump, MINIDUMP_EXCEPTION_INFORMATION,
+    };
+
+    let Some(dir) = CRASH_LOG_DIR.get() else {
+        return 0;
+    };
+    // 目录可能被用户手动删掉（logs/ 由日志子系统按需重建，过滤器等不到那一刻）；
+    // 已存在时 create_dir_all 是零开销的 Ok，失败则两个落盘都会失败——best effort
+    let _ = std::fs::create_dir_all(dir);
+    let pid = std::process::id();
+    let tid = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+    let code = if info.is_null() || unsafe { (*info).ExceptionRecord }.is_null() {
+        0
+    } else {
+        unsafe { (*(*info).ExceptionRecord).ExceptionCode }
+    };
+    let ip = crash_ip(info);
+    let module = ip.and_then(module_for_address);
+
+    // 1) txt：最小必成
+    let mut text = format!(
+        "[{}] 原生崩溃（未处理异常）\n进程={} 线程={}\n异常码=0x{:08X}\n",
+        chrono_str(),
+        pid,
+        tid,
+        code as u32
+    );
+    // ⛔ 匹配必须穷尽且不含 panic 路径——过滤器里任何 panic（=fastfail）都丢证据
+    match (ip, module.as_ref()) {
+        (Some(addr), Some((name, base, off))) => text.push_str(&format!(
+            "IP=0x{addr:016X} 模块={name}\n基址=0x{base:016X} 偏移=0x{off:X}\n"
+        )),
+        (Some(addr), None) => text.push_str(&format!(
+            "IP=0x{addr:016X} 模块=未知（不在已加载模块范围内）\n"
+        )),
+        (None, _) => text.push_str("IP=未知（上下文缺失或架构未适配）\n"),
+    }
+    if let Ok(mut f) = std::fs::File::create(dir.join(format!("native_crash_{pid}.txt"))) {
+        let _ = f.write_all(text.as_bytes());
+        let _ = f.sync_all();
+    }
+
+    // 2) minidump：尽力而为。句柄经 std File 取得，避免引入 Storage_FileSystem feature
+    if !info.is_null() {
+        if let Ok(f) = std::fs::File::create(dir.join(format!("native_crash_{pid}.dmp"))) {
+            let param = MINIDUMP_EXCEPTION_INFORMATION {
+                ThreadId: tid,
+                // 过滤器签名收 *const，转储结构要 *mut——同一份 OS 数据，仅去 const
+                ExceptionPointers: info.cast_mut(),
+                ClientPointers: 0, // FALSE：异常记录就在本进程内存
+            };
+            unsafe {
+                MiniDumpWriteDump(
+                    windows_sys::Win32::System::Threading::GetCurrentProcess(),
+                    pid,
+                    f.as_raw_handle(),
+                    MiniDumpNormal,
+                    &param,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                );
+            }
+        }
+    }
+    0 // EXCEPTION_CONTINUE_SEARCH
+}
+
+/// 崩溃指令指针：按架构从 CONTEXT 取（x86_64=Rip，aarch64=Pc）。
+#[cfg(target_os = "windows")]
+fn crash_ip(
+    info: *const windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+) -> Option<usize> {
+    let ctx = unsafe { (*info).ContextRecord };
+    if ctx.is_null() {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        Some(unsafe { (*ctx).Rip } as usize)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        Some(unsafe { (*ctx).Pc } as usize)
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        None
+    }
+}
+
+/// 在已加载模块表中定位地址：返回 (模块文件全路径, 基址, 偏移)。
+///
+/// ⛔ 只按 EnumProcessModules + GetModuleInformation 的「基址 ≤ addr < 基址+镜像尺寸」
+///   区间判定，不猜；返回 None 表示地址不在任何已加载模块内。
+#[cfg(target_os = "windows")]
+fn module_for_address(addr: usize) -> Option<(String, usize, usize)> {
+    use windows_sys::Win32::Foundation::HMODULE;
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32EnumProcessModules, K32GetModuleFileNameExW, K32GetModuleInformation, MODULEINFO,
+    };
+    let proc = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
+    let mut modules = [std::ptr::null_mut() as HMODULE; 1024];
+    let mut needed = 0u32;
+    let ok = unsafe {
+        K32EnumProcessModules(
+            proc,
+            modules.as_mut_ptr(),
+            std::mem::size_of_val(&modules) as u32,
+            &mut needed,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let count = (needed as usize / std::mem::size_of::<HMODULE>()).min(modules.len());
+    for h in &modules[..count] {
+        let mut mi = MODULEINFO {
+            lpBaseOfDll: std::ptr::null_mut(),
+            SizeOfImage: 0,
+            EntryPoint: std::ptr::null_mut(),
+        };
+        if unsafe {
+            K32GetModuleInformation(proc, *h, &mut mi, std::mem::size_of::<MODULEINFO>() as u32)
+        } == 0
+        {
+            continue;
+        }
+        let base = mi.lpBaseOfDll as usize;
+        if addr < base || addr >= base + mi.SizeOfImage as usize {
+            continue;
+        }
+        let mut name = [0u16; 1024];
+        unsafe { K32GetModuleFileNameExW(proc, *h, name.as_mut_ptr(), name.len() as u32) };
+        // 返回值不消费：改用 NUL 扫描截断，对「含/不含终止符」两种返回语义都成立
+        let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        let file = String::from_utf16_lossy(&name[..len]);
+        return Some((file, base, addr - base));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1253,5 +1434,74 @@ mod tests {
         assert!(current.exists(), "★ 按文件名排除失效时此处会红");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 模块定位的自检（函数地址必落在本测试进程的已加载模块内）：
+    /// 回填的「基址+偏移」必须还原原地址，模块名必须是本测试可执行文件；
+    /// 乱地址必须判 None。
+    ///
+    /// ⛔ 这是过滤器取证质量的下限——若此处拿不到本 exe，用户机器上同样
+    ///   拿不到任何出错模块。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn module_for_address_finds_own_exe_and_rejects_junk() {
+        let addr = module_for_address as fn(usize) -> Option<(String, usize, usize)> as usize;
+        let Some((name, base, off)) = module_for_address(addr) else {
+            panic!("函数地址 {addr:#x} 未命中任何已加载模块");
+        };
+        assert_eq!(base + off, addr, "基址+偏移必须还原原地址");
+        assert!(
+            name.to_lowercase().ends_with(".exe"),
+            "定位到的模块应为本测试可执行文件，实际：{name}"
+        );
+        assert!(
+            module_for_address(0x1000).is_none(),
+            "低位乱地址不得命中任何模块"
+        );
+    }
+
+    /// 活体验证专用目录（固定名，验收脚本先清空再跑）。
+    #[cfg(target_os = "windows")]
+    fn crash_capture_e2e_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join("peritray_crash_capture_e2e")
+    }
+
+    /// 活体验证正例（`cargo test native_capture_writes -- --ignored --nocapture`）：
+    /// 装上过滤器后触发**真实**原生 AV，进程随之终止，但必须先落盘取证文件。
+    ///
+    /// ⛔ 必须独立进程运行（与其它 ignored 测试合跑会因 CRASH_LOG_DIR 已被占用而
+    ///   跳过）——过滤器是进程级的，无法按测试隔离。
+    /// 依据：null 写入 = 0xC0000005，IP 落在本测试 exe 内 ⇒ 模块定位应命中本 exe。
+    /// 配套验收脚本：`node tools/local/verify-native-crash-capture.mjs`（负例在此
+    /// 脚本中先跑：未装过滤器的进程触发同款 AV 不得产生任何文件）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "故意触发原生 AV：进程会随之崩溃（活体验证专用）"]
+    fn native_capture_writes_evidence_on_real_av() {
+        let dir = crash_capture_e2e_dir();
+        if CRASH_LOG_DIR.set(dir).is_err() {
+            eprintln!("[skip] CRASH_LOG_DIR 已被占用（与其他测试合跑）——请独立进程运行");
+            return;
+        }
+        install_native_crash_capture();
+        eprintln!("[crash] 即将触发原生 AV（null 写入），本行之后进程应死并落盘取证");
+        unsafe { std::ptr::null_mut::<u8>().write_volatile(42) };
+        eprintln!("[crash] 不可达：AV 之后不应有代码执行到此处");
+    }
+
+    /// 活体验证负例（`cargo test native_av_without -- --ignored --nocapture`）：
+    /// **不装**过滤器的进程触发同款 AV，必须不产生任何取证文件——
+    /// 证明正例的文件确实来自本过滤器，而非 WER 或其他机制。
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "故意触发原生 AV：进程会随之崩溃（活体验证负例）"]
+    fn native_av_without_capture_writes_nothing() {
+        if CRASH_LOG_DIR.get().is_some() {
+            eprintln!("[skip] CRASH_LOG_DIR 已被占用（与其他测试合跑）——请独立进程运行");
+            return;
+        }
+        eprintln!("[crash] 未装过滤器，即将触发原生 AV（null 写入）");
+        unsafe { std::ptr::null_mut::<u8>().write_volatile(42) };
+        eprintln!("[crash] 不可达：AV 之后不应有代码执行到此处");
     }
 }

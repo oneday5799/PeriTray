@@ -908,6 +908,11 @@ fn main() {
             #[cfg(target_os = "windows")]
             process::install_session_watch_window();
 
+            // 原生崩溃自取证：SEH 过滤器落异常码/出错模块/minidump（判据见
+            // process::install_native_crash_capture）
+            #[cfg(target_os = "windows")]
+            process::install_native_crash_capture();
+
             // 注册 AUMID，使 Windows 通知显示应用图标。
             // 首次启动需同步等待一次 PowerShell（冷启动 300ms~1.5s），故下放子线程，
             // 不叠加到应用可见时间上；函数自身幂等（快捷方式已最新时立即返回）。

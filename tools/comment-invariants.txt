@@ -50,6 +50,8 @@
 # FLOOR	⛔+⭐ 总数下界	1280
 # FLOOR	⛔+⭐ 总数下界	1281
 # FLOOR	⛔+⭐ 总数下界	1281
+# FLOOR	⛔+⭐ 总数下界	1286
+# FLOOR	⛔+⭐ 总数下界	1293
 
 src-tauri/src/a2dp_sink.rs	<file>	⛔	1
 src-tauri/src/a2dp_sink.rs	const WAIT_POLL	⛔	1
@@ -240,6 +242,12 @@ src-tauri/src/media_activate.rs	fn is_browser_exe	⭐	1
 src-tauri/src/media_activate.rs	fn launch_exe	⛔	2
 src-tauri/src/media_activate.rs	fn launch_exe	⭐	1
 src-tauri/src/media_activate.rs	fn shell_apps_folder	⛔	3
+src-tauri/src/process.rs	const CRASH_LOG_DIR	⛔	1
+src-tauri/src/process.rs	const CRASH_LOG_DIR	⭐	3
+src-tauri/src/process.rs	const INSTALLED	⛔	1
+src-tauri/src/process.rs	fn clean_log_dir_skips_current_file_by_name	⛔	1
+src-tauri/src/process.rs	fn crash_capture_e2e_dir	⛔	1
+src-tauri/src/process.rs	fn crash_ip	⛔	1
 src-tauri/src/process.rs	fn is_exiting	⛔	2
 src-tauri/src/process.rs	fn open_settings_page	⛔	1
 src-tauri/src/process.rs	fn open_settings_page	⭐	2
@@ -838,4 +846,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	1286
+# FLOOR	⛔+⭐ 总数下界	1294
