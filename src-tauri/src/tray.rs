@@ -156,6 +156,11 @@ fn start_device_watcher(app: &tauri::AppHandle) {
             // 每轮重新读取间隔（支持运行时修改）
             let secs = config::with_config(|c| c.low_battery_refresh_secs.max(10));
             std::thread::sleep(std::time::Duration::from_secs(secs as u64));
+            // 退出竞态闸：停轮询——emit 与 update_tooltip（走 run_item_main_thread
+            // 无超时等主线程）一并切断（判据见 process::EXITING）
+            if crate::process::is_exiting() {
+                break;
+            }
 
             let has_tray = config::with_config(|c| !c.tray_devices.is_empty());
             let has_battery_notify = config::with_config(|c| c.low_battery_notify);
@@ -507,6 +512,12 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
+            // 退出竞态闸：菜单事件由 tao 主循环派发，退出中（Destroy 阶段）主线程泵
+            // 仍在消化消息，此时菜单分支里的 emit/子线程投递都是 panic 源
+            // （判据见 process::EXITING）
+            if crate::process::is_exiting() {
+                return;
+            }
             standard_log!("[tray] menu: {}", event.id.as_ref());
             // 菜单事件由 tao 主循环派发（tauri/src/app.rs 的 EventLoopMessage::MenuEvent
             // 分支）⇒ 本回调就在主线程上：重操作（窗口/材质/DWM）一律 spawn 移出，

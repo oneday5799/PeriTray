@@ -548,6 +548,10 @@ fn spawn_startup_update_check(app: &tauri::AppHandle) {
         let current_version = app_handle.package_info().version.to_string();
         let (result, stored) =
             crate::update::check_and_store("startup", current_version, include).await;
+        // 退出竞态闸：检查期间退出已开始的话，结果不再广播（判据见 process::EXITING）
+        if crate::process::is_exiting() {
+            return;
+        }
         match result {
             Ok(info) => {
                 let status = if info.has_update {

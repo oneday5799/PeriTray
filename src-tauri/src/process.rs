@@ -689,7 +689,7 @@ pub fn open_settings_page(page: &str) {
 ///   **不置退出码**（tao-0.35.3 event_loop.rs），主线程泵继续跑到系统杀进程为止；
 ///   期间任何代理事件 / `WM_PAINT` 都会推进 tao 状态机，命中
 ///   `(Destroyed, _) => panic!("cannot move state from Destroyed")`（runner.rs:371）。
-///   本机一个月 25 个 panic_*.txt 全部是这一指纹，时刻全落在关机/重启点。
+///   现场取证与定性 → Wiki 07 §15。
 /// ⭐ 因此除闸门外还有第二道防线 [`install_session_watch_window`]：收到 ENDSESSION
 ///   主动 flush + 退出，让泵尽快停转——闸门只挡我方投递，挡不住 tao 在 Destroyed 后
 ///   消化残留消息。
@@ -863,7 +863,7 @@ unsafe extern "system" fn native_crash_filter(
         let _ = f.sync_all();
     }
 
-    // 2) minidump：尽力而为。句柄经 std File 取得，避免引入 Storage_FileSystem feature
+    // 2) minidump：尽力而为。句柄经 std File 取得，避免直接用 CreateFileW 绑定
     if !info.is_null() {
         if let Ok(f) = std::fs::File::create(dir.join(format!("native_crash_{pid}.dmp"))) {
             let param = MINIDUMP_EXCEPTION_INFORMATION {

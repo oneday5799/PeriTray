@@ -121,9 +121,19 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
 
 /// 读取 COM 分配的 PWSTR 到 Rust String 后释放 CoTaskMem 内存。
 /// 用于 GetId / GetDisplayName / GetSessionInstanceIdentifier 等返回 PWSTR 的 API。
+///
+/// ⛔ null 必须闸住返回空串：MMDevAPI 的 id/显示名类 API 在设备/会话建立拆除
+///   瞬窗可能返回 null，而 `to_string()` 内部直接 `wcslen(self.0)`
+///   （windows-strings pcwstr.rs 的 `PWSTR::len`），null 一触即 AV。
+///   取证与调用链 → Wiki 07 §16。
+/// ⚠️ 空串语义由调用点收尾：GetDisplayName 的调用点已有
+///   `is_empty() → "Unknown App"` 分支，GetId 的调用点用 `unwrap_or_default()`。
 pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
     // #29 先保存原始指针，确保无论 to_string 成功与否都能释放 COM 内存
     let ptr = pwstr.as_ptr();
+    if ptr.is_null() {
+        return Ok(String::new());
+    }
     // to_string() 的错误类型是 FromUtf16Error（不是 windows::core::Error），
     // 需要 From 转换；直接传关联函数即可，不必再包一层闭包。
     let result = pwstr.to_string().map_err(windows::core::Error::from);
@@ -857,6 +867,16 @@ pub fn toggle_default_mute() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// pwstr_to_string 的 null 闸：null 必须返回空串、不得触达 wcslen
+    /// （判据见 `pwstr_to_string` 文档）。
+    #[test]
+    fn pwstr_to_string_null_returns_empty() {
+        unsafe {
+            let s = pwstr_to_string(PWSTR(std::ptr::null_mut())).unwrap();
+            assert!(s.is_empty(), "null PWSTR 必须闸成空串，不得触碰 wcslen");
+        }
+    }
 
     /// ⛔ SMTC 会话没有 PID，**唯一的桥是 AUMID 文本包含 exe 名**。
     ///

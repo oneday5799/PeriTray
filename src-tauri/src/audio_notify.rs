@@ -197,6 +197,18 @@ impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
 
 // ── 设备通知回调（IMMNotificationClient）──────────────────
 
+/// PCWSTR（通知参数，系统拥有内存，不得 CoTaskMemFree）转 String。
+///
+/// ⛔ null 必须闸住返回空串——MMDevAPI 通知瞬窗可给 null，`to_string()` 内部
+///   直接 `wcslen(self.0)` 一触即 AV（判据同 `audio::pwstr_to_string`，本函数
+///   不走那边是因为所有权不同：通知参数无需释放，闸的形态相同、实现点各自唯一）。
+fn pcwstr_to_string(p: &PCWSTR) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    unsafe { (*p).to_string().unwrap_or_default() }
+}
+
 #[implement(IMMNotificationClient)]
 struct DeviceNotification {
     hwnd: HWND,
@@ -204,36 +216,30 @@ struct DeviceNotification {
 
 impl IMMNotificationClient_Impl for DeviceNotification_Impl {
     fn OnDeviceStateChanged(&self, pwstrdeviceid: &PCWSTR, dwnewstate: DEVICE_STATE) -> Result<()> {
-        unsafe {
-            verbose_log!(
-                "[audio_notify] OnDeviceStateChanged id={} state={}",
-                (*pwstrdeviceid).to_string().unwrap_or_default(),
-                dwnewstate.0
-            );
-            request_sync_callbacks(self.hwnd);
-        }
+        verbose_log!(
+            "[audio_notify] OnDeviceStateChanged id={} state={}",
+            pcwstr_to_string(pwstrdeviceid),
+            dwnewstate.0
+        );
+        request_sync_callbacks(self.hwnd);
         Ok(())
     }
 
     fn OnDeviceAdded(&self, pwstrdeviceid: &PCWSTR) -> Result<()> {
-        unsafe {
-            verbose_log!(
-                "[audio_notify] OnDeviceAdded id={}",
-                (*pwstrdeviceid).to_string().unwrap_or_default()
-            );
-            request_sync_callbacks(self.hwnd);
-        }
+        verbose_log!(
+            "[audio_notify] OnDeviceAdded id={}",
+            pcwstr_to_string(pwstrdeviceid)
+        );
+        request_sync_callbacks(self.hwnd);
         Ok(())
     }
 
     fn OnDeviceRemoved(&self, pwstrdeviceid: &PCWSTR) -> Result<()> {
-        unsafe {
-            verbose_log!(
-                "[audio_notify] OnDeviceRemoved id={}",
-                (*pwstrdeviceid).to_string().unwrap_or_default()
-            );
-            request_sync_callbacks(self.hwnd);
-        }
+        verbose_log!(
+            "[audio_notify] OnDeviceRemoved id={}",
+            pcwstr_to_string(pwstrdeviceid)
+        );
+        request_sync_callbacks(self.hwnd);
         Ok(())
     }
 
@@ -243,20 +249,18 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
         erender: ERole,
         pwstrdefaultdeviceid: &PCWSTR,
     ) -> Result<()> {
-        unsafe {
-            verbose_log!(
-                "[audio_notify] OnDefaultDeviceChanged flow={} role={} id={}",
-                edflow.0,
-                erender.0,
-                (*pwstrdefaultdeviceid).to_string().unwrap_or_default()
-            );
-            request_sync_callbacks(self.hwnd);
-        }
+        verbose_log!(
+            "[audio_notify] OnDefaultDeviceChanged flow={} role={} id={}",
+            edflow.0,
+            erender.0,
+            pcwstr_to_string(pwstrdefaultdeviceid)
+        );
+        request_sync_callbacks(self.hwnd);
         Ok(())
     }
 
     fn OnPropertyValueChanged(&self, pwstrdeviceid: &PCWSTR, _key: &PROPERTYKEY) -> Result<()> {
-        log_throttle_property(&unsafe { (*pwstrdeviceid).to_string().unwrap_or_default() });
+        log_throttle_property(&pcwstr_to_string(pwstrdeviceid));
         Ok(())
     }
 }

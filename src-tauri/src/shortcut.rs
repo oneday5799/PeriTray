@@ -342,6 +342,10 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
 }
 
 pub(crate) fn dispatch_shortcut_action(app: &tauri::AppHandle, action: &str, key: &str) {
+    // 退出竞态闸：hotkey 监听线程在退出开始后不再投递/执行动作（判据见 process::EXITING）
+    if crate::process::is_exiting() {
+        return;
+    }
     if crate::state::SHORTCUT_RECORDING.load(Ordering::Relaxed) {
         // 录制期间：不执行动作，把按下的键上报给前端用于录制
         standard_log!("[hotkey] captured while recording: {}", key);

@@ -220,6 +220,11 @@ fn press_take_click() -> Option<(i32, i32)> {
 /// ⛔ 只发命令给后台线程 / 改配置，**绝不** `emit`、**绝不**持锁调窗口 API。
 #[cfg(target_os = "windows")]
 pub fn on_click(hwnd: *mut core::ffi::c_void, local: (i32, i32)) {
+    // 退出竞态闸：本函数经主线程泵分发（widget 消息），退出中点击不再投递/执行
+    // （判据见 process::EXITING）
+    if crate::process::is_exiting() {
+        return;
+    }
     match current_panel() {
         Some(crate::config::TaskbarPanel::Music) => {
             let hit = hit_test_music(local);
