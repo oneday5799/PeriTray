@@ -259,22 +259,31 @@ struct AudioMonitor {
     enumerator: IMMDeviceEnumerator,
     callbacks: HashMap<String, (IAudioEndpointVolume, IAudioEndpointVolumeCallback)>,
     session_callbacks: HashMap<String, (IAudioSessionControl, IAudioSessionEvents)>,
+    /// 退役回调隔离区：设备/会话消失时把「接口 + 回调」整体移入，**永不注销、
+    /// 永不释放**（随 AudioMonitor 在退出路径 drop 归还系统）。
+    /// ⛔ 判据：通知回调一经注册就不得走「注销→释放」路径——Unregister 内部会
+    ///   同步 Release 系统侧引用，而音频工作线程的在途回调借裸指针，注销与
+    ///   回调并发时最后一个引用可能在回调仍在途时归零 ⇒ UAF；唯一安全态是
+    ///   对象与进程同寿命。依据：Register*Notification 文档原文「注册 AddRef /
+    ///   注销 Release」只保护计数、不覆盖在途借用窗口；泄漏量 = 设备/会话
+    ///   增量（每个 ≈ 数十字节），可忽略。位置：唯一实现点 = 本隔离区，
+    ///   `sync_callbacks` / `sync_session_callbacks` 只入不放。
+    retired_devices: Vec<(IAudioEndpointVolume, IAudioEndpointVolumeCallback)>,
+    retired_sessions: Vec<(IAudioSessionControl, IAudioSessionEvents)>,
     notification: IMMNotificationClient,
     app_handle: tauri::AppHandle,
 }
 
 impl Drop for AudioMonitor {
     fn drop(&mut self) {
+        // ⛔ 只注销 IMMNotificationClient：其契约是「系统不 AddRef、借裸指针
+        //   调用」（RegisterEndpointNotificationCallback 文档原文），注销前释放
+        //   = UAF。设备/会话回调与隔离区一律随 drop 归还系统、不逐个注销
+        //   （判据见 retired_devices 字段文档）。
         unsafe {
             let _ = self
                 .enumerator
                 .UnregisterEndpointNotificationCallback(&self.notification);
-            for (_, (endpoint, callback)) in self.callbacks.drain() {
-                let _ = endpoint.UnregisterControlChangeNotify(&callback);
-            }
-            for (_, (control, callback)) in self.session_callbacks.drain() {
-                let _ = control.UnregisterAudioSessionNotification(&callback);
-            }
         }
     }
 }
@@ -292,6 +301,8 @@ impl AudioMonitor {
                 enumerator,
                 callbacks: HashMap::new(),
                 session_callbacks: HashMap::new(),
+                retired_devices: Vec::new(),
+                retired_sessions: Vec::new(),
                 notification,
                 app_handle,
             })
@@ -331,18 +342,23 @@ impl AudioMonitor {
                 .cloned()
                 .collect();
             for id in to_remove {
-                if let Some((endpoint, callback)) = self.callbacks.remove(&id) {
-                    let _ = endpoint.UnregisterControlChangeNotify(&callback);
+                // ⛔ 不注销不释放：整体移入隔离区（判据见 retired_devices 字段文档）。
+                //   设备回来时 id 不在 map ⇒ 走 register_device 重新注册，旧回调留在隔离区。
+                if let Some(entry) = self.callbacks.remove(&id) {
+                    self.retired_devices.push(entry);
                 }
             }
 
             self.sync_session_callbacks();
 
             verbose_log!(
-                "[audio_notify] sync_callbacks: 枚举 {} 台设备，设备回调 {} 个，会话回调 {} 个",
+                "[audio_notify] sync_callbacks: 枚举 {} 台设备，设备回调 {} 个，会话回调 {} 个，\
+                 退役持有 {}+{} 个",
                 count,
                 self.callbacks.len(),
-                self.session_callbacks.len()
+                self.session_callbacks.len(),
+                self.retired_devices.len(),
+                self.retired_sessions.len()
             );
 
             if let Err(e) = self.app_handle.emit("audio-devices-changed", ()) {
@@ -414,8 +430,10 @@ impl AudioMonitor {
                 .cloned()
                 .collect();
             for id in to_remove {
-                if let Some((control, callback)) = self.session_callbacks.remove(&id) {
-                    let _ = control.UnregisterAudioSessionNotification(&callback);
+                // ⛔ 不注销不释放：整体移入隔离区（判据见 retired_devices 字段文档）。
+                //   会话实例 id 每次重建都不同 ⇒ 新会话走 register_session 重新注册。
+                if let Some(entry) = self.session_callbacks.remove(&id) {
+                    self.retired_sessions.push(entry);
                 }
             }
         }
@@ -585,7 +603,7 @@ pub fn request_session_sync_blocking() {
 }
 
 /// 退出前投递 WM_CLOSE：触发消息窗口销毁 → WM_DESTROY → drop AudioMonitor
-/// （反注册 IMMNotificationClient 与各设备/会话回调）→ STA 线程退出。
+/// （回调与隔离区对象随 drop 整体归还系统，不做逐个注销）→ STA 线程退出。
 /// best-effort：仅覆盖正常退出路径（app.exit）；watchdog/panic 的 process::exit 不触发。
 pub fn request_shutdown() {
     let Some(&hwnd) = NOTIFY_HWND.get() else {
@@ -631,7 +649,8 @@ extern "system" fn audio_msg_wnd_proc(
                 LRESULT(0)
             }
             WM_CLOSE => {
-                // 退出路径：销毁消息窗口 → WM_DESTROY → drop AudioMonitor（反注册回调）→ 线程退出
+                // 退出路径：销毁消息窗口 → WM_DESTROY → drop AudioMonitor → 线程退出。
+                // 回调对象随 drop 整体归还系统，不做逐个注销（判据见 retired_devices 字段文档）
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
             }

@@ -100,27 +100,22 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 
 /// TrySuspend 完成回调（最小 COM 对象，vtable 指针为首字段的標準布局）
 ///
-/// 引用计数约定（**三处必须一致，勿单独改一处**）：
-/// - `create()` 返回的对象**初始计数 1，由调用方持有**；
-/// - `TrySuspend` 成功时 runtime 会自行 AddRef 以持有异步完成回调；
-/// - **调用方在 `TrySuspend` 返回后（无论成功或失败）必须释放自己那一份**
-///   （`release_owned`）——对象存活期 = 「调用方持有」∪「runtime 持有」，
-///   最后一个引用释放时由 `release` 内的 `Box::from_raw` 回收。
+/// 存活期约定（**三处必须一致，勿单独改一处**：模块头 / 调用点 / `invoke`）：
+/// `TrySuspend` 成功返回后，调用方**不再释放**、`invoke` 也**不释放**——
+/// 对象与进程同寿命（与 audio_notify 的通知回调同一模式）。依据：
+/// - 完成回调可能在任意线程、任意延迟后到达；runtime 持有回调的方式
+///   （AddRef 还是借裸指针）没有任何文档保证，任何「按实测配对同步释放」
+///   的写法都把正确性押在运行时行为上，而 WebView2 是 Evergreen
+///   （运行时自动更新），实测配对不构成保证；
+/// - 借用配对下「invoke 内释放 / 调用方同步释放」都会让 runtime 在
+///   Invoke 前后的后续操作踩已回收内存 ⇒ UAF；
+/// - 泄漏量 = 每次成功 suspend 一个 ≈ 数十字节对象，可忽略。
 ///
-/// 该约定与上游 `webview2-com` 一致：其 `TrySuspendCompletedHandler::create()` 返回持有
-/// 一份引用的智能指针，`TrySuspend(&handler)` 按借用传入，局部变量析构时释放。
+/// 唯一允许的释放点：`TrySuspend` **同步返回 Err** 或 `from_raw_borrowed`
+/// 失败——此时异步操作不存在，runtime 必然未接管，调用方那份是唯一引用。
 ///
-/// **实测（WebView2 运行时 137.0.3296.52，真实进程 + env 门控探针）**:
-/// - 成功路径：运行时**恰好** `1×AddRef → Invoke → 1×Release`（trace 序列 `A→I→R`）；
-/// - 错误路径（`IsVisible == TRUE` ⇒ 同步返回 `HRESULT_FROM_WIN32(ERROR_INVALID_STATE)`）：
-///   运行时**零次引用操作**（序列 `""`）。
-///
-/// ⇒ 上面的约定在两条路径上都恰好回收一次。⚠️ 旧实现（`add_ref` 恒返回 1 +
-/// `release` 无条件 `Box::from_raw`）只在「Release 恰好一次」时正确——它把安全性
-/// **押在运行时的配对行为上**；WebView2 是 Evergreen（运行时自动更新），这种依赖不构成保证。
-/// 完整判据、正控与保留边界见 Wiki「12-代码审查与整改复盘」§10
-/// （正控：同一套 trace 在成功路径记录到 `A/I/R`，且探针自己调 `release_owned` 时被记录为 `R`
-/// ⇒ 错误路径的空序列是**真实阴性**，不是探针失灵）。
+/// 实测配对数据（成功路径 trace 序列 `A→I→R`、错误路径零引用操作）、
+/// 正控方法与保留边界见 Wiki「12-代码审查与整改复盘」§10。
 #[cfg(target_os = "windows")]
 mod try_suspend_cb {
     use crate::standard_log;
@@ -189,11 +184,15 @@ mod try_suspend_cb {
     }
 
     unsafe extern "system" fn invoke(_this: *mut Obj, error_code: i32, is_successful: i32) -> i32 {
+        // ⛔ 不得在此释放：runtime 可能以借裸指针的方式调用本回调，Invoke 返回后
+        //    还会继续使用对象；释放即 UAF。对象与进程同寿命（见模块头注释）。
         standard_log!(
             "[webview] TrySuspend completed: hr=0x{:08X} success={}",
             error_code as u32,
             is_successful != 0
         );
+        // 完成行同步落盘：与 suspend_webview 的 issued 行配对成「死亡窗口」证据
+        crate::process::flush_log();
         0 // S_OK
     }
 
@@ -204,7 +203,8 @@ mod try_suspend_cb {
         invoke,
     };
 
-    /// 创建回调对象：返回的指针**持有一份引用**，调用方用完必须 `release_owned`。
+    /// 创建回调对象：返回的指针**持有一份引用**；仅「异步操作未发生」的失败路径
+    /// 由调用方 `release_owned` 释放，成功路径与进程同寿命（见模块头注释）。
     pub fn create() -> *mut core::ffi::c_void {
         let obj = Box::new(Obj {
             vtable: &VTABLE,
@@ -213,9 +213,9 @@ mod try_suspend_cb {
         Box::into_raw(obj) as *mut core::ffi::c_void
     }
 
-    /// 释放**调用方自己持有的那一份引用**（⛔ 不得无条件释放：runtime 若已 AddRef，
-    /// 提前释放会让对象被回收）。
-    /// 与 `destroy` 的区别：若 runtime 已 AddRef，对象不会被提前回收。
+    /// 释放调用方持有的那一份引用。⛔ 仅限「异步操作不存在」的调用点
+    /// （`TrySuspend` 同步返回 Err / `from_raw_borrowed` 失败）：此时 runtime
+    /// 必然未接管，调用方那份是唯一引用；成功路径禁止调用（存活期约定见模块头注释）。
     ///
     /// # Safety
     /// `ptr` 必须是 `create()` 返回、且尚未由调用方释放过的指针。
@@ -273,33 +273,35 @@ mod try_suspend_cb {
             }
         }
 
-        /// 回归（实测配对）：**调用点实际使用的** `release_owned` 在实测到的两条
-        /// 运行时路径上都只释放调用方那一份、且恰好回收一次。
+        /// 成功路径存活期：调用方与 `invoke` 都**不得释放**（对象与进程同寿命），
+        /// 无论 runtime 用 AddRef 还是借裸指针持有回调。
         ///
-        /// - 错误路径实测：运行时零次引用操作 ⇒ 调用方那一份是唯一引用；
-        /// - 成功路径实测：运行时 `AddRef(1→2) → Invoke → Release(2→1)` ⇒ 调用方释放后归零。
-        ///
-        /// 可证伪性：把 `add_ref` / `release` / `release_owned` 还原成旧语义（恒返回 1 +
-        /// 无条件 `Box::from_raw`）后本用例转红——先卡在「AddRef 必须真的递增」这条断言上；
-        /// 即使放宽该断言，成功路径的第二次回收也会造成堆损坏。
+        /// 可证伪性：把「成功路径不释放」改回「调用方同步 `release_owned`」或
+        /// 在 `invoke` 内释放，则在「runtime 借用不加引用」的配对下，Invoke
+        /// 返回前对象已被回收（UAF）——本用例钉住「invoke 不改计数」与
+        /// 「模拟 runtime Release 后调用方那份仍然存活」两条。
         #[test]
-        fn release_owned_is_safe_under_measured_runtime_pairing() {
-            // 错误路径（实测：运行时零次引用操作）
-            let p = create();
-            unsafe { release_owned(p) };
-
-            // 成功路径（实测：AddRef → Invoke → Release → 调用方释放）
+        fn success_path_holds_callback_for_process_lifetime() {
+            // 成功路径（模拟 runtime 接管：AddRef → Invoke → Release）
             let p = create();
             let obj = p as *mut Obj;
             unsafe {
                 assert_eq!(add_ref(obj), 2, "运行时接管时 AddRef 必须真的递增");
+                invoke(obj, 0, 1);
                 assert_eq!(
-                    release(obj),
-                    1,
-                    "运行时在 Invoke 之后 Release，对象仍须存活"
+                    (*obj).refs.load(Ordering::Relaxed),
+                    2,
+                    "invoke 不得改变引用计数"
                 );
-                release_owned(p); // 调用方那一份 → 归零回收
+                // 调用方不调 release_owned；仅回收模拟 runtime 的那一份，
+                // 计数停在 1（调用方持有至进程结束）
+                assert_eq!(release(obj), 1);
+                assert_eq!((*obj).refs.load(Ordering::Relaxed), 1);
             }
+
+            // 同步失败路径（实测：运行时零次引用操作）：唯一引用立即回收
+            let p = create();
+            unsafe { release_owned(p) };
         }
     }
 }
@@ -331,21 +333,23 @@ pub fn suspend_webview(webview: &tauri::Webview) {
             }
         };
 
-        // 完成回调：create() 返回的对象持有一份引用（调用方所有）；
-        // runtime 成功接管时会自行 AddRef，故**无论成败都由我们释放自己那一份**，
-        // 避免「runtime 未 AddRef 时对象提前回收」与「已 AddRef 时泄漏」两种偏差。
-        // 生命周期与计数约定见 try_suspend_cb 模块头注释。
+        // 完成回调：create() 返回的对象持有一份引用（调用方所有）。
+        // 存活期判据见 try_suspend_cb 模块头注释；仅同步失败路径立即回收。
         let cb_ptr = try_suspend_cb::create();
         let Some(handler) = ICoreWebView2TrySuspendCompletedHandler::from_raw_borrowed(&cb_ptr)
         else {
             try_suspend_cb::release_owned(cb_ptr);
             return;
         };
+        // 发出行先强制落盘再进危险窗口：闪退若发生在「已发出、completed 缺失」
+        // 区间，日志尾部不丢即可钉死死亡窗口（异步队列在同步死亡时会丢尾行）
+        standard_log!("[webview] TrySuspend issued");
+        process::flush_log();
         if let Err(e) = wv3.TrySuspend(handler) {
+            // 同步返回 Err ⇒ 异步操作不存在，runtime 必然未接管 ⇒ 唯一引用是我们
             standard_log!("[webview] TrySuspend call failed: {}", e);
+            try_suspend_cb::release_owned(cb_ptr);
         }
-        // 释放调用方持有的引用；若 runtime 已 AddRef，对象继续存活至其 Release
-        try_suspend_cb::release_owned(cb_ptr);
     });
     if r.is_err() {
         process::append_log("[webview] suspend_webview: with_webview dispatch failed");
@@ -418,6 +422,9 @@ pub fn set_memory_usage_target(webview: &tauri::Webview, low: bool) {
                     "[webview] memory usage target -> {}",
                     if low { "LOW" } else { "NORMAL" }
                 );
+                // 档位行同步落盘：本行是 popup 生命周期最后的状态标记，闪退时
+                // 需要它可核对——异步队列在同步死亡时会丢尾行，flush 保证落盘
+                process::flush_log();
             }
             Err(e) => {
                 standard_log!("[webview] SetMemoryUsageTargetLevel failed: {}", e);

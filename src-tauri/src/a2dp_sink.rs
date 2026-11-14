@@ -887,6 +887,21 @@ fn ensure_mta() {
 /// 枚举当前系统内「可被本机接收音频」的设备（手机等音频源）。
 /// 命令层经 run_blocking 调用（枚举 + join 阻塞数百毫秒，禁入主线程）。
 pub fn enumerate_devices() -> Result<Vec<A2dpDevice>, String> {
+    // ⛔ 不得在调用线程直接 ensure_mta：命令层经 run_blocking（tokio
+    //   spawn_blocking 共享池）调用，MTA 会**永久污染**池线程，此后复用该
+    //   线程的 STA 命令全部 RPC_E_CHANGED_MODE（audio.rs「进程内统一 STA」
+    //   契约被破坏，STA-only 组件在该线程上必败）。故收进一次性专用线程，
+    //   线程随 join 结束、污染不外溢（taskbar_music 的 MTA 同样限定专用线程）。
+    std::thread::spawn(enumerate_devices_mta)
+        .join()
+        // ⚠️ panic→Err 映射仅 dev/test 可达：release 为 panic="abort"，
+        //    工作线程 panic 直接终止进程（与既有全局语义一致，非回归）
+        .unwrap_or_else(|e| Err(format!("枚举线程异常退出：{e:?}")))
+}
+
+/// `enumerate_devices` 本体：**只能在专用线程调用**（WinRT 异步操作需 MTA
+/// 线程才能无消息泵阻塞等待，依据见 `ensure_mta` 注释）。
+fn enumerate_devices_mta() -> Result<Vec<A2dpDevice>, String> {
     ensure_mta();
     let selector = AudioPlaybackConnection::GetDeviceSelector()
         .map_err(|e| format!("获取选择器失败：{}", e))?;
