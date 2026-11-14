@@ -488,7 +488,8 @@ function appendA2dpDeviceRow(items, status, dev) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "connect-btn";
-  btn.textContent = isActiveTarget ? "断开" : "连接";
+  // 措辞判据见 popup-devices.js syncActionsEl（与 popup 设备 tab 的 A2DP 按钮两处一致）
+  btn.textContent = isActiveTarget ? "关闭" : "开启";
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     btn.classList.add("btn-loading");

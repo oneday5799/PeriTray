@@ -437,10 +437,12 @@ function syncActionsEl(card) {
   // 路由判据与 buildActionsEl 同款（枚举命中或会话占用中，防枚举空窗口回落）
   if (a2dpDeviceFor(dev) || a2dpSessionActiveFor(dev)) {
     const active = a2dpSessionActiveFor(dev);
-    // 空闲 ∧ 蓝牙链路已通时说「连接」会被状态标签的「已连接」打脸——
-    // 这个动作实际是拉起 Sink 会话接收音频（Win32 连接对手机无效，见点击路由注释），
-    // 故改说「接收音频」；链路未通（已配对）保持「连接」，两种文案动作相同（connect）。
-    connectBtn.textContent = active ? "断开" : (dev.status === "已连接" ? "接收音频" : "连接");
+    // ⭐ 按钮措辞与设置窗设备信息卡片（settings-audio.js appendA2dpDeviceRow）
+    //   统一为「开启/关闭」，两处必须一致；动作是拉起/关闭 Sink 会话（Win32
+    //   连接对手机无效，见点击路由注释）。链路已通 ∧ 会话空闲的旧特例「接收
+    //   音频」随统一取消——它起因于「连接」会与状态标签「已连接」打脸，
+    //   「开启」无此冲突。
+    connectBtn.textContent = active ? "关闭" : "开启";
     connectBtn.dataset.action = active ? "disconnect" : "connect";
     connectBtn.style.display = "";
     return;

@@ -46,12 +46,16 @@
 # FLOOR	⛔+⭐ 总数下界	1165
 # FLOOR	⛔+⭐ 总数下界	1165
 # FLOOR	⛔+⭐ 总数下界	1173
+# FLOOR	⛔+⭐ 总数下界	1275
+# FLOOR	⛔+⭐ 总数下界	1280
+# FLOOR	⛔+⭐ 总数下界	1281
 
 src-tauri/src/a2dp_sink.rs	<file>	⛔	1
 src-tauri/src/a2dp_sink.rs	const WAIT_POLL	⛔	1
 src-tauri/src/a2dp_sink.rs	fn abort_if_disconnected	⛔	1
 src-tauri/src/a2dp_sink.rs	fn connect_internal	⛔	4
 src-tauri/src/a2dp_sink.rs	fn connect_internal	⭐	1
+src-tauri/src/a2dp_sink.rs	fn enumerate_devices	⛔	1
 src-tauri/src/a2dp_sink.rs	fn fail	⛔	1
 src-tauri/src/a2dp_sink.rs	fn init	⛔	1
 src-tauri/src/a2dp_sink.rs	fn on_connect	⛔	1
@@ -61,7 +65,11 @@ src-tauri/src/a2dp_sink.rs	fn step	⭐	1
 src-tauri/src/a2dp_sink.rs	fn supported	⛔	1
 src-tauri/src/app_icon.rs	const EXE_PATH_CACHE	⭐	1
 src-tauri/src/app_icon.rs	fn normalize_image_path	⭐	1
+src-tauri/src/audio_notify.rs	fn drop	⛔	1
+src-tauri/src/audio_notify.rs	fn OnPropertyValueChanged	⛔	1
 src-tauri/src/audio_notify.rs	fn post_sync_callbacks	⛔	1
+src-tauri/src/audio_notify.rs	fn sync_callbacks	⛔	1
+src-tauri/src/audio_notify.rs	fn sync_session_callbacks	⛔	1
 src-tauri/src/audio.rs	<file>	⭐	1
 src-tauri/src/audio.rs	const MIN_STEM_LEN	⭐	1
 src-tauri/src/audio.rs	fn aumid_matches_exe_path_only_in_the_aumid_contains_direction	⛔	2
@@ -807,7 +815,7 @@ src-tauri/src/tray.rs	fn theme_watch_state_now	⭐	1
 src-tauri/src/tray.rs	fn update_tray_icon	⭐	1
 src-tauri/src/update.rs	fn real_window	⭐	1
 src-tauri/src/webview.rs	fn create	⛔	1
-src-tauri/src/webview.rs	fn guid_eq	⛔	1
+src-tauri/src/webview.rs	fn guid_eq	⛔	2
 src-tauri/src/windows.rs	fn system_dark_mode	⭐	1
 src-tauri/src/wireless_24g/drivers/flydigi/vader5pro.rs	fn decode_reply	⛔	1
 src-tauri/src/wireless_24g/drivers/flydigi/vader5pro.rs	fn read_battery_percent	⭐	1
@@ -826,4 +834,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	1275
+# FLOOR	⛔+⭐ 总数下界	1281
