@@ -153,6 +153,10 @@ enum Msg {
 // ── 快照与事件 ──────────────────────────────────────────────────────────
 
 fn publish() {
+    // 退出竞态闸：退出开始后不再 emit（判据见 process::EXITING）
+    if crate::process::is_exiting() {
+        return;
+    }
     let snap = lock_unpoisoned(&SNAPSHOT).clone();
     if let Some(app) = A2DP_HANDLE.get() {
         let _ = app.emit("a2dp-changed", snap);

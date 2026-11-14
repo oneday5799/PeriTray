@@ -88,6 +88,10 @@ struct VolumeCallback {
 
 impl IAudioEndpointVolumeCallback_Impl for VolumeCallback_Impl {
     fn OnNotify(&self, pnotify: *mut AUDIO_VOLUME_NOTIFICATION_DATA) -> Result<()> {
+        // 退出竞态闸：COM 回调线程在退出开始后不得再 emit（判据见 process::EXITING）
+        if crate::process::is_exiting() {
+            return Ok(());
+        }
         unsafe {
             if let Some(data) = pnotify.as_ref() {
                 verbose_log!(
@@ -140,6 +144,10 @@ impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
         newmute: BOOL,
         _eventcontext: *const GUID,
     ) -> Result<()> {
+        // 退出竞态闸：COM 回调线程在退出开始后不得再 emit（判据见 process::EXITING）
+        if crate::process::is_exiting() {
+            return Ok(());
+        }
         verbose_log!(
             "[audio_notify] OnSimpleVolumeChanged 会话: {} vol={} muted={}",
             self.session_id,
@@ -366,8 +374,11 @@ impl AudioMonitor {
                 self.retired_sessions.len()
             );
 
-            if let Err(e) = self.app_handle.emit("audio-devices-changed", ()) {
-                standard_log!("[audio_notify] emit audio-devices-changed 失败: {}", e);
+            // 退出竞态闸：退出开始后不再 emit（判据见 process::EXITING）
+            if !crate::process::is_exiting() {
+                if let Err(e) = self.app_handle.emit("audio-devices-changed", ()) {
+                    standard_log!("[audio_notify] emit audio-devices-changed 失败: {}", e);
+                }
             }
         }
     }

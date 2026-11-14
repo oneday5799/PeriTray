@@ -264,6 +264,10 @@ pub fn on_click(hwnd: *mut core::ffi::c_void, local: (i32, i32)) {
 ///   「有没有会话」决定组件**在不在**；只重绘的话，无会话→有会话时窗口仍然挂着空窗。
 #[cfg(target_os = "windows")]
 pub fn on_music_changed() {
+    // 退出竞态闸：SMTC 回调线程在退出开始后不得再向主线程投递（判据见 process::EXITING）
+    if crate::process::is_exiting() {
+        return;
+    }
     // ⛔⛔ **只重绘、绝不取数**（修：播放/暂停图标延迟数秒才变）。
     //
     // 根因：`refresh_async()` 是**设备**刷新通道 ——
@@ -6515,6 +6519,10 @@ pub fn should_show() -> bool {
 /// ⛔ 投递必须发生在**读取配置之后**：`with_config` 的锁此刻已释放。
 ///   持配置锁去投递主线程任务，正是 AGENTS.md 里那条 AB/BA 死锁的构成条件。
 pub fn apply_from_config(app: &tauri::AppHandle) {
+    // 退出竞态闸：退出开始后不再做挂载/拆窗投递（判据见 process::EXITING）
+    if crate::process::is_exiting() {
+        return;
+    }
     #[cfg(target_os = "windows")]
     {
         // ⭐⭐ **必须排在 `should_show()` 之前**：挂载决策问的是「音乐可用吗」，
@@ -6968,6 +6976,10 @@ pub fn start_refresh_loop(app: &tauri::AppHandle) {
             let mut tick: u64 = 0;
             loop {
                 tick += 1;
+                // 退出竞态闸：停维护节拍（raise/refresh/remount 三路投递都停，判据见 process::EXITING）
+                if crate::process::is_exiting() {
+                    break;
+                }
                 let alive = widget_alive();
                 let taskbar = taskbar_hwnd();
                 // ⭐ 「任务栏换了」= Explorer 重建。**这是唯一能立刻重建的触发条件**；

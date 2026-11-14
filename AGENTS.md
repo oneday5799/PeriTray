@@ -133,6 +133,7 @@ OpenRazer / `ck/` …）。这些一律进 Wiki，代码里最多留一句 `→ 
 | 12 | 单飞标志不得跨动画域共用，守卫与时钟成对 | Wiki 13 §17 |
 | 13 | `if let` 临时量存活至整个块尾（edition 2021） | Wiki 08 §4.6 |
 | 14 | 异步上下文禁止 `std::thread::sleep`（真线程里则用 `thread::sleep`） | Wiki 08 §4.6 |
+| 15 | 退出开始后后台线程不得向主线程泵投递（自发 `emit` / `run_on_main_thread` 先查 `process::is_exiting`）；哨兵窗口收到 ENDSESSION 必须 flush+退出 | Wiki 13 §23 |
 
 ⛔ **忽略 `Result` / `let _ =` 必须写明「为什么安全」**，且只接受三类：无状态后果（UI 呈现）、
 有下游兜底、不可上报。失败后**状态与用户操作不一致**的（切默认设备、写配置、注册快捷键…）

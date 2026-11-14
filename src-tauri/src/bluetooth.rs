@@ -668,6 +668,10 @@ fn enqueue_bt_refresh(queue: Vec<(String, BtKind)>) {
 
 /// 电量发生实质变化后通知前端静默重拉（未注入句柄时静默跳过）
 fn notify_bt_battery_changed() {
+    // 退出竞态闸：退出开始后不再 emit（判据见 process::EXITING）
+    if crate::process::is_exiting() {
+        return;
+    }
     if let Some(app) = BT_EVENT_HANDLE.get() {
         let _ = app.emit("bt-battery-updated", ());
     }
@@ -916,6 +920,10 @@ fn watch_radio_state() -> Result<(), String> {
 }
 
 fn handle_radio_state() {
+    // 退出竞态闸：radio watcher 线程在退出开始后不得再 emit（判据见 process::EXITING）
+    if crate::process::is_exiting() {
+        return;
+    }
     let Some(app) = RADIO_WATCHER_HANDLE.get() else {
         return;
     };

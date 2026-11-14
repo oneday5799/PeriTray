@@ -679,11 +679,121 @@ pub fn open_settings_page(page: &str) {
     let _ = shell_open(&format!("ms-settings:{}", page), None);
 }
 
+// ── 退出竞态闸 ──────────────────────────────────────────────
+
+/// 退出已启动标志。置位后进程必然在秒级内终止。
+///
+/// ⛔ 置位后，**后台线程不得再向主线程事件泵投递**（`emit` / `run_on_main_thread`）：
+///   一切自发投递的调用点都必须先查 [`is_exiting`] 早退。
+/// ⭐ 依据：tao 收到系统关机的 `WM_ENDSESSION` 时只把事件循环标为 `Destroyed`、
+///   **不置退出码**（tao-0.35.3 event_loop.rs），主线程泵继续跑到系统杀进程为止；
+///   期间任何代理事件 / `WM_PAINT` 都会推进 tao 状态机，命中
+///   `(Destroyed, _) => panic!("cannot move state from Destroyed")`（runner.rs:371）。
+///   本机一个月 25 个 panic_*.txt 全部是这一指纹，时刻全落在关机/重启点。
+/// ⭐ 因此除闸门外还有第二道防线 [`install_session_watch_window`]：收到 ENDSESSION
+///   主动 flush + 退出，让泵尽快停转——闸门只挡我方投递，挡不住 tao 在 Destroyed 后
+///   消化残留消息。
+/// ⚠️ 终态标志、**无**自愈兜底（不适用「全局标志需超时自愈」那条纪律）：
+///   三个置位点（ENDSESSION / ExitRequested / watchdog 自愈）之后进程都必然退出，
+///   不存在「置位后长期运行」态；若加自愈反而会在退出过程中重新放行投递。
+static EXITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 标记退出已启动（判据见 [`EXITING`]）。任意线程可调。
+pub fn set_exiting() {
+    EXITING.store(true, std::sync::atomic::Ordering::Release);
+}
+
+/// 退出是否已启动。后台投递点据此早退（判据见 [`EXITING`]）。
+pub fn is_exiting() -> bool {
+    EXITING.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// 关机/注销哨兵窗口：主线程（setup）建一次，消息由 tao 的主线程泵分发。
+///
+/// ⛔ 必须是**顶层**窗口——`WM_ENDSESSION` 广播只送顶层窗口（HWND_MESSAGE 收不到）。
+/// ⛔ 收到 `WM_ENDSESSION`(wParam=TRUE) 必须 flush + 退出（判据见 [`EXITING`]）：
+///   flush 放子线程（各自忙等 ≤2s，队列空则立即返回），wnd_proc 本身立即返回 0，
+///   不阻塞系统向其余窗口继续广播。
+#[cfg(target_os = "windows")]
+pub fn install_session_watch_window() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, RegisterClassW, WNDCLASSW};
+    static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if INSTALLED.set(()).is_err() {
+        return;
+    }
+    let class_w = to_wide("PeriTraySessionWatch");
+    let wc = WNDCLASSW {
+        style: 0,
+        lpfnWndProc: Some(session_watch_wnd_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: std::ptr::null_mut(),
+        hIcon: std::ptr::null_mut(),
+        hCursor: std::ptr::null_mut(),
+        hbrBackground: std::ptr::null_mut(),
+        lpszMenuName: std::ptr::null(),
+        lpszClassName: class_w.as_ptr(),
+    };
+    // 重复注册同名类会失败（ERROR_CLASS_ALREADY_EXISTS）；建窗走类名，故不消费返回值
+    // （同 taskbar_widget::register_class 的口径）。
+    unsafe { RegisterClassW(&wc) };
+    let hwnd = unsafe {
+        CreateWindowExW(
+            0,
+            class_w.as_ptr(),
+            std::ptr::null(),
+            0, // WS_OVERLAPPED：从不显示，只为接收 ENDSESSION 广播
+            0,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    };
+    if hwnd.is_null() {
+        append_log("[main] 关机哨兵窗口创建失败——仅损失关机期的 panic 防线，不影响功能");
+    }
+}
+
+/// 哨兵窗口的过程：只认 `WM_ENDSESSION`(TRUE)，其余全交默认过程。
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn session_watch_wnd_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    wp: usize,
+    lp: isize,
+) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_ENDSESSION};
+    if msg == WM_ENDSESSION && wp != 0 {
+        // 先关门再落盘：闸门立刻挡住后续自发投递，flush 保住退出路径的最后几行
+        set_exiting();
+        append_log("[main] 系统关机/注销：收到 ENDSESSION，进程即将退出");
+        std::thread::spawn(|| {
+            flush_log();
+            crate::config::flush_persist();
+            std::process::exit(0);
+        });
+        return 0;
+    }
+    DefWindowProcW(hwnd, msg, wp, lp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 退出竞态闸原语：默认关、置位后闩住（后台投递点判据的唯一来源）。
+    #[test]
+    fn exiting_flag_defaults_false_and_latches_true() {
+        assert!(!is_exiting());
+        set_exiting();
+        assert!(is_exiting());
+    }
 
     /// 每个用例独立的临时路径（沿用仓库既有写法：temp_dir + tag + pid）
     fn tmp_path(tag: &str) -> std::path::PathBuf {

@@ -329,6 +329,11 @@ const EXIT_CODE_WATCHDOG_RESTART: i32 = 70;
 /// --autostart 复用静默启动逻辑（重启不弹窗）；
 /// 旧 pid 经参数传递，新实例启动时内核级等待其退出，规避 single-instance 转发竞态。
 fn watchdog_self_restart() {
+    // 退出已开始 ⇒ 不再自愈重启（否则会在关机/注销过程中拉起新实例）
+    if process::is_exiting() {
+        return;
+    }
+    process::set_exiting();
     process::append_log("[watchdog] EVENT LOOP STUCK — self-restarting");
     // 退出前投递一次 WM_CLOSE，让音频 STA 线程反注册 IMMNotificationClient 与
     // 各设备/会话回调（P2-4）。本路径直接 process::exit，不经 RunEvent::Exit，
@@ -633,6 +638,10 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
 
         loop {
             std::thread::sleep(WATCHDOG_ROUND_INTERVAL);
+            // 退出已开始 ⇒ 停止探活：探活会向主线程投递，且退出中误判僵死会触发自愈重启
+            if crate::process::is_exiting() {
+                break;
+            }
             round = round.wrapping_add(1);
             if should_log_heartbeat(round) {
                 crate::process::append_log("[heartbeat]");
@@ -894,6 +903,11 @@ fn main() {
             commands::check_material_support,
         ])
         .setup(move |app| {
+            // 关机/注销哨兵窗口：tao 对 WM_ENDSESSION 只标 Destroyed 不停泵，
+            // 必须由本窗口收到 ENDSESSION 后主动退出（判据见 process::EXITING）
+            #[cfg(target_os = "windows")]
+            process::install_session_watch_window();
+
             // 注册 AUMID，使 Windows 通知显示应用图标。
             // 首次启动需同步等待一次 PowerShell（冷启动 300ms~1.5s），故下放子线程，
             // 不叠加到应用可见时间上；函数自身幂等（快捷方式已最新时立即返回）。
@@ -954,6 +968,8 @@ fn main() {
     };
     app.run(|_app_handle, event| match event {
         RunEvent::ExitRequested { .. } => {
+            // 退出竞态闸（判据见 process::EXITING）：正常退出同样要停掉后台自发投递
+            crate::process::set_exiting();
             crate::audio_notify::request_shutdown();
             // A2DP 连接由控制器线程收尾（对象析构可能阻塞，不在此同步等）
             crate::a2dp_sink::request_shutdown();

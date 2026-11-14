@@ -49,6 +49,7 @@
 # FLOOR	⛔+⭐ 总数下界	1275
 # FLOOR	⛔+⭐ 总数下界	1280
 # FLOOR	⛔+⭐ 总数下界	1281
+# FLOOR	⛔+⭐ 总数下界	1281
 
 src-tauri/src/a2dp_sink.rs	<file>	⛔	1
 src-tauri/src/a2dp_sink.rs	const WAIT_POLL	⛔	1
@@ -239,6 +240,9 @@ src-tauri/src/media_activate.rs	fn is_browser_exe	⭐	1
 src-tauri/src/media_activate.rs	fn launch_exe	⛔	2
 src-tauri/src/media_activate.rs	fn launch_exe	⭐	1
 src-tauri/src/media_activate.rs	fn shell_apps_folder	⛔	3
+src-tauri/src/process.rs	fn is_exiting	⛔	2
+src-tauri/src/process.rs	fn open_settings_page	⛔	1
+src-tauri/src/process.rs	fn open_settings_page	⭐	2
 src-tauri/src/shortcut.rs	fn cycle_device_shortcut	⭐	1
 src-tauri/src/shortcut.rs	fn sync_device_shortcuts	⛔	2
 src-tauri/src/state.rs	<file>	⛔	5
@@ -834,4 +838,4 @@ tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
 
-# FLOOR	⛔+⭐ 总数下界	1281
+# FLOOR	⛔+⭐ 总数下界	1286
