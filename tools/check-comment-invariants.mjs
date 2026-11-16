@@ -102,7 +102,9 @@ if (process.argv.includes("--write")) {
   const head = fs
     .readFileSync(REGISTRY, "utf-8")
     .split("\n")
-    .filter((l) => l.startsWith("#"))
+    // ⛔ FLOOR 行是尾部元数据、每次重写都会新追加一份——必须排除，否则旧 FLOOR
+    //   会并进 head，每次重生成累积一条重复 FLOOR（实测：1308/1311 两条并存）。
+    .filter((l) => l.startsWith("#") && !l.startsWith("# FLOOR"))
     .join("\n");
   const body = rows.map(([f, a2, mk, n]) => `${f}\t${a2}\t${mk}\t${n}`).join("\n");
   fs.writeFileSync(REGISTRY, `${head}\n\n${body}\n\n# FLOOR\t⛔+⭐ 总数下界\t${total}\n`);

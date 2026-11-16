@@ -15,46 +15,6 @@
 #
 # 改动规则：注释重写**不改本表**；只有当某条判据被判定为「不再需要」
 #   （并已迁到 Wiki）时才允许删对应行，且必须在同一提交里说明迁到哪一节。
-# FLOOR	⛔+⭐ 总数下界	773
-# FLOOR	⛔+⭐ 总数下界	778
-# FLOOR	⛔+⭐ 总数下界	790
-# FLOOR	⛔+⭐ 总数下界	864
-# FLOOR	⛔+⭐ 总数下界	889
-# FLOOR	⛔+⭐ 总数下界	904
-# FLOOR	⛔+⭐ 总数下界	913
-# FLOOR	⛔+⭐ 总数下界	912
-# FLOOR	⛔+⭐ 总数下界	913
-# FLOOR	⛔+⭐ 总数下界	933
-# FLOOR	⛔+⭐ 总数下界	968
-# FLOOR	⛔+⭐ 总数下界	974
-# FLOOR	⛔+⭐ 总数下界	982
-# FLOOR	⛔+⭐ 总数下界	989
-# FLOOR	⛔+⭐ 总数下界	988
-# FLOOR	⛔+⭐ 总数下界	1031
-# FLOOR	⛔+⭐ 总数下界	1036
-# FLOOR	⛔+⭐ 总数下界	1063
-# FLOOR	⛔+⭐ 总数下界	1070
-# FLOOR	⛔+⭐ 总数下界	1102
-# FLOOR	⛔+⭐ 总数下界	1107
-# FLOOR	⛔+⭐ 总数下界	1109
-# FLOOR	⛔+⭐ 总数下界	1114
-# FLOOR	⛔+⭐ 总数下界	1119
-# FLOOR	⛔+⭐ 总数下界	1140
-# FLOOR	⛔+⭐ 总数下界	1150
-# FLOOR	⛔+⭐ 总数下界	1163
-# FLOOR	⛔+⭐ 总数下界	1164
-# FLOOR	⛔+⭐ 总数下界	1165
-# FLOOR	⛔+⭐ 总数下界	1165
-# FLOOR	⛔+⭐ 总数下界	1173
-# FLOOR	⛔+⭐ 总数下界	1275
-# FLOOR	⛔+⭐ 总数下界	1280
-# FLOOR	⛔+⭐ 总数下界	1281
-# FLOOR	⛔+⭐ 总数下界	1281
-# FLOOR	⛔+⭐ 总数下界	1286
-# FLOOR	⛔+⭐ 总数下界	1293
-# FLOOR	⛔+⭐ 总数下界	1294
-# FLOOR	⛔+⭐ 总数下界	1296
-# FLOOR	⛔+⭐ 总数下界	1296
 
 src-tauri/src/a2dp_sink.rs	<file>	⛔	1
 src-tauri/src/a2dp_sink.rs	const WAIT_POLL	⛔	1
@@ -424,7 +384,7 @@ src-tauri/src/taskbar_widget.rs	const BACKDROP_RADIUS_DIP	⭐	1
 src-tauri/src/taskbar_widget.rs	const BADGE_RING_ALPHA_GAMMA	⛔	2
 src-tauri/src/taskbar_widget.rs	const BADGE_RING_ALPHA_GAMMA	⭐	2
 src-tauri/src/taskbar_widget.rs	const BADGE_STACK_GAP_DIP	⭐	1
-src-tauri/src/taskbar_widget.rs	const CACHE	⭐	1
+src-tauri/src/taskbar_widget.rs	const CACHE_CAP	⛔	2
 src-tauri/src/taskbar_widget.rs	const D	⛔	1
 src-tauri/src/taskbar_widget.rs	const D	⭐	2
 src-tauri/src/taskbar_widget.rs	const DATA_EVENTS	⛔	2
@@ -537,6 +497,7 @@ src-tauri/src/taskbar_widget.rs	fn build_items	⛔	2
 src-tauri/src/taskbar_widget.rs	fn build_items	⭐	3
 src-tauri/src/taskbar_widget.rs	fn build_items_with_opt_labels	⛔	3
 src-tauri/src/taskbar_widget.rs	fn build_items_with_opt_labels	⭐	4
+src-tauri/src/taskbar_widget.rs	fn cache_store	⭐	1
 src-tauri/src/taskbar_widget.rs	fn catmull_rom_upscale_ex	⛔	2
 src-tauri/src/taskbar_widget.rs	fn center_y	⭐	1
 src-tauri/src/taskbar_widget.rs	fn cjk_is_not_underestimated	⭐	1
@@ -623,7 +584,7 @@ src-tauri/src/taskbar_widget.rs	fn format_battery	⭐	1
 src-tauri/src/taskbar_widget.rs	fn format_volume	⛔	1
 src-tauri/src/taskbar_widget.rs	fn format_volume	⭐	6
 src-tauri/src/taskbar_widget.rs	fn free_dib	⛔	2
-src-tauri/src/taskbar_widget.rs	fn get	⛔	2
+src-tauri/src/taskbar_widget.rs	fn get	⛔	3
 src-tauri/src/taskbar_widget.rs	fn get	⭐	2
 src-tauri/src/taskbar_widget.rs	fn hit_rect	⛔	2
 src-tauri/src/taskbar_widget.rs	fn hit_rect	⭐	1
@@ -646,6 +607,7 @@ src-tauri/src/taskbar_widget.rs	fn item	⭐	2
 src-tauri/src/taskbar_widget.rs	fn item_rect_on_screen	⛔	2
 src-tauri/src/taskbar_widget.rs	fn item_rects_are_disjoint	⛔	1
 src-tauri/src/taskbar_widget.rs	fn item_rects_match_draw_loop	⛔	1
+src-tauri/src/taskbar_widget.rs	fn item_row_texts	⛔	1
 src-tauri/src/taskbar_widget.rs	fn m96	⭐	1
 src-tauri/src/taskbar_widget.rs	fn mark_slot_stale	⛔	2
 src-tauri/src/taskbar_widget.rs	fn mark_slot_stale	⭐	1
@@ -751,7 +713,6 @@ src-tauri/src/taskbar_widget.rs	fn scale_to_slot	⭐	1
 src-tauri/src/taskbar_widget.rs	fn scale_up_does_not_darken_transparent_edges	⭐	1
 src-tauri/src/taskbar_widget.rs	fn scale_up_interpolates	⛔	1
 src-tauri/src/taskbar_widget.rs	fn scaled_buttons_are_centered_on_their_own_size	⭐	1
-src-tauri/src/taskbar_widget.rs	fn scaled_icon_has_visible_pixels	⛔	1
 src-tauri/src/taskbar_widget.rs	fn scaled_icon_has_visible_pixels	⭐	1
 src-tauri/src/taskbar_widget.rs	fn screen_size	⭐	1
 src-tauri/src/taskbar_widget.rs	fn should_dim_item	⛔	2
@@ -786,6 +747,9 @@ src-tauri/src/taskbar_widget.rs	fn taskbar_dpi	⭐	2
 src-tauri/src/taskbar_widget.rs	fn taskbar_hwnd	⛔	1
 src-tauri/src/taskbar_widget.rs	fn taskbar_hwnd	⭐	1
 src-tauri/src/taskbar_widget.rs	fn taskbar_rect	⭐	1
+src-tauri/src/taskbar_widget.rs	fn theme_switch_gets_own_cache_entry	⛔	1
+src-tauri/src/taskbar_widget.rs	fn theme_switch_gets_own_cache_entry	⭐	1
+src-tauri/src/taskbar_widget.rs	fn tiny	⭐	1
 src-tauri/src/taskbar_widget.rs	fn tooltip_diag	⛔	1
 src-tauri/src/taskbar_widget.rs	fn tooltip_item_text	⛔	1
 src-tauri/src/taskbar_widget.rs	fn tooltip_item_text	⭐	1
@@ -846,7 +810,7 @@ src-tauri/src/wireless_24g/drivers/flydigi/vader5pro.rs	fn read_battery_percent	
 src-tauri/src/wireless_24g/hid_link.rs	fn no_scope_keeps_everything	⛔	1
 src-tauri/src/wmi_query.rs	fn mark_phone_rows_writes_only_the_icon_flag	⛔	1
 src-tauri/src/wmi_query.rs	fn query_devices_with	⛔	2
-tools/check-comment-invariants.mjs	<file>	⛔	5
+tools/check-comment-invariants.mjs	<file>	⛔	6
 tools/check-rust-warnings.mjs	<file>	⛔	1
 tools/check.mjs	<file>	⛔	1
 tools/check.mjs	<file>	⭐	3
@@ -857,5 +821,6 @@ tools/local/verify-b14.mjs	<file>	⛔	2
 tools/local/verify-l1l2.mjs	<file>	⛔	2
 tools/strip-comment-narrative.mjs	<file>	⛔	2
 tools/svg-offset.mjs	<file>	⛔	5
+tools/verify-batch-4.mjs	<file>	⛔	2
 
-# FLOOR	⛔+⭐ 总数下界	1308
+# FLOOR	⛔+⭐ 总数下界	1317

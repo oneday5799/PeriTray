@@ -106,7 +106,7 @@ target 目录已预热时，**6 道闸门合计 1m17s**（check 段约 13s、cli
 pre-commit 钩子那次提交只花 **19s**。
 ⇒ 旧稿「check ≈5 分钟 / clippy ≈4 分钟」是**冷 target** 或改动面更大的场景，**别当常态引用**。
 ⇒ 仍建议 `run_in_background`（冷构建确实会超 120s 前台超时），但不必按分钟级等待。
-✅ 6 道闸门的单一入口就是 §4 那条命令序列；`tools/verify-final.sh` 会把其中多道串起来跑。
+✅ 6 道闸门的单一入口就是 §4 那条命令序列；`tools/verify-final.mjs` 会把其中多道串起来跑。
 ⚠️ 原脚本 `run-gates-release.sh` 已随 `.workbuddy-ai` 清理删除，勿再找。
 
 ## 5. 提交

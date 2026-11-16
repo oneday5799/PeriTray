@@ -200,6 +200,13 @@ Toast 契约成对 / **GDI 文本入口必须有空串闸**（Rust 侧唯一一�
 ⚠️ `tools/local/` 有一批脚本写死 `C:\Users\...` 的**仓库外**工具链路径，
 换机器改用 `PATH` 上的 `node`；判据是 `C:\Users\...` 归本机、`D:\Code\PeriTray\...` 归本仓。
 
+**工具脚本语言分工（⛔ 不再新增语言）**：闸门 / 文本处理 / CDP 调试 / 一次性验收脚本
+一律 `.mjs`（Node 是 dev + CI 硬依赖；历史 `verify-*.sh` 已迁 `.mjs`）；Win32 自动化
+验收脚本用 Python（`ctypes`/`winreg` 是标准库，Node 无标准库 FFI，⛔ 不为此引第三方）；
+MSIX/AppX 打包链保持 PowerShell（MakeAppx/signtool 母语；**含非 ASCII 注释就必须带 BOM**
+——无 BOM 的 UTF-8 会被 Windows PowerShell 5.1 按 GBK 解码，行尾多字节字符可吞掉换行、
+把下一行并进注释）。全文见 Wiki 08。
+
 ## 验收与回归纪律（修复类改动强制）
 
 - **每批完成 = 回归段 + 验收段，缺一不可**：① 四道闸门全绿；

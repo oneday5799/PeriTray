@@ -1,4 +1,4 @@
-# stage.ps1 - Assemble MSIX packaging directory
+﻿# stage.ps1 - Assemble MSIX packaging directory
 param(
     [string]$Target = "x64",
     [string]$Version = "1.3.5.0",

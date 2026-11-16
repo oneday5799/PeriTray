@@ -9566,7 +9566,7 @@ mod tests {
     /// `store` 必须能识别「内容相同」⇒ 返回 false（避免无谓重绘）。
     #[test]
     fn snapshot_store_reports_no_change_for_identical_content() {
-        let _g = SNAPSHOT_TEST_GUARD.lock().unwrap();
+        let _g = crate::state::lock_unpoisoned(&SNAPSHOT_TEST_GUARD);
         let a = vec![item(Some(80), None, false, None)];
         // 先写一次（无论之前有什么，这次一定"变化"或幂等，取两次比较）
         let _ = snapshot::store(a.clone());
@@ -9581,7 +9581,7 @@ mod tests {
     /// （放宽成只比名字），第 2 条断言立刻转红——同名但有端点的设备会被误改。
     #[test]
     fn update_relay_volume_matches_only_endpointless_entries() {
-        let _g = SNAPSHOT_TEST_GUARD.lock().unwrap();
+        let _g = crate::state::lock_unpoisoned(&SNAPSHOT_TEST_GUARD);
         let mut relay = item(Some(50), Some(0.5), true, Some(false));
         relay.name = "一天的Xiaomi 17".to_string();
         relay.icon = AudioKind::Phone;

@@ -1,7 +1,7 @@
 # `doc-table-audit.mjs` 判据自测夹具（**故意损坏，勿修**）
 
 本文件是 `tools/doc-table-audit.mjs` 的**可证伪性夹具**：它故意包含四种缺陷，
-用来证明四条判据**仍然承重**。由 `tools/verify-final.sh` 调用，期望结果：
+用来证明四条判据**仍然承重**。由 `tools/verify-final.mjs` 调用，期望结果：
 **退出码 1、问题恰好 4 个**（若少于 4，说明某条判据已失效）。
 
 用法：

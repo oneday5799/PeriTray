@@ -15,7 +15,7 @@
  *   node tools/doc-table-audit.mjs <文件|目录...> # 指定目标（目录展开为其下的 *.md）
  *   node tools/doc-table-audit.mjs tools/doc-table-audit.selftest.md
  *                                               # 判据自测夹具：**期望退出码 1、问题恰好 4 个**
- *                                               # （少于 4 即某条判据已失效；由 verify-final.sh 调用）
+ *                                               # （少于 4 即某条判据已失效；由 verify-final.mjs 调用）
  *
  * 退出码：0 = 无硬失败；1 = 有硬失败（列数不一致 / 表内裸竖线 / 活指针）。
  *
@@ -45,7 +45,7 @@ import { join } from "node:path";
  *    需要体检别的文档时显式传路径（目录会展开为其下的 `*.md`）。
  *
  * ⚠️ **不要把 `tools/doc-table-audit.selftest.md` 加进默认目标**——它是**故意损坏**的夹具，
- *    只应由 `verify-final.sh` 显式传入并断言「退出码 1 且恰好 4 个问题」。
+ *    只应由 `verify-final.mjs` 显式传入并断言「退出码 1 且恰好 4 个问题」。
  *
  * ⚠️ **覆盖边界**：本工具只扫主仓内可达的文件。**Wiki（独立仓库）不在覆盖范围内**——
  *    它没有 CI，且工作区是主仓的并列目录（`../PeriTray.wiki`），CI 上不存在。
