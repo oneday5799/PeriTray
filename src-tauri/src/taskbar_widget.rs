@@ -1570,7 +1570,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
                 //   （实测：三键间距看起来过大）。
                 //   按 `btn` 画满格子后，视觉间隙 == `gap` 本身。
                 if let Some(scaled) = music_icons::get(slots[i], dark)
-                    .and_then(|r| music_icons::scale_to_slot(slots[i], r, btn as u32))
+                    .and_then(|r| music_icons::scale_to_slot(slots[i], dark, r, btn as u32))
                 {
                     let (ipx, iw, ih) = scaled;
                     for yy in 0..(ih as i32).min(h - slot.top) {
@@ -1637,7 +1637,7 @@ fn draw_music_render(hwnd: *mut core::ffi::c_void, publish: bool) -> Painted {
         // ④ 「切换」按钮恒在最右
         if let Some(sb) = switch_btn {
             if let Some(scaled) = music_icons::get(music_icons::Icon::Switch, dark).and_then(|r| {
-                music_icons::scale_to_slot(music_icons::Icon::Switch, r, switch_px as u32)
+                music_icons::scale_to_slot(music_icons::Icon::Switch, dark, r, switch_px as u32)
             }) {
                 let (ipx, iw, ih) = scaled;
                 for yy in 0..(ih as i32).min(h - sb.top) {
@@ -4002,8 +4002,37 @@ mod resample {
     ///   理想阶跃边上 k=0.5 就会冲出「越过 90% 再跌回」的振铃波形。
     const COVER_SHARPEN: f64 = 0.8;
 
-    /// `(槽位, 目标边长) -> 结果`。键空间 = 图标数 × 尺寸数，天然有界。
+    /// `(槽位, 目标边长) -> 结果`。
+    ///
+    /// ⚠️ 两个键空间共存：图标键有界（图标 × 主题 × 尺寸）；封面键
+    ///   （`NS_COVER | hash`）**按歌递增、无界**。满容量的淘汰判据见
+    ///   [`cache_store`]——只淘汰封面条目。
     static CACHE: std::sync::Mutex<Vec<(u32, u32, RgbaAlias)>> = std::sync::Mutex::new(Vec::new());
+
+    /// 上限只防御图标键的极端组合（多档缩放设置叠加）；
+    /// 封面键真实键空间远超此数 ⇒ 满容量靠 [`cache_store`] 淘汰封面续命。
+    const CACHE_CAP: usize = 64;
+
+    /// 存入缓存；满了先淘汰**最早的封面条目**再插入。
+    ///
+    /// ⛔ 封面键无界（按歌递增），不淘汰 ⇒ 缓存打满后新歌封面永远进不来，
+    ///   每次重绘都重跑 Lanczos3 + 锐化（缓存对封面永久失效）。
+    /// ⛔ 图标条目**永不淘汰**：键有界，淘汰会让静态图标退化成每帧重采样。
+    ///   满容量时必有封面条目在缓存里（封面键持续新增）；极端的纯图标
+    ///   满容量态 ⇒ 放弃插入，与旧行为一致（只损失命中，不损正确性）。
+    ///   判据唯一实现点在本函数；两个 `scale_cached*` 调用点不得各写一份。
+    fn cache_store(c: &mut Vec<(u32, u32, RgbaAlias)>, slot: u32, side: u32, r: &RgbaAlias) {
+        if c.len() < CACHE_CAP {
+            c.push((slot, side, r.clone()));
+            return;
+        }
+        let Some(idx) = c.iter().position(|(s, _, _)| *s & NS_COVER == NS_COVER) else {
+            return;
+        };
+        // remove + push 保持「Vec 序 = 插入序」：原地替换会让位置序不再等于年龄序
+        c.remove(idx);
+        c.push((slot, side, r.clone()));
+    }
 
     /// 取缓存的缩放结果，没有就现算并记下。
     ///
@@ -4019,10 +4048,7 @@ mod resample {
         }
         let r = resample(src, side)?;
         let mut c = crate::state::lock_unpoisoned(&CACHE);
-        // 上限只是防御：正常键空间是「图标数 × 用过的尺寸数」，不会逼近
-        if c.len() < 64 {
-            c.push((slot, side, r.clone()));
-        }
+        cache_store(&mut c, slot, side, &r);
         Some(r)
     }
 
@@ -4056,9 +4082,7 @@ mod resample {
         }
         let r = (out, side, side);
         let mut c = crate::state::lock_unpoisoned(&CACHE);
-        if c.len() < 64 {
-            c.push((slot, side, r.clone()));
-        }
+        cache_store(&mut c, slot, side, &r);
         Some(r)
     }
 
@@ -4435,6 +4459,52 @@ mod resample {
             }
         }
     }
+
+    /// 淘汰语义的测试要**直接翻 CACHE 的内容**（`scale_cached` 的返回值对
+    /// 「存了」与「现算」不可区分，外部断言不了淘汰），故测试放模块内部。
+    #[cfg(test)]
+    mod cache_eviction_tests {
+        use super::*;
+
+        fn cover_key(k: u32) -> u32 {
+            NS_COVER | (0x5EED_0000 + k)
+        }
+        fn tiny() -> RgbaAlias {
+            (vec![7u8; 2 * 2 * 4], 2, 2)
+        }
+
+        /// ⭐ 满容量淘汰语义：封面键按歌递增（无界），打满后新封面必须能进缓存
+        ///   （淘汰最早封面）；图标条目永不淘汰；总量不越上限。
+        /// 可证伪：把 `cache_store` 的淘汰分支删掉（满容量直接 return），
+        ///   「最后一首已入缓存」与「最早的封面已淘汰」两条同时转红。
+        #[test]
+        fn full_cache_evicts_oldest_cover_and_keeps_icons() {
+            let mut c = crate::state::lock_unpoisoned(&CACHE);
+            c.clear();
+            // 图标哨兵：唯一键、无 NS_COVER 位（与既有测试的 9_9xx / 900_0xx 不相交）
+            let icon_slot = 0x6000_0042u32;
+            cache_store(&mut c, icon_slot, 2, &tiny());
+            // 80 首歌连续入缓存：容量 64，必须靠淘汰容纳最后一首
+            for k in 1..=80u32 {
+                cache_store(&mut c, cover_key(k), 2, &tiny());
+            }
+            assert!(c.len() <= CACHE_CAP, "总量不得越上限：{}", c.len());
+            assert!(
+                c.iter().any(|(s, _, _)| *s == icon_slot),
+                "图标条目不得被封面淘汰挤掉"
+            );
+            assert!(
+                c.iter().any(|(s, _, _)| *s == cover_key(80)),
+                "最后一首封面必须已入缓存（淘汰给新键腾位）"
+            );
+            assert!(
+                !c.iter().any(|(s, _, _)| *s == cover_key(1)),
+                "最早的封面应已被淘汰"
+            );
+            // 收尾清场：不把测试封面留给并行测试（它们命中不了也只会重算，但仍保持干净）
+            c.clear();
+        }
+    }
 }
 
 /// 解码后的 RGBA 位图（`(像素, 宽, 高)`）。像素顺序 = RGBA（`image` crate 约定）。
@@ -4517,8 +4587,14 @@ mod icons {
     ///   ⇒ 图标外圈出现**黑晕/白边**（`A == 0` 时 RGB 无意义，置 0）。
     ///
     /// ⭐ 返回预乘前的 straight RGBA —— 合成到 DIB 时由调用方按需预乘。
-    /// 设备图标的**缓存槽位**（`NS_DEVICE` 命名空间内唯一，与 [`AudioKind`] 一一对应）。
-    pub fn slot_of(kind: AudioKind) -> u32 {
+    /// 设备图标的**缓存槽位**（`NS_DEVICE` 命名空间内唯一）。
+    ///
+    /// ⛔ 缓存键必须等于**母图身份** =（类别，主题）：同类别深浅两套 PNG 笔画
+    ///   颜色相反（黑线稿 / 白线稿，合成时按图标自带颜色绘制、不重着色），
+    ///   键漏掉主题 ⇒ 换系统主题后的重绘命中另一套主题的缓存像素
+    ///   （图标颜色不翻转；判据由 `theme_switch_gets_own_cache_entry` 钉住）。
+    ///   排布 = 类别 × 2 + 主题，6 类 ≤ 12 项，不越过 `NS_MUSIC` 边界（16）。
+    pub fn slot_of(kind: AudioKind, dark: bool) -> u32 {
         super::resample::NS_DEVICE
             + match kind {
                 AudioKind::Pointer => 0,
@@ -4527,15 +4603,16 @@ mod icons {
                 AudioKind::Speaker => 3,
                 AudioKind::Headphones => 4,
                 AudioKind::Phone => 5,
-            }
+            } * 2
+            + u32::from(dark)
     }
 
     /// 缩放到 `side × side`（**带缓存**，见 [`resample`]）。
     ///
-    /// ⛔ `slot` 必须**按图标内容唯一**（设备图标用 `NS_DEVICE + 序号`、
-    ///   音乐图标用 `NS_MUSIC + 序号`、封面用 `NS_COVER | hash`）——它是缓存键，
-    ///   撞车会让一个图标**显示成另一个**。⛔ 不要用 `AudioKind as u32` 直接当槽：
-    ///   那只是碰巧不撞，没有语义保护。
+    /// ⛔ `slot` 必须**按图标内容唯一**（设备图标用 `NS_DEVICE + 类别×2+主题`、
+    ///   音乐图标用 `NS_MUSIC + 序号×2+主题`、封面用 `NS_COVER | hash`——封面
+    ///   无主题变体）——它是缓存键，撞车会让一个图标**显示成另一个**。
+    ///   ⛔ 不要用 `AudioKind as u32` 直接当槽：那只是碰巧不撞，没有语义保护。
     /// ⚠️⚠️ **这不是假设，本仓库已经踩过**：两个单测各用 `900_002/4` 缩**不同**的
     ///   合成图，并行跑时谁先谁污染 ⇒ 另一个拿到**别人的像素**
     ///   （表现为 `scale_up_interpolates` 偶发失败、单跑却通过）。
@@ -4585,8 +4662,9 @@ mod music_icons {
     impl Icon {
         /// 本图标的**缓存槽位**（`NS_MUSIC` 命名空间内唯一）。
         ///
-        /// ⛔ 槽位是重采样缓存的键，**必须与图标一一对应**；改枚举顺序时这里要同步。
-        pub fn slot(self) -> u32 {
+        /// ⛔ 键必须含主题维度，判据与排布同 [`icons::slot_of`]（音乐图标 5 枚 ×2
+        ///   ≤ 10 项，不越过 32 边界）；改枚举顺序时这里要同步。
+        pub fn slot(self, dark: bool) -> u32 {
             super::resample::NS_MUSIC
                 + match self {
                     Icon::Play => 0,
@@ -4594,7 +4672,8 @@ mod music_icons {
                     Icon::Prev => 2,
                     Icon::Next => 3,
                     Icon::Switch => 4,
-                }
+                } * 2
+                + u32::from(dark)
         }
     }
 
@@ -4639,9 +4718,9 @@ mod music_icons {
     /// 本图标的**缓存槽位**（`NS_MUSIC` 命名空间内唯一）。
     ///
     /// ⛔ 槽位是重采样缓存的键，**必须与图标一一对应**；改枚举顺序时这里要同步。
-    /// 带槽位的缩放（调用方已知是哪个图标）。
-    pub fn scale_to_slot(icon: Icon, src: &Rgba, side: u32) -> Option<Rgba> {
-        super::icons::scale_to(icon.slot(), src, side)
+    /// 带槽位的缩放（调用方已知是哪个图标 + 主题）。
+    pub fn scale_to_slot(icon: Icon, dark: bool, src: &Rgba, side: u32) -> Option<Rgba> {
+        super::icons::scale_to(icon.slot(dark), src, side)
     }
 }
 
@@ -5997,9 +6076,9 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
             let alpha_scale: f32 = if should_dim_item(it) { 0.45 } else { 1.0 };
 
             // ① 图标：解码（带缓存）→ 面积平均缩放到 `m.icon` → 预乘合成
-            if let Some(scaled) = icons::get(it.icon, dark)
-                .and_then(|rgba| icons::scale_to(icons::slot_of(it.icon), rgba, m.icon as u32))
-            {
+            if let Some(scaled) = icons::get(it.icon, dark).and_then(|rgba| {
+                icons::scale_to(icons::slot_of(it.icon, dark), rgba, m.icon as u32)
+            }) {
                 let (ipx, iw, ih) = scaled;
                 for yy in 0..(ih as i32).min(h - icon_y) {
                     for xx in 0..(iw as i32).min(total_w - cursor) {
@@ -6081,7 +6160,7 @@ fn draw_items_render(hwnd: *mut core::ffi::c_void, items: &[WidgetItem], publish
         // ── 最右的「切换」按钮（几何与音乐面板同款：图标边长 + 垂直居中）──
         if let Some(sb) = switch_rect {
             if let Some(scaled) = music_icons::get(music_icons::Icon::Switch, dark).and_then(|r| {
-                music_icons::scale_to_slot(music_icons::Icon::Switch, r, switch_px as u32)
+                music_icons::scale_to_slot(music_icons::Icon::Switch, dark, r, switch_px as u32)
             }) {
                 let (ipx, iw, ih) = scaled;
                 for yy in 0..(ih as i32).min(h - sb.top) {
@@ -9537,8 +9616,8 @@ mod tests {
                 let src = icons::get(kind, dark)
                     .unwrap_or_else(|| panic!("图标解码失败: {kind:?} dark={dark}"));
                 assert!(src.1 > 0 && src.2 > 0, "解码出的尺寸不能为 0");
-                let scaled =
-                    icons::scale_to(icons::slot_of(kind), src, 16).expect("缩放到 16px 不应失败");
+                let scaled = icons::scale_to(icons::slot_of(kind, dark), src, 16)
+                    .expect("缩放到 16px 不应失败");
                 assert_eq!((scaled.1, scaled.2), (16, 16));
                 assert_eq!(scaled.0.len(), 16 * 16 * 4, "RGBA 缓冲长度必须是 w*h*4");
             }
@@ -9549,11 +9628,49 @@ mod tests {
     #[test]
     fn scaled_icon_has_visible_pixels() {
         let src = icons::get(AudioKind::Speaker, false).expect("扬声器图标应解码成功");
-        let (px, ..) = icons::scale_to(icons::slot_of(AudioKind::Speaker), src, 16).unwrap();
+        let (px, ..) = icons::scale_to(icons::slot_of(AudioKind::Speaker, false), src, 16).unwrap();
         let opaque = px.chunks(4).filter(|c| c[3] > 0).count();
         assert!(
             opaque > 16,
             "扬声器图标缩放后应有相当数量的不透明像素，实际 {opaque}"
+        );
+    }
+
+    /// ⭐⭐ 缓存键必须含**主题**维度：深浅两套母图笔画颜色相反（黑线稿 / 白线稿），
+    ///   键漏主题 ⇒ 同会话切系统主题后重绘命中另一套主题的缓存像素（图标颜色不翻转）。
+    /// 可证伪：把 `slot_of` 的 `dark` 维度去掉（键退回 `NS_DEVICE + 类别`），
+    ///   亮主题这次调用就会命中暗主题先存的缓存 ⇒ `lr < 60` 立刻转红。
+    #[test]
+    fn theme_switch_gets_own_cache_entry() {
+        // 尺寸独占 52：与既有测试（16/40/48/64）不相交，防并行撞键
+        // （本模块踩过同键互污染，见 `icons::scale_to` 的 ⚠️⚠️ 注释）
+        let side = 52u32;
+        let dark_master = icons::get(AudioKind::Pointer, true).expect("暗主题鼠标图标应解码");
+        let light_master = icons::get(AudioKind::Pointer, false).expect("亮主题鼠标图标应解码");
+        let dark_scaled =
+            icons::scale_to(icons::slot_of(AudioKind::Pointer, true), dark_master, side)
+                .expect("缩放不应失败");
+        let light_scaled = icons::scale_to(
+            icons::slot_of(AudioKind::Pointer, false),
+            light_master,
+            side,
+        )
+        .expect("缩放不应失败");
+        // 母图笔画颜色相反（暗主题 ≈ 白线稿、亮主题 ≈ 黑线稿）⇒ 首个不透明像素也必须相反
+        let first_opaque = |r: &RgbaAlias| -> (u8, u8, u8) {
+            for p in r.0.chunks(4) {
+                if p[3] > 200 {
+                    return (p[0], p[1], p[2]);
+                }
+            }
+            (0, 0, 0)
+        };
+        let (dr, dg, db) = first_opaque(&dark_scaled);
+        let (lr, lg, lb) = first_opaque(&light_scaled);
+        assert!(
+            dr > 200 && lr < 60,
+            "暗主题像素 ({dr},{dg},{db}) 应为白线稿、亮主题像素 ({lr},{lg},{lb}) 应为黑线稿 \
+             —— 两套主题拿到了同一份缓存"
         );
     }
 
