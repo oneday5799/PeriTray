@@ -1,11 +1,15 @@
-window.__TAURI__.event.listen("config-changed", async () => {
-  loadDevicesAsync().catch(console.error);
-  loadAudioDevicesAsync().catch(console.error);
-});
-
+/* settings-audio.js — 设置页·音量控制 tab：音量控制页设备列表卡/静音锁定/精细调节/
+ *            简化设备名称/强制静音设备选择器/空间音效开关/关机重启自动调整音量(NumberBox 编辑器)/
+ *            设备信息 tab：蓝牙音频接收（A2DP Sink：可接收设备列表 + 行内连接/断开 + 选项开关）
+ * 加载序 5/8 · 提供：loadAudioDevicesAsync()/initAudioCardToggle()/initMuteLockSettings()/
+ *            initFineAdjustSettings()/initSimplifyNamesSettings()/initForceMuteSettings()/
+ *            initSpatialSoundSettings()/initShutdownVolumeSettings()/renderShutdownVolumeDevices()/
+ *            initA2dpSinkSettings()
+ * 依赖：common.js(getInvoke/showToast/onTauriEvent) /
+ *       settings.js(config/bindToggle/createExpandableCard/createToggle/saveConfig) */
 async function loadAudioDevicesAsync() {
   try {
-    config = await invoke("get_config");
+    acceptConfig(await invoke("get_config"));
     const audioDevices = await invoke("get_audio_devices");
     renderAudioDeviceGroups(audioDevices);
   } catch (e) {
@@ -13,32 +17,36 @@ async function loadAudioDevicesAsync() {
   }
 }
 
+let audioExpanded = true;
+
 function renderAudioDeviceGroups(audioDevices) {
-  const container = document.getElementById("audio-device-groups");
+  const container = document.getElementById("audio-device-items");
+  const arrow = document.getElementById("arrow-audio");
   container.innerHTML = "";
 
   if (audioDevices.length === 0) {
-    container.innerHTML = '<div class="device-item"><div class="device-item-name" style="color:#888">没有检测到音频设备</div></div>';
+    // 空态以 DOM 组装（空态类的灰色见 base.css 的 .card-item-name--empty）：
+    // 不再把样式写进 innerHTML —— 内联 style 属性会被 CSP `style-src 'self'` 拦掉
+    container.innerHTML = "";
+    const emptyItem = document.createElement("div");
+    emptyItem.className = "card-item";
+    const emptyName = document.createElement("div");
+    emptyName.className = "card-item-name card-item-name--empty";
+    emptyName.textContent = "没有检测到音频设备";
+    emptyItem.appendChild(emptyName);
+    container.appendChild(emptyItem);
+    if (arrow) arrow.classList.remove("expanded");
+    container.style.maxHeight = "0px";
     return;
   }
 
-  const groupEl = document.createElement("div");
-  groupEl.className = "group";
-
-  const card = document.createElement("div");
-  card.className = "group-card";
-
-  const items = document.createElement("div");
-  items.className = "group-items show";
-  items.style.maxHeight = "none";
-
   for (const dev of audioDevices) {
     const item = document.createElement("div");
-    item.className = "device-item";
+    item.className = "card-item";
 
     const nameEl = document.createElement("div");
-    nameEl.className = "device-item-name";
-    nameEl.textContent = dev.name;
+    nameEl.className = "card-item-name";
+    nameEl.textContent = fmtDevName(dev);
     if (dev.is_default) {
       const badge = document.createElement("span");
       badge.style.cssText = "font-size:12px;color:#0078d7;margin-left:6px";
@@ -49,54 +57,170 @@ function renderAudioDeviceGroups(audioDevices) {
     const isHidden = (config.hidden_audio_devices || []).includes(dev.name);
     if (isHidden) nameEl.classList.add("hidden");
 
-    const toggle = document.createElement("label");
-    toggle.className = "toggle";
-
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = !isHidden;
-
-    input.addEventListener("change", async () => {
+    const { toggle, input } = createToggle(!isHidden, async (input) => {
       await invoke("toggle_audio_device_hidden", { name: dev.name });
-      config = await invoke("get_config");
+      acceptConfig(await invoke("get_config"));
       nameEl.classList.toggle("hidden", !input.checked);
     });
 
-    const slider = document.createElement("span");
-    slider.className = "slider";
-
-    toggle.appendChild(input);
-    toggle.appendChild(slider);
-
     item.appendChild(nameEl);
     item.appendChild(toggle);
-    items.appendChild(item);
+    container.appendChild(item);
   }
 
-  card.appendChild(items);
-  groupEl.appendChild(card);
-  container.appendChild(groupEl);
+  // 重建后按记忆态恢复（展开分支免过渡，避免重载时播放收展动画）
+  createExpandableCard(container, arrow).setInstant(audioExpanded, "999px");
+}
+
+function initAudioCardToggle() {
+  const card = document.getElementById("audio-card");
+  const items = document.getElementById("audio-device-items");
+  const arrow = document.getElementById("arrow-audio");
+
+  if (!card || !items || !arrow) return;
+
+  createExpandableCard(items, arrow).bindHeaderClick(card, {
+    expandHeight: "content",
+    onChanged: (expanded) => { audioExpanded = expanded; },
+  });
+
+  // 数据异步加载完成前先同步箭头初始态（与 audioExpanded 一致）
+  arrow.classList.toggle("expanded", audioExpanded);
+}
+
+function initMuteLockSettings() {
+  bindToggle("toggle-mute-lock", {
+    get: () => config.mute_lock || false,
+    set: (v) => { config.mute_lock = v; },
+  });
+}
+
+function initFineAdjustSettings() {
+  bindToggle("toggle-fine-adjust", {
+    get: () => config.volume_fine_adjust || false,
+    set: (v) => { config.volume_fine_adjust = v; },
+  });
+}
+
+function initSimplifyNamesSettings() {
+  bindToggle("toggle-simplify-names", {
+    get: () => config.simplify_device_names !== false,
+    set: (v) => { config.simplify_device_names = v; },
+  });
+}
+
+function initSpatialSoundSettings() {
+  bindToggle("toggle-spatial-sound", {
+    get: () => config.enable_spatial_sound || false,
+    set: (v) => { config.enable_spatial_sound = v; },
+  });
+}
+
+// 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为设置页 config 单例）
+// ⭐ 「设备名 → 后端算好的 `core_name`」映射的**唯一发布点**。
+//
+// 供 `settings-shortcut.js` 复用：那页的条目只有 `entry.name`（没有设备对象），
+// 而 `simplifyDeviceName` 不剥蓝牙后缀、与后端 `core_name` 不是一回事 ⇒ 直接
+// 用它会查不到设备页改的别名。做成显式全局（而非让对方自己再拉一次
+// `get_audio_devices`）是为了不引入第二个 IPC 与第二份数据源。
+function publishCoreNames(devices) {
+  window.__pmDeviceCoreNames = new Map((devices || []).map((d) => [d.name, d.core_name]));
+}
+
+// ⭐ 收**设备对象**：用后端算好的 `core_name` 做别名回退（见 common.js 同名函数注释）。
+function fmtDevName(dev) {
+  return window.formatDeviceName(
+    dev.name, config.device_names || {}, config.simplify_device_names !== false, dev.core_name
+  );
+}
+
+function initForceMuteSettings() {
+  const btn = document.getElementById("btn-force-mute");
+  if (!btn) return;
+
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    let audioDevices = [];
+    try {
+      audioDevices = await invoke("get_audio_devices");
+    } catch (err) {
+      console.error("Failed to load audio devices for force mute:", err);
+      return;
+    }
+    publishCoreNames(audioDevices);
+    const hidden = config.hidden_audio_devices || [];
+    const selected = new Set(config.force_mute_devices || []);
+    const deviceNames = config.device_names || {};
+
+    createCheckableMenu({
+      anchor: btn,
+      emptyText: "没有可用的音频设备",
+      items: audioDevices
+        .filter(dev => !hidden.includes(dev.name))
+        .map(dev => ({
+          key: dev.name,
+          // ⚠️ 传**原名**即可：`fmtDevName` 内部已做别名查找 + 简化（预解析会重复两次）。
+          label: fmtDevName(dev),
+        })),
+      checked: selected,
+      onToggle: async (name) => {
+        const list = config.force_mute_devices || [];
+        const idx = list.indexOf(name);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          selected.delete(name);
+        } else {
+          list.push(name);
+          selected.add(name);
+        }
+        config.force_mute_devices = list;
+        await saveConfig();
+      },
+    });
+  });
 }
 
 async function initShutdownVolumeSettings() {
   const toggle = document.getElementById("toggle-shutdown-volume");
-  const settingsWrap = document.getElementById("shutdown-volume-settings");
-  const deviceList = document.getElementById("shutdown-device-list");
+  const items = document.getElementById("shutdown-device-items");
+  const arrow = document.getElementById("arrow-shutdown");
+  const card = document.getElementById("shutdown-card");
 
-  toggle.checked = config.shutdown_volume_enabled || false;
-  settingsWrap.style.display = toggle.checked ? "block" : "none";
+  const shutdownExpandable = createExpandableCard(items, arrow);
 
-  toggle.addEventListener("change", async () => {
-    config.shutdown_volume_enabled = toggle.checked;
-    settingsWrap.style.display = toggle.checked ? "block" : "none";
-    await saveConfig();
+  // 开关联动展开（内容高度动态，用实测值）
+  function setShutdownExpanded(expanded) {
+    shutdownExpandable.set(expanded, "content");
+  }
+
+  bindToggle("toggle-shutdown-volume", {
+    get: () => config.shutdown_volume_enabled || false,
+    set: (v) => { config.shutdown_volume_enabled = v; },
+    onChange: async (checked) => { setShutdownExpanded(checked); }
   });
 
+  // 初始化恢复：按开关当前态免过渡落位（展开分支固定上限，与既有行为一致）
+  shutdownExpandable.setInstant(toggle.checked, "999px");
+
+  shutdownExpandable.bindHeaderClick(card, {
+    extraGuards: [".toggle", "input"],
+    expandHeight: "content",
+  });
+
+  try {
+    await renderShutdownVolumeDevices();
+  } catch (e) {
+    console.error("Failed to load audio devices for shutdown volume:", e);
+  }
+}
+
+async function renderShutdownVolumeDevices() {
+  const items = document.getElementById("shutdown-device-items");
   try {
     const audioDevices = await invoke("get_audio_devices");
     const savedDevices = config.shutdown_volume_devices || {};
 
-    deviceList.innerHTML = "";
+    items.innerHTML = "";
 
     for (const dev of audioDevices) {
       const savedVolume = savedDevices[dev.name];
@@ -104,64 +228,311 @@ async function initShutdownVolumeSettings() {
       const volume = isEnabled ? Math.round(savedVolume * 100) : 50;
 
       const item = document.createElement("div");
-      item.className = "shutdown-device-item";
+      item.className = "card-item";
 
       const nameEl = document.createElement("div");
-      nameEl.className = "device-name" + (isEnabled ? "" : " inactive");
-      nameEl.textContent = dev.name;
+      nameEl.className = "card-item-name" + (isEnabled ? "" : " hidden");
+      nameEl.textContent = fmtDevName(dev);
 
       const controls = document.createElement("div");
-      controls.className = "shutdown-device-controls";
+      controls.className = "card-item-controls";
 
-      const slider = document.createElement("input");
-      slider.type = "range";
-      slider.className = "volume-slider";
-      slider.min = "0";
-      slider.max = "100";
-      slider.value = volume;
-      updateSliderGradient(slider);
+      const numberbox = document.createElement("div");
+      numberbox.className = "win-numberbox";
 
-      const valueEl = document.createElement("span");
-      valueEl.className = "volume-value" + (isEnabled ? "" : " inactive");
-      valueEl.textContent = volume;
+      const numberboxBorder = document.createElement("div");
+      numberboxBorder.className = "win-numberbox-border";
 
-      nameEl.style.cursor = "pointer";
-      nameEl.addEventListener("click", async () => {
-        if (config.shutdown_volume_devices[dev.name] !== undefined) {
-          delete config.shutdown_volume_devices[dev.name];
-          nameEl.classList.add("inactive");
-          valueEl.classList.add("inactive");
+      const focusBorder = document.createElement("div");
+      focusBorder.className = "win-numberbox-focus-border";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "win-numberbox-input";
+      input.value = volume;
+      input.inputMode = "numeric";
+
+      const spin = document.createElement("div");
+      spin.className = "win-numberbox-spin";
+
+      const btnUp = document.createElement("button");
+      btnUp.type = "button";
+      btnUp.className = "win-numberbox-spin-btn";
+      btnUp.innerHTML = '<svg viewBox="0 0 12 12" fill="none"><path d="M2 8L6 4L10 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+      const btnDown = document.createElement("button");
+      btnDown.type = "button";
+      btnDown.className = "win-numberbox-spin-btn";
+      btnDown.innerHTML = '<svg viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+      function clamp(v) { return Math.max(0, Math.min(100, v)); }
+      function setNumberBoxValue(v) {
+        if (isNaN(v)) v = 0;
+        const val = clamp(Math.round(v));
+        input.value = val;
+        btnUp.disabled = val >= 100;
+        btnDown.disabled = val <= 0;
+        return val;
+      }
+
+      function updateConfig(val) {
+        if (isEnabled) {
+          config.shutdown_volume_devices[dev.name] = val / 100;
+          saveConfig();
+        }
+      }
+
+      setNumberBoxValue(volume);
+      if (!isEnabled) {
+        input.disabled = true;
+        btnUp.disabled = true;
+        btnDown.disabled = true;
+      }
+
+      btnUp.addEventListener("click", () => {
+        const val = setNumberBoxValue(parseInt(input.value) + 5);
+        updateConfig(val);
+      });
+
+      btnDown.addEventListener("click", () => {
+        const val = setNumberBoxValue(parseInt(input.value) - 5);
+        updateConfig(val);
+      });
+
+      let debounceTimer = null;
+      input.addEventListener("input", () => {
+        const raw = parseInt(input.value);
+        if (!isNaN(raw)) {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            const val = setNumberBoxValue(raw);
+            updateConfig(val);
+          }, 300);
+        }
+      });
+
+      input.addEventListener("blur", () => {
+        const raw = parseInt(input.value);
+        if (!isNaN(raw)) {
+          const val = setNumberBoxValue(raw);
+          updateConfig(val);
+        }
+      });
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          const val = setNumberBoxValue(parseInt(input.value) + 5);
+          updateConfig(val);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          const val = setNumberBoxValue(parseInt(input.value) - 5);
+          updateConfig(val);
+        }
+      });
+
+      spin.appendChild(btnUp);
+      spin.appendChild(btnDown);
+      numberboxBorder.appendChild(focusBorder);
+      numberboxBorder.appendChild(input);
+      numberboxBorder.appendChild(spin);
+      numberbox.appendChild(numberboxBorder);
+
+      const { toggle: deviceToggle, input: deviceInput } = createToggle(isEnabled, async (deviceInput) => {
+        if (deviceInput.checked) {
+          config.shutdown_volume_devices[dev.name] = parseInt(input.value) / 100;
+          nameEl.classList.remove("hidden");
+          input.disabled = false;
+          btnUp.disabled = parseInt(input.value) >= 100;
+          btnDown.disabled = parseInt(input.value) <= 0;
         } else {
-          config.shutdown_volume_devices[dev.name] = parseInt(slider.value) / 100;
-          nameEl.classList.remove("inactive");
-          valueEl.classList.remove("inactive");
+          delete config.shutdown_volume_devices[dev.name];
+          nameEl.classList.add("hidden");
+          input.disabled = true;
+          btnUp.disabled = true;
+          btnDown.disabled = true;
         }
         await saveConfig();
       });
 
-      slider.addEventListener("input", () => {
-        valueEl.textContent = slider.value;
-        updateSliderGradient(slider);
-      });
-
-      let debounceTimer = null;
-      slider.addEventListener("change", () => {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(async () => {
-          if (config.shutdown_volume_devices[dev.name] !== undefined) {
-            config.shutdown_volume_devices[dev.name] = parseInt(slider.value) / 100;
-            await saveConfig();
-          }
-        }, 300);
-      });
-
-      controls.appendChild(slider);
-      controls.appendChild(valueEl);
+      controls.appendChild(numberbox);
+      controls.appendChild(deviceToggle);
       item.appendChild(nameEl);
       item.appendChild(controls);
-      deviceList.appendChild(item);
+      items.appendChild(item);
     }
   } catch (e) {
     console.error("Failed to load audio devices for shutdown volume:", e);
   }
+}
+
+// ── 蓝牙音频接收（A2DP Sink）────────────────────────────────────────────
+// 状态完全以后端快照为准（a2dp_get_status / a2dp-changed 事件）；设备列表缓存于
+// a2dpDeviceCache，只在初始化、显式刷新、展开卡片时重新枚举（枚举有 COM 成本，
+// 事件高频到达时不重复拉）。
+
+let a2dpExpanded = false;
+let a2dpDeviceCache = null;
+
+function initA2dpSinkSettings() {
+  initA2dpCardToggle();
+  bindToggle("toggle-a2dp-reconnect-start", {
+    get: () => config.a2dp_reconnect_on_start,
+    set: (v) => { config.a2dp_reconnect_on_start = v; },
+  });
+  bindToggle("toggle-a2dp-reconnect-drop", {
+    get: () => config.a2dp_reconnect_on_drop,
+    set: (v) => { config.a2dp_reconnect_on_drop = v; },
+  });
+  loadA2dpDevices({ refreshDevices: true });
+  onTauriEvent("a2dp-changed", () => loadA2dpDevices());
+}
+
+function initA2dpCardToggle() {
+  const card = document.getElementById("a2dp-card");
+  const items = document.getElementById("a2dp-device-items");
+  const arrow = document.getElementById("arrow-a2dp");
+
+  if (!card || !items || !arrow) return;
+
+  createExpandableCard(items, arrow).bindHeaderClick(card, {
+    expandHeight: "content",
+    onChanged: (expanded) => {
+      a2dpExpanded = expanded;
+      // 展开即刷新：用户看到列表的时机必须配一次新枚举，避免陈旧/空缓存
+      if (expanded) loadA2dpDevices({ refreshDevices: true });
+    },
+  });
+
+  arrow.classList.toggle("expanded", a2dpExpanded);
+}
+
+async function loadA2dpDevices({ refreshDevices = false } = {}) {
+  const items = document.getElementById("a2dp-device-items");
+  if (!items) return;
+  try {
+    const status = await invoke("a2dp_get_status");
+    if (!status.supported) {
+      a2dpDeviceCache = [];
+    } else if (refreshDevices || a2dpDeviceCache === null || !a2dpDeviceCache.length) {
+      // ⛔ 空缓存不算数：蓝牙栈就绪时序可能让单次枚举偶发为空，靠 `!length` 让
+      //   后续每次加载都重拉，直到拿到非空列表；显式刷新（含展开/初始化）的
+      //   空结果如实覆盖（用户主动要求以真实为准）。
+      a2dpDeviceCache = await invoke("a2dp_get_devices");
+    }
+    renderA2dpDevices(items, status, a2dpDeviceCache || []);
+    if (a2dpExpanded) {
+      items.style.maxHeight = items.scrollHeight + "px";
+    }
+  } catch (e) {
+    console.error("Failed to load a2dp status:", e);
+    // 枚举/状态拉取失败必须可见：静默空白会被用户当成「没有设备」
+    renderA2dpError(items, String(e));
+  }
+}
+
+function renderA2dpError(items, text) {
+  items.innerHTML = "";
+  appendA2dpEmptyRow(items, "蓝牙音频接收状态拉取失败：" + text);
+}
+
+function renderA2dpDevices(items, status, devices) {
+  items.innerHTML = "";
+
+  if (!status.supported) {
+    appendA2dpEmptyRow(items, "此系统版本不支持蓝牙音频接收（需 Windows 10 2004+）");
+    return;
+  }
+
+  if (status.hint) appendA2dpHintRow(items, status.hint);
+
+  if (devices.length === 0) {
+    appendA2dpEmptyRow(items, "未发现可接收音频的蓝牙设备，请先在系统蓝牙设置中配对手机");
+  } else {
+    for (const dev of devices) {
+      appendA2dpDeviceRow(items, status, dev);
+    }
+  }
+
+  appendA2dpActionRow(items);
+}
+
+function appendA2dpRow(items, name, controls) {
+  const item = document.createElement("div");
+  item.className = "card-item";
+  const nameEl = document.createElement("div");
+  nameEl.className = name.muted ? "card-item-name card-item-name--empty" : "card-item-name";
+  nameEl.textContent = name.text;
+  if (name.title) nameEl.title = name.title;
+  item.appendChild(nameEl);
+  if (controls) {
+    item.appendChild(controls);
+  }
+  items.appendChild(item);
+  return item;
+}
+
+function appendA2dpEmptyRow(items, text) {
+  appendA2dpRow(items, { text, muted: true });
+}
+
+function appendA2dpHintRow(items, text) {
+  appendA2dpRow(items, { text, muted: true });
+}
+
+function appendA2dpDeviceRow(items, status, dev) {
+  const isActiveTarget = status.device_id === dev.id && A2DP_ACTIVE_STATES.includes(status.state);
+  const controls = document.createElement("div");
+  controls.className = "card-item-controls";
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "connect-btn";
+  // 措辞判据见 popup-devices.js syncActionsEl（与 popup 设备 tab 的 A2DP 按钮两处一致）
+  btn.textContent = isActiveTarget ? "关闭" : "开启";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.classList.add("btn-loading");
+    try {
+      if (isActiveTarget) {
+        await invoke("a2dp_disconnect");
+      } else {
+        await invoke("a2dp_connect", { deviceId: dev.id, deviceName: dev.name || "" });
+      }
+    } catch (e) {
+      showToast(String(e));
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("btn-loading");
+    }
+  });
+  controls.appendChild(btn);
+
+  // 会话反馈折进活动设备行（后端 detail：正在连接…/等待手机播放/音频链路已建立/重试中），
+  // 不再单独占一行；非活动目标或 detail 为空时只显示设备名
+  const baseName = dev.name || dev.id;
+  const nameText =
+    isActiveTarget && status.detail ? `${baseName} · ${status.detail}` : baseName;
+  appendA2dpRow(items, { text: nameText, title: dev.name }, controls);
+}
+
+function appendA2dpActionRow(items) {
+  const controls = document.createElement("div");
+  controls.className = "card-item-controls";
+
+  const refreshBtn = document.createElement("button");
+  refreshBtn.type = "button";
+  refreshBtn.className = "add-device-btn";
+  refreshBtn.textContent = "刷新设备";
+  refreshBtn.addEventListener("click", () => loadA2dpDevices({ refreshDevices: true }));
+  controls.appendChild(refreshBtn);
+
+  const settingsBtn = document.createElement("button");
+  settingsBtn.type = "button";
+  settingsBtn.className = "add-device-btn";
+  settingsBtn.textContent = "打开蓝牙设置";
+  settingsBtn.addEventListener("click", () => invoke("open_bt_settings"));
+  controls.appendChild(settingsBtn);
+
+  appendA2dpRow(items, { text: "配对新设备后点「刷新设备」更新列表", muted: true }, controls);
 }

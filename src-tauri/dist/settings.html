@@ -7,166 +7,545 @@
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/settings.css">
 </head>
-<body oncontextmenu="return false">
-  <div class="settings-container" id="app">
-    <h1 class="page-title">设置</h1>
+<body>
+  <div class="settings-container">
+    <!-- Left Sidebar (NavigationView Pane) -->
+    <nav class="win-nav-left-panel">
+      <div class="win-nav-indicator" id="nav-indicator"></div>
+      <div class="win-nav-header">
+          <img class="win-nav-logo" src="icon.png" alt="logo">
+          <span class="win-nav-title">PeriTray</span>
+        </div>
+       <div class="win-nav-menu">
+         <div class="win-nav-item is-selected" data-tab="general" role="button" aria-selected="true" tabindex="0">
+           <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          <span class="label">通用设置</span>
+        </div>
+          <div class="win-nav-item" data-tab="device" role="button" aria-selected="false" tabindex="-1">
+            <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span class="label">设备信息</span>
+        </div>
+          <div class="win-nav-item" data-tab="audio" role="button" aria-selected="false" tabindex="-1">
+            <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+          </svg>
+          <span class="label">音量控制</span>
+        </div>
+          <div class="win-nav-item" data-tab="shortcut" role="button" aria-selected="false" tabindex="-1">
+            <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2" ry="2"/>
+            <line x1="6" y1="8" x2="6.01" y2="8"/>
+            <line x1="10" y1="8" x2="10.01" y2="8"/>
+            <line x1="14" y1="8" x2="14.01" y2="8"/>
+            <line x1="18" y1="8" x2="18.01" y2="8"/>
+            <line x1="8" y1="12" x2="8.01" y2="12"/>
+            <line x1="12" y1="12" x2="12.01" y2="12"/>
+            <line x1="16" y1="12" x2="16.01" y2="12"/>
+            <line x1="7" y1="16" x2="17" y2="16"/>
+          </svg>
+          <span class="label">快捷键</span>
+        </div>
+          <div class="win-nav-item" data-tab="taskbar" role="button" aria-selected="false" tabindex="-1">
+            <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="16" rx="2" ry="2"/>
+            <line x1="2" y1="16" x2="22" y2="16"/>
+            <rect x="9" y="9" width="6" height="5" rx="1"/>
+          </svg>
+          <span class="label">任务栏</span>
+        </div>
+          <div class="win-nav-item" data-tab="about" role="button" aria-selected="false" tabindex="-1">
+            <svg class="win-nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11z"/>
+            <path d="M8 6.75c.41 0 .75.34.75.75v3.25a.75.75 0 1 1-1.5 0V7.5c0-.41.34-.75.75-.75z"/>
+            <circle cx="8" cy="5" r="1"/>
+          </svg>
+          <span class="label">关于</span>
+        </div>
+      </div>
+    </nav>
 
-    <!-- Tab bar -->
-    <div class="tab-bar">
-      <div class="tab-item active" data-tab="general">通用设置</div>
-      <div class="tab-item" data-tab="device">设备信息设置</div>
-      <div class="tab-item" data-tab="audio">音量控制设置</div>
-    </div>
+    <!-- Right Content (NavigationView Content) -->
+    <main class="win-nav-content">
+      <div class="win-nav-page-header" id="page-header">通用设置</div>
 
-    <!-- Tab: General -->
-    <div class="tab-content active" id="tab-general">
-      <div class="setting-row">
-        <span class="setting-label">开机自启动</span>
+      <div class="settings-tab-viewport">
+      <!-- Tab: General -->
+      <div class="tab-content active" id="tab-general">
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">开机自启动</span>
+        </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-autostart">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="setting-row">
-        <span class="setting-label">硬件加速
-          <span class="setting-hint">重启后生效</span>
-        </span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">默认打开页面</span>
+          <div class="card-desc">自定义左键点击托盘图标时打开的页面</div>
+        </div>
+        <div class="win-combo-box" id="combo-default-popup-tab">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">设备信息</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="devices">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">设备信息</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="volume">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">音量控制</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">弹出窗口大小</span>
+          <div class="card-desc">调整托盘弹出面板的尺寸，修改后下次打开弹窗生效</div>
+        </div>
+        <div class="win-combo-box" id="combo-popup-size">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">默认</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="small">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">小</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="default">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">默认</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="large">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">大</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">硬件加速</span>
+          <div class="card-desc">关闭可降低内存占用，开启可使动画更流畅，修改后重启生效</div>
+        </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-hardware-acceleration">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div class="separator"></div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">主题模式</span>
+          <div class="card-desc">切换主窗口和设置页的显示主题，修改后立即生效</div>
+        </div>
+        <div class="win-combo-box" id="combo-theme-mode">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">跟随系统</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="follow_system">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">跟随系统</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="light">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">浅色模式</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="dark">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">深色模式</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <div class="setting-row">
-        <span class="setting-label">启动时检测更新</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">窗口材质</span>
+          <div class="card-desc">设置窗口背景材质效果</div>
+        </div>
+        <div class="win-combo-box" id="combo-window-material">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">默认</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="default">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">默认</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="recommended">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">推荐</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="acrylic">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">亚克力</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="mica">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">云母</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">更新设置</div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">启动时检测更新</span>
+        </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-check-updates">
           <span class="slider"></span>
         </label>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">获取测试版更新
-          <span class="tooltip-trigger">?
-            <span class="tooltip-content">开启后不仅检测正式版，也检测测试版（beta/rc）更新。</span>
-          </span>
-        </span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">获取测试版更新</span>
+          <div class="card-desc">关闭时只获取正式版更新，开启后会获取测试版更新</div>
+        </div>
         <label class="toggle">
           <input type="checkbox" id="toggle-include-prerelease">
           <span class="slider"></span>
         </label>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">手动检测更新</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">手动检测更新</span>
+        </div>
         <button class="add-device-btn" id="btn-check-update">检测更新</button>
       </div>
 
-      <div class="separator"></div>
+      <div class="section-title">日志设置</div>
 
-      <div class="setting-row">
-        <span class="setting-label">运行日志</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">运行日志</span>
+          <div class="card-desc">切换运行日志的开关以及日志记录的详略级别</div>
+        </div>
+        <div class="win-combo-box" id="combo-log-level">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">关闭</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="off">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">关闭</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="standard">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">标准</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="verbose">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">详细</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">保留时长</span>
+        </div>
+        <div class="win-combo-box" id="combo-log-retention">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">一天</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="once">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">一次</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="one_day">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">一天</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="three_days">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">三天</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="one_week">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">一周</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="one_month">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">一月</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">查看日志</span>
+        </div>
+        <button class="add-device-btn" id="btn-log-dir">打开目录</button>
+      </div>
+    </div>
+
+    <!-- Tab: Shortcut -->
+    <div class="tab-content" id="tab-shortcut">
+      <div class="section-title">基础快捷键</div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">打开设备信息</span>
+        </div>
+        <div class="card-actions">
+          <div class="shortcut-input-wrap">
+            <div class="shortcut-key-box">
+              <input type="text" class="shortcut-key-input" id="shortcut-devices" placeholder="点击录制快捷键" readonly>
+              <button class="shortcut-clear-btn" id="clear-shortcut-devices">&times;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">打开音量控制</span>
+        </div>
+        <div class="card-actions">
+          <div class="shortcut-input-wrap">
+            <div class="shortcut-key-box">
+              <input type="text" class="shortcut-key-input" id="shortcut-volume" placeholder="点击录制快捷键" readonly>
+              <button class="shortcut-clear-btn" id="clear-shortcut-volume">&times;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">提高音量</span>
+        </div>
+        <div class="card-actions">
+          <div class="shortcut-input-wrap">
+            <div class="shortcut-key-box">
+              <input type="text" class="shortcut-key-input" id="shortcut-volume-up" placeholder="点击录制快捷键" readonly>
+              <button class="shortcut-clear-btn" id="clear-shortcut-volume-up">&times;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">降低音量</span>
+        </div>
+        <div class="card-actions">
+          <div class="shortcut-input-wrap">
+            <div class="shortcut-key-box">
+              <input type="text" class="shortcut-key-input" id="shortcut-volume-down" placeholder="点击录制快捷键" readonly>
+              <button class="shortcut-clear-btn" id="clear-shortcut-volume-down">&times;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">设备静音</span>
+        </div>
+        <div class="card-actions">
+          <div class="shortcut-input-wrap">
+            <div class="shortcut-key-box">
+              <input type="text" class="shortcut-key-input" id="shortcut-volume-mute" placeholder="点击录制快捷键" readonly>
+              <button class="shortcut-clear-btn" id="clear-shortcut-volume-mute">&times;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">设备快捷键</div>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">切换设备时弹出通知</span>
+        </div>
         <label class="toggle">
-          <input type="checkbox" id="toggle-log">
+          <input type="checkbox" id="toggle-shortcut-switch-notify">
           <span class="slider"></span>
         </label>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">保留时长</span>
-        <select class="setting-select" id="log-retention">
-          <option value="once">一次</option>
-          <option value="one_day">一天</option>
-          <option value="three_days">三天</option>
-          <option value="one_week">一周</option>
-          <option value="one_month">一月</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">查看日志</span>
-        <button class="add-device-btn" id="btn-log-dir">打开目录</button>
-      </div>
-
-      <div class="separator"></div>
-
-      <div class="setting-row">
-        <span class="setting-label">快捷键</span>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">打开设备信息</span>
-        <div class="shortcut-input-wrap">
-          <input type="text" class="shortcut-key-input" id="shortcut-devices" placeholder="点击录制快捷键" readonly>
-          <button class="shortcut-clear-btn" id="clear-shortcut-devices">&times;</button>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">设备快捷键共享切换
+            <span class="tooltip-trigger">?
+              <span class="tooltip-content">开启后，多个设备可共用同一快捷键，按下时按设备列表顺序循环切换默认输出设备；关闭时每个快捷键仅能分配给一个设备。</span>
+            </span>
+          </span>
         </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-device-shortcut-cycle">
+          <span class="slider"></span>
+        </label>
       </div>
-      <div class="setting-row">
-        <span class="setting-label">打开音量控制</span>
-        <div class="shortcut-input-wrap">
-          <input type="text" class="shortcut-key-input" id="shortcut-volume" placeholder="点击录制快捷键" readonly>
-          <button class="shortcut-clear-btn" id="clear-shortcut-volume">&times;</button>
-        </div>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">提高音量</span>
-        <div class="shortcut-input-wrap">
-          <input type="text" class="shortcut-key-input" id="shortcut-volume-up" placeholder="点击录制快捷键" readonly>
-          <button class="shortcut-clear-btn" id="clear-shortcut-volume-up">&times;</button>
-        </div>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">降低音量</span>
-        <div class="shortcut-input-wrap">
-          <input type="text" class="shortcut-key-input" id="shortcut-volume-down" placeholder="点击录制快捷键" readonly>
-          <button class="shortcut-clear-btn" id="clear-shortcut-volume-down">&times;</button>
-        </div>
-      </div>
-      <div class="setting-row">
-        <span class="setting-label">静音</span>
-        <div class="shortcut-input-wrap">
-          <input type="text" class="shortcut-key-input" id="shortcut-volume-mute" placeholder="点击录制快捷键" readonly>
-          <button class="shortcut-clear-btn" id="clear-shortcut-volume-mute">&times;</button>
-        </div>
-      </div>
-      <div class="shortcut-hint" id="shortcut-hint">点击输入框后按下键盘组合键录制快捷键，如 Ctrl+Shift+D</div>
+      <div id="device-shortcut-list"></div>
     </div>
 
     <!-- Tab: Device Info -->
     <div class="tab-content" id="tab-device">
-      <div class="setting-row">
-        <span class="setting-label">设备过滤</span>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-filter">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="filter-regex-wrap" id="filter-regex-wrap">
-        <textarea id="filter-regex" class="filter-textarea" rows="4" spellcheck="false"></textarea>
-        <div class="filter-hint">匹配设备名称的正则表达式，不区分大小写。匹配到的设备将被隐藏。</div>
-      </div>
-
-      <div class="setting-row">
-        <span class="setting-label">设备去重</span>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-dedup">
-          <span class="slider"></span>
-        </label>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">只显示无线设备</span>
+          <div class="card-desc">开启后只显示无线设备，关闭后可显示其他设备，仅在「设备信息」页生效</div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-wireless-only">
+            <span class="slider"></span>
+          </label>
+        </div>
       </div>
 
-      <div class="setting-row">
-        <span class="setting-label">显示无名称蓝牙设备</span>
-        <label class="toggle">
-          <input type="checkbox" id="toggle-unnamed-bt">
-          <span class="slider"></span>
-        </label>
+      <div class="card expandable" id="filter-card">
+        <div class="card-left">
+          <span class="card-title">设备过滤</span>
+          <div class="card-desc">匹配设备名称的正则表达式，不区分大小写，匹配到的设备将被隐藏</div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-filter">
+            <span class="slider"></span>
+          </label>
+          <span class="card-arrow" id="arrow-filter">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+        </div>
+        <div class="card-items filter-regex-wrap" id="filter-regex-wrap">
+          <div class="filter-textarea-border">
+            <div class="filter-textarea-focus-border"></div>
+            <textarea id="filter-regex" class="filter-textarea" rows="4" spellcheck="false"></textarea>
+          </div>
+        </div>
       </div>
 
-      <div class="setting-row setting-row-col">
-        <div class="setting-row-top">
-          <span class="setting-label">使用系统蓝牙连接
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">设备去重</span>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-dedup">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">显示无名称蓝牙设备</span>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-unnamed-bt">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">使用系统蓝牙连接
             <span class="tooltip-trigger">?
               <span class="tooltip-content">应用内通过启用/禁用蓝牙服务来实现连接/断开蓝牙设备连接，可能会出现兼容性问题，如果出现问题可打开此开关通过跳转到系统蓝牙设置页进行管理。</span>
             </span>
           </span>
+        </div>
+        <div class="card-actions">
           <label class="toggle">
             <input type="checkbox" id="toggle-use-system-bt">
             <span class="slider"></span>
@@ -174,58 +553,443 @@
         </div>
       </div>
 
-      <div class="separator"></div>
-
-      <div class="setting-row">
-        <span class="setting-label">自定义 2.4G 设备列表
-            <span class="help-link" id="help-24g" title="点击查看如何添加 2.4G 设备">?</span>
-          </span>
-        <button class="add-device-btn" id="btn-add-24g">打开</button>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">自定义 2.4G 设备列表</span>
+          <div class="card-desc"><a href="#" id="help-24g" class="setting-link">点击查看如何添加 2.4G 设备</a></div>
+        </div>
+        <div class="card-actions">
+          <button class="add-device-btn" id="btn-add-24g">打开</button>
+        </div>
       </div>
 
-      <div class="separator"></div>
-
-      <div class="setting-row">
-        <span class="setting-label">设备信息页设备列表</span>
+      <div class="card expandable" id="low-battery-card">
+        <div class="card-left">
+          <div class="card-title">低电量通知
+            <span class="tooltip-trigger" data-tip="当无线设备电量达到阈值时弹出 Windows 系统通知。需手动选择要监听的设备，未选择任何设备时不发送通知。">?</span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-low-battery">
+            <span class="slider"></span>
+          </label>
+          <div class="card-arrow" id="arrow-low-battery">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="low-battery-items"></div>
       </div>
+
+      <div class="section-title">蓝牙音频接收功能</div>
+      <div class="card expandable" id="a2dp-card">
+        <div class="card-left">
+          <div class="card-title">蓝牙音频接收
+            <span class="tooltip-trigger" data-tip="此功能需要 Windows 10 2004 及以上，手机需先与电脑蓝牙配对。">?</span>
+          </div>
+          <div class="card-desc">实验性功能。把电脑当作蓝牙音箱，接收手机等设备播放的音频</div>
+        </div>
+        <div class="card-actions">
+          <div class="card-arrow" id="arrow-a2dp">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="a2dp-device-items">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">启动时恢复蓝牙音频连接</span>
+          <div class="card-desc">启动后自动连接上一次接收音频的设备</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-a2dp-reconnect-start">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">蓝牙音频连接断开后自动重试</span>
+          <div class="card-desc">手机走远或连接失败时自动重试，最多 3 次后停止并把发起权交还手机</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-a2dp-reconnect-drop">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="section-title">设备信息页设备列表</div>
       <div class="device-groups" id="device-groups"></div>
     </div>
 
     <!-- Tab: Audio -->
     <div class="tab-content" id="tab-audio">
-      <div class="setting-row">
-        <span class="setting-label">音量控制页设备列表</span>
-      </div>
-      <div class="audio-device-groups" id="audio-device-groups"></div>
-
-      <div class="separator"></div>
-
-      <div class="setting-row">
-        <span class="setting-label">关机/重启时自动调整音量
-          <span class="tooltip-trigger">?
-            <span class="tooltip-content">关机或重启时自动将指定音频设备的音量调整到设定值，适用于需要固定关机音量及重置开机音量的场景。</span>
-          </span>
-        </span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">音量精细调节</span>
+          <div class="card-desc">开启后，音量条拖动与滚轮均按 0.1 步进调节，可进行精细调整</div>
+        </div>
         <label class="toggle">
-          <input type="checkbox" id="toggle-shutdown-volume">
+          <input type="checkbox" id="toggle-fine-adjust">
           <span class="slider"></span>
         </label>
       </div>
 
-      <div id="shutdown-volume-settings" style="display:none;">
-        <div class="setting-row">
-          <span class="setting-label">目标设备</span>
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">静音锁定</span>
+          <div class="card-desc">实验性功能。点击静音后，拖动音量条仍会保持静音直到点击取消静音</div>
         </div>
-        <div class="shutdown-hint">点击设备名启用/禁用，已启用的设备会在关机时自动调整音量</div>
-        <div id="shutdown-device-list" class="shutdown-device-list"></div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-mute-lock">
+          <span class="slider"></span>
+        </label>
       </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">强制静音
+            <span class="tooltip-trigger" data-tip="某些设备在静音前会先把音量降低到特定值，再次点击静音后才能实现静音。此项设置可以实现一次直接将设备静音，不需要二次点击。">?</span>
+          </span>
+          <div class="card-desc">实验性功能。一次直接将设备静音，不需要二次点击</div>
+        </div>
+        <div class="card-actions">
+          <button class="add-device-btn" id="btn-force-mute">选择设备</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <span class="card-title">空间音效</span>
+          <div class="card-desc">实验性功能。开启后可切换可用于音频设备的空间音效</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-spatial-sound">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+<span class="card-title">简化设备名称</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-simplify-names">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="card expandable" id="audio-card">
+        <div class="card-left">
+          <div class="card-title">音量控制页设备列表</div>
+        </div>
+        <div class="card-actions">
+          <div class="card-arrow" id="arrow-audio">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="audio-device-items">
+        </div>
+      </div>
+
+      <div class="card expandable" id="shutdown-card">
+        <div class="card-left">
+          <div class="card-title">关机/重启时自动调整音量
+            <span class="tooltip-trigger">?
+              <span class="tooltip-content">关机或重启时自动将指定音频设备的音量调整到设定值，适用于需要固定关机音量及重置开机音量的场景。</span>
+            </span>
+          </div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-shutdown-volume">
+            <span class="slider"></span>
+          </label>
+          <div class="card-arrow" id="arrow-shutdown">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="shutdown-device-items">
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Taskbar -->
+    <div class="tab-content" id="tab-taskbar">
+      <div class="card expandable" id="taskbar-widget-card">
+        <div class="card-left">
+          <div class="card-title">显示设备信息组件</div>
+          <div class="card-desc">在任务栏添加并显示设备信息组件，可手动切换</div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <!-- ⛔ **不写 `checked`**：默认关闭，
+                 真实初值一律由 `bindToggle` 从 config 同步进来。 -->
+            <input type="checkbox" id="toggle-taskbar-widget">
+            <span class="slider"></span>
+          </label>
+          <div class="card-arrow" id="arrow-taskbar-widget">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items" id="taskbar-widget-items">
+          <!-- ⭐ 展开区 = **已添加设备清单**（含已断开）+ 每行一个「移除」按钮。
+               设备来源改为弹出窗口右键菜单「钉到任务栏」，此处只负责**查看与移除**。 -->
+          <div class="card-item" id="taskbar-widget-empty" style="display: none;">
+            <div class="card-item-name" id="taskbar-widget-empty-text">尚未添加设备</div>
+          </div>
+          <div id="taskbar-widget-devices"></div>
+        </div>
+      </div>
+
+      <!-- 「显示音乐控制组件」与上面的「显示设备信息组件」是**两个独立开关**：
+           关掉其中一个**不会**影响另一个（用户 2026-09-28 明确要求）。
+           ⛔ 本卡是**单开关卡、无展开区**——音乐没有「已添加设备清单」那类内容。 -->
+      <div class="card" id="taskbar-music-card">
+        <div class="card-left">
+          <div class="card-title">显示音乐控制组件</div>
+          <div class="card-desc">在任务栏添加并显示音乐控制组件，可手动切换</div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <input type="checkbox" id="toggle-taskbar-music">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- 「常驻显示未连接的设备」单开关卡（默认关）：关 = 任务栏只显示已连接的设备，
+           设备连上后自动出现；开 = 已添加设备以置灰形式常驻（旧行为）。
+           ⛔ 与「显示音乐控制组件」同理：单开关卡、无展开区。 -->
+      <div class="card" id="taskbar-show-disconnected-card">
+        <div class="card-left">
+          <div class="card-title">常驻显示未连接的设备</div>
+          <div class="card-desc">关闭时任务栏仅显示已连接的设备，设备连接后自动出现；开启后已添加的设备以置灰形式常驻显示</div>
+        </div>
+        <div class="card-actions">
+          <label class="toggle">
+            <!-- ⛔ **不写 `checked`**：默认关闭，真实初值由 bindToggle 从 config 同步进来。 -->
+            <input type="checkbox" id="toggle-taskbar-show-disconnected">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card" id="taskbar-position-card">
+        <div class="card-left">
+          <div class="card-title">任务栏窗口位置</div>
+          <div class="card-desc">自动档避开任务栏上已有的按钮；「手动拖拽」档可直接拖动窗口摆放</div>
+        </div>
+        <!-- ⭐ 六档 `data-value` 必须与后端 `VALID_TASKBAR_POSITIONS` 逐字一致
+             （`config.rs`），否则该档永远选不出来且不报错（判据在 config.rs 的单测里）。
+             ⛔ 改档位值必须同时改读取期迁移（`migrate_taskbar_position_value` /
+             `migrate_taskbar_drag`）—— 老用户配置里存的是旧字面量，只改值不迁移
+             会被归一化冲回默认档 ⇒ 用户**静默丢失设置**（无报错、无提示）。
+             ⭐ 顺序对齐 EchoMusicNext 的位置下拉：自动两档在前，拖拽收尾。 -->
+        <div class="win-combo-box" id="combo-taskbar-position">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">自动靠右</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="auto_left">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">自动靠左</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="auto_right">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">自动靠右</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="fixed_left">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">固定靠左</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="fixed_center">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">固定居中</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="fixed_right">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">固定靠右</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="drag">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">手动拖拽</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-left">
+          <div class="card-title">任务栏内容缩放大小</div>
+          <div class="card-desc">设置任务栏信息窗口中图标和信息文字的大小</div>
+        </div>
+        <!-- ⛔ `data-value` 必须与后端 `TaskbarContentScale` 的序列化字面逐字一致
+             （`config.rs`：`"default"` / `"smaller"`）——
+             拼错任一侧都会让该档永远选不出来，且不报错。 -->
+        <div class="win-combo-box" id="combo-taskbar-content-scale">
+          <button class="win-combo-btn" role="combobox" aria-expanded="false">
+            <span class="win-combo-content">默认</span>
+            <span class="win-combo-chevron">
+              <svg width="12" height="12" viewBox="0 0 8.098 4.598" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M0.195 0.195C0.39 0 0.708 0 0.903 0.195L4.049 3.342 7.195 0.195C7.39 0 7.708 0 7.903 0.195C8.098 0.39 8.098 0.708 7.903 0.903L4.403 4.403C4.208 4.598 3.89 4.598 3.695 4.403L0.195 0.903C0 0.708 0 0.39 0.195 0.195Z" fill="currentColor"/>
+              </svg>
+            </span>
+          </button>
+          <div class="win-combo-flyout">
+            <div class="win-combo-items-presenter">
+              <button class="win-combo-item" data-value="default">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">默认</span>
+                </span>
+              </button>
+              <button class="win-combo-item" data-value="smaller">
+                <span class="win-combo-item-layout">
+                  <span class="win-combo-item-pill"></span>
+                  <span class="win-combo-item-content">偏小</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: About -->
+    <div class="tab-content" id="tab-about">
+      <div class="win-infobar win-infobar-card" id="about-update-infobar" role="alert" hidden>
+        <div class="card-left">
+          <span class="win-infobar-icon" id="about-update-icon">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11z"/>
+              <path d="M8 6.75c.41 0 .75.34.75.75v3.25a.75.75 0 1 1-1.5 0V7.5c0-.41.34-.75.75-.75z"/>
+              <circle cx="8" cy="5" r="1"/>
+            </svg>
+          </span>
+          <div class="win-infobar-content" id="about-update-content"></div>
+        </div>
+        <div class="card-actions">
+          <button class="add-device-btn" id="about-update-action" hidden></button>
+          <button class="win-infobar-close-button" id="about-update-close" aria-label="关闭">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="card expandable about-info-card" id="about-info-card">
+        <div class="card-left">
+          <div class="card-title">PeriTray - 外设监控</div>
+          <div class="card-desc">© 2026 PeriTray Project. All Rights Reserved.</div>
+        </div>
+        <div class="card-actions">
+          <button class="add-device-btn" id="about-version-btn">版本 v1.4.4</button>
+          <div class="card-arrow expanded" id="arrow-about">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+        <div class="card-items show" id="about-info-items">
+          <div class="card-item card-item--stack">
+            <div class="section-title">功能简介</div>
+            <div class="card-item-controls about-item-controls">
+              <p>监控并显示所有连接外设的信息，支持音频、USB、蓝牙、电池和显示器设备；</p>
+              <p>查看并控制所有已连接的音频设备，支持独立调整正在播放的设备和应用的音量。</p>
+            </div>
+          </div>
+          <div class="card-item card-item--stack">
+            <div class="section-title">相关信息</div>
+            <div class="card-item-controls about-item-controls">
+              <div class="about-link-item">
+                <span class="about-link-label">开发人员：</span>
+                <a class="win-hyperlink-btn" href="#" id="about-dev">oneday5799</a>
+              </div>
+              <div class="about-link-item">
+                <span class="about-link-label">开源协议：</span>
+                <a class="win-hyperlink-btn" href="#" id="about-license">GPL-3.0 License</a>
+              </div>
+              <div class="about-link-item">
+                <span class="about-link-label">项目主页：</span>
+                <a class="win-hyperlink-btn" href="#" id="about-homepage">访问 GitHub 仓库</a>
+              </div>
+            </div>
+          </div>
+          <div class="card-item card-item--stack">
+            <div class="section-title">其他链接</div>
+            <div class="card-item-controls about-item-controls">
+              <div class="about-link-item">
+                <a class="win-hyperlink-btn" href="#" id="about-help">获取帮助</a>
+                <a class="win-hyperlink-btn" href="#" id="about-feedback">提供反馈</a>
+                <a class="win-hyperlink-btn" href="#" id="about-24g-devices">查看 2.4G 设备支持列表</a>
+              </div>
+              <div class="about-link-item">
+                <a class="win-hyperlink-btn" href="#" id="about-pr">欢迎各位PR更好的想法或改进💗</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="win-infobar win-infobar-card" id="about-infobar" role="alert">
+        <div class="card-left">
+          <span class="win-infobar-icon">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11z"/>
+              <path d="M8 6.75c.41 0 .75.34.75.75v3.25a.75.75 0 1 1-1.5 0V7.5c0-.41.34-.75.75-.75z"/>
+              <circle cx="8" cy="5" r="1"/>
+            </svg>
+          </span>
+          <div class="win-infobar-content">本工具支持 Windows 10 （大概）以及 Windows 11 版本，具体兼容性请自行测试。</div>
+        </div>
+        <div class="card-actions">
+          <button class="win-infobar-close-button" id="infobar-close" aria-label="关闭">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      </div>
+    </div>
+    </main>
+  </div>
+
+  <div class="update-error-flyout" id="about-update-flyout" role="dialog" hidden>
+    <div class="update-error-flyout-title">更新检测失败</div>
+    <div class="update-error-flyout-summary" id="about-update-error-summary"></div>
+    <div class="update-error-flyout-body" id="about-update-error-text"></div>
+    <div class="update-error-flyout-footer">
+      <button class="dialog-btn" id="about-update-error-copy">复制</button>
     </div>
   </div>
 
   <script src="scripts/common.js"></script>
+  <script src="scripts/settings-general.js"></script>
+  <script src="scripts/settings-shortcut.js"></script>
   <script src="scripts/settings-devices.js"></script>
   <script src="scripts/settings-audio.js"></script>
-  <script src="scripts/settings-general.js"></script>
+  <script src="scripts/settings-taskbar.js"></script>
+  <script src="scripts/settings-about.js"></script>
   <script src="scripts/settings.js"></script>
 </body>
 </html>

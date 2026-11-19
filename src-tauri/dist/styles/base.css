@@ -4,10 +4,223 @@
   box-sizing: border-box;
 }
 
-html, body {
-  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
-  background: #f3f3f3;
+/* ── 交互净化：禁用图片拖拽 + 消除默认焦点黑框 ── */
+img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
+
+*:focus,
+*:focus-visible {
+  outline: none !important;
+}
+
+/*
+ * base.css — 主窗口 + 设置页共享样式
+ *
+ * 目录：
+ *   1.  Theme tokens          设计令牌（明/暗主题 + 缓动曲线）
+ *   2.  窗口材质              data-material 统一材质层
+ *   3.  Scrollbar             滚动条
+ *   4.  Section title / Loading / Card / Navigation / Icon button / Button
+ *   5.  Text field / Toggle switch
+ *   6.  Flyout surface(4)     tooltip / toast 表面
+ *   7.  Tooltip
+ *   8.  Dialog                对话框
+ *   9.  Context menu          右键菜单
+ *   10. Flyout surface(8)     右键菜单浮层
+ *   11. Toast                 通知
+ *
+ * 设置页专属组件（ComboBox/NumberBox/Infobar/更新浮层/过滤文本域）
+ * 见 settings.css 尾部「设置页专属组件」分区。
+ */
+/* ── Theme tokens (shared: settings page + main window) ─────── */
+:root {
+  --page-bg: #f3f3f3;
+  --card-bg: #ffffff;
+  --card-border: #e0e0e0;
+  --card-border-hover: rgba(0, 0, 0, 0.07);
+  --card-item-border: rgba(0, 0, 0, 0.06);
+  --text-primary: #1a1a1a;
+  --text-secondary: #666666;
+  --text-tertiary: #888888;
+  --text-disabled: #a0a0a0;
+  --text-body: #444444;
+  --accent: #0078d7;
+  --accent-hover: #106ebe;
+  --text-on-accent: #ffffff;
+  --link: #0067c0;
+  --link-hover-bg: rgba(0, 103, 192, 0.04);
+  --link-pressed-bg: rgba(0, 103, 192, 0.08);
+  --hover-overlay: rgba(0, 0, 0, 0.0373);
+  --pressed-overlay: rgba(0, 0, 0, 0.0241);
+  --active-overlay: rgba(0, 0, 0, 0.049);
+  --pressed-text: rgba(0, 0, 0, 0.62);
+  --icon-color: #404040;
+  --icon-hover-color: #1a1a1a;
+  --control-bg: rgba(255, 255, 255, 0.70);
+  --control-bg-hover: rgba(249, 249, 249, 0.50);
+  --control-bg-pressed: rgba(249, 249, 249, 0.30);
+  --control-border: rgba(0, 0, 0, 0.06);
+  --control-border-strong: rgba(0, 0, 0, 0.16);
+  --field-border: #e0e0e0;
+  --field-border-strong: #888888;
+  --field-border-focus: #e0e0e0;
+  --field-bg: rgba(255, 255, 255, 0.70);
+  --field-bg-hover: rgba(249, 249, 249, 0.50);
+  --field-bg-focus: #ffffff;
+  --field-text: #1a1a1a;
+  --danger: #e81123;
+  --danger-hover: #e81123;
+  --danger-hover-bg: rgba(232, 17, 35, 0.08);
+  --danger-pressed-bg: rgba(232, 17, 35, 0.12);
+  --toggle-track: #999999;
+  --toggle-checked: #0078d7;
+  --surface-subtle: rgba(0, 0, 0, 0.03);
+  --icon-chip-bg: #f0f0f0;
+  --status-success: #4caf50;
+  --status-wireless: #388e3c;
+  --status-bluetooth: #1976d2;
+  --status-paired: #999999;
+  --dialog-background: #fcfcfc;
+  --dialog-content-bg: rgba(255, 255, 255, 0.95);
+  --dialog-overlay: rgba(0, 0, 0, 0.30);
+  --dialog-divider: rgba(0, 0, 0, 0.06);
+  --dialog-button-bg: #f3f3f3;
+  --panel-border: #e5e5e5;
+  --flyout-bg: #fcfcfc;
+  --flyout-border: rgba(0, 0, 0, 0.06);
+  --flyout-text: rgba(0, 0, 0, 0.89);
+  --flyout-shadow: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.18);
+  --flyout-backdrop: none;
+  --tooltip-icon-bg: #d0d0d0;
+  --tooltip-icon-hover: #999999;
+  --slider-track: #e0e0e0;
+  --material-card: rgba(255, 255, 255, 0.88);
+  --material-card-hover: rgba(255, 255, 255, 0.5);
+  --material-border: rgba(255, 255, 255, 0.3);
+  --page-padding: 0 20px 20px;
+  /* WinUI 缓动曲线 */
+  --ease-standard: cubic-bezier(0, 0, 0, 1);    /* 标准过渡 */
+  --ease-decel: cubic-bezier(0.1, 0.9, 0.2, 1); /* 减速进入 */
+  --ease-accel: cubic-bezier(0.7, 0, 1, 0.5);   /* 加速离场 */
+}
+
+html[data-theme="dark"] {
+  --page-bg: #202020;
+  --card-bg: rgba(255, 255, 255, 0.10);
+  --card-border: rgb(0 0 0 / 30%);
+  --card-border-hover: rgb(0 0 0 / 9%);
+  --card-item-border: rgb(0 0 0 / 30%);
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.62);
+  --text-tertiary: rgba(255, 255, 255, 0.54);
+  --text-disabled: rgba(255, 255, 255, 0.40);
+  --text-body: rgba(255, 255, 255, 0.77);
+  --accent: #4cc2ff;
+  --accent-hover: #3a9ee0;
+  --text-on-accent: #1a1a1a;
+  --link: #4cc2ff;
+  --link-hover-bg: rgba(255, 255, 255, 0.06);
+  --link-pressed-bg: rgba(255, 255, 255, 0.1);
+  --hover-overlay: rgba(255, 255, 255, 0.0605);
+  --pressed-overlay: rgba(255, 255, 255, 0.0419);
+  --active-overlay: rgba(255, 255, 255, 0.0326);
+  --pressed-text: rgba(255, 255, 255, 0.77);
+  --icon-color: rgba(255, 255, 255, 0.62);
+  --icon-hover-color: #ffffff;
+  --control-bg: rgba(255, 255, 255, 0.0605);
+  --control-bg-hover: rgba(255, 255, 255, 0.0837);
+  --control-bg-pressed: rgba(255, 255, 255, 0.0326);
+  --control-border: rgba(255, 255, 255, 0.0706);
+  --control-border-strong: rgba(255, 255, 255, 0.54);
+  --field-border: rgba(255, 255, 255, 0.0706);
+  --field-border-strong: rgba(255, 255, 255, 0.54);
+  --field-border-focus: rgba(0, 0, 0, 0.07);
+  --field-bg: rgba(255, 255, 255, 0.0605);
+  --field-bg-hover: rgba(255, 255, 255, 0.0837);
+  --field-bg-focus: rgba(30, 30, 30, 0.70);
+  --field-text: #ffffff;
+  --danger: #e81123;
+  --danger-hover: #ff6b7a;
+  --danger-hover-bg: rgba(255, 107, 122, 0.08);
+  --danger-pressed-bg: rgba(255, 107, 122, 0.12);
+  --toggle-track: #666666;
+  --toggle-checked: #0078d7;
+  --surface-subtle: rgba(255, 255, 255, 0.0314);
+  --icon-chip-bg: rgba(255, 255, 255, 0.10);
+  --status-success: #6fc46f;
+  --status-wireless: #7ed97e;
+  --status-bluetooth: #6cb4ff;
+  --status-paired: rgba(255, 255, 255, 0.40);
+  --dialog-background: #2c2c2c;
+  --dialog-content-bg: rgba(43, 43, 43, 0);
+  --dialog-overlay: rgba(0, 0, 0, 0.30);
+  --dialog-divider: rgba(0, 0, 0, 0.20);
+  --dialog-button-bg: #202020;
+  --panel-border: #1d1d1d;
+  --flyout-bg: #2c2c2c;
+  --flyout-border: rgba(0, 0, 0, 0.20);
+  --flyout-text: #ffffff;
+  --flyout-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
+  --flyout-backdrop: none;
+  --tooltip-icon-bg: #404040;
+  --tooltip-icon-hover: #555555;
+  --slider-track: rgba(255, 255, 255, 0.25);
+  --material-card: rgba(0, 0, 0, 0.55);
+  --material-card-hover: rgba(0, 0, 0, 0.3);
+  --material-border: rgba(255, 255, 255, 0.15);
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  background: var(--page-bg, #f3f3f3);
+  user-select: none;
+}
+
+body {
+  overflow: hidden;
+  border: none;
+}
+
+/* ── 窗口材质（统一：主窗口 + 设置页，data-material 非 default 时存在） ── */
+html[data-material],
+html[data-material] body {
+  background: transparent !important;
+}
+
+/* 页面容器与内容层透明 */
+html[data-material] .popup-container,
+html[data-material] .settings-container,
+html[data-material] .tab-viewport,
+html[data-material] .tab-content,
+html[data-material] .device-list,
+html[data-material] .volume-control,
+html[data-material] .section-title,
+html[data-material] .win-nav-page-header {
+  background: transparent !important;
+}
+
+/* 导航面板透明（左面板基础态无边框，材质下补一条分隔线） */
+html[data-material] .win-nav-left-panel {
+  background: transparent !important;
+  border-right: 1px solid var(--material-border) !important;
+}
+
+html[data-material] .win-nav-top-bar {
+  background: transparent !important;
+  border-bottom-color: var(--material-border) !important;
+}
+
+/* 卡片为半透明玻璃 */
+html[data-material] .card { background: var(--material-card) !important; }
+html[data-material] .card:hover { background: var(--material-card-hover) !important; }
+html[data-material] .card.expandable.no-hover:hover { background: var(--material-card) !important; }
+html[data-material] .card.expandable .card-items { background: var(--material-card) !important; }
 
 /* Windows 11 native scrollbar */
 ::-webkit-scrollbar {
@@ -31,94 +244,1152 @@ html, body {
   border-width: 2px;
 }
 
-/* Volume slider */
-.volume-slider {
+html[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.50);
+  border: 3.5px solid transparent;
+  border-radius: 5px;
+  background-clip: padding-box;
+}
+
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.57);
+  background-clip: padding-box;
+  border-width: 2px;
+}
+
+/* ── Section title (shared) ─────────────────────────── */
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #1a1a1a);
+  margin-top: 20px;
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+/* ── Loading placeholder (shared) ───────────────────── */
+.loading {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--text-tertiary, #888);
+  font-size: 14px;
+}
+
+/* ── Card component (shared: settings page + main window) ───── */
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 0 14px;
+  margin-bottom: 6px;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--card-border, #e0e0e0);
+  border-radius: 6px;
+  cursor: default;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.card:hover {
+  background: var(--material-card-hover);
+  border-color: var(--card-border-hover, var(--card-border, #e0e0e0));
+}
+
+/* 可折叠卡：鼠标在 card-items 区域时抑制 hover */
+.card.expandable.no-hover:hover {
+  background: var(--card-bg, #fff);
+  border-color: var(--card-border, #e0e0e0);
+}
+
+/* 可折叠卡：flex-wrap 实现两行布局，overflow:hidden 裁剪圆角 */
+.card.expandable {
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+/* 展开的列表覆盖自身，使 hover 效果只显示在卡片标题区 */
+.card.expandable .card-items {
+  background: var(--card-bg, #fff);
+}
+
+/* 两行布局（popup 音频设备卡） */
+.card.column {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 0;
+}
+
+.card-left {
+  min-width: 0;
   flex: 1;
-  -webkit-appearance: none;
+  margin-right: 12px;
+}
+
+.card.column > .card-left {
+  flex: none;
+  margin-right: 0;
+}
+
+.card-title {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  color: var(--text-primary, #1a1a1a);
+}
+
+.card-desc {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* 音量控制行（滑块 + 静音按钮） */
+.card-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.card.column > .card-controls {
+  flex: none;
+}
+
+.card-arrow {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary, #888);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.card-arrow.expanded {
+  transform: rotate(180deg);
+}
+
+.card-toggle {
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.card-toggle input {
+  cursor: pointer;
+}
+
+.card-items {
+  flex-basis: 100%;
+  max-width: 100%;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.2s ease;
+}
+
+.card-items.show {
+  max-height: 1000px;
+}
+
+.card-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--card-item-border, rgba(0, 0, 0, 0.06));
+}
+
+/* 纵向堆叠的 card-item（关于页使用） */
+.card-item--stack {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 10px 14px;
+}
+
+.card-item--stack .section-title {
+  margin-top: 0;
+  margin-bottom: 8px;
+  flex: none;
+}
+
+.card-item--stack .card-item-controls {
+  margin-left: 0;
+}
+
+.card-item-name {
+  font-size: 14px;
+  color: var(--text-primary, #1a1a1a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  margin-right: 12px;
+}
+
+.card-item-name.hidden {
+  color: var(--text-disabled, #a0a0a0);
+}
+
+/* 空态文案（「没有检测到…」）：原为内联 style="color:#888"，CSP `style-src 'self'`
+   会拦掉内联 style 属性使灰色丢失，故收敛为类，并改用主题令牌（暗色下同样成立） */
+.card-item-name--empty {
+  color: var(--text-tertiary, #888);
+}
+
+.card-item-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.card-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-tag {
+  font-size: 12px;
+  color: var(--text-tertiary, #808080);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+}
+
+.card-tag.connected::before,
+.card-tag.paired::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.card-tag.connected::before {
+  background: var(--status-success);
+}
+
+.card-tag.paired::before {
+  background: var(--status-paired);
+}
+
+.card-tag.bluetooth {
+  color: var(--status-bluetooth);
+}
+
+.card-tag.wireless {
+  color: var(--status-wireless);
+}
+
+.card-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--icon-chip-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.card-icon img {
   width: 100%;
-  height: 4px;
-  --track-color: linear-gradient(to right, #0078d7 0%, #0078d7 0%, #e0e0e0 0%, #e0e0e0 100%);
+  height: 100%;
+  object-fit: contain;
+}
+
+.card:not(.column) .card-left {
+  height: 60px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.card:not(.column) .card-actions {
+  height: 60px;
+}
+
+/* ── Navigation (shared: settings left pane + popup top bar) ── */
+.win-nav-item {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
   background: transparent;
+  color: var(--text-primary, #1a1a1a);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s var(--ease-standard),
+    color 0.167s var(--ease-standard);
+}
+
+.win-nav-item:hover {
+  background: var(--hover-overlay);
+  color: var(--text-primary, #1a1a1a);
+}
+
+.win-nav-item:active {
+  background: var(--pressed-overlay);
+  color: var(--pressed-text);
+}
+
+.win-nav-item.is-selected {
+  background: var(--hover-overlay);
+  color: var(--text-primary, #1a1a1a);
+}
+
+.win-nav-item.is-selected:hover {
+  background: var(--pressed-overlay);
+  color: var(--text-primary, #1a1a1a);
+}
+
+.win-nav-item.is-selected:active {
+  background: var(--hover-overlay);
+  color: var(--pressed-text);
+}
+
+.win-nav-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+
+.win-nav-item .label {
+  font-size: 14px;
+  line-height: 20px;
+  color: inherit;
+}
+
+/* 导航指示条基类（popup 顶部下划线 / settings 左侧竖条 共用） */
+.win-nav-indicator {
+  position: absolute;
+  background: var(--accent, #0078d7);
+  border-radius: 2px;
+  pointer-events: none;
+  will-change: transform, width, height;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* ── Icon button (shared base) ─────────────────────── */
+.win-nav-icon-btn,
+.mute-btn,
+.shortcut-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.167s var(--ease-standard), color 0.167s;
+}
+
+.win-nav-icon-btn {
+  box-sizing: border-box;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  margin: 2px 4px;
+  padding: 0;
+  color: var(--icon-color, #404040);
+}
+
+.win-nav-icon-btn:hover {
+  background: var(--hover-overlay);
+  color: var(--icon-hover-color, #1a1a1a);
+}
+
+.win-nav-icon-btn:active {
+  background: var(--pressed-overlay);
+  color: var(--pressed-text);
+}
+
+/* ── Button (shared) ─────────────────────────────── */
+.dialog-btn,
+.connect-btn,
+.add-device-btn,
+.shortcut-delete-btn {
+  height: 32px;
+  padding: 5px 11px 6px;
+  color: var(--text-primary);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: normal;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  user-select: none;
+  transition: background 0.167s var(--ease-standard), color 0.167s;
+  border-left: 1px solid var(--control-border);
+  border-top: 1px solid var(--control-border);
+  border-right: 1px solid var(--control-border);
+  border-bottom: 1px solid var(--control-border-strong);
+  border-radius: 4px;
+  background: var(--control-bg);
+}
+
+.dialog-btn:hover,
+.connect-btn:hover,
+.add-device-btn:hover,
+.shortcut-delete-btn:hover {
+  background: var(--control-bg-hover);
+}
+
+.dialog-btn:active,
+.connect-btn:active,
+.add-device-btn:active,
+.shortcut-delete-btn:active {
+  background: var(--control-bg-pressed);
+  color: var(--pressed-text);
+  border-bottom-color: var(--control-border);
+}
+
+.add-device-btn {
+  min-width: 120px;
+  gap: 8px;
+}
+
+.shortcut-delete-btn {
+  color: var(--danger);
+}
+
+.dialog-btn.confirm {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+.dialog-btn.confirm:hover {
+  background: var(--accent-hover);
+}
+
+.connect-btn:disabled,
+.connect-btn.btn-loading {
+  background: var(--control-bg-hover);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.connect-btn:disabled:hover,
+.connect-btn.btn-loading:hover {
+  background: var(--control-bg-hover);
+}
+
+.dialog-btn.danger {
+  color: var(--danger);
+  margin-right: auto;
+}
+
+.dialog-btn.danger:hover {
+  background: var(--danger-hover-bg);
+}
+
+.dialog-btn:disabled,
+.add-device-btn:disabled,
+.shortcut-delete-btn:disabled {
+  background: var(--control-bg-hover);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+/* Link / hyperlink */
+.setting-link {
+  font-size: 12px;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.setting-link:hover {
+  text-decoration: underline;
+}
+
+.win-hyperlink-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 5px 11px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--link);
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 83ms var(--ease-decel);
+}
+
+.win-hyperlink-btn:hover {
+  background: var(--link-hover-bg);
+}
+
+.win-hyperlink-btn:active {
+  background: var(--link-pressed-bg);
+}
+
+/* ── Text field (shared) ─────────────────────────── */
+.dialog-input,
+.shortcut-key-input {
+  box-sizing: border-box;
+  height: 32px;
+  padding: 5px 8px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  border: 1px solid var(--field-border);
+  border-bottom-color: var(--field-border-strong);
+  border-radius: 4px;
+  background: var(--field-bg);
+  color: var(--field-text);
   outline: none;
-  border-radius: 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.volume-slider::-webkit-slider-runnable-track {
+.shortcut-key-input {
+  width: 180px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dialog-input {
+  flex: 1;
   width: 100%;
-  height: 4px;
-  background: var(--track-color);
-  border-radius: 10px;
-  border: 0;
+  text-align: left;
 }
 
-.volume-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  border: 4px solid #fff;
+/* 修改信息对话框：三行「标签 + 控件」复用 .card-item 行样式（与设置页
+   低电量通知·电量阈值行同一套类）；首行不画分隔线（上面是标题） */
+.dialog-fields .card-item:first-child {
+  border-top: 0;
+}
+
+
+.dialog-input:hover,
+.shortcut-key-input:hover {
+  background: var(--field-bg-hover);
+}
+
+.dialog-input:focus,
+.dialog-input.recording,
+.shortcut-key-input:focus,
+.shortcut-key-input.recording {
+  border-color: var(--field-border-focus);
+  border-bottom-color: var(--field-border-focus);
+  box-shadow: inset 0 -1.5px 0 0 var(--accent);
+  background: var(--field-bg-focus);
+}
+
+/* 快捷键录制框在对话框内仍居中显示 */
+.shortcut-key-input.dialog-input {
+  text-align: center;
+  cursor: pointer;
+}
+
+/* ── ComboBox（WinUI 风格下拉，设置页与「修改信息」对话框共用，样式单源在本文件） ── */
+.win-combo-box {
+  position: relative;
+  display: inline-block;
+  min-width: 64px;
+  vertical-align: top;
+  color: var(--field-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.win-combo-btn {
+  width: 100%;
+  min-width: 120px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 0;
+  align-items: stretch;
+  text-align: left;
+  appearance: none;
+  border-left: 1px solid var(--control-border);
+  border-top: 1px solid var(--control-border);
+  border-right: 1px solid var(--control-border);
+  border-bottom: 1px solid var(--control-border-strong);
+  border-radius: 4px;
+  background: var(--control-bg);
+  color: var(--field-text);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.167s var(--ease-standard);
+}
+
+.win-combo-btn:hover {
+  background: var(--control-bg-hover);
+}
+
+.win-combo-btn:active {
+  background: var(--control-bg-pressed);
+}
+
+.win-combo-content {
+  min-width: 0;
+  padding: 5px 0 7px 12px;
+  display: block;
+  box-sizing: border-box;
+  overflow: hidden;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.win-combo-chevron {
+  grid-row: 1;
+  grid-column: 2;
+  width: 12px;
+  height: 12px;
+  margin: 0 14px 0 0;
+  place-self: center end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--pressed-text);
+  transition: transform 0.2s var(--ease-standard);
+}
+
+.win-combo-box.is-open .win-combo-chevron {
+  transform: rotate(180deg);
+}
+
+.win-combo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+}
+
+.win-combo-flyout {
+  position: fixed;
+  /* 必须压过 .dialog-overlay（10000）：「修改信息」对话框开启下拉时 flyout 在 body 下，
+     低于它会被对话框面板盖住（实测点不到）；设置页无更高层，提到 10001 无副作用 */
+  z-index: 10001;
+  width: max-content;
+  min-width: 80px;
+  box-sizing: border-box;
+  /* 初始态一律由样式表给出，不得依赖标记里的内联 style：
+     CSP `style-src 'self'` 会拦掉内联 style 属性，届时 display 回落为初始值，
+     而 settings.js 又用「内联样式回读」判断浮层是否已展开 —— 首点必被吞。
+     现改为读 `combo.classList.contains("is-open")`，本行只是把初始态补回样式表。 */
+  display: none;
+  overflow: hidden;
+  visibility: hidden;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+}
+
+.win-combo-flyout::-webkit-scrollbar {
+  display: none;
+}
+
+.win-combo-items-presenter {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 0;
+}
+
+.win-combo-item {
+  appearance: none;
+  position: relative;
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  box-sizing: border-box;
+  color: var(--flyout-text);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* 菜单项行模式（ComboBox 项） */
+.win-combo-item-layout {
+  min-height: 32px;
+  margin: 2px 5px;
+  box-sizing: border-box;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: calc(100% - 10px);
+}
+
+.win-combo-item-content {
+  padding: 5px 11px 7px;
+  box-sizing: border-box;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.win-combo-item:hover .win-combo-item-layout {
+  background: var(--hover-overlay);
+}
+
+.win-combo-item:active .win-combo-item-layout {
+  color: var(--pressed-text);
+  background: var(--pressed-overlay);
+}
+
+.win-combo-item.selected .win-combo-item-layout {
+  background: var(--hover-overlay);
+}
+
+.win-combo-item.selected:hover .win-combo-item-layout {
+  background: var(--pressed-overlay);
+}
+
+.win-combo-item-pill {
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 1.5px;
+  background: var(--accent);
+  transform: translateY(-50%);
+  transition: height 167ms var(--ease-standard);
+  display: none;
+}
+
+.win-combo-item.selected .win-combo-item-pill {
+  display: block;
+}
+
+.win-combo-item.selected:active .win-combo-item-pill {
+  height: 10px;
+}
+
+.shortcut-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-key-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.shortcut-clear-btn {
+  width: 22px;
+  height: 22px;
+  color: var(--pressed-text);
+  font-size: 16px;
+  transition: background 0.167s var(--ease-standard), color 0.167s, opacity 0.15s;
+}
+
+.shortcut-key-box .shortcut-clear-btn {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.shortcut-key-box:hover .shortcut-clear-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.shortcut-clear-btn:hover {
+  color: var(--danger-hover);
+  background: var(--danger-hover-bg);
+}
+
+.shortcut-clear-btn:active {
+  background: var(--danger-pressed-bg);
+}
+
+/* ── Toggle switch (shared) ─────────────────────── */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--toggle-track);
+  border-radius: 12px;
+  transition: background 0.2s ease;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
   height: 18px;
   width: 18px;
-  border-radius: 10px;
-  background: #0078d7;
-  margin-top: -8px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+}
+
+.toggle input:checked + .slider {
+  background: var(--toggle-checked);
+}
+
+.toggle input:checked + .slider::before {
+  transform: translateX(20px);
+}
+
+/* ── Flyout surface（tooltip / toast 共用，圆角 4） ── */
+.session-tip,
+.tooltip-content,
+.slider-tooltip,
+.toast {
+  padding: 6px 9px 8px;
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-weight: 400;
+  line-height: 16px;
+  border: 1px solid var(--flyout-border);
+  border-radius: 4px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+}
+
+/* ── Tooltip (shared) ────────────────────────────── */
+/* 应用名 tooltip：页面内 fixed 定位，超出边界自动避让 */
+.session-tip {
+  position: fixed;
+  z-index: 1000;
+  display: none;
+  max-width: 320px;
+  box-sizing: border-box;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  pointer-events: none;
+}
+
+.tooltip-host {
+  position: relative;
+}
+
+.tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--tooltip-icon-bg);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 6px;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+}
+
+.tooltip-trigger:hover {
+  background: var(--tooltip-icon-hover);
+}
+
+.tooltip-content {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 320px;
+  box-sizing: border-box;
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.tooltip-content--below {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+
+.tooltip-content--end {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.tooltip-content--start {
+  left: 0;
+  transform: none;
+}
+
+.tooltip-trigger:hover .tooltip-content {
+  display: block;
+  animation: win-tooltip-fade-in 167ms linear both;
+}
+
+/* 非「?」提示：悬停 1s 后再弹出 */
+.tooltip-host:hover .tooltip-content {
+  display: block;
+  animation: win-tooltip-fade-in 167ms 1s linear both;
+}
+
+@keyframes win-tooltip-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-trigger:hover .tooltip-content {
+    animation-duration: 1ms;
+  }
+  .tooltip-host:hover .tooltip-content {
+    animation-duration: 1ms;
+    animation-delay: 1s;
+  }
+}
+
+/* ── Dialog (shared) ─────────────────────────────── */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--dialog-overlay);
+  z-index: 10000;
+}
+
+.rename-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: min(100%, 548px);
+  min-width: min(100%, 320px);
+  min-height: 184px;
+  max-height: calc(100vh - 48px);
+  color: var(--text-primary);
+  background: var(--dialog-background);
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: 0 32px 64px rgba(0, 0, 0, 0.28);
+}
+
+.dialog-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+  background: var(--dialog-content-bg);
+  border-bottom: 1px solid var(--dialog-divider);
+}
+
+.dialog-title {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+  color: var(--text-primary);
+}
+
+.dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 24px;
+  background: var(--dialog-button-bg);
+}
+
+.shortcut-dialog-device {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.shortcut-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-dialog-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 8px;
+}
+
+/* ── Context menu (shared) ───────────────────────── */
+.context-menu-item {
+  min-height: 32px;
+  margin: 2px 5px;
+  padding: 5px 11px 7px;
+  box-sizing: border-box;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  position: relative;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--flyout-text);
+  white-space: nowrap;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-  transition: all 0.1s;
 }
 
-.volume-slider::-webkit-slider-thumb:hover {
-  border: 3px solid #fff;
+.context-menu-item:hover {
+  background: var(--hover-overlay);
 }
 
-.volume-slider::-webkit-slider-thumb:active {
-  border: 5px solid #fff;
+.context-menu-item:active {
+  color: var(--pressed-text);
+  background: var(--pressed-overlay);
 }
 
-.volume-slider::-moz-range-track {
-  width: 100%;
-  height: 4px;
-  background: var(--track-color);
-  border-radius: 10px;
-  border: 0;
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 120px;
+  box-sizing: border-box;
+  padding: 4px 0;
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
 }
 
-.volume-slider::-moz-range-thumb {
-  border: 4px solid #fff;
-  height: 18px;
-  width: 18px;
-  border-radius: 10px;
-  background: #0078d7;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+.context-menu-subitem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.volume-slider::-moz-range-thumb:hover {
-  border: 3px solid #fff;
+.context-menu-subitem .context-menu-chevron {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
 }
 
-.volume-slider::-moz-range-thumb:active {
-  border: 5px solid #fff;
+.context-menu-subitem.open {
+  background: var(--hover-overlay);
 }
 
-/* ── Toast 通知 ─────────────────────────────────────── */
+.context-submenu {
+  position: fixed;
+  z-index: 1001;
+  display: none;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}
+
+.context-menu-item .context-menu-leading {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-right: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-menu-item .context-menu-leading .context-menu-check {
+  color: var(--accent);
+}
+
+/* ── Toast 通知 ─────────────────────────────────── */
 .toast {
   position: fixed;
-  bottom: 20px;
+  bottom: 120px;
   left: 50%;
   transform: translateX(-50%) translateY(100px);
-  background: #333;
-  color: #fff;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 13px;
+  font-size: 12px;
   z-index: 10000;
   opacity: 0;
   transition: all 0.3s ease;
   pointer-events: none;
   max-width: 80%;
   text-align: center;
-  line-height: 1.5;
+  /* 文案里的 \n 要真的换行：showToast 用 textContent 写入（防 XSS），
+     故调用方传的是纯文本，换行只能靠 pre-line 渲染（P1-6）。 */
+  white-space: pre-line;
 }
 .toast.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
   pointer-events: auto;
+}
+
+.toast.error {
+  color: var(--danger);
 }

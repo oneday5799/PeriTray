@@ -1,18 +1,26 @@
-use std::sync::atomic::Ordering;
-use tauri::Manager;
 use tauri::Emitter;
+use tauri::Manager;
 
+use crate::state::{POPUP_POS, TRAY_POS};
+use crate::webview;
+use crate::window_material;
 use crate::windows;
-use crate::state::{TRAY_POS, POPUP_POS, ANIMATING};
+use crate::{standard_log, verbose_log};
 
-const POPUP_W: f64 = 360.0;
-const POPUP_H: f64 = 520.0;
+/// 弹窗宽度 clamp 下限（窄屏下避免退化为不可用宽度）
+const POPUP_MIN_W: f64 = 300.0;
+/// 弹窗动态 clamp 下限（极低分屏下避免退化为不可用高度）
+const POPUP_MIN_H: f64 = 200.0;
+/// 弹窗距屏幕左右边缘的留白（逻辑像素＝物理 26×缩放因子，随缩放等比）
+const POPUP_EDGE_MARGIN: f64 = 26.0;
+/// 弹窗底边与任务栏上缘的固定间隙（13px 逻辑＝物理 13×缩放因子，随缩放等比）
+const POPUP_TASKBAR_GAP: f64 = 13.0;
 
 /// cubic-bezier(0.62, 0, 0.32, 1) easing — same as win11React
 fn cubic_bezier(t: f64) -> f64 {
     let p1x = 0.62;
     let p2x = 0.32;
-    // solve x(t) = progress for t using Newton-Raphson
+    // 以牛顿迭代法求解贝塞尔方程 x(t) = progress
     let mut t_param = t;
     for _ in 0..8 {
         let x = 3.0 * p1x * t_param * (1.0 - t_param).powi(2)
@@ -24,89 +32,160 @@ fn cubic_bezier(t: f64) -> f64 {
         t_param -= (x - t) / dx;
         t_param = t_param.clamp(0.0, 1.0);
     }
-    3.0 * t_param.powi(2) * (1.0 - t_param)
-        + t_param.powi(3)
+    3.0 * t_param.powi(2) * (1.0 - t_param) + t_param.powi(3)
 }
 
-/// 计算弹窗位置参数：(target_x, target_y, start_y)
-fn compute_position(app: &tauri::AppHandle) -> (f64, f64, f64) {
-    let sf = windows::scale_factor(app);
-    let screen_h = app.primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.size().height as f64 / sf)
-        .unwrap_or(1080.0);
-    let (tray_x, tray_y) = TRAY_POS.get()
-        .map(|m| *m.lock().unwrap())
-        .unwrap_or((100.0, screen_h - 50.0));
-    let target_x = tray_x - POPUP_W / 2.0;
-    let target_y = tray_y - POPUP_H - 15.0;
-    let start_y = screen_h + 10.0;
-    (target_x, target_y, start_y)
+/// 弹窗位置计算结果
+struct Placement {
+    target_x: f64,
+    target_y: f64,
+    start_y: f64,
+    popup_w: f64,
+    popup_h: f64,
+}
+
+/// 计算弹窗位置参数
+fn compute_position(app: &tauri::AppHandle) -> Placement {
+    // 托盘所在屏工作区（fallback 主屏）：见 windows::resolve_work_area
+    let info = windows::resolve_work_area(app);
+    let (pref_w, pref_h) = preferred_popup_size();
+    placement_from(
+        info.work_x,
+        info.work_y,
+        info.work_w,
+        info.work_h,
+        pref_w,
+        pref_h,
+    )
+}
+
+/// 依据工作区（逻辑坐标）算出弹窗落点与实宽高（宽高均对称 clamp，防窄/低分屏溢出）
+fn placement_from(
+    work_x: f64,
+    work_y: f64,
+    work_w: f64,
+    work_h: f64,
+    pref_w: f64,
+    pref_h: f64,
+) -> Placement {
+    let tray_x = TRAY_POS
+        .get()
+        .map(|m| crate::state::lock_unpoisoned(m).0)
+        .unwrap_or(work_x + work_w / 2.0);
+
+    // 宽度按工作区动态 clamp：窄屏不越出左右，留 POPUP_EDGE_MARGIN 边距
+    let max_w = (work_w - POPUP_EDGE_MARGIN * 2.0).max(POPUP_MIN_W);
+    let popup_w = pref_w.min(max_w).max(POPUP_MIN_W);
+
+    // 弹窗高度按工作区动态 clamp：低分屏不越出上缘，留 45px 上下余量
+    let max_h = (work_h - 45.0).max(POPUP_MIN_H);
+    let popup_h = pref_h.min(max_h).max(POPUP_MIN_H);
+
+    // 底边与任务栏上缘固定留 POPUP_TASKBAR_GAP 间隙（不再依赖托盘图标 y 精度）
+    let target_y = (work_y + work_h - popup_h - POPUP_TASKBAR_GAP).max(work_y + 8.0);
+
+    // 水平钳制到工作区：居中托盘但不得溢出左右（留 POPUP_EDGE_MARGIN 边距）
+    let min_x = work_x + POPUP_EDGE_MARGIN;
+    let max_x = (work_x + work_w - popup_w - POPUP_EDGE_MARGIN).max(min_x);
+    let target_x = (tray_x - popup_w / 2.0).clamp(min_x, max_x);
+
+    Placement {
+        target_x,
+        target_y,
+        start_y: work_y + work_h + 10.0,
+        popup_w,
+        popup_h,
+    }
 }
 
 pub fn toggle(app: &tauri::AppHandle, tab: &str) {
-    if ANIMATING.load(Ordering::Relaxed) {
+    if crate::state::animation_blocks() {
         return;
     }
 
-    let (target_x, target_y, start_y) = compute_position(app);
+    standard_log!("[popup] toggle tab={}", tab);
+    let p = compute_position(app);
 
     if let Some(window) = app.get_webview_window("popup") {
-        if window.is_visible().unwrap_or(false) {
-            close(&window, target_x, target_y, start_y);
+        let visible = window.is_visible().unwrap_or(false);
+        if visible {
+            close(&window, p.target_x, p.target_y, p.start_y);
         } else {
             let _ = app.emit("switch-tab", tab);
-            show(&window, target_x, start_y, target_y);
+            show(
+                &window, p.target_x, p.start_y, p.target_y, p.popup_w, p.popup_h,
+            );
         }
     } else {
-        create(app, target_x, target_y, tab);
+        create(app, p.target_x, p.target_y, p.popup_w, p.popup_h, tab);
     }
 }
 
 pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
-    if ANIMATING.load(Ordering::Relaxed) {
+    if crate::state::animation_blocks() {
         return;
     }
 
-    let (target_x, target_y, start_y) = compute_position(app);
+    let p = compute_position(app);
 
     if let Some(window) = app.get_webview_window("popup") {
         let _ = app.emit("switch-tab", tab);
         if !window.is_visible().unwrap_or(false) {
-            show(&window, target_x, start_y, target_y);
+            show(
+                &window, p.target_x, p.start_y, p.target_y, p.popup_w, p.popup_h,
+            );
         }
     } else {
-        create(app, target_x, target_y, tab);
+        create(app, p.target_x, p.target_y, p.popup_w, p.popup_h, tab);
     }
 }
 
-fn close(
-    window: &tauri::WebviewWindow,
-    target_x: f64,
-    target_y: f64,
-    start_y: f64,
+/// 在后台线程执行一段滑动动画，动画期间持有 `ANIMATING` 单飞守卫。
+///
+/// **`guard` 是必需参数**，这不是风格偏好：漏传即编译错误，从类型层面堵死
+/// 「置位了却没人复位」这条 P1-8 的复发路径——靠手工 `store(false)` 复位时
+/// 漏一处，弹窗就永久打不开也关不掉。
+///
+/// 闭包体内显式 `let _guard = guard;` 是**必须**的：`move` 闭包只有在体内
+/// 引用过该变量时才会真正捕获它，否则守卫会在调用方返回时立刻 Drop，
+/// 单飞语义直接退化为无保护（见 `AGENTS.md`「RAII 守卫的绑定命名」）。
+fn spawn_animation(
+    guard: crate::state::SingleFlightGuard<'static>,
+    f: impl FnOnce() + Send + 'static,
 ) {
-    ANIMATING.store(true, Ordering::Relaxed);
-    let _ = window.set_always_on_top(false);
-    let (cx, cy) = POPUP_POS.get()
-        .map(|m| *m.lock().unwrap())
+    std::thread::spawn(move || {
+        let _guard = guard;
+        f();
+    });
+}
+
+fn close(window: &tauri::WebviewWindow, target_x: f64, target_y: f64, start_y: f64) {
+    // 守卫在函数顶部取得：取不到说明已有动画在跑（且未超时），本次放弃
+    let Some(guard) = crate::state::try_begin_animation() else {
+        return;
+    };
+    // 下滑全程保持低于任务栏（防御性重沉：若窗口曾被抬回波段顶则归位）
+    if let Ok(hwnd) = window.hwnd() {
+        windows::place_below_taskbar(hwnd.0 as isize);
+    }
+    let (cx, cy) = POPUP_POS
+        .get()
+        .map(|m| *crate::state::lock_unpoisoned(m))
         .unwrap_or((target_x, target_y));
     let win = window.clone();
-    std::thread::spawn(move || {
+    spawn_animation(guard, move || {
         animate_close(&win, cx, cy, start_y);
-        ANIMATING.store(false, Ordering::Relaxed);
     });
 }
 
 pub fn close_popup(app: &tauri::AppHandle) {
-    if ANIMATING.load(Ordering::Relaxed) {
+    if crate::state::animation_blocks() {
         return;
     }
-    let (target_x, target_y, start_y) = compute_position(app);
+    let p = compute_position(app);
     if let Some(window) = app.get_webview_window("popup") {
         if window.is_visible().unwrap_or(false) {
-            close(&window, target_x, target_y, start_y);
+            close(&window, p.target_x, p.target_y, p.start_y);
         }
     }
 }
@@ -116,91 +195,189 @@ fn show(
     target_x: f64,
     start_y: f64,
     target_y: f64,
+    popup_w: f64,
+    popup_h: f64,
 ) {
-    ANIMATING.store(true, Ordering::Relaxed);
-    let _ = window.set_always_on_top(false);
+    // 守卫在函数顶部取得（取不到说明已有动画在跑且未超时，放弃本次显示）
+    let Some(guard) = crate::state::try_begin_animation() else {
+        return;
+    };
+
+    // popup 打开前 Resume WebView2 渲染进程（可能因关闭后 Suspend 或系统唤醒处于挂起状态）
+    let wv: &tauri::Webview = window.as_ref();
+    webview::resume_webview(wv);
+    // 打开即恢复常规内存档位（隐藏期间 LOW 收缩的缓存按需回填）
+    webview::set_memory_usage_target(wv, false);
+
+    // 按当前工作区动态尺寸调整窗口（换显示器/换分辨率/改档位后尺寸可能变化）
+    let _ = window.set_size(tauri::LogicalSize::new(popup_w, popup_h));
+
+    // 先移到屏幕外，再置顶，最后显示：滑动全程位于其他窗口之上，
+    // 避免非置顶状态下被前台窗口遮挡（表现为动画"丢失"或部分不可见）
     let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
-        x: target_x, y: start_y,
+        x: target_x,
+        y: start_y,
     }));
+    let _ = window.set_always_on_top(true);
     let _ = window.show();
+    // 沉到 topmost 波段内任务栏正下方：动画期间高于普通窗口、不遮挡任务栏
+    if let Ok(hwnd) = window.hwnd() {
+        windows::place_below_taskbar(hwnd.0 as isize);
+    }
     let win = window.clone();
-    std::thread::spawn(move || {
+    spawn_animation(guard, move || {
         animate_open(&win, target_x, start_y, target_y);
-        ANIMATING.store(false, Ordering::Relaxed);
     });
 }
 
-fn create(app: &tauri::AppHandle, target_x: f64, target_y: f64, tab: &str) {
+fn create(
+    app: &tauri::AppHandle,
+    target_x: f64,
+    target_y: f64,
+    popup_w: f64,
+    popup_h: f64,
+    tab: &str,
+) {
     let url = if tab == "volume" {
         "popup.html#volume".to_string()
     } else {
         "popup.html".to_string()
     };
 
+    // 恒透明创建：透明能力在窗口诞生时固化，「默认」材质的不透明观感由 CSS 承担
     #[cfg(target_os = "windows")]
-    let builder = tauri::WebviewWindowBuilder::new(
-        app, "popup", tauri::WebviewUrl::App(url.into()),
-    )
-    .additional_browser_args(&crate::windows::browser_args())
-    .title("外设信息")
-    .inner_size(POPUP_W, POPUP_H)
-    .decorations(false)
-    .resizable(false)
-    .skip_taskbar(true)
-    .always_on_top(true)
-    .position(target_x, target_y);
+    let builder = {
+        let mut b =
+            tauri::WebviewWindowBuilder::new(app, "popup", tauri::WebviewUrl::App(url.into()))
+                .additional_browser_args(&crate::windows::browser_args())
+                .title("外设信息")
+                .inner_size(popup_w, popup_h)
+                .decorations(false)
+                .resizable(false)
+                .skip_taskbar(true)
+                .always_on_top(true)
+                .position(target_x, target_y);
+        b = b
+            .transparent(true)
+            .background_color(tauri::utils::config::Color(0, 0, 0, 0));
+        b
+    };
 
     #[cfg(not(target_os = "windows"))]
-    let builder = tauri::WebviewWindowBuilder::new(
-        app, "popup", tauri::WebviewUrl::App(url.into()),
-    )
-    .title("外设信息")
-    .inner_size(POPUP_W, POPUP_H)
-    .decorations(false)
-    .resizable(false)
-    .skip_taskbar(true)
-    .always_on_top(true)
-    .position(target_x, target_y);
+    let builder =
+        tauri::WebviewWindowBuilder::new(app, "popup", tauri::WebviewUrl::App(url.into()))
+            .title("外设信息")
+            .inner_size(popup_w, popup_h)
+            .decorations(false)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .position(target_x, target_y);
 
     match builder.build() {
         Ok(win) => {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {
                 windows::set_rounded_corners(hwnd.0 as isize);
+                // 应用窗口材质（DWM 层；webview 表面恒透明，COM 一次性设定与材质无关）
+                let material = crate::config::with_config(|c| c.window_material.clone());
+                window_material::apply_window_material(hwnd.0 as isize, &material);
+                let wv: &tauri::Webview = win.as_ref();
+                webview::ensure_webview_bg_transparent(wv);
             }
+            // 首启即按 show() 语义重设尺寸/位置：窗口先按创建屏 SF 诞生再被移到目标屏，
+            // 混合 DPI 下 builder 的 inner_size 用了创建屏 SF，移动后物理尺寸失真；
+            // 此时窗口已就位于目标屏，按逻辑重设即可用目标屏 SF 正确换算。
+            let _ = win.set_size(tauri::LogicalSize::new(popup_w, popup_h));
+            let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x: target_x,
+                y: target_y,
+            }));
             let _ = win.show();
             let _ = win.set_focus();
-            if let Some(pos) = POPUP_POS.get() {
-                *pos.lock().unwrap() = (target_x, target_y);
+            // 首启无滑动动画，但层级不变式一致：低于任务栏、高于普通窗口
+            if let Ok(hwnd) = win.hwnd() {
+                windows::place_below_taskbar(hwnd.0 as isize);
             }
+            if let Some(pos) = POPUP_POS.get() {
+                *crate::state::lock_unpoisoned(pos) = (target_x, target_y);
+            }
+            // WM_DPICHANGED 异步：延迟按目标屏 SF 补一次尺寸，杜绝首启残留创建屏尺寸
+            let rewin = win.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                verbose_log!(
+                    "[popup] create size reapply, popup_w={}, popup_h={}",
+                    popup_w,
+                    popup_h
+                );
+                let _ = rewin.set_size(tauri::LogicalSize::new(popup_w, popup_h));
+            });
         }
         Err(e) => {
-            crate::process::append_log(&format!("[popup] create window failed: {}", e));
+            standard_log!("[popup] create window failed: {}", e);
         }
     }
 }
 
 /// 通用滑动动画
-fn animate_slide(window: &tauri::WebviewWindow, x: f64, from_y: f64, to_y: f64, duration_ms: u64, frames: u64) {
+fn animate_slide(
+    window: &tauri::WebviewWindow,
+    x: f64,
+    from_y: f64,
+    to_y: f64,
+    duration_ms: u64,
+    frames: u64,
+) {
     let step_ms = duration_ms / frames;
     for i in 0..=frames {
         let t = i as f64 / frames as f64;
         let y = from_y + (to_y - from_y) * cubic_bezier(t);
-        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+        if let Err(e) =
+            window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
+        {
+            standard_log!("[popup] set_position FAILED frame={}: {}", i, e);
+        }
         std::thread::sleep(std::time::Duration::from_millis(step_ms));
     }
+}
+
+/// 弹窗尺寸档位 → 首选逻辑宽高（未知档位回退默认 360×520）
+fn popup_size_dims(size: &str) -> (f64, f64) {
+    match size {
+        "small" => (300.0, 440.0),
+        "large" => (420.0, 600.0),
+        _ => (360.0, 520.0),
+    }
+}
+
+/// 从配置读取弹窗当前档位并映射为首选尺寸
+fn preferred_popup_size() -> (f64, f64) {
+    let size = crate::config::with_config(|c| c.popup_size.clone());
+    popup_size_dims(&size)
 }
 
 fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {
     animate_slide(window, x, start_y, end_y, 250, 20);
     if let Some(pos) = POPUP_POS.get() {
-        *pos.lock().unwrap() = (x, end_y);
+        *crate::state::lock_unpoisoned(pos) = (x, end_y);
     }
-    let _ = window.set_always_on_top(true);
     let _ = window.set_focus();
+    // set_focus 的激活可能把窗口抬回波段顶，重新沉降到任务栏之下（静止态恒低于任务栏）
+    if let Ok(hwnd) = window.hwnd() {
+        windows::place_below_taskbar(hwnd.0 as isize);
+    }
 }
 
 fn animate_close(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64) {
     animate_slide(window, x, start_y, end_y, 200, 16);
     let _ = window.hide();
+    // popup 关闭后 Suspend WebView2 渲染进程：
+    // - 释放 CPU/内存（渲染进程休眠）
+    // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（仅针对**休眠唤醒**这一类）
+    //   ⚠️ 范围限定：这**不是**「运行期窗口冻结」的解释——实测根因是
+    //   **锁序死锁（P0-4）**，与挂起态无关；遇到「窗口完全无响应」请先查锁序
+    //   （登记表见 `state.rs` 模块文档）。
+    let wv: &tauri::Webview = window.as_ref();
+    webview::suspend_webview(wv);
 }

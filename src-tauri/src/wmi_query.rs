@@ -1,21 +1,36 @@
-use std::collections::{HashMap, HashSet};
-use serde::Deserialize;
 use regex::Regex;
+use serde::Deserialize;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use wmi::WMIConnection;
 
-use crate::device::{Device, DevType};
-use crate::config;
-use crate::classify::{classify_device, classify_bluetooth, is_wireless_24g_by_vid_pid, is_bt_service, is_generic_hid, is_system_device};
-use crate::device_data;
 use crate::bluetooth::find_paired_bluetooth_devices;
+use crate::classify::{
+    classify_bluetooth, classify_device, is_bt_service, is_generic_hid, is_system_device,
+};
+use crate::config;
 use crate::dedup::{core_name, try_insert};
+use crate::device::{DevType, Device};
+use crate::device_data;
+use crate::device_identity;
+use crate::wireless_24g;
+use crate::{standard_log, verbose_log};
 
-static CACHED_REGEX: OnceLock<Mutex<Option<(String, Arc<Regex>)>>> = OnceLock::new();
+/// 蓝牙设备状态字符串：WMI 查询构造与托盘图标判断共用，避免字面量散落
+pub const BT_STATUS_CONNECTED: &str = "已连接";
+pub const BT_STATUS_PAIRED: &str = "已配对";
+
+/// 正则缓存的一格：`(pattern, 编译结果)`。
+///
+/// 具名是为了让 `CACHED_REGEX` 的类型可读（`clippy::type_complexity`）。
+/// 两者必须同进同出——只换其中一个会让后续查询拿旧 pattern 配新正则。
+type RegexCacheEntry = (String, Arc<Regex>);
+
+static CACHED_REGEX: OnceLock<Mutex<Option<RegexCacheEntry>>> = OnceLock::new();
 
 fn get_cached_regex(pattern: &str) -> Option<Arc<Regex>> {
     let cache = CACHED_REGEX.get_or_init(|| Mutex::new(None));
-    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = crate::state::lock_unpoisoned(cache);
     if let Some((ref cached_pat, ref re)) = *guard {
         if cached_pat == pattern {
             return Some(Arc::clone(re));
@@ -42,37 +57,85 @@ struct BatteryDevice {
     estimated_charge_remaining: Option<i32>,
 }
 
-pub fn query_devices() -> Vec<Device> {
+/// fresh=true 时强制现查 2.4G 接收器与蓝牙设备电量（设备列表手动刷新入口），
+/// 否则两者均走各自的 SWR 缓存。Err 表示主查询通道不可信（COM/WMI 连接失败或
+/// PnP 主查询失败），调用方应保留既有数据而非应用残缺结果。
+pub fn query_devices(fresh: bool) -> Result<Vec<Device>, String> {
+    let con = match WMIConnection::new() {
+        Ok(c) => c,
+        Err(_) => {
+            crate::process::append_log("[wmi] WMIConnection::new failed");
+            return Err("wmi connection failed".to_string());
+        }
+    };
+    query_devices_with(&con, fresh)
+}
+
+/// 使用调用方持有的连接查询设备列表（供后台轮询线程复用连接，规避每轮 ConnectServer）。
+pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device>, String> {
     let mut all = vec![];
     let mut seen = HashSet::new();
     let mut cn_index: HashMap<String, Vec<usize>> = HashMap::new();
 
     crate::device_data::reload_device_data();
 
-    let (filter_enabled, dedup_enabled, filter_regex_str) = config::with_config(|c| {
-        (c.filter_enabled, c.dedup_devices, c.filter_regex.clone())
-    });
+    let (filter_enabled, dedup_enabled, filter_regex_str, wireless_only) =
+        config::with_config(|c| {
+            (
+                c.filter_enabled,
+                c.dedup_devices,
+                c.filter_regex.clone(),
+                c.wireless_only,
+            )
+        });
 
-    let com = unsafe { wmi::COMLibrary::assume_initialized() };
-    let con = match WMIConnection::new(com) {
-        Ok(c) => c,
-        Err(_) => {
-            crate::process::append_log("[wmi] WMIConnection::new failed");
-            return all;
-        }
+    // 编译正则（在查询前准备，避免查询期间重复编译）
+    let re = if filter_enabled && !filter_regex_str.is_empty() {
+        get_cached_regex(&filter_regex_str)
+    } else {
+        None
     };
+    let re_ref = re.as_deref();
 
     let mut bt_names = HashSet::new();
+    let mut pnp_24g_targets: Vec<wireless_24g::BatteryTarget> = vec![];
 
-    query_pnp_devices(&con, dedup_enabled, &mut seen, &mut all, &mut cn_index);
-    query_bt_devices(dedup_enabled, &mut seen, &mut all, &mut bt_names, &mut cn_index);
-    query_battery_devices(&con, dedup_enabled, &mut seen, &mut all, &mut cn_index);
-
-    // Apply user-defined regex filter
-    if filter_enabled && !filter_regex_str.is_empty() {
-        if let Some(re) = get_cached_regex(&filter_regex_str) {
-            all.retain(|d| !re.is_match(&d.name));
-        }
+    if let Err(e) = query_pnp_devices(
+        con,
+        dedup_enabled,
+        re_ref,
+        wireless_only,
+        &mut seen,
+        &mut all,
+        &mut cn_index,
+        &mut pnp_24g_targets,
+    ) {
+        standard_log!("[wmi] {}", e);
+        return Err(e);
+    }
+    query_bt_devices(
+        dedup_enabled,
+        re_ref,
+        &mut seen,
+        &mut all,
+        &mut bt_names,
+        &mut cn_index,
+        fresh,
+    );
+    // 手机服务行扫描：is_phone 标记 + 连接态复核（判据见 mark_phone_rows /
+    // device_identity::phone_service_containers）。
+    let phone_live = device_identity::phone_service_containers();
+    mark_phone_rows(&mut all, &phone_live);
+    // 电池查询：wireless_only 时跳过（电池设备均为有线 USB）
+    if !wireless_only {
+        query_battery_devices(
+            con,
+            dedup_enabled,
+            re_ref,
+            &mut seen,
+            &mut all,
+            &mut cn_index,
+        );
     }
 
     // Temporarily hide status for devices not detected by WinRT Bluetooth API
@@ -82,26 +145,70 @@ pub fn query_devices() -> Vec<Device> {
         }
     }
 
-    crate::process::append_log(&format!("[wmi] query_devices: {} devices found", all.len()));
-    all
+    // 2.4G 接收器电量并入列表（读缓存即时返回，手动刷新时现查）
+    fill_24g_battery(&mut all, pnp_24g_targets, fresh);
+
+    verbose_log!(
+        "[wmi:dbg] query_devices: fresh={}, wireless_only={}",
+        fresh,
+        wireless_only
+    );
+    standard_log!("[wmi] query_devices: {} devices found", all.len());
+    Ok(all)
+}
+
+/// 把手机服务行扫描的命中写回设备行（命中集合来自
+/// `device_identity::phone_service_containers`，它是唯一判定来源）。
+///
+/// 判据：只写 `is_phone` 图标标记，且只写**蓝牙行** ∧ 容器键（`c:` 前缀）——
+/// ⛔ 不得扩散到非蓝牙行或 `n:`/`i:` 降级键的行：它们没有容器证据，
+///   命中集合里根本不会有其 GUID，这里再挡一层是防「键前缀口径变化」后误写。
+/// ⛔ **不得在此推断连接态**：服务行 devnode 不随链路断开移除（真机实测手机
+///   关蓝牙后仍全部 Present / OK），「服务行在场 ⇒ 在线」会把离场手机永久误报
+///   已连接；手机在线只能由链路证据合成（`bind_relay_sessions` 绑定转发会话）。
+fn mark_phone_rows(devices: &mut [Device], live: &BTreeSet<String>) {
+    for d in devices.iter_mut() {
+        if !d.is_bluetooth {
+            continue;
+        }
+        let Some(key) = d.device_key.as_deref().and_then(|k| k.strip_prefix("c:")) else {
+            continue;
+        };
+        if !live.contains(key) {
+            continue;
+        }
+        d.is_phone = true;
+    }
 }
 
 fn query_pnp_devices(
     con: &WMIConnection,
     dedup: bool,
+    re: Option<&Regex>,
+    wireless_only: bool,
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
-) {
-    const PNPCLASS_WHITELIST: &[&str] = &["AudioEndpoint", "Bluetooth", "HIDClass", "Keyboard", "MEDIA", "Mouse", "Monitor"];
+    p24g_targets: &mut Vec<wireless_24g::BatteryTarget>,
+) -> Result<(), String> {
+    const PNPCLASS_WHITELIST: &[&str] = &[
+        "AudioEndpoint",
+        "Bluetooth",
+        "HIDClass",
+        "Keyboard",
+        "MEDIA",
+        "Mouse",
+        "Monitor",
+    ];
 
     let rows = match con.raw_query::<HashMap<String, wmi::Variant>>(
-        "SELECT Name, Status, PNPDeviceID, Caption, PNPClass, ConfigManagerErrorCode FROM Win32_PnPEntity",
+        "SELECT Name, Status, PNPDeviceID, Caption, PNPClass, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE PNPClass = 'AudioEndpoint' OR PNPClass = 'Bluetooth' OR PNPClass = 'HIDClass' OR PNPClass = 'Keyboard' OR PNPClass = 'MEDIA' OR PNPClass = 'Mouse' OR PNPClass = 'Monitor'",
     ) {
         Ok(r) => r,
         Err(e) => {
-            crate::process::append_log(&format!("[wmi] PnP query failed: {}", e));
-            return;
+            let msg = format!("pnp query failed: {}", e);
+            standard_log!("[wmi] {}", msg);
+            return Err(msg);
         }
     };
 
@@ -115,7 +222,10 @@ fn query_pnp_devices(
         let pnp = wmi_str(&row, "PNPClass");
         let status_str = wmi_str(&row, "Status");
 
-        if !PNPCLASS_WHITELIST.iter().any(|c| pnp.eq_ignore_ascii_case(c)) {
+        if !PNPCLASS_WHITELIST
+            .iter()
+            .any(|c| pnp.eq_ignore_ascii_case(c))
+        {
             continue;
         }
 
@@ -134,8 +244,14 @@ fn query_pnp_devices(
             Some(code) => code == 0,
             None => status_str == "OK",
         };
-        let s = if connected { "已连接" } else { "已配对" };
-        if n.is_empty() { continue; }
+        let s = if connected {
+            BT_STATUS_CONNECTED
+        } else {
+            BT_STATUS_PAIRED
+        };
+        if n.is_empty() {
+            continue;
+        }
 
         if pnp.eq_ignore_ascii_case("Bluetooth") && is_bt_service(&u) {
             continue;
@@ -148,48 +264,143 @@ fn query_pnp_devices(
         }
 
         let dt = classify_device(&n, &pnp, &u, &cap);
-        let is_24g = is_wireless_24g_by_vid_pid(&u);
-        let display_name = if is_24g {
-            device_data::extract_vid_pid(&u)
-                .and_then(|(vid, pid)| device_data::get_device_name(&vid, &pid))
-        } else {
-            None
-        };
-        try_insert(&n, display_name.as_deref(), dt, s, None, None, false, is_24g, dedup, seen, all, cn_index);
+        // 物理设备身份键：容器优先，失败降级到实例路径 / 名称。
+        // 容器解析是 2 次 cfgmgr32 调用（进程内、无 IPC），失败一律返回 None ⇒ 不阻断枚举。
+        let container = device_identity::container_of_instance(&devid);
+        let identity = device_identity::device_key(
+            container.as_deref(),
+            Some(devid.as_str()),
+            Some(n.as_str()),
+        )
+        .map(|k| k.encode());
+        // #21 统一 VID/PID 查询：一次提取 + 一次 Hash 查表，替代原有的 3~4 次重复解析
+        let (is_24g, display_name, device_type) =
+            device_data::lookup(&u).unwrap_or((false, None, "other".to_string()));
+        let wireless_24g_kind = is_24g
+            .then(|| crate::device::Wireless24gKind::from_device_type(&device_type))
+            .flatten();
+        // 收集 2.4G 设备的电量查询目标（身份键 + 驱动分派用的 VID/PID）。
+        // ⚠️ 键必须是**设备身份**，不是型号：同款两台接收器共用型号键会导致
+        // 只有一台显示得出电量、且显示的值可能来自另一台。
+        // 极少数情况下拿不到身份键（名称与实例路径都为空）时退回型号键 `m:`，
+        // 语义等同历史行为 —— 宁可退化为旧行为，也不要凭空丢掉电量。
+        if is_24g {
+            if let Some((v, p)) = device_data::extract_vid_pid(&u) {
+                let key = identity.clone().unwrap_or_else(|| format!("m:{}:{}", v, p));
+                p24g_targets.push(wireless_24g::BatteryTarget {
+                    key,
+                    vid: v,
+                    pid: p,
+                });
+            }
+        }
+        // wireless_only 时只保留 2.4G 设备，跳过有线设备
+        if wireless_only && !is_24g {
+            continue;
+        }
+        try_insert(
+            &n,
+            display_name.as_deref(),
+            dt,
+            s,
+            None,
+            None,
+            identity,
+            false,
+            is_24g,
+            wireless_24g_kind,
+            false,
+            dedup,
+            re,
+            seen,
+            all,
+            cn_index,
+        );
     }
+    Ok(())
 }
 
 fn query_bt_devices(
     dedup: bool,
+    re: Option<&Regex>,
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     bt_names: &mut HashSet<String>,
     cn_index: &mut HashMap<String, Vec<usize>>,
+    fresh: bool,
 ) {
-    let btc_devices = match find_paired_bluetooth_devices() {
+    let btc_devices = match find_paired_bluetooth_devices(fresh) {
         Ok(d) => d,
         Err(_) => return,
     };
 
-    for (name, connected, battery, device_id) in btc_devices {
-        if name.is_empty() { continue; }
+    // 「MAC → 容器」映射：一次枚举覆盖全部蓝牙设备。
+    // 实测同一 MAC 会命中 3~4 个 BTHENUM 服务实例但容器一致 ⇒ 单值映射无歧义。
+    // 失败时返回空表 ⇒ 设备降级到名称键，不影响枚举本身。
+    let container_map = device_identity::bluetooth_container_map();
+
+    for (name, connected, battery, device_id, is_ble) in btc_devices {
+        if name.is_empty() {
+            continue;
+        }
+        // 正则匹配原始名（core_name 之前），命中即跳过
+        if let Some(re) = re {
+            if re.is_match(&name) {
+                continue;
+            }
+        }
         let dt = match classify_bluetooth(&name) {
             Some(dt) => dt,
             None => continue,
         };
-        let s = if connected { "已连接" } else { "已配对" };
+        let s = if connected {
+            BT_STATUS_CONNECTED
+        } else {
+            BT_STATUS_PAIRED
+        };
+        // WinRT 只给 device_id，先折算成 MAC 才能查容器；
+        // 查不到就走「容器 → 实例 → 名称」里的名称兜底。
+        let container = crate::bluetooth::normalize_mac(&device_id)
+            .and_then(|mac| container_map.get(&mac).cloned());
+        let identity = device_identity::device_key(container.as_deref(), None, Some(name.as_str()))
+            .map(|k| k.encode());
         let cn = core_name(&name);
         bt_names.insert(cn.clone());
-        if let Some(existing) = all.iter_mut().find(|d| core_name(&d.name) == cn && d.is_bluetooth) {
+        if let Some(existing) = all
+            .iter_mut()
+            .find(|d| core_name(&d.name) == cn && d.is_bluetooth)
+        {
             existing.status = s.to_string();
+            existing.is_connected = crate::device::status_is_connected(s);
             if battery.is_some() {
                 existing.battery = battery.map(|b| b as i32);
             }
             if existing.device_id.is_none() {
                 existing.device_id = Some(device_id);
             }
+            if existing.device_key.is_none() {
+                existing.device_key = identity;
+            }
+            existing.is_ble = existing.is_ble || is_ble;
         } else {
-            try_insert(&name, None, dt, s, battery.map(|b| b as i32), Some(device_id), true, false, dedup, seen, all, cn_index);
+            try_insert(
+                &name,
+                None,
+                dt,
+                s,
+                battery.map(|b| b as i32),
+                Some(device_id),
+                identity,
+                true,
+                false,
+                None,
+                is_ble,
+                dedup,
+                re,
+                seen,
+                all,
+                cn_index,
+            );
         }
     }
 }
@@ -197,31 +408,210 @@ fn query_bt_devices(
 fn query_battery_devices(
     con: &WMIConnection,
     dedup: bool,
+    re: Option<&Regex>,
     seen: &mut HashSet<String>,
     all: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
 ) {
     if let Ok(r) = con.query::<BatteryDevice>() {
         for d in r {
-            let (n, s) = (
-                d.name.unwrap_or_default(),
-                d.status.unwrap_or_default(),
-            );
-            if n.is_empty() { continue; }
+            let (n, s) = (d.name.unwrap_or_default(), d.status.unwrap_or_default());
+            if n.is_empty() {
+                continue;
+            }
+            // 正则匹配原始名（core_name 之前），命中即跳过
+            if let Some(re) = re {
+                if re.is_match(&n) {
+                    continue;
+                }
+            }
             let cn = core_name(&n);
-            if dedup && seen.contains(&format!("{}:usb", cn)) { continue; }
+            if dedup && seen.contains(&format!("{}:usb", cn)) {
+                continue;
+            }
             seen.insert(format!("{}:usb", cn));
             let idx = all.len();
+            let is_connected = crate::device::status_is_connected(&s);
             all.push(Device {
                 name: cn.clone(),
                 dt: DevType::Battery,
                 status: s,
                 battery: d.estimated_charge_remaining,
                 device_id: None,
+                // 电池类设备来自 Win32_Battery，无 PnP 实例路径 ⇒ 无身份键
+                device_key: None,
                 is_bluetooth: false,
                 is_wireless_24g: false,
+                wireless_24g_kind: None,
+                is_connected,
+                is_ble: false,
+                is_phone: false,
             });
             cn_index.entry(cn).or_default().push(idx);
+        }
+    }
+}
+
+/// 将 2.4G 接收器缓存电量填入设备列表。
+/// 默认只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成；
+/// fresh=true 时同步现查（手动刷新按钮，耗时约 0.5~2 秒）。
+///
+/// ⚠️ 电量按**设备身份键**对回条目，不按型号名 —— 同型号两台接收器
+/// 共用型号键时，会出现「只有一台显示电量、且值可能来自另一台」。
+fn fill_24g_battery(all: &mut [Device], targets: Vec<wireless_24g::BatteryTarget>, fresh: bool) {
+    // 入口可见性：列出本次发现的全部 2.4G 实体与驱动支持判定——
+    // 「设备为什么没电量」的第一层证据；
+    // 内容变化时才输出，避免托盘轮询反复刷屏。
+    // `×N` 是该型号下**不同身份键**的个数（N>1 即同型号多台）：
+    // 旧实现在这里看不出「两台同款」，正是串号缺陷长期不可见的原因之一。
+    if !targets.is_empty() {
+        let mut models: Vec<(&str, &str)> = targets
+            .iter()
+            .map(|t| (t.vid.as_str(), t.pid.as_str()))
+            .collect();
+        models.sort_unstable();
+        models.dedup();
+        let summary = models
+            .iter()
+            .map(|(v, p)| {
+                let keys: HashSet<&str> = targets
+                    .iter()
+                    .filter(|t| t.vid == *v && t.pid == *p)
+                    .map(|t| t.key())
+                    .collect();
+                let mark = if crate::wireless_24g::supported(v, p) {
+                    "✓"
+                } else {
+                    "✗未收录"
+                };
+                match keys.len() {
+                    0 | 1 => format!("{v}:{p}{mark}"),
+                    n => format!("{v}:{p}{mark}×{n}"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        static LAST_SUMMARY: std::sync::OnceLock<Mutex<String>> = std::sync::OnceLock::new();
+        let last = LAST_SUMMARY.get_or_init(|| Mutex::new(String::new()));
+        let mut guard = crate::state::lock_unpoisoned(last);
+        if *guard != summary {
+            *guard = summary.clone();
+            drop(guard);
+            standard_log!("[24g] 管线实体: {}", summary);
+        }
+    }
+
+    let supported: Vec<_> = targets
+        .into_iter()
+        .filter(|t| crate::wireless_24g::supported(&t.vid, &t.pid))
+        .collect();
+    if supported.is_empty() {
+        return;
+    }
+
+    // 保留一份用于对回：snapshot 按值收走 targets，但它只返回键→电量，
+    // 对回时还需要 vid/pid（显示名覆盖、型号兜底）
+    let snap = crate::wireless_24g::snapshot(supported.clone(), fresh);
+
+    // ① 身份键精确对回（靶心）：键相同的条目必属同一台物理设备，
+    //    同型号两台各自认领各自的值，互不覆盖、互不抢位。
+    for t in &supported {
+        let Some(Some(lvl)) = snap.get(t.key()).copied() else {
+            continue;
+        };
+        if let Some(d) = all.iter_mut().find(|d| {
+            d.is_wireless_24g && d.battery.is_none() && d.device_key.as_deref() == Some(t.key())
+        }) {
+            d.battery = Some(lvl);
+            // 罗技单下游：卡片名替换为下游设备名（如 "MX Master 3S"）
+            if let Some(oname) = crate::wireless_24g::display_override_name(&t.vid, &t.pid) {
+                d.name = oname;
+            }
+        }
+    }
+
+    // ② 型号兜底：极少数拿不到身份键的条目（键形如 `m:VID:PID`，
+    //    与 query_pnp_devices 构造目标时的兜底规则一致）只能按型号名对回。
+    //    这正是旧实现的全部逻辑 —— 保留它只为「不凭空丢电量」，
+    //    覆盖范围严格限于 device_key 为空的条目，不会与 ① 争抢。
+    for t in supported.iter().filter(|t| t.key().starts_with("m:")) {
+        let Some(Some(lvl)) = snap.get(t.key()).copied() else {
+            continue;
+        };
+        let Some(base_name) = device_data::get_device_name(&t.vid, &t.pid) else {
+            continue;
+        };
+        if let Some(d) = all.iter_mut().find(|d| {
+            d.is_wireless_24g
+                && d.device_key.is_none()
+                && d.name == base_name
+                && d.battery.is_none()
+        }) {
+            d.battery = Some(lvl);
+            if let Some(oname) = crate::wireless_24g::display_override_name(&t.vid, &t.pid) {
+                d.name = oname;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mark_phone_rows, BT_STATUS_PAIRED};
+    use crate::device::{DevType, Device};
+    use std::collections::BTreeSet;
+
+    fn row(bt: bool, key: Option<&str>) -> Device {
+        Device {
+            name: "一天的Xiaomi 17".to_string(),
+            dt: DevType::Other,
+            status: BT_STATUS_PAIRED.to_string(),
+            battery: None,
+            device_id: None,
+            device_key: key.map(|k| k.to_string()),
+            is_bluetooth: bt,
+            is_wireless_24g: false,
+            wireless_24g_kind: None,
+            is_connected: false,
+            is_ble: false,
+            is_phone: false,
+        }
+    }
+
+    /// 服务行扫描命中只写 `is_phone` 图标标记，**连接态与状态词不得动**：
+    /// 服务行不随链路断开消失（真机实测手机关蓝牙后仍 Present/OK），
+    /// 「在场 ⇒ 在线」会把离场手机永久误报已连接。
+    /// 可证伪：在 mark_phone_rows 里加回 `is_connected = true` 即转红。
+    #[test]
+    fn mark_phone_rows_writes_only_the_icon_flag() {
+        let mut all = vec![row(true, Some("c:phone"))];
+        let mut live = BTreeSet::new();
+        live.insert("phone".to_string());
+        mark_phone_rows(&mut all, &live);
+        let d = &all[0];
+        assert!(d.is_phone);
+        assert!(!d.is_connected, "服务行在场证不了在线");
+        assert_eq!(d.status, BT_STATUS_PAIRED);
+    }
+
+    /// 判据边界：非蓝牙行、无容器键（`i:` / `n:` / None）、容器不在命中集合 ——
+    /// 四者都**不得**被改写（⛔ 标记不得扩散到没有容器证据的行）。
+    #[test]
+    fn mark_phone_rows_never_touches_rows_without_container_evidence() {
+        let mut all = vec![
+            row(false, Some("c:phone")),
+            row(true, Some("i:instance")),
+            row(true, Some("n:name")),
+            row(true, None),
+            row(true, Some("c:other")),
+        ];
+        let mut live = BTreeSet::new();
+        live.insert("phone".to_string());
+        mark_phone_rows(&mut all, &live);
+        for d in &all {
+            assert!(!d.is_phone);
+            assert!(!d.is_connected);
+            assert_eq!(d.status, BT_STATUS_PAIRED);
         }
     }
 }

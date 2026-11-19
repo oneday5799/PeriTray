@@ -1,0 +1,36 @@
+# Rust 工具链固定版本 —— 本地与 CI 的单一来源
+#
+# ── 为什么固定 ──────────────────────────────────────────────
+# 2026-09-19 实测到一次「本地绿、CI 红」：本机 stable 是 1.96.0，而 CI 的
+# `dtolnay/rust-toolchain@stable` 已推进到 1.98.1。后者往 clippy::all 新增了
+# `chunks_exact_to_as_chunks`，直接命中**存量**代码（src-tauri/src/app_icon.rs），
+# 在 CI 的 `-D warnings` 下变成编译错误。
+# ⇒ 工具链浮动 = 闸门结果不可复现：同一份代码，闸门过不过取决于「哪天推的」。
+#
+# ── 生效范围 ────────────────────────────────────────────────
+# rustup 对仓库内**任何** cargo / rustc / rustfmt / clippy 调用都会读本文件。
+# 优先级：RUSTUP_TOOLCHAIN 环境变量 > rust-toolchain.toml > rustup default
+# ⇒ 本机 `rustup default` 保持 stable 也不影响仓库内行为，**不需要**改 default。
+#
+# ── 与 CI 的关系 ────────────────────────────────────────────
+# ci.yml 与 release.yml 都**从本文件读 channel 再安装**（不再用浮动 tag），
+# 并在同一步断言「生效工具链必须等于本文件里的值」。若将来有人给 workflow 塞了
+# RUSTUP_TOOLCHAIN 之类的覆盖，那一步会当场变红 —— 而不是让两边静默跑在不同版本上。
+#
+# ── 为什么只有 host target ──────────────────────────────────
+# `aarch64-pc-windows-msvc` 只有 release.yml 的 arm64 矩阵需要；写在这里会让每个
+# 开发者都多下约 100MB。故由 release.yml 用 `--target` 单独装。
+#
+# ── 升级流程（改 channel 后必须三步都做）────────────────────
+# 1. 本机实跑五道闸门：tools/check.mjs、cargo fmt --check、cargo check 零告警、
+#    cargo test、tools/check-clippy.mjs（见 AGENTS.md「提交自动闸门」）
+# 2. 推送后确认 CI 十步全绿
+# 3. 按 AGENTS.md「工具链变化→Wiki 08」同步 Wiki 08 章
+# ⚠️ 最常见的拦路虎：新版本往 clippy::all 加 lint 会命中存量代码。此时按
+# tools/check-clippy.mjs 的基线约定处置 —— 要么修掉，要么按 lint 粒度加进
+# `BASELINE_ALLOW` 并写明理由（**不要**为了让 CI 变绿而放宽 `-D warnings`）。
+
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

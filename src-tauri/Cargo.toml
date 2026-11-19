@@ -1,6 +1,6 @@
 [package]
-name = "PeriphMonitor"
-version = "1.0.0"
+name = "PeriTray"
+version = "1.4.4"
 edition = "2021"
 
 [dependencies]
@@ -9,25 +9,56 @@ tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2"
+tauri-winrt-notification = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = { version = "1", features = ["serde"] }
 tokio = { version = "1", features = ["rt", "time"] }
 regex = "1"
-wmi = "0.14"
+wmi = "0.18"
 image = "0.25"
-lru = "0.12"
-base64 = "0.22"
-windows_pnp = { path = "../libs/windows_pnp" }
-windows_pnp_uuid = { path = "../libs/windows_pnp/libs/windows_pnp_uuid" }
+lru = "0.18"
+base64 = "0.23"
+ntapi = "0.4"
+hidapi = "2"
 windows-core = "0.62"
+# SMTC 的异步操作与集合类型：windows crate **不 re-export** 这两个 crate
+# （实测 `grep 'pub use windows_future' windows-0.62.2/src/lib.rs` 零命中），
+# 必须显式声明，版本要与 windows 0.62.2 内部依赖的 0.3.2 对齐。
+windows-future = "0.3.2"
+windows-collections = "0.3.2"
+# WebView2 类型安全基座：sys 0.38 绑定在 windows-core 0.61 上（与 audio_notify
+# 的 implement 宏所需 0.62 不同版本，rename 共存，勿合并）
+windows-core-061 = { package = "windows-core", version = "0.61" }
+webview2-com-sys = "0.38"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    # 注意：Win32_Security 并无直接 use，但 CreateEventW（Threading，tray.rs 事件线程）
+    # 的签名引用 SECURITY_ATTRIBUTES，绑定存在性依赖此 feature，勿删
     "Win32_Devices_Bluetooth",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
     "Win32_Graphics_Dwm",
+    # GDI：任务栏 widget 的 DIB 自绘（CreateDIBSection/UpdateLayeredWindow）
+    # 与文本渲染（CreateFontW/DrawTextW/SET_TEXT_COLOR）都需要。
+    "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_System_Com",
-    "Win32_UI_Input",
+    # 原生崩溃自取证：EXCEPTION_POINTERS/CONTEXT/MiniDumpWriteDump（Debug）依赖
+    # Kernel / Storage_FileSystem / Memory feature；ProcessStatus 提供出错模块定位
+    # （EnumProcessModules 全家）。
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    # HiDpi：widget 的布局标称值按 DIP 定义，需 GetDpiForWindow(任务栏) 换算物理像素。
+    # ⛔ 别删：漏了它 = 布局按 100% 画，125% 缩放下底衬比 FluentFlyout 矮 10px。
+    "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -39,10 +70,26 @@ features = [
     "Devices_Bluetooth",
     "Devices_Bluetooth_GenericAttributeProfile",
     "Devices_Enumeration",
+    "Devices_Radios",
+    "ApplicationModel",
+    "Data_Xml_Dom",
     "Foundation_Collections",
+    # SMTC（音乐控制组件）：GlobalSystemMediaTransportControlsSessionManager。
+    # ⚠️ 少了它 = 整个 taskbar_music 模块编译不过（类型不存在）。
+    "Media_Control",
+    # A2DP Sink（蓝牙音频接收）：AudioPlaybackConnection 全套类型。
+    # ⛔ 少了它 = 整个 a2dp_sink 模块编译不过（类型不存在）。
+    "Media_Audio",
+    # ApiInformation（Windows.Foundation.Metadata）：A2DP Sink 的系统支持检测
+    # （Win10 2004 前无 AudioPlaybackConnection 类型，须运行时探测）。
+    "Foundation_Metadata",
+    "Management_Deployment",
+    "Services_Store",
     "Storage_Streams",
+    "UI_Notifications",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
@@ -50,6 +97,12 @@ features = [
     "Win32_System_Variant",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
+    # UIA：`taskbar_layout` 的「占用区探针」（自适应位置）要读任务栏上各按钮的
+    # 包围盒。⛔ 少了它 = 该模块编译不过（IUIAutomation 类型不存在）。
+    "Win32_UI_Accessibility",
+    # `VARIANT`（构造 UIA 属性条件用）的类型定义被 `Win32_System_Ole` 门控，
+    # ⛔ 少了它 = `VARIANT_0_0.vt` 等字段不存在，属性条件构造不出来。
+    "Win32_System_Ole",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ]

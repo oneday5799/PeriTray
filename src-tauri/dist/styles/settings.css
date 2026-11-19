@@ -1,516 +1,645 @@
-html, body {
-  width: 100%;
-  height: 100%;
-  user-select: none;
-}
-
+/* settings.css 目录：容器/左栏 → 导航指示条 → 右内容区 → 滑动动画 → 卡片尺寸 →
+ *       过滤正则 → 快捷键 → About → 设置页专属组件五件套(过滤文本域/NumberBox/
+ *       ComboBox/Infobar/版本infobar/更新错误浮层)
+ * 共享基类在 base.css；本文件仅设置页布局与专属组件 */
 .settings-container {
   height: 100%;
-  padding: 10px 20px 20px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-}
-
-.page-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: #1a1a1a;
-  padding: 10px 0 12px;
-}
-
-/* Tab bar */
-.tab-bar {
   display: flex;
-  gap: 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  margin-bottom: 4px;
+  overflow: hidden;
+  background: transparent;
 }
 
-.tab-item {
-  padding: 8px 16px;
-  font-size: 14px;
-  color: #666;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: color 0.15s, border-color 0.15s;
-  user-select: none;
-}
-
-.tab-item:hover {
-  color: #1a1a1a;
-}
-
-.tab-item.active {
-  color: #0078d7;
-  border-bottom-color: #0078d7;
-  font-weight: 500;
-}
-
-.tab-content {
-  display: none;
-}
-
-.tab-content.active {
-  display: block;
-}
-
-/* Setting row */
-.setting-row {
+/* ── Left Sidebar (NavigationView Pane) ──────── */
+.win-nav-left-panel {
+  width: 240px;
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 0;
-}
-
-.setting-row-col {
   flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  position: relative;
+  background: var(--page-bg, #f3f3f3);
 }
 
-.setting-row-top {
+.win-nav-left-panel::-webkit-scrollbar {
+  display: none;
+}
+
+.win-nav-header {
+  padding: 12px 16px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.setting-label {
-  font-size: 15px;
-  color: #1a1a1a;
-  display: inline-flex;
-  align-items: center;
+.win-nav-logo {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
 }
 
-.setting-hint {
-  font-size: 12px;
-  color: #888;
-  margin-left: 8px;
+.win-nav-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-primary, #1a1a1a);
+  white-space: nowrap;
 }
 
-/* Tooltip trigger */
-.tooltip-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #d0d0d0;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  margin-left: 6px;
-  cursor: help;
-  position: relative;
-  vertical-align: middle;
-}
-
-.tooltip-trigger:hover {
-  background: #999;
-}
-
-.help-link {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #d0d0d0;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  text-decoration: none;
-  margin-left: 6px;
-  cursor: pointer;
-  position: relative;
-  vertical-align: middle;
-}
-
-.help-link:hover {
-  background: #999;
-}
-
-.tooltip-content {
-  display: none;
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 260px;
-  padding: 10px 12px;
-  background: #333;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.5;
-  border-radius: 6px;
-  white-space: normal;
-  z-index: 100;
-  pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-}
-
-.tooltip-content::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: #333;
-}
-
-.tooltip-trigger:hover .tooltip-content {
-  display: block;
-}
-
-/* Toggle switch */
-.toggle {
-  position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 24px;
-}
-
-.toggle input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: #999;
-  border-radius: 12px;
-  transition: background 0.2s ease;
-}
-
-.slider::before {
-  content: "";
-  position: absolute;
-  height: 18px;
-  width: 18px;
-  left: 3px;
-  bottom: 3px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform 0.2s ease;
-}
-
-.toggle input:checked + .slider {
-  background: #0078d7;
-}
-
-.toggle input:checked + .slider::before {
-  transform: translateX(20px);
-}
-
-/* Separator */
-.separator {
-  height: 1px;
-  background: rgba(0, 0, 0, 0.08);
-  margin: 6px 0;
-}
-
-/* Filter regex */
-.filter-regex-wrap {
-  padding: 8px 0 12px;
-}
-
-.filter-textarea {
-  width: 100%;
-  min-height: 60px;
-  padding: 8px 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  font-family: "Consolas", "Courier New", monospace;
-  font-size: 13px;
-  color: #1a1a1a;
-  background: #fff;
-  resize: vertical;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.filter-textarea:focus {
-  border-color: #0078d7;
-}
-
-.filter-hint {
-  font-size: 12px;
-  color: #888;
-  margin-top: 4px;
-}
-
-/* Device groups */
-.device-groups {
-  margin-top: 10px;
-}
-
-.group {
-  margin-bottom: 3px;
-}
-
-/* Windows 11 settings card */
-.group-card {
-  background: #fff;
-  border-radius: 6px;
-  border: 1px solid #e0e0e0;
+/* Pane 形态导航（共享基类在 base.css，此处为 pane 变体） */
+.win-nav-left-panel .win-nav-menu {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px;
+  margin-left: 4px;
   overflow: hidden;
 }
 
-.group-header {
+.win-nav-left-panel .win-nav-item {
+  height: 36px;
+  min-height: 36px;
+}
+
+/* ── Navigation Indicator (single element, WinUI NavigationView style) ──────── */
+.win-nav-left-panel .win-nav-indicator {
+  left: 8px;
+  top: 0;
+  width: 3px;
+  height: 16px;
+  z-index: 10;
+}
+
+/* ── Right Content (NavigationView Content) ──────── */
+.win-nav-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* 标签页视口：面板切换期间的定位锚（对齐主窗口 tab-viewport 模式）；
+   overflow 裁剪进入动画的 80px 下移溢出，避免越出视口压住外部元素 */
+.settings-tab-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.win-nav-page-header {
+  padding: 10px 20px 12px;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-primary, #1a1a1a);
+  min-height: 40px;
+  flex-shrink: 0;
+  border-bottom: 1px solid transparent;
+}
+
+.settings-container .tab-content {
+  display: none;
+}
+
+/* 可见面板统一绝对铺满视口：新旧面板切换期真正重叠交叉，
+   滚动职责移入面板（各标签滚动位置独立保留），消除文档流堆叠与布局塌缩跳变 */
+.settings-container .tab-content.active,
+.settings-container .tab-content.slide-active,
+.settings-container .tab-content.slide-leave-up {
+  display: block;
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  will-change: opacity, transform;
+  /* 卡片与侧边栏/滚动条保持间距（滚动条贴窗缘，对齐主窗口与 Win11 设置布局） */
+  padding: var(--page-padding);
+}
+
+/* Slide Navigation Transition (WinUI SlideNavigationTransitionInfo, vertical) */
+/* 进入面板置于离开面板之上（侧栏序与面板 DOM 序不一致，反向切换时必须显式提层） */
+.settings-container .tab-content.slide-enter-down {
+  z-index: 1;
+  animation: SlideFromBottom_Enter 450ms var(--ease-decel) both;
+}
+
+/* Leave to top (forward navigation) */
+.settings-container .tab-content.slide-leave-up {
+  animation: SlideFromBottom_Leave 167ms var(--ease-accel) both;
+}
+@keyframes SlideFromBottom_Enter {
+  0%   { opacity: 0; transform: translateY(80px); }
+  33.333% { opacity: 0; transform: translateY(80px); }
+  33.334% { opacity: 1; transform: translateY(80px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes SlideFromBottom_Leave {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-60px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-container .tab-content.slide-enter-down,
+  .settings-container .tab-content.slide-leave-up {
+    animation: none !important;
+  }
+}
+
+/* ── 设置页卡片尺寸（卡片组件在 base.css，60px 头部行共享） ──────── */
+.settings-container .card {
+  margin-bottom: 3px;
+}
+
+.settings-container .card.expandable .card-items {
+  flex-basis: auto;
+  width: calc(100% + 28px);
+  max-width: none;
+  margin-left: -14px;
+  margin-right: -14px;
+}
+
+.settings-container .card.expandable .card-item {
+  padding-left: 30px;
+  padding-right: 30px;
+}
+
+/* 关机卡标题含 tooltip，需允许溢出显示 */
+#shutdown-card {
+  overflow: visible;
+}
+
+/* ── Filter regex ─────────────────────────────── */
+.filter-regex-wrap {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.2s ease, padding 0.2s ease;
+  padding: 0 28px;
+}
+
+.filter-regex-wrap.show {
+  max-height: 400px;
+  padding: 10px 28px;
+}
+
+/* ── 快捷键设置 ──────────────────────────────── */
+.shortcut-hint {
+  font-size: 12px;
+  color: var(--text-tertiary, #888);
+  padding: 4px 0 0 0;
+}
+
+.device-shortcut-label {
+  word-break: break-all;
+}
+
+#device-shortcut-list .card-actions {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+#device-shortcut-list .shortcut-input-wrap {
+  flex: 1;
+  justify-content: flex-end;
+}
+
+/* ── About tab ────────────────────────────────── */
+/* 关于卡使用标准卡片尺寸（header 60px，列表自然出血到左右下边缘） */
+
+.about-info-card .card-desc {
+  font-size: 13px;
+  color: var(--text-tertiary, #888);
+  margin-top: 2px;
+}
+
+.about-info-card .add-device-btn {
+  margin-left: auto;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.about-item-controls {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.about-item-controls p {
+  font-size: 14px;
+  color: var(--text-body, #444);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.about-link-item {
   display: flex;
   align-items: center;
-  padding: 14px 16px;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.about-link-label {
+  font-size: 14px;
+  color: var(--text-primary, #1a1a1a);
+  flex-shrink: 0;
+}
+/* ═══ 设置页专属组件（自 base.css 归位：过滤文本域 / NumberBox / ComboBox / Infobar / 更新浮层） ═══ */
+
+/* Multiline variant（过滤正则文本域） */
+.filter-textarea {
+  width: 100%;
+  min-height: 80px;
+  height: auto;
+  padding: 5px 6px 10px 10px;
+  border: 0;
+  border-radius: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--field-text);
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+  box-sizing: border-box;
+  outline: none;
+}
+
+/* Field border wrapper（过滤框 / NumberBox 共用） */
+.filter-textarea-border,
+.win-numberbox-border {
+  position: relative;
+  border-radius: 4px;
+  background: var(--field-bg);
+  overflow: hidden;
+  border: 1px solid var(--field-border);
+  border-bottom-color: var(--field-border-strong);
+  transition: background 0.167s var(--ease-standard), border-color 0.167s ease;
+}
+
+.filter-textarea-border:hover,
+.win-numberbox-border:hover {
+  background: var(--field-bg-hover);
+}
+
+.filter-textarea-border:focus-within,
+.win-numberbox:focus-within .win-numberbox-border {
+  background: var(--field-bg-focus);
+  border-color: var(--field-border-focus);
+  border-bottom-color: var(--field-border-focus);
+}
+
+.filter-textarea-focus-border,
+.win-numberbox-focus-border {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.filter-textarea-focus-border::after,
+.win-numberbox-focus-border::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.5px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.filter-textarea-border:focus-within .filter-textarea-focus-border::after,
+.win-numberbox:focus-within .win-numberbox-focus-border::after {
+  background: var(--accent);
+}
+
+
+/* ── NumberBox（设置页专属） ────────────────────── */
+.win-numberbox {
+  display: flex;
+  align-items: stretch;
+  min-height: 32px;
+  width: 120px;
+  position: relative;
+}
+
+.win-numberbox-border {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-height: 32px;
+}
+
+.win-numberbox-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px 5px 10px;
+  font-size: 14px;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 20px;
+  color: var(--field-text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+
+.win-numberbox-input::-webkit-outer-spin-button,
+.win-numberbox-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.win-numberbox-spin {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: stretch;
+}
+
+.win-numberbox-spin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
   cursor: pointer;
-  transition: background 0.12s ease;
+  width: 22px;
+  height: 22px;
+  min-width: 0;
+  flex: 0 0 22px;
+  color: var(--text-secondary);
+  font-size: 16px;
 }
 
-.group-header:hover {
-  background: rgba(0, 0, 0, 0.03);
+.win-numberbox-spin-btn:hover {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
 }
 
-.group-toggle {
+.win-numberbox-spin-btn:active {
+  background: var(--active-overlay);
+}
+
+.win-numberbox-spin-btn:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.win-numberbox-spin-btn svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+
+/* ── Infobar（设置页专属） ─────────────────────── */
+.win-infobar {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.win-infobar-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.win-infobar-content {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.win-infobar-close-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-right: -6px;
+  color: inherit;
+  transition: background 83ms var(--ease-decel);
+}
+
+.win-infobar-close-button:hover {
+  background: var(--hover-overlay);
+}
+
+.win-infobar-close-button:active {
+  background: var(--pressed-overlay);
+}
+
+/* ── Infobar severity (版本更新) ─────────────────── */
+.win-infobar.win-infobar-success {
+  --infobar-bg: #dff6dd;
+  --infobar-border: #c5e8c0;
+  --infobar-icon-color: #0f7b0f;
+}
+
+.win-infobar.win-infobar-warning {
+  --infobar-bg: #fff4ce;
+  --infobar-border: #f0e0a8;
+  --infobar-icon-color: #9d5d00;
+}
+
+.win-infobar.win-infobar-error {
+  --infobar-bg: #fde7e9;
+  --infobar-border: #f6c2c7;
+  --infobar-icon-color: #c42b1c;
+}
+
+html[data-theme="dark"] .win-infobar.win-infobar-success {
+  --infobar-bg: #393d1b;
+  --infobar-border: #4d5230;
+  --infobar-icon-color: #6ccb5f;
+}
+
+html[data-theme="dark"] .win-infobar.win-infobar-warning {
+  --infobar-bg: #433519;
+  --infobar-border: #5a4826;
+  --infobar-icon-color: #fce100;
+}
+
+html[data-theme="dark"] .win-infobar.win-infobar-error {
+  --infobar-bg: #442726;
+  --infobar-border: #5a3534;
+  --infobar-icon-color: #ff99a4;
+}
+
+.win-infobar.win-infobar-success,
+.win-infobar.win-infobar-warning,
+.win-infobar.win-infobar-error {
+  background: var(--infobar-bg);
+  border-color: var(--infobar-border);
+}
+
+.win-infobar.win-infobar-success .win-infobar-icon,
+.win-infobar.win-infobar-warning .win-infobar-icon,
+.win-infobar.win-infobar-error .win-infobar-icon {
+  color: var(--infobar-icon-color);
+}
+
+/* ── 版本更新 infobar：卡片式布局（与其他卡片一致） ── */
+.win-infobar.win-infobar-card[hidden] {
+  display: none;
+}
+
+.win-infobar.win-infobar-card {
+  display: flex;
+  align-items: center;
+  min-height: 60px;
+  padding: 0 14px;
+  margin-bottom: 3px;
+}
+
+.win-infobar.win-infobar-card .card-left {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.win-infobar.win-infobar-card #about-update-action {
+  min-width: 120px;
+  height: 32px;
   margin-left: auto;
   margin-right: 8px;
 }
 
-.group-toggle input {
-  cursor: pointer;
-}
-
-.group-icon {
-  font-size: 20px;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.group-text {
-  flex: 1;
-  margin-left: 12px;
-}
-
-.group-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a1a1a;
-}
-
-.group-subtitle {
-  font-size: 12px;
-  color: #666;
-  margin-top: 2px;
-}
-
-.group-arrow {
+.win-infobar.win-infobar-card .win-infobar-close-button {
   width: 24px;
   height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #888;
-  transition: transform 0.2s ease;
-  flex-shrink: 0;
+  min-width: 24px;
+  min-height: 24px;
+  margin: 0 0 0 8px;
 }
 
-.group-arrow.expanded {
-  transform: rotate(90deg);
+
+/* ── 更新错误详细信息浮出面板 ───────────────────── */
+.update-error-flyout {
+  background: var(--flyout-bg);
+  color: var(--flyout-text);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  border: 1px solid var(--flyout-border);
+  border-radius: 8px;
+  box-shadow: var(--flyout-shadow);
+  -webkit-backdrop-filter: var(--flyout-backdrop);
+  backdrop-filter: var(--flyout-backdrop);
+  position: fixed;
+  z-index: 1200;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+  padding: 12px 14px 14px;
+  animation: update-flyout-open 167ms var(--ease-decel) both;
 }
 
-/* Expandable items */
-.group-items {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.2s ease;
-}
-
-.group-items.show {
-  max-height: 1000px;
-}
-
-.device-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px 10px 64px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.device-item-name {
+.update-error-flyout-title {
   font-size: 14px;
-  color: #1a1a1a;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  margin-right: 12px;
-}
-
-.device-item-name.hidden {
-  color: #a0a0a0;
-}
-
-/* 2.4G device list button */
-.add-device-btn {
-  padding: 6px 16px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.add-device-btn:hover {
-  background: #f0f0f0;
-  border-color: #bbb;
-}
-
-.add-device-btn:active {
-  background: #e0e0e0;
-}
-
-.setting-select {
-  padding: 6px 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  background: #fff;
-  color: #1a1a1a;
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.setting-select:focus {
-  border-color: #0078d7;
-}
-
-.shutdown-device-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-
-.shutdown-device-item {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  padding: 10px 14px;
-  transition: background 0.12s;
-}
-
-.shutdown-device-item:hover {
-  background: #f0f0f0;
-}
-
-.shutdown-device-item .device-name {
-  font-size: 14px;
-  color: #1a1a1a;
-  cursor: pointer;
-  margin-bottom: 6px;
-}
-
-.shutdown-device-item .device-name.inactive {
-  color: #aaa;
-}
-
-.shutdown-device-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.shutdown-device-controls .volume-slider {
-  flex: 1;
-}
-
-.shutdown-device-controls .volume-value {
-  font-size: 13px;
-  color: #333;
-  width: 28px;
-  text-align: right;
-  flex-shrink: 0;
-}
-
-.shutdown-device-controls .volume-value.inactive {
-  color: #aaa;
-}
-
-.shutdown-hint {
-  font-size: 12px;
-  color: #888;
+  font-weight: 600;
+  line-height: 20px;
   margin-bottom: 8px;
 }
 
-.shortcut-input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.update-error-flyout-summary {
+  font-size: 14px;
+  line-height: 20px;
+  color: #d32f2f;
+  margin-bottom: 8px;
 }
 
-.shortcut-key-input {
-  width: 180px;
-  padding: 6px 10px;
-  font-size: 13px;
-  border: 1px solid #d0d0d0;
+.update-error-flyout-body {
+  box-sizing: border-box;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--card-border);
   border-radius: 4px;
-  background: #fff;
-  color: #1a1a1a;
-  outline: none;
-  cursor: pointer;
-  text-align: center;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.shortcut-key-input:focus {
-  border-color: #0078d7;
-  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.15);
-}
-
-.shortcut-key-input.recording {
-  border-color: #0078d7;
-  box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25);
-  animation: recording-pulse 1s ease-in-out infinite;
-}
-
-@keyframes recording-pulse {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(0, 120, 215, 0.25); }
-  50% { box-shadow: 0 0 0 4px rgba(0, 120, 215, 0.15); }
-}
-
-.shortcut-clear-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: none;
-  background: transparent;
-  color: #999;
-  font-size: 16px;
-  cursor: pointer;
-  border-radius: 50%;
-  transition: color 0.15s, background 0.15s;
-}
-
-.shortcut-clear-btn:hover {
-  color: #e81123;
-  background: rgba(232, 17, 35, 0.08);
-}
-
-.shortcut-hint {
   font-size: 12px;
-  color: #999;
-  padding: 4px 0 0 0;
+  line-height: 18px;
+  color: var(--text-body, #444);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.update-error-flyout-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+@keyframes update-flyout-open {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── 窄屏适配：侧栏折叠为图标栏（Win11 icon-only rail） ──
+   窗口宽度 ≤ 820px 时侧栏收起为 48px，仅保留图标，悬停经 data-tip 显示名称，
+   为右侧内容区让出空间，避免卡片控件被 overflow-x:hidden 裁剪。 */
+@media (max-width: 820px) {
+  .win-nav-left-panel {
+    width: 48px;
+  }
+
+  .win-nav-header {
+    padding: 12px 0;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .win-nav-header .win-nav-title {
+    display: none;
+  }
+
+  .win-nav-header .win-nav-logo {
+    width: 32px;
+    height: 32px;
+  }
+
+  .win-nav-left-panel .win-nav-menu {
+    margin-left: 0;
+    padding: 0 4px;
+  }
+
+  .win-nav-left-panel .win-nav-item {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+
+  .win-nav-left-panel .win-nav-item .label {
+    display: none;
+  }
 }

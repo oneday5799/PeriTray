@@ -1,9 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickelpack/tauri-v2-docs/main/tauri.conf.schema.json",
-  "productName": "PeriphMonitor",
-  "version": "1.0.0",
-  "identifier": "com.periph.monitor",
-  "mainBinaryName": "PeriphMonitor",
+  "productName": "PeriTray",
+  "version": "1.4.4",
+  "identifier": "com.peri.tray",
+  "mainBinaryName": "PeriTray",
   "build": {
     "frontendDist": "dist",
     "beforeDevCommand": "",
@@ -13,22 +13,20 @@
     "windows": [],
     "withGlobalTauri": true,
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
     "publisher": "oneday5799",
+    "homepage": "https://github.com/oneday5799/PeriTray",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": {
-      "data/wireless_24g_devices.json": "data/wireless_24g_devices.json"
-    },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico"

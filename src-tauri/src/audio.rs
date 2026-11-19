@@ -1,26 +1,120 @@
+//! 音频设备枚举、音量与会话控制（IMMDeviceEnumerator / IAudioSessionManager2）。
+//! 应用级设备路由与默认设备切换见 audio_policy 模块。
+
+use crate::{standard_log, verbose_log};
 use serde::Serialize;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 use windows::core::*;
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::Endpoints::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    keybd_event, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_VOLUME_DOWN, VK_VOLUME_MUTE,
+    VK_VOLUME_UP,
+};
+
+pub use crate::audio_policy::{get_session_device, set_default_device, set_session_device};
+pub(crate) use crate::audio_policy::{CLSID_POLICY_CONFIG, IID_IUNKNOWN};
 
 #[derive(Debug, Clone, Serialize)]
-pub struct AudioDevice { pub id: String, pub name: String, pub volume: f32, pub is_muted: bool, pub is_default: bool }
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+    /// `name` 的**括号内核心名**（`耳机 (小爱音箱-9205)` → `小爱音箱-9205`），
+    /// 由后端 `dedup::core_name` 算出。
+    ///
+    /// ⭐ **为什么必须由后端给**：前端需要它做「改名表」的短名回退查找，而
+    ///   `core_name` 会额外剥 17 种蓝牙协议后缀（` Stereo` / ` LE` / ` A2DP SNK` …），
+    ///   而 JS 侧 `simplifyDeviceName` 只取最外层括号内容、不剥后缀 ⇒ 两套口径。
+    ///   让前端自己推 ⇒ 遇到 `扬声器 (小爱音箱-9205 Stereo)` 这类名字时
+    ///   音量页查不到设备页改的别名（**只在一半页面生效**，极难归因）。
+    ///   与其在前端复制那份后缀表（双源必漂），不如把后端已有的结果带出来。
+    pub core_name: String,
+    pub volume: f32,
+    pub is_muted: bool,
+    pub is_default: bool,
+    /// 该端点所属物理设备的容器 GUID（小写无花括号）。
+    /// 用于把「音量」与另一条采集路径上的「电量」关联到同一台设备；
+    /// 虚拟音频设备落在占位容器上 ⇒ 此处为 `None`（调用方须降级）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_id: Option<String>,
+    /// 本端点的**编码身份键**（`audio_endpoint_key_from`，容器可用取 `c:`，
+    /// 否则退 `i:SWD\MMDEVAPI\{id}`）。音量页右键「修改信息」要把它传给后端，
+    /// 让类型/连接覆盖落进与设备页、任务栏**同一套**身份键空间。
+    /// ⛔ 前端不得自己推键（与 `core_name` 由后端下发同一条纪律）。
+    pub device_key: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
-pub struct VolumeChangeEvent { pub device_id: String, pub volume: f32, pub is_muted: bool }
+pub struct VolumeChangeEvent {
+    pub device_id: Option<String>,
+    pub session_id: Option<String>,
+    pub volume: f32,
+    pub is_muted: bool,
+}
 
 #[derive(Debug, Clone, Serialize)]
-pub struct AudioSession { pub id: String, pub name: String, pub icon: Arc<str>, pub pid: u32, pub volume: f32, pub is_muted: bool, pub device_id: String, pub is_active: bool }
+pub struct AudioSession {
+    pub id: String,
+    pub name: String,
+    pub icon: Arc<str>,
+    pub pid: u32,
+    pub volume: f32,
+    pub is_muted: bool,
+    pub device_id: String,
+    pub is_active: bool,
+}
 
-/// 确保当前线程已初始化 COM（幂等调用）
-unsafe fn ensure_com_initialized() {
-    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok();
+/// 某应用已设置的输出/输入设备名（用于应用音量卡片的图标红框与悬停提示）
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDeviceNames {
+    pub output: Option<String>,
+    pub input: Option<String>,
+}
+
+/// `RPC_E_CHANGED_MODE`（0x80010106）：本线程已被**另一种公寓模型**初始化过。
+///
+/// 项目约定「进程内统一 STA」（见 `ensure_com_initialized` 的契约），故该值意味着
+/// 约定被破坏——有代码抢先把线程初始化成了 MTA。抽成纯函数以便单测，并被三处
+/// COM 初始化点（`audio` / `audio_notify` / `main`）复用。
+pub(crate) fn is_apartment_mode_conflict(hr: i32) -> bool {
+    // 0x80010106 作为有符号 i32 即 -2147417850
+    hr == 0x80010106u32 as i32
+}
+
+/// 确保当前线程已初始化 COM（幂等调用）。
+///
+/// **显式契约（P2-5）**：以下三条是全进程 COM 约定的唯一书面口径：
+/// - 本项目**进程内统一使用 STA**（`COINIT_APARTMENTTHREADED`），且**从不调用
+///   `CoUninitialize`**：COM 在整个进程生命周期内保持可用，故各处只做「确保」，
+///   不做配对释放。将来若要加反初始化，必须同时审视 `audio_notify` 的 STA 线程
+///   与 `IMMNotificationClient` 回调的存活期。
+/// - `CoInitializeEx` 的 `S_FALSE`（本线程已初始化过）在 `windows::core::Result`
+///   里是 `Ok` ⇒ 属幂等命中，不记日志。
+/// - `RPC_E_CHANGED_MODE` **不是「已初始化」**，而是「被别人初始化成了 MTA」：
+///   与上述约定冲突，STA-only 的组件（shell 通知、部分 COM 对象）在本线程上会失败。
+///   故单独识别并**告警级**记录，而不是混在一般错误里按 `verbose_log!` 记
+///   ——verbose 默认不输出，等于静默。
+pub(crate) unsafe fn ensure_com_initialized() {
+    match CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
+        Ok(()) => {}
+        Err(e) if is_apartment_mode_conflict(e.code().0) => {
+            standard_log!(
+                "[audio] COM 公寓模型冲突（RPC_E_CHANGED_MODE）：本线程已被初始化为 MTA，\
+                 与「进程内统一 STA」的约定不符；STA-only 组件在本线程上可能失败"
+            );
+        }
+        Err(e) => {
+            verbose_log!(
+                "[audio] ensure_com_initialized: CoInitializeEx 返回错误: {}",
+                e
+            );
+        }
+    }
 }
 
 /// 获取 IMMDeviceEnumerator 并执行回调
@@ -30,87 +124,89 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
     Ok(f(&enumerator))
 }
 
-pub fn set_default_device(device_id: &str) -> Result<()> {
-    crate::process::append_log(&format!("[audio] set_default_device: {}", device_id));
-    unsafe {
-        ensure_com_initialized();
-        let wide: Vec<u16> = device_id.encode_utf16().chain(std::iter::once(0)).collect();
-        set_default_device_raw(wide.as_ptr())?;
-        Ok(())
+/// 读取 COM 分配的 PWSTR 到 Rust String 后释放 CoTaskMem 内存。
+/// 用于 GetId / GetDisplayName / GetSessionInstanceIdentifier 等返回 PWSTR 的 API。
+///
+/// ⛔ null 必须闸住返回空串：MMDevAPI 的 id/显示名类 API 在设备/会话建立拆除
+///   瞬窗可能返回 null，而 `to_string()` 内部直接 `wcslen(self.0)`
+///   （windows-strings pcwstr.rs 的 `PWSTR::len`），null 一触即 AV。
+///   取证与调用链 → Wiki 07 §16。
+/// ⚠️ 空串语义由调用点收尾：GetDisplayName 的调用点已有
+///   `is_empty() → "Unknown App"` 分支，GetId 的调用点用 `unwrap_or_default()`。
+pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
+    // #29 先保存原始指针，确保无论 to_string 成功与否都能释放 COM 内存
+    let ptr = pwstr.as_ptr();
+    if ptr.is_null() {
+        return Ok(String::new());
+    }
+    // to_string() 的错误类型是 FromUtf16Error（不是 windows::core::Error），
+    // 需要 From 转换；直接传关联函数即可，不必再包一层闭包。
+    let result = pwstr.to_string().map_err(windows::core::Error::from);
+    CoTaskMemFree(Some(ptr as *const c_void));
+    result
+}
+
+/// 把音量标量收敛到 `[0.0, 1.0]`。
+///
+/// ⚠️ 不能直接写 `v.clamp(0.0, 1.0)`：`f32::max` 会把 NaN 折成另一个操作数
+/// （`f32::NAN.max(0.0) == 0.0`），而 `clamp` 对 NaN **原样返回 NaN** ⇒ 会把 NaN
+/// 交给 `SetMasterVolumeLevelScalar` / `SetMasterVolume`，换来一个 `E_INVALIDARG`。
+/// 收敛点收成一处，既保住「NaN 视为 0.0」的既有语义，也让 `clippy::manual_clamp` 无话可说。
+///
+/// 唯一的残留差异：`-0.0` 经 `clamp` 仍是 `-0.0`（无判据时给 `+0.0`）——
+/// 两者数值相等，且 Windows 侧按 `0.0 <= level <= 1.0` 校验，行为一致。
+fn sanitize_volume(v: f32) -> f32 {
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(0.0, 1.0)
     }
 }
 
-unsafe fn set_default_device_raw(wide_ptr: *const u16) -> Result<()> {
-    let policy_config_cls = windows_sys::core::GUID {
-        data1: 0x870af99c, data2: 0x171d, data3: 0x4f9e,
-        data4: [0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9],
-    };
-    let ipolicy_iid = windows_sys::core::GUID {
-        data1: 0xf8679f50, data2: 0x850a, data3: 0x41cf,
-        data4: [0x9c, 0x72, 0x43, 0x0f, 0x29, 0x02, 0x90, 0xc8],
-    };
-    let iid_unknown = windows_sys::core::GUID {
-        data1: 0x00000000, data2: 0x0000, data3: 0x0000,
-        data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
-    };
-
-    let mut unknown_ptr: *mut c_void = ptr::null_mut();
-    let hr = windows_sys::Win32::System::Com::CoCreateInstance(
-        &policy_config_cls, ptr::null_mut(), windows_sys::Win32::System::Com::CLSCTX_ALL,
-        &iid_unknown,
-        &mut unknown_ptr as *mut *mut _,
-    );
-    if hr < 0 { return Err(Error::empty()); }
-
-    let mut policy_ptr: *mut c_void = ptr::null_mut();
-    let unknown_vtable = *(unknown_ptr as *const *const usize);
-    let qi_fn: unsafe extern "system" fn(*mut c_void, *const windows_sys::core::GUID, *mut *mut c_void) -> i32 =
-        std::mem::transmute(*unknown_vtable);
-    let qi_hr = qi_fn(unknown_ptr, &ipolicy_iid, &mut policy_ptr);
-
-    let release_fn: unsafe extern "system" fn(*mut c_void) -> u32 =
-        std::mem::transmute(*(unknown_vtable.offset(2)));
-    release_fn(unknown_ptr);
-
-    if qi_hr < 0 || policy_ptr.is_null() { return Err(Error::empty()); }
-
-    let policy_vtable = *(policy_ptr as *const *const usize);
-    let set_endpoint_fn: unsafe extern "system" fn(*mut c_void, PCWSTR, i32) -> i32 =
-        std::mem::transmute(*policy_vtable.add(13));
-
-    let mut all_ok = true;
-    for role in 0..=2 {
-        let hr = set_endpoint_fn(policy_ptr, PCWSTR(wide_ptr), role);
-        if hr < 0 { all_ok = false; }
-    }
-
-    let release_fn2: unsafe extern "system" fn(*mut c_void) -> u32 =
-        std::mem::transmute(*(policy_vtable.offset(2)));
-    release_fn2(policy_ptr);
-
-    if !all_ok { return Err(Error::empty()); }
-    Ok(())
-}
-
-pub fn enumerate_output_devices() -> Result<Vec<AudioDevice>> {
+/// 枚举指定方向的音频设备（output=eRender / input=eCapture），并标记系统默认
+fn enumerate_devices(flow: EDataFlow) -> Result<Vec<AudioDevice>> {
     unsafe {
         with_enumerator(|enumerator| {
             let default_id = enumerator
-                .GetDefaultAudioEndpoint(eRender, eMultimedia)
+                .GetDefaultAudioEndpoint(flow, eMultimedia)
                 .ok()
                 .and_then(|d| d.GetId().ok())
-                .map(|id| id.to_string().unwrap_or_default())
+                .map(|id| pwstr_to_string(id).unwrap_or_default())
                 .unwrap_or_default();
-            let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+            let collection = enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)?;
             let count = collection.GetCount()?;
             let mut devices = Vec::new();
             for i in 0..count {
                 if let Ok(device) = collection.Item(i) {
                     if let Ok(id) = device.GetId() {
-                        let id_str = id.to_string()?;
-                        let name = get_device_name(&device).unwrap_or_else(|_| "Unknown Device".to_string());
-                        let (volume, is_muted) = get_device_volume_state(&device).unwrap_or((0.0, false));
-                        devices.push(AudioDevice { id: id_str.clone(), name, volume, is_muted, is_default: id_str == default_id });
+                        // #30 单台设备 ID 转换失败跳过，不影响其他设备枚举
+                        let Some(id_str) = pwstr_to_string(id).ok() else {
+                            continue;
+                        };
+                        let name = get_device_name(&device)
+                            .unwrap_or_else(|_| "Unknown Device".to_string());
+                        let (volume, is_muted) =
+                            get_device_volume_state(&device).unwrap_or((0.0, false));
+                        // 端点 devnode 实例名就是 `SWD\MMDEVAPI\{id}`，容器直接可读；
+                        // 解析失败/占位容器返回 None，不影响端点本身的枚举。
+                        let container_id =
+                            crate::device_identity::container_of_audio_endpoint(&id_str);
+                        devices.push(AudioDevice {
+                            id: id_str.clone(),
+                            core_name: crate::dedup::core_name(&name),
+                            name,
+                            volume,
+                            is_muted,
+                            is_default: id_str == default_id,
+                            // 与设备页/任务栏同一套身份键公式（唯一实现点在
+                            // audio_endpoint_key_from），构造点不许自己另写 match
+                            device_key: crate::device_identity::audio_endpoint_key_from(
+                                container_id.as_deref(),
+                                &id_str,
+                            )
+                            .encode(),
+                            container_id,
+                        });
                     }
                 }
             }
@@ -119,6 +215,13 @@ pub fn enumerate_output_devices() -> Result<Vec<AudioDevice>> {
     }
 }
 
+pub fn enumerate_output_devices() -> Result<Vec<AudioDevice>> {
+    enumerate_devices(eRender)
+}
+
+pub fn enumerate_input_devices() -> Result<Vec<AudioDevice>> {
+    enumerate_devices(eCapture)
+}
 unsafe fn get_device_volume_state(device: &IMMDevice) -> Result<(f32, bool)> {
     let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
     let mute = endpoint.GetMute()?;
@@ -127,25 +230,59 @@ unsafe fn get_device_volume_state(device: &IMMDevice) -> Result<(f32, bool)> {
 
 unsafe fn get_device_name(device: &IMMDevice) -> Result<String> {
     let store = device.OpenPropertyStore(STGM(0))?;
-    let key = PROPERTYKEY { fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0), pid: 14 };
+    let key = PROPERTYKEY {
+        fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
+        pid: 14,
+    };
     let value = store.GetValue(&key as *const _)?;
     let name = format!("{}", value).trim().to_string();
     if name.is_empty() {
-        let key_desc = PROPERTYKEY { fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0), pid: 2 };
+        let key_desc = PROPERTYKEY {
+            fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
+            pid: 2,
+        };
         let value_desc = store.GetValue(&key_desc as *const _)?;
         let name_desc = format!("{}", value_desc).trim().to_string();
-        if !name_desc.is_empty() { return Ok(name_desc); }
+        if !name_desc.is_empty() {
+            return Ok(name_desc);
+        }
         return Ok("Unknown Audio Device".to_string());
     }
     Ok(name)
 }
 
+/// 读**单个**端点的当前音量。
+///
+/// ⭐ 为什么不复用 `enumerate_output_devices()`：任务栏窗口的滚轮调音量要做
+///   **读—改—写**，而全量枚举要几百毫秒（且随设备数增长）；每滚一格都枚举一遍
+///   会让快速滚动明显滞后。这里只 `GetDevice` + `Activate` 目标端点，与
+///   `set_device_volume` 完全对称。
+pub fn get_device_volume(device_id: &str) -> Result<f32> {
+    // 与 set_device_volume 同款收尾：闭包直接返回 COM 的 Result，末尾用 ?? 拆两层，
+    // 再包一层 Ok —— 少了最外层 Ok 会与本函数的返回类型不符（编译器会明确报出来）。
+    Ok(unsafe {
+        with_enumerator(|enumerator| -> Result<f32> {
+            let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
+            let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
+            endpoint.GetMasterVolumeLevelScalar()
+        })??
+    })
+}
+
 pub fn set_device_volume(device_id: &str, volume: f32) -> Result<()> {
+    verbose_log!("[audio] set_device_volume {} {}", device_id, volume);
+    let mute_lock = crate::config::with_config(|c| c.mute_lock);
     unsafe {
         with_enumerator(|enumerator| -> Result<()> {
             let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
             let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
-            endpoint.SetMasterVolumeLevelScalar(volume.max(0.0).min(1.0), ptr::null())?;
+            let was_muted = endpoint.GetMute()?.as_bool();
+            let mut target = sanitize_volume(volume);
+            if mute_lock && was_muted {
+                let current = endpoint.GetMasterVolumeLevelScalar()?;
+                target = target.min(current);
+            }
+            endpoint.SetMasterVolumeLevelScalar(target, ptr::null())?;
             Ok(())
         })??;
     }
@@ -161,11 +298,16 @@ pub fn set_shutdown_volumes(devices: &std::collections::HashMap<String, f32>) {
                 if let Ok(device) = collection.Item(i) {
                     let name = get_device_name(&device).unwrap_or_default();
                     if let Some(&level) = devices.get(&name) {
-                        if let Ok(endpoint) = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) {
-                            let _ = endpoint.SetMasterVolumeLevelScalar(level.max(0.0).min(1.0), ptr::null());
-                            crate::process::append_log(&format!(
-                                "[audio_notify] shutdown: set '{}' to {:.0}%", name, level * 100.0
-                            ));
+                        if let Ok(endpoint) =
+                            device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+                        {
+                            let _ = endpoint
+                                .SetMasterVolumeLevelScalar(sanitize_volume(level), ptr::null());
+                            standard_log!(
+                                "[audio_notify] shutdown: set '{}' to {:.0}%",
+                                name,
+                                level * 100.0
+                            );
                         }
                     }
                 }
@@ -183,45 +325,160 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
             let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
             let current = endpoint.GetMute()?;
             new_muted = !current.as_bool();
-            endpoint.SetMute(new_muted, ptr::null())?;
+            let name = get_device_name(&device).unwrap_or_default();
+            standard_log!("[audio] toggle_device_mute '{}' -> {}", name, new_muted);
+            let force_mute =
+                crate::config::with_config(|c| c.force_mute_devices.iter().any(|n| n == &name));
+            if new_muted {
+                if force_mute {
+                    // 强制静音：记录静音前音量，模拟两次静音（设备在最低音量下才真正静音）
+                    let pre = endpoint.GetMasterVolumeLevelScalar()?;
+                    crate::state::lock_unpoisoned(force_mute_prev_volume()).insert(name, pre);
+                    endpoint.SetMute(true, ptr::null())?;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    endpoint.SetMute(true, ptr::null())?;
+                } else {
+                    endpoint.SetMute(true, ptr::null())?;
+                    // 非 force_mute 设备静音时，清理可能残留的旧记录
+                    crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
+                }
+            } else {
+                endpoint.SetMute(false, ptr::null())?;
+                if force_mute {
+                    // 恢复静音前的音量。
+                    //
+                    // ⚠️ `remove` 的结果必须先落到**独立语句**再进 `if let`：本仓是
+                    // edition 2021，`if let` 的临时量存活到整个 `if` 块结束，若写成
+                    // `if let Some(prev) = lock(..).remove(&name) { SetMasterVolumeLevelScalar(..) }`，
+                    // 则这个 COM 调用会在**持锁状态下**执行。拆成语句后 `MutexGuard`
+                    // 在分号处即释放，COM 调用全程无锁。
+                    // 与 `toast.rs` 的 `PREV_TOAST.take()` 是同一类坑（P3-10 锁序登记表 §四）。
+                    let prev =
+                        crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
+                    if let Some(prev) = prev {
+                        let _ =
+                            endpoint.SetMasterVolumeLevelScalar(sanitize_volume(prev), ptr::null());
+                    }
+                }
+            }
             Ok(())
         })??;
     }
     Ok(())
 }
 
-pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
+fn force_mute_prev_volume() -> &'static std::sync::Mutex<std::collections::HashMap<String, f32>> {
+    static FORCE_MUTE_PREV_VOLUME: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, f32>>,
+    > = std::sync::OnceLock::new();
+    FORCE_MUTE_PREV_VOLUME.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn set_device_mute(device_id: &str, muted: bool) -> Result<()> {
+    standard_log!("[audio] set_device_mute {} muted={}", device_id, muted);
     unsafe {
+        with_enumerator(|enumerator| -> Result<()> {
+            let device = enumerator.GetDevice(&HSTRING::from(device_id))?;
+            let endpoint: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
+            endpoint.SetMute(muted, ptr::null())?;
+            Ok(())
+        })??;
+    }
+    Ok(())
+}
+
+pub fn enumerate_audio_sessions(device_id: &str) -> Result<Vec<AudioSession>> {
+    standard_log!("[audio] enumerate_audio_sessions: device_id={}", device_id);
+    let result = unsafe {
         with_enumerator(|enumerator| -> Result<Vec<AudioSession>> {
             let mut all_sessions: Vec<AudioSession> = Vec::new();
             let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
             let device_count = collection.GetCount()?;
+            verbose_log!(
+                "[audio] enumerate_audio_sessions: 枚举到 {} 台设备",
+                device_count
+            );
             for di in 0..device_count {
                 if let Ok(device) = collection.Item(di) {
-                    let dev_id = device.GetId().map(|id| id.to_string().unwrap_or_default()).unwrap_or_default();
-                    let session_manager: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) { Ok(m) => m, Err(_) => continue };
-                    let session_enumerator = match session_manager.GetSessionEnumerator() { Ok(e) => e, Err(_) => continue };
+                    let dev_id = device
+                        .GetId()
+                        .map(|id| pwstr_to_string(id).unwrap_or_default())
+                        .unwrap_or_default();
+                    let session_manager: IAudioSessionManager2 =
+                        match device.Activate(CLSCTX_ALL, None) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                verbose_log!(
+                                    "[audio] 设备 {} Activate IAudioSessionManager2 失败: {}",
+                                    dev_id,
+                                    e
+                                );
+                                continue;
+                            }
+                        };
+                    let session_enumerator = match session_manager.GetSessionEnumerator() {
+                        Ok(e) => e,
+                        Err(e) => {
+                            verbose_log!(
+                                "[audio] 设备 {} GetSessionEnumerator 失败: {}",
+                                dev_id,
+                                e
+                            );
+                            continue;
+                        }
+                    };
                     let count = session_enumerator.GetCount().unwrap_or(0);
+                    verbose_log!("[audio] 设备 {}: 枚举到 {} 个会话", dev_id, count);
                     for i in 0..count {
                         if let Ok(session_control) = session_enumerator.GetSession(i) {
-                            let session_control2: IAudioSessionControl2 = match session_control.cast() { Ok(s) => s, Err(_) => continue };
+                            let session_control2: IAudioSessionControl2 =
+                                match session_control.cast() {
+                                    Ok(s) => s,
+                                    Err(_) => continue,
+                                };
                             let state = session_control2.GetState().unwrap_or(AudioSessionState(0));
-                            if state.0 > 2 { continue; }
+                            // #31 显式枚举过滤：只保留 Active/Inactive 状态，跳过 Expired/Invalid
+                            match state.0 {
+                                0 | 1 => {} // Active | Inactive — 继续处理
+                                _ => continue,
+                            }
                             let pid = session_control2.GetProcessId().unwrap_or(0);
-                            if pid == 0 { continue; }
+                            if pid == 0 {
+                                continue;
+                            }
                             let session_id = get_session_id(&session_control2).unwrap_or_default();
-                            let (volume, is_muted) = if let Ok(sv) = session_control.cast::<ISimpleAudioVolume>() {
-                                let vol = sv.GetMasterVolume().unwrap_or(0.0);
-                                let muted = sv.GetMute().map(|b| b.as_bool()).unwrap_or(false);
-                                (vol, muted)
+                            let (volume, is_muted) =
+                                if let Ok(sv) = session_control.cast::<ISimpleAudioVolume>() {
+                                    let vol = sv.GetMasterVolume().unwrap_or(0.0);
+                                    let muted = sv.GetMute().map(|b| b.as_bool()).unwrap_or(false);
+                                    (vol, muted)
+                                } else {
+                                    (0.0, false)
+                                };
+                            let session_name =
+                                get_session_display_name(&session_control).unwrap_or_default();
+                            let display_name = if session_name.starts_with('@') {
+                                "System".to_string()
+                            } else if !session_name.is_empty() && session_name != "Unknown App" {
+                                session_name
                             } else {
-                                (0.0, false)
+                                crate::app_icon::get_process_name_by_pid(pid)
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| format!("App (PID: {})", pid))
                             };
-                            let session_name = get_session_display_name(&session_control).unwrap_or_default();
-                            let display_name = if !session_name.is_empty() && session_name != "Unknown App" { session_name } else { format!("App (PID: {})", pid) };
-                            let icon = crate::app_icon::get_app_icon_by_pid(pid).unwrap_or_default();
+                            let icon =
+                                crate::app_icon::get_app_icon_by_pid(pid).unwrap_or_default();
                             let is_active = state.0 == 1;
-                            let audio_session = AudioSession { id: session_id, name: display_name, icon, pid, volume, is_muted, device_id: dev_id.clone(), is_active };
+                            let audio_session = AudioSession {
+                                id: session_id,
+                                name: display_name,
+                                icon,
+                                pid,
+                                volume,
+                                is_muted,
+                                device_id: dev_id.clone(),
+                                is_active,
+                            };
                             if let Some(existing) = all_sessions.iter_mut().find(|s| s.pid == pid) {
                                 if is_active && !existing.is_active {
                                     *existing = audio_session;
@@ -235,20 +492,158 @@ pub fn enumerate_audio_sessions(_device_id: &str) -> Result<Vec<AudioSession>> {
             }
             Ok(all_sessions)
         })?
+    };
+    if let Ok(ref sessions) = result {
+        standard_log!(
+            "[audio] enumerate_audio_sessions: 返回 {} 个会话",
+            sessions.len()
+        );
+    }
+    result
+}
+
+/// 电表采样请求：设备名 + 应答通道。
+type FlowProbe = (String, mpsc::Sender<bool>);
+
+/// 电表采样专用 STA 工作线程的请求通道（懒拉起，见 [`spawn_flow_sampler`]）。
+static FLOW_SAMPLER: Mutex<Option<mpsc::Sender<FlowProbe>>> = Mutex::new(None);
+
+/// 单次探测的超时：探测含全端点会话枚举，与 `enumerate_output_devices`
+/// 同路径（实测 13~15ms 量级），300ms ≈ 20 倍余量。
+const FLOW_PROBE_TIMEOUT_MS: u64 = 300;
+
+/// 指定设备的 A2DP SNK 转发会话此刻是否有音频流过（会话峰值电表超阈值）。
+///
+/// 枚举/激活失败一律按「无流」处理（返回 `false`）：调用方只把它当判活采样。
+pub fn relay_session_flowing(device_name: &str) -> bool {
+    // ⛔ 采样必须经专用 STA 工作线程（`spawn_flow_sampler`），不得在 MTA 线程
+    //   直调探测本体：a2dp 控制器线程是故意 MTA（WinRT 回调免泵，见 a2dp_sink
+    //   `controller_main`），而本进程 COM 约定统一 STA —— 直调会让
+    //   `ensure_com_initialized` 的公寓冲突告警逐 tick 刷屏。
+    // ⛔ 不据此拆链路：链路关闭由 WinRT StateChanged 驱动（见 a2dp_sink）；
+    //   工作线程无应答（死亡/卡死）同样按「无流」返回并重建通道，下一 tick 自愈。
+    let tx = {
+        let mut guard = crate::state::lock_unpoisoned(&FLOW_SAMPLER);
+        match guard.clone() {
+            Some(tx) => tx,
+            None => {
+                let tx = spawn_flow_sampler();
+                *guard = Some(tx.clone());
+                tx
+            }
+        }
+    };
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if tx.send((device_name.to_string(), reply_tx)).is_err() {
+        *crate::state::lock_unpoisoned(&FLOW_SAMPLER) = None;
+        return false;
+    }
+    match reply_rx.recv_timeout(Duration::from_millis(FLOW_PROBE_TIMEOUT_MS)) {
+        Ok(flow) => flow,
+        Err(_) => {
+            // 超时 = 工作线程疑似死亡/卡死：丢弃重建（旧线程在请求通道
+            // 全部丢弃后退出），本次按「无流」处理
+            *crate::state::lock_unpoisoned(&FLOW_SAMPLER) = None;
+            false
+        }
     }
 }
 
+/// 拉起电表采样工作线程并返回其请求通道。新线程首次 `ensure_com_initialized`
+/// 必然命中 STA（无公寓冲突告警），随后按请求串行探测。
+fn spawn_flow_sampler() -> mpsc::Sender<FlowProbe> {
+    let (tx, rx) = mpsc::channel::<FlowProbe>();
+    // 拉起失败时闭包（含 rx）随 Err 丢弃 ⇒ 请求永无应答，走超时重建路径
+    let _ = std::thread::Builder::new()
+        .name("flow-sampler".to_string())
+        .spawn(move || {
+            unsafe { ensure_com_initialized() };
+            while let Ok((name, reply)) = rx.recv() {
+                let flow = relay_session_flow_probe(&name);
+                let _ = reply.send(flow);
+            }
+        });
+    tx
+}
+
+/// 探测本体（COM 走栈，必须在 STA 线程调用——入口见 [`relay_session_flowing`]）。
+///
+/// 判据：会话命中规则与 `device_identity::relay_session_matches` 同款
+/// （名含设备名 ∧ 含 A2DP SNK 记号，捕获端点与转发会话同名形）；电表取
+/// 会话控制的 `IAudioMeterInformation` 峰值。
+/// ⛔ 会话存在 ≠ 有流：Sink 武装后手机离场，转发会话仍以 Active 残留
+/// （真机实测 active=true）；⛔ 捕获端点不进 `DEVICE_STATE_ACTIVE` 枚举
+/// （真机实测）——电表是**唯一**流量信号。
+fn relay_session_flow_probe(device_name: &str) -> bool {
+    /// 数字静音的电表峰值恒为 0，0.001 只过滤浮点噪声
+    const FLOW_PEAK_THRESHOLD: f32 = 0.001;
+    let hit = unsafe {
+        with_enumerator(|enumerator| -> Result<bool> {
+            let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
+            let count = collection.GetCount()?;
+            for di in 0..count {
+                let Ok(device) = collection.Item(di) else {
+                    continue;
+                };
+                let Ok(session_manager) = device.Activate(CLSCTX_ALL, None) else {
+                    continue;
+                };
+                let session_manager: IAudioSessionManager2 = session_manager;
+                let Ok(session_enumerator) = session_manager.GetSessionEnumerator() else {
+                    continue;
+                };
+                let count = session_enumerator.GetCount().unwrap_or(0);
+                for i in 0..count {
+                    let Ok(session_control) = session_enumerator.GetSession(i) else {
+                        continue;
+                    };
+                    let name = get_session_display_name(&session_control).unwrap_or_default();
+                    if !crate::device_identity::relay_session_matches(device_name, &name) {
+                        continue;
+                    }
+                    let Ok(meter) = session_control.cast::<IAudioMeterInformation>() else {
+                        continue;
+                    };
+                    if meter.GetPeakValue().unwrap_or(0.0) > FLOW_PEAK_THRESHOLD {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        })
+    };
+    hit.is_ok_and(|inner| inner.unwrap_or(false))
+}
+
 /// 按 session_id 查找并返回 ISimpleAudioVolume 接口
-unsafe fn find_session_volume(session_id: &str) -> Result<ISimpleAudioVolume> {
+/// device_id 非空时只在指定设备内查找，为空时全量扫描
+unsafe fn find_session_volume(session_id: &str, device_id: &str) -> Result<ISimpleAudioVolume> {
     with_enumerator(|enumerator| -> Result<ISimpleAudioVolume> {
         let collection = enumerator.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)?;
         for di in 0..collection.GetCount().unwrap_or(0) {
             if let Ok(device) = collection.Item(di) {
-                let sm: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) { Ok(m) => m, Err(_) => continue };
-                let se = match sm.GetSessionEnumerator() { Ok(e) => e, Err(_) => continue };
+                let dev_id = device
+                    .GetId()
+                    .map(|id| pwstr_to_string(id).unwrap_or_default())
+                    .unwrap_or_default();
+                // 按 device_id 裁剪：只在指定设备内查找
+                if !device_id.is_empty() && dev_id != device_id {
+                    continue;
+                }
+                let sm: IAudioSessionManager2 = match device.Activate(CLSCTX_ALL, None) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let se = match sm.GetSessionEnumerator() {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
                 for i in 0..se.GetCount().unwrap_or(0) {
                     if let Ok(sc) = se.GetSession(i) {
-                        let sc2: IAudioSessionControl2 = match sc.cast() { Ok(s) => s, Err(_) => continue };
+                        let sc2: IAudioSessionControl2 = match sc.cast() {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
                         if get_session_id(&sc2).unwrap_or_default() == session_id {
                             if let Ok(sv) = sc.cast::<ISimpleAudioVolume>() {
                                 return Ok(sv);
@@ -262,32 +657,204 @@ unsafe fn find_session_volume(session_id: &str) -> Result<ISimpleAudioVolume> {
     })?
 }
 
-pub fn set_session_volume(session_id: &str, volume: f32) -> Result<()> {
+/// ⭐⭐⭐ **SMTC 会话 → 音频会话的唯一匹配口径**（两套身份体系之间唯一的桥）。
+///
+/// **为什么需要它**：音乐面板的数据源是 SMTC 会话，它的身份是 `AUMID`
+/// （`SourceAppUserModelId`）；而音量只能写在**音频会话**上
+/// （`ISimpleAudioVolume`），那一侧的身份是 **PID**。
+/// ⚠️ **实测平台事实：SMTC 会话既不给 PID、也不给应用显示名**
+///   ——`IGlobalSystemMediaTransportControlsSession` 的方法面只有
+///   `SourceAppUserModelId` + 媒体元数据 + 播放控制，`MediaProperties` 里
+///   也没有应用名字段。⇒ 只能靠字符串形态匹配。
+/// ⚠️ 实测形态：`com.hoowhoami.echomusic`（Win32 应用自定义 AUMID）、
+///   `Spotify_zpdnekdrzrea0!Spotify`（商店版 PFN + 应用 id）。
+///   两者都**包含**该应用的 exe 文件名（无扩展名）。
+/// ⭐ 因此本仓的口径是「AUMID 包含 exe 基名」——不需要任何硬编码别名表：
+///   同一件事 AF-Media-Bar 只能靠 `KnownSources` 12 条穷举表兜住，因为那边
+///   拿不到 pid；本仓能从 pid 查出 exe 名（`app_icon` 里有现成的 LRU），
+///   动态求出的令牌天然覆盖新应用。
+/// ⛔ **只认「AUMID 包含 exe 基名（不含扩展名）」这一条证据**：exe 基名可能
+///   短到 `go` / `ms` 这种程度，反向包含会把一堆无关应用判成同一个。
+/// ⛔ **过短的 exe 基名一律拒绝匹配**（`< 3` 字符）：实测最短可信的播放器名
+///   恰为 3 字符（`vlc` / `mpv`），而 1-2 字符的名字（`go`、`ms`）命中纯属
+///   巧合，改不了音量只会改错声音。
+/// ⛔ **不要**再加「AUMID 含带 `.exe` 的完整文件名」这类证据：实测 AUMID 里
+///   根本不会出现 `.exe`（`com.hoowhoami.echomusic` 就不含），当成必要条件
+///   会让本机这个唯一在用的应用也匹配不上。
+/// ⭐ **入参是完整 exe 路径**：两条取法（`file_stem`）只在匹配方做一次。
+/// ⛔ **匹配不上就返回空、不改任何音量**：宁可不动，也不要改到别人
+///   ——那是本仓最怕的静默失效（用户以为在调音乐，实际在调别的应用）。
+/// ⭐⭐ **刻意不做「运行期记忆」**（同类项目有）：记忆一旦记错就永久固化，
+///   且记忆键只有 AUMID、无法校验重名；这里宁可每次重算。
+/// ⚠️ **已知覆盖缺口**：AUMID 与 exe 名毫无字面关系的应用（实测本机的
+///   `com.hoowhoami.echomusic` 之所以能工作，是因为它的尾段恰好等于
+///   exe 名）⇒ 匹配失败、滚轮不动、standard 日志写明原因。要覆盖它需要
+///   Win32 侧读应用自有 AUMID（只能从进程内读，外部不可得）。
+///
+/// **纯函数**：便于钉住上面的口径。
+pub fn media_aumid_matches(aumid: &str, exe_path: &str) -> bool {
+    const MIN_STEM_LEN: usize = 3;
+    let a = aumid.trim().to_lowercase();
+    let p = exe_path.trim().to_lowercase();
+    if a.is_empty() || p.is_empty() {
+        return false;
+    }
+    let Some(stem) = std::path::Path::new(&p)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+    else {
+        return false;
+    };
+    let stem = stem.to_lowercase();
+    if stem.len() < MIN_STEM_LEN {
+        return false;
+    }
+    a.contains(&stem)
+}
+
+/// 找出 AUMID 对应的音频会话（限定在某台设备上）。
+///
+/// ⭐ **设备口径与弹出窗口的「应用音量」卡片一致**：卡片列表本身就是
+///   按设备枚举的（`get_audio_sessions(deviceId)`），所以这里也只在该设备
+///   的会话里找，而不是把该应用的**所有**设备会话一起改。
+/// ⚠️ 同一 exe 可能有多条会话（如浏览器多进程共用同一端点），此时**全部**
+///   返回、由调用方写成同一音量——它们本来就是同一个应用。
+pub fn find_media_sessions(aumid: &str, device_id: &str) -> Result<Vec<AudioSession>> {
+    let all = enumerate_audio_sessions(device_id)?;
+    let mut hit = Vec::new();
+    for s in all {
+        // ⚠️ 逐会话把「AUMID ↔ exe 名」两边的原值打出来：匹配不上时**光看
+        //   「未受理」无法区分「AUMID 与 exe 名毫无关系」（平台限制）与
+        //   「exe 路径查不到」（权限/进程已退）——这两种的修法完全不同。
+        let exe = crate::app_icon::get_process_exe_path(s.pid);
+        let matched = exe
+            .as_deref()
+            .map(|p| media_aumid_matches(aumid, p))
+            .unwrap_or(false);
+        verbose_log!(
+            "[audio] 媒体会话匹配: aumid={aumid} 会话={} pid={} exe={} 命中={matched}",
+            s.name,
+            s.pid,
+            exe.as_deref().unwrap_or("<查不到>")
+        );
+        if matched {
+            hit.push(s);
+        }
+    }
+    Ok(hit)
+}
+
+/// 取系统默认**输出**（eRender / eMultimedia）端点 id。
+///
+/// ⭐ 与 `enumerate_devices` 里标记 `is_default` 用的是同一次调用口径
+///   （`eMultimedia` 而非 `eCommunications`）⇒ 任务栏滚轮调的那个会话，
+///   与弹出窗口里 `is_default` 标着的那台设备**必然是同一台**。
+pub fn default_output_device_id() -> Result<String> {
     unsafe {
-        let sv = find_session_volume(session_id)?;
-        sv.SetMasterVolume(volume.max(0.0).min(1.0), ptr::null())?;
+        with_enumerator(|enumerator| {
+            enumerator
+                .GetDefaultAudioEndpoint(eRender, eMultimedia)
+                .ok()
+                .and_then(|d| d.GetId().ok())
+                .map(|id| pwstr_to_string(id).unwrap_or_default())
+                .ok_or_else(|| {
+                    windows::core::Error::new(
+                        windows::Win32::Foundation::E_FAIL,
+                        "取不到默认输出端点",
+                    )
+                })
+        })?
+    }
+}
+
+/// 读「AUMID 对应应用在默认输出设备上的会话音量」（`None` = 取不到）。
+///
+/// ⭐ 口径与「任务栏音乐面板滚轮调音量」**完全同源**（同一个
+///   `default_output_device_id` + 同一个 `find_media_sessions`）⇒ tooltip
+///   上显示的音量与滚轮改动的量**必然是同一个对象**，不会各读各的。
+/// ⛔ 命中多条时取**第一条**：多条意味着该应用在同设备上有多个会话
+///   （进程分裂），它们的音量本应一致；滚轮侧是**全部写成同一值**。
+/// 读「AUMID 对应应用在默认输出设备上的那个会话」（`None` = 取不到）。
+///
+/// ⭐ **一次匹配带回全部所需**：音量（tooltip 第三行 + 滚轮）与 `pid`
+///   （点封面激活窗口只能按 pid 找）都出自这一条会话 ⇒ 两者必然指向同一个
+///   进程，不会各指各的；而重跑一次匹配等于多枚举一遍全部会话。
+pub fn media_session_of(aumid: &str) -> Option<AudioSession> {
+    let dev = default_output_device_id().ok()?;
+    find_media_sessions(aumid, &dev).ok()?.into_iter().next()
+}
+
+pub fn set_session_volume(session_id: &str, device_id: &str, volume: f32) -> Result<()> {
+    verbose_log!(
+        "[audio] set_session_volume {} {} {}",
+        session_id,
+        device_id,
+        volume
+    );
+    unsafe {
+        let sv = find_session_volume(session_id, device_id)?;
+        sv.SetMasterVolume(sanitize_volume(volume), ptr::null())?;
     }
     Ok(())
 }
 
-pub fn toggle_session_mute(session_id: &str) -> Result<()> {
+pub fn set_session_mute(session_id: &str, device_id: &str, muted: bool) -> Result<()> {
+    standard_log!(
+        "[audio] set_session_mute {} {} muted={}",
+        session_id,
+        device_id,
+        muted
+    );
     unsafe {
-        let sv = find_session_volume(session_id)?;
-        let current = sv.GetMute()?;
-        sv.SetMute(!current.as_bool(), ptr::null())?;
+        let sv = find_session_volume(session_id, device_id)?;
+        sv.SetMute(muted, ptr::null())?;
     }
     Ok(())
+}
+
+/// 解析给定一批 pid 各自已设置的输出/输入设备名（id→名，取系统友好名）。
+/// 未设置覆盖、设备不可解析（已断开等）时为 None。
+pub fn resolve_session_device_names(
+    pids: &[u32],
+) -> std::collections::HashMap<u32, SessionDeviceNames> {
+    let out_map: std::collections::HashMap<String, String> = enumerate_output_devices()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| (d.id, d.name))
+        .collect();
+    let in_map: std::collections::HashMap<String, String> = enumerate_input_devices()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| (d.id, d.name))
+        .collect();
+
+    let mut result = std::collections::HashMap::new();
+    for &pid in pids {
+        let output = get_session_device(pid, "output")
+            .ok()
+            .flatten()
+            .and_then(|id| out_map.get(&id).cloned());
+        let input = get_session_device(pid, "input")
+            .ok()
+            .flatten()
+            .and_then(|id| in_map.get(&id).cloned());
+        if output.is_some() || input.is_some() {
+            result.insert(pid, SessionDeviceNames { output, input });
+        }
+    }
+    result
 }
 
 unsafe fn get_session_display_name(session: &IAudioSessionControl) -> Result<String> {
-    let display_name = session.GetDisplayName()?;
-    if display_name.is_empty() { return Ok("Unknown App".to_string()); }
-    Ok(display_name.to_string()?)
+    let display_name = pwstr_to_string(session.GetDisplayName()?)?;
+    if display_name.is_empty() {
+        return Ok("Unknown App".to_string());
+    }
+    Ok(display_name)
 }
 
 unsafe fn get_session_id(session: &IAudioSessionControl2) -> Result<String> {
-    let id = session.GetSessionInstanceIdentifier()?;
-    Ok(id.to_string()?)
+    pwstr_to_string(session.GetSessionInstanceIdentifier()?)
 }
 
 fn simulate_media_key(vk: u16) {
@@ -307,4 +874,100 @@ pub fn adjust_default_volume_down() {
 
 pub fn toggle_default_mute() {
     simulate_media_key(VK_VOLUME_MUTE);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// pwstr_to_string 的 null 闸：null 必须返回空串、不得触达 wcslen
+    /// （判据见 `pwstr_to_string` 文档）。
+    #[test]
+    fn pwstr_to_string_null_returns_empty() {
+        unsafe {
+            let s = pwstr_to_string(PWSTR(std::ptr::null_mut())).unwrap();
+            assert!(s.is_empty(), "null PWSTR 必须闸成空串，不得触碰 wcslen");
+        }
+    }
+
+    /// ⛔ SMTC 会话没有 PID，**唯一的桥是 AUMID 文本包含 exe 名**。
+    ///
+    /// 判别力在两侧：既要认出两类真实 AUMID 形态（Win32 自定义反向域名 /
+    /// 商店版 PFN+应用 id），也要**拒绝**两种过度匹配 —— ① 反向包含（exe 名
+    /// 更短更泛）；② 过短 exe 名（`go`、`ms` 命中纯属巧合，改不了音量只会
+    /// 改错声音）。空串同样必须拒绝：否则任何空 AUMID 都能命中任意会话。
+    /// ⭐ 入参是**完整 exe 路径**：匹配方按 `file_stem` 取不含 `.exe` 的基名。
+    /// ⚠️ 最后一条钉的是**已知的覆盖缺口**，不是期望行为：AUMID 与 exe 名
+    ///   毫无字面关系时必然匹配不上（本机实测能工作是**侥幸**：AUMID 尾段
+    ///   恰好等于 exe 名），此时拒绝、不动音量。
+    #[test]
+    fn aumid_matches_exe_path_only_in_the_aumid_contains_direction() {
+        // 实测形态：Win32 应用自定义 AUMID
+        assert!(media_aumid_matches(
+            "com.hoowhoami.echomusic",
+            r"c:\program files\echomusic\echomusic.exe"
+        ));
+        // 商店版形态
+        assert!(media_aumid_matches(
+            "Spotify_zpdnekdrzrea0!Spotify",
+            r"c:\users\me\appdata\roaming\spotify\spotify.exe"
+        ));
+        // 大小写不影响判定（两侧都小写化）
+        assert!(media_aumid_matches(
+            "com.hoowhoami.echomusic",
+            r"C:\Program Files\EchoMusic\EchoMusic.exe"
+        ));
+        // 恰好 3 字符的名字仍可用（实测 vlc / mpv 就是这个长度）
+        assert!(media_aumid_matches("com.vendor.vlc", r"c:\tools\vlc.exe"));
+        // ⛔ 反向包含必须不成立（exe 名更短、且更泛）
+        assert!(
+            !media_aumid_matches("go", r"c:\program files\google\chrome.exe"),
+            "反向包含会把 go 判成 chrome"
+        );
+        // ⛔ 过短的 exe 基名：即使字面被包含也拒绝（巧合命中不算证据）
+        assert!(
+            !media_aumid_matches("com.vendor.go", r"c:\program files\go\go.exe"),
+            "2 字符 exe 名不该作为匹配依据"
+        );
+        // 互不相关
+        assert!(!media_aumid_matches(
+            "com.hoowhoami.echomusic",
+            r"c:\program files\tencent\qqmusic.exe"
+        ));
+        // 空串
+        assert!(!media_aumid_matches("", r"c:\x\y.exe"));
+        assert!(!media_aumid_matches("com.hoowhoami.echomusic", "  "));
+        // ⚠️ 已知覆盖缺口：AUMID 与 exe 名毫无字面关系时必然匹配不上
+        //   ⇒ 判否、不动音量。把它钉成判据：改动这条断言前先想清楚缺口是否已修。
+        assert!(
+            !media_aumid_matches(
+                "com.vendor.player",
+                r"c:\program files\echomusic\echomusic.exe"
+            ),
+            "AUMID 与 exe 名无关时不该匹配上"
+        );
+    }
+
+    /// P2-5：公寓模型冲突的识别必须**只命中** `RPC_E_CHANGED_MODE`。
+    ///
+    /// 判别力在于两侧：既要求认出 0x80010106，也要求不把成功码（S_OK / S_FALSE）
+    /// 与邻近的错误码误判为冲突——误判会让正常的幂等命中被打成告警，
+    /// 漏判则会让「约定被破坏」这件事继续静默。
+    #[test]
+    fn apartment_mode_conflict_is_recognized_and_not_over_broad() {
+        assert!(is_apartment_mode_conflict(0x80010106u32 as i32));
+        assert!(!is_apartment_mode_conflict(0), "S_OK 不是冲突");
+        assert!(
+            !is_apartment_mode_conflict(1),
+            "S_FALSE（已初始化过）不是冲突"
+        );
+        assert!(
+            !is_apartment_mode_conflict(0x80010107u32 as i32),
+            "相邻 HRESULT 不应误报"
+        );
+        assert!(
+            !is_apartment_mode_conflict(0x80004005u32 as i32),
+            "E_FAIL 不是冲突"
+        );
+    }
 }

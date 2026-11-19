@@ -1,12 +1,24 @@
+use crate::device::{DevType, Device};
+use crate::verbose_log;
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use crate::device::{Device, DevType};
 
+/// 取设备名括号内核心名并剥离蓝牙协议后缀（Hands-Free/Stereo/LE/Audio 等），用于重名合并。
+/// 注意：与 tray::simplify_device_name 语义不同——本函数会剥后缀返回 String，两者勿互相替换。
 pub fn core_name(n: &str) -> String {
     let base = if let Some(i) = n.find(" (") {
         if let Some(j) = n.rfind(')') {
-            if j > i + 2 { &n[i + 2..j] } else { n }
-        } else { n }
-    } else { n };
+            if j > i + 2 {
+                &n[i + 2..j]
+            } else {
+                n
+            }
+        } else {
+            n
+        }
+    } else {
+        n
+    };
     for suffix in &[
         " Hands-Free AG",
         " Hands-Free HF",
@@ -26,10 +38,16 @@ pub fn core_name(n: &str) -> String {
         " 音频网关服务",
     ] {
         if let Some(pos) = base.strip_suffix(suffix) {
-            return pos.to_string();
+            let result = pos.to_string();
+            verbose_log!("[dedup] core_name: {} -> {}（剥离后缀）", n, result);
+            return result;
         }
     }
-    base.to_string()
+    let result = base.to_string();
+    if result != n {
+        verbose_log!("[dedup] core_name: {} -> {}（括号提取）", n, result);
+    }
+    result
 }
 
 pub fn try_insert(
@@ -39,13 +57,24 @@ pub fn try_insert(
     status: &str,
     battery: Option<i32>,
     device_id: Option<String>,
+    device_key: Option<String>,
     is_bluetooth: bool,
     is_wireless_24g: bool,
+    wireless_24g_kind: Option<crate::device::Wireless24gKind>,
+    is_ble: bool,
     dedup: bool,
+    re: Option<&Regex>,
     seen: &mut HashSet<String>,
     devices: &mut Vec<Device>,
     cn_index: &mut HashMap<String, Vec<usize>>,
 ) {
+    // 正则匹配原始名（core_name 之前），命中即丢弃
+    if let Some(re) = re {
+        if re.is_match(name) {
+            return;
+        }
+    }
+
     let effective_name = display_name.unwrap_or(name);
     let cn = if display_name.is_some() {
         effective_name.to_string()
@@ -79,14 +108,26 @@ pub fn try_insert(
         }
     }
 
-    let conn_tag = if is_bluetooth { "bt" } else if is_wireless_24g { "24g" } else { "usb" };
+    let conn_tag = if is_bluetooth {
+        "bt"
+    } else if is_wireless_24g {
+        "24g"
+    } else {
+        "usb"
+    };
     let dedup_key = format!("{}:{}", cn, conn_tag);
     if dedup && !seen.insert(dedup_key) {
         if let Some(indices) = cn_index.get(&cn) {
             if let Some(&pos) = indices.iter().find(|&&i| {
                 let d = &devices[i];
                 let d_cn = core_name(&d.name);
-                let econn = if d.is_bluetooth { "bt" } else if d.is_wireless_24g { "24g" } else { "usb" };
+                let econn = if d.is_bluetooth {
+                    "bt"
+                } else if d.is_wireless_24g {
+                    "24g"
+                } else {
+                    "usb"
+                };
                 d_cn == cn && econn == conn_tag
             }) {
                 let existing = &mut devices[pos];
@@ -94,8 +135,23 @@ pub fn try_insert(
                 if existing.device_id.is_none() {
                     existing.device_id = device_id;
                 }
+                // 身份键按「先到先得」补齐：容器键比实例/名称键更可信，
+                // 但重算需要 PnP 实例路径，而合并路径未必持有 ⇒ 只补空缺。
+                if existing.device_key.is_none() {
+                    existing.device_key = device_key;
+                }
+                if battery.is_some() {
+                    existing.battery = battery;
+                }
                 existing.is_bluetooth = existing.is_bluetooth || is_bluetooth;
                 existing.is_wireless_24g = existing.is_wireless_24g || is_wireless_24g;
+                if existing.wireless_24g_kind.is_none() {
+                    existing.wireless_24g_kind = wireless_24g_kind;
+                }
+                existing.is_connected =
+                    existing.is_connected || crate::device::status_is_connected(status);
+                existing.is_ble = existing.is_ble || is_ble;
+                verbose_log!("[dedup] 合并 {name} 到现有条目（cn={cn}, conn={conn_tag}）");
             }
         }
         return;
@@ -107,8 +163,14 @@ pub fn try_insert(
         status: status.to_string(),
         battery,
         device_id,
+        device_key,
         is_bluetooth,
         is_wireless_24g,
+        wireless_24g_kind,
+        is_connected: crate::device::status_is_connected(status),
+        is_ble,
+        // 手机标记由 wmi_query 的服务行扫描补写（mark_phone_rows），此处恒为否
+        is_phone: false,
     });
     cn_index.entry(cn).or_default().push(idx);
 }

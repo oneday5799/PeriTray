@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ⚠️ 下面 Identity 元素的 Version 属性是**占位值**：`src-tauri/msix/stage.ps1` 会按结构
+     匹配该元素的 Version 属性，整段替换成打包时传入的 `-Version`（CI 传 tag 版本）。
+     替换与该占位值**无关**，所以请勿「顺手把它对齐到当前版本」—— 改了只会误导后来人。
+     ⛔ 本注释**刻意不写出带 Version 属性的 Identity 标签样例**：stage.ps1 的结构正则若先
+     命中注释里的样例，就会改错目标（自校验会因此报错退出）。 -->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap rescap">
+  <Identity Name="Oneday.PeriTray" 
+            Version="1.3.5.0" 
+            Publisher="__PUBLISHER_DN__"
+            ProcessorArchitecture="__ARCH__" />
+  <Properties>
+    <DisplayName>PeriTray</DisplayName>
+    <PublisherDisplayName>Oneday</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="zh-CN" />
+    <Resource Language="en-US" />
+  </Resources>
+  <Applications>
+    <Application Id="App" Executable="PeriTray.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="PeriTray" 
+                          Description="外设监控 - 系统托盘外设管理工具"
+                          Square150x150Logo="Assets\Square150x150Logo.png" 
+                          Square44x44Logo="Assets\Square44x44Logo.png" 
+                          BackgroundColor="transparent" />
+    </Application>
+  </Applications>
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

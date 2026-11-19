@@ -1,196 +1,748 @@
+/* settings.js — 设置页·入口框架：init 装配/导航与 tab 切换/ComboBox 装配薄壳/更新检测横切流程/
+ *            NumberBox 焦点装配/材质浮层背景/config-changed 与 settings-tab 监听
+ * 加载序 8/8（最后执行，调用各分区脚本提供的 init 系列与刷新函数）
+ * 提供：saveConfig/createCheckableMenu/bindToggle/createToggle/createExpandableCard/
+ *       initComboBox/runUpdateCheck/copyToClipboard/showUpdateErrorFlyout/renderUpdateInfobar/
+ *       updateFlyoutBackdrop 等框架级共享函数
+ * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/taskbar/about) */
+let config = null;
+// 「基线副本」= 本页**上次从后端收到的整份快照**（P1-11）。
+// saveConfig() 会把它随请求一起发回，后端据此算出用户真正改了哪些字段，
+// 只套用这些字段 —— 否则整份覆盖会抹掉弹窗侧并发的改名/隐藏等改动。
+// ⚠️ 必须是独立深拷贝：各分区脚本都直接在 config 上就地改字段，
+// 若与 config 指向同一对象，差异永远是空集，修复即失效。
+let configBase = null;
+
+/**
+ * 深比较两个配置值（字段级）。
+ * ⚠️ **不能用引用相等**：本页各分区脚本大量**就地改嵌套对象**
+ * （如 `config.device_names[id] = name`、`config.device_groups[id] = g`），
+ * 引用不变但内容已变；而 `configBase` 是独立深拷贝，两边引用必然不同。
+ * 数组与对象一律按「内容相等」判定，**元素顺序敏感**（本仓数组字段都是小集合，
+ * 顺序由用户操作决定，顺序变化即视为一次真实改动）。
+ */
+function isSameConfigValue(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!isSameConfigValue(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+/**
+ * 算出「本页尚未落盘的本地改动」——`configBase` → `config` 的**稀疏补丁**
+ * （只含值发生变化的顶层字段）。无改动时返回 `null`。
+ */
+function localPendingPatch() {
+  if (!config || !configBase) return null;
+  const keys = new Set([...Object.keys(configBase), ...Object.keys(config)]);
+  const patch = {};
+  let changed = 0;
+  for (const key of keys) {
+    if (!isSameConfigValue(configBase[key], config[key])) {
+      patch[key] = structuredClone(config[key]);
+      changed++;
+    }
+  }
+  return changed === 0 ? null : patch;
+}
+
+/**
+ * 把「本页尚未落盘的改动」重放到一份新快照上（B14）。
+ *
+ * 逐字段**三态判定**（`B` = 旧基线 `configBase`、`L` = 本页当前值 `config`、
+ * `S` = 新快照）：
+ * - `L === B`：该字段本页没改过 → 直接用 `S`（外部改动正常生效）。
+ * - `S === L`：快照里已经是本地值 → 无事可做。
+ * - `S === B`：**快照没动这个字段** ⇒ 外部改动与本地改动互不相干，
+ *   **保留 `L`**。这是本条要修的核心场景——用户刚点了一下、还没落盘，
+ *   外部快照到达，这一下不能被吞掉。
+ * - 三者互不相同（真三方冲突）：**采纳 `S`** 并 `console.warn` 点名。
+ *   为什么不是「本页优先」：后端是唯一权威，且这种形态最常见的成因是
+ *   **后端对我们刚保存的值做了归一化**（`normalize_config`，P3-9）——
+ *   若本页硬保留原值，UI 会永远显示未归一化的旧值且每次保存都被改回去。
+ *   取舍：**宁可让外部覆盖，也不与后端对峙**；冲突有 warn 日志可追。
+ */
+function mergeLocalEdits(snapshot) {
+  const pending = localPendingPatch();
+  if (!pending) return snapshot;
+  const out = structuredClone(snapshot);
+  const conflicted = [];
+  for (const key of Object.keys(pending)) {
+    if (isSameConfigValue(snapshot[key], pending[key])) continue;
+    if (isSameConfigValue(snapshot[key], configBase[key])) out[key] = pending[key];
+    else conflicted.push(key);
+  }
+  if (conflicted.length) {
+    console.warn(
+      "[settings] 本地未落盘改动与后端快照冲突，已采纳后端：" + conflicted.join(", ")
+    );
+  }
+  return out;
+}
+
+/**
+ * 接受一份来自后端的整份配置快照：同时刷新工作副本与基线副本。
+ * **只有来自后端的快照**才走这里；本地派生的浅拷贝（如 `{ ...config }`）不走，
+ * 否则会把用户的未落盘改动误当成基线，差异被清零。
+ *
+ * `keepLocalEdits`（B14）**默认为 `true`**——即「外部/后端快照到达时，
+ * 保留本页尚未落盘的改动」。这样设计是为了让**忘记传参**也不会造成静默丢改动
+ * （安全的那一侧做默认值）；确实需要「无条件整份采纳」时，必须**显式**
+ * 传 `false` 并写明理由。
+ *
+ * ⚠️ 本函数有**多处调用点**，改动语义时务必一并核对（`grep -rn "acceptConfig"`）：
+ *   `settings.js`（首份快照 = 唯一的 `false`、`config-changed` 处理器）
+ *   `settings-audio.js:10/60`、`settings-devices.js:14/118`、
+ *   `settings-shortcut.js:131/166`
+ *   ——后 6 处都是「改完后端某个字段后重新拉取整份配置」，
+ *   **它们同样会吞掉用户在别处（如刚改的日志级别）的未落盘改动**，
+ *   所以必须保留本地改动（这也是「只修 `config-changed` 一处」不够用的原因：
+ *   该处理器自己就会经 `loadDevicesAsync()` 走到这里）。
+ */
+function acceptConfig(snapshot, { keepLocalEdits = true } = {}) {
+  if (!snapshot) return;
+  config = keepLocalEdits ? mergeLocalEdits(snapshot) : snapshot;
+  configBase = structuredClone(snapshot);
+}
+let activeSettingsMenu = null;
+// 导航就绪门：get_config 往返期间各标签页内容尚未初始化，
+// 此期间的点击/托盘事件先记录、init 完成后统一补执行（防首次切换播在空白面板上）
+let settingsNavReady = false;
+let pendingNavTab = null;
+registerContextMenu({ get menu() { return activeSettingsMenu; }, set menu(v) { activeSettingsMenu = v; } });
+
+// [data-tip] 提示：定位与 DOM 复用 common.js 的边界避让实现
+document.addEventListener("pointerenter", (e) => {
+  const el = e.target.closest?.("[data-tip]");
+  if (el) showSessionTip(el, el.dataset.tip);
+}, true);
+document.addEventListener("pointerleave", (e) => {
+  const el = e.target.closest?.("[data-tip]");
+  if (el) hideSessionTip();
+}, true);
+
 async function saveConfig() {
   try {
-    await invoke("update_config", { newConfig: config });
+    // base + newConfig 一起送：后端只套用两者之间的差异（P1-11）
+    await invoke("update_config", { base: configBase, newConfig: config });
   } catch (e) {
     console.error("Failed to save config:", e);
   }
 }
 
-async function init() {
-  // Tab switching
-  document.querySelectorAll(".tab-item").forEach(tab => {
+// ── 复选型多选菜单（低电量设备 / 强制静音设备共用的右键菜单壳） ─────────
+// 仅负责 DOM 骨架（context-menu + leading 勾选图标 + 定位 + activeSettingsMenu 登记），
+// 数据源/过滤/config 字段/空态文案由调用点注入；onToggle 负责更新 config 并同步 checked。
+function createCheckableMenu({ anchor, items, checked, onToggle, emptyText }) {
+  if (activeSettingsMenu) {
+    hideAllContextMenus();
+    return;
+  }
+
+  const menu = document.createElement("div");
+  menu.className = "context-menu";
+  menu.style.maxHeight = "360px";
+  menu.style.overflowY = "auto";
+
+  for (const { key, label } of items) {
+    const item = document.createElement("div");
+    item.className = "context-menu-item";
+    item.style.display = "flex";
+    item.style.alignItems = "center";
+
+    const leading = document.createElement("span");
+    leading.className = "context-menu-leading";
+    if (checked.has(key)) {
+      leading.appendChild(createCheckIcon());
+    }
+    item.appendChild(leading);
+
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    item.appendChild(labelEl);
+
+    item.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      await onToggle(key);
+      leading.innerHTML = "";
+      if (checked.has(key)) {
+        leading.appendChild(createCheckIcon());
+      }
+    });
+
+    menu.appendChild(item);
+  }
+
+  if (menu.childElementCount === 0) {
+    const empty = document.createElement("div");
+    empty.className = "context-menu-item";
+    empty.textContent = emptyText;
+    menu.appendChild(empty);
+  }
+
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  clampMenuPosition(menu, rect.right - menu.offsetWidth, rect.bottom + 4);
+  activeSettingsMenu = menu;
+}
+
+function bindToggle(id, { get, set, onChange }) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.checked = !!get();
+  el.addEventListener("change", async () => {
+    set(el.checked);
+    await saveConfig();
+    if (onChange) await onChange(el.checked);
+  });
+}
+
+function createToggle(checked, onChange, extraClass) {
+  const toggle = document.createElement("label");
+  toggle.className = "toggle" + (extraClass ? " " + extraClass : "");
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = !!checked;
+  const slider = document.createElement("span");
+  slider.className = "slider";
+  toggle.appendChild(input);
+  toggle.appendChild(slider);
+  if (onChange) input.addEventListener("change", () => onChange(input));
+  return { toggle, input };
+}
+
+// ── 折叠卡骨架（设置页各折叠卡共享的展开/收起机制） ─────────
+// 展开 = .show 类 + arrow 旋转 + inline max-height；CSS 基础态为收起（.card-items{max-height:0}）。
+// expandHeight 取值："content"=按内容实测（scrollHeight，适合内容动态的卡）；
+//                    "999px" 等固定值=高度上限（适合内容受控的卡），与既有行为一一对应。
+function createExpandableCard(items, arrow) {
+  function apply(expanded, expandHeight) {
+    items.classList.toggle("show", expanded);
+    if (arrow) arrow.classList.toggle("expanded", expanded);
+    items.style.maxHeight = expanded
+      ? (expandHeight === "content" ? items.scrollHeight + "px" : expandHeight)
+      : "0px";
+  }
+
+  return {
+    // 常规切换：带 max-height 过渡动画
+    set(expanded, expandHeight = "999px") { apply(expanded, expandHeight); },
+
+    // 初始化恢复：展开分支抑制过渡（避免页面加载时播放收展动画）；收起分支与常规等价
+    setInstant(expanded, expandHeight = "999px") {
+      if (!expanded) { apply(false); return; }
+      items.style.transition = "none";
+      apply(true, expandHeight);
+      requestAnimationFrame(() => { items.style.transition = ""; });
+    },
+
+    // 绑定"点击卡片头部切换"。extraGuards：额外点击排除选择器（如 .toggle/button/a/input）。
+    // onChanged(newExpanded)：切换后的附加动作（状态记忆、联动刷新等）。
+    bindHeaderClick(card, { extraGuards = [], expandHeight = "999px", onChanged } = {}) {
+      card.addEventListener("click", (e) => {
+        if (e.target.closest(".card-items")) return;
+        for (const sel of extraGuards) {
+          if (e.target.closest(sel)) return;
+        }
+        const expanded = !items.classList.contains("show");
+        apply(expanded, expandHeight);
+        if (onChanged) onChanged(expanded);
+      });
+    },
+  };
+}
+
+// ComboBox 行为核心已上移 common.js（bindComboBox/createComboBox）——弹窗「修改信息」
+// 对话框与设置页共用同一份开合/定位/动画实现，⛔ 两页不许各写一份。
+// 本页只剩按 id 装配的薄壳（静态标记在 settings.html）。
+function initComboBox(comboId, selectedValue, onChange) {
+  const combo = document.getElementById(comboId);
+  if (!combo) return;
+  window.bindComboBox(combo, selectedValue, onChange);
+}
+
+function initNavigation() {
+  let currentTabIndex = 0;
+  const INDICATOR_SIZE = 16;
+  const EASE_OUT = "cubic-bezier(0.1, 0.9, 0.2, 1)";
+
+  function getIndicatorY(item) {
+    const itemRect = item.getBoundingClientRect();
+    const panelRect = document.querySelector(".win-nav-left-panel").getBoundingClientRect();
+    return itemRect.top - panelRect.top + (itemRect.height / 2) - (INDICATOR_SIZE / 2);
+  }
+
+  function setIndicatorStyle(indicatorEl, y, h) {
+    indicatorEl.style.transform = `translateY(${y}px)`;
+    indicatorEl.style.height = (h || INDICATOR_SIZE) + "px";
+    indicatorEl.style.transition = "none";
+  }
+
+  function animateIndicator(oldY, newY) {
+    const indicatorEl = document.getElementById("nav-indicator");
+    if (!indicatorEl) return;
+    indicatorEl.getAnimations().forEach(a => a.cancel());
+    const distance = Math.abs(newY - oldY);
+    const edge = Math.min(oldY, newY);
+    const keyframes = [
+      { transform: `translateY(${oldY}px)`, height: INDICATOR_SIZE + "px", offset: 0, easing: "cubic-bezier(0.9, 0.1, 1, 0.2)" },
+      { transform: `translateY(${edge}px)`, height: (distance + INDICATOR_SIZE) + "px", offset: 0.333, easing: EASE_OUT },
+      { transform: `translateY(${newY}px)`, height: INDICATOR_SIZE + "px", offset: 1 }
+    ];
+    const anim = indicatorEl.animate(keyframes, { duration: 200, fill: "forwards" });
+    anim.onfinish = () => {
+      // 回写最终位并立即释放动画：fill:"forwards" 的已完成动画仍会覆盖后续
+      // inline 样式（折叠侧栏时 repositionIndicator 重算的 transform 会被旧动画值压住）
+      indicatorEl.style.transform = `translateY(${newY}px)`;
+      indicatorEl.style.height = INDICATOR_SIZE + "px";
+      anim.cancel();
+    };
+  }
+
+  // Tab switching (NavigationView Left mode)
+  const navItems = document.querySelectorAll(".win-nav-item");
+  const pageHeader = document.getElementById("page-header");
+  navItems.forEach((tab, index) => {
     tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab-item").forEach(t => t.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-      tab.classList.add("active");
-      document.getElementById("tab-" + tab.dataset.tab).classList.add("active");
+      if (!settingsNavReady) { pendingNavTab = tab; return; }
+      if (currentTabIndex === index) return;
+      const oldIndex = currentTabIndex;
+
+      // Update nav item states
+      navItems.forEach(t => {
+        t.classList.remove("is-selected");
+        t.setAttribute("aria-selected", "false");
+        t.setAttribute("tabindex", "-1");
+      });
+      tab.classList.add("is-selected");
+      tab.setAttribute("aria-selected", "true");
+      tab.setAttribute("tabindex", "0");
+
+      // Animate indicator with stretch
+      const indicatorEl = document.getElementById("nav-indicator");
+      if (indicatorEl) {
+        const oldTransform = indicatorEl.style.transform;
+        const oldY = oldTransform ? parseFloat(oldTransform.match(/translateY\(([-\d.]+)px\)/)?.[1] || 0) : 0;
+        const newY = getIndicatorY(tab);
+        animateIndicator(oldY, newY);
+      }
+
+      // Slide transition — always: old content slides up, new content slides in from bottom
+      const oldContent = document.getElementById("tab-" + navItems[oldIndex].dataset.tab);
+      const newContent = document.getElementById("tab-" + tab.dataset.tab);
+
+      document.querySelectorAll(".tab-content").forEach(c => {
+        c.classList.remove("slide-enter-down", "slide-leave-up", "slide-active");
+      });
+
+      if (oldContent) oldContent.classList.add("slide-leave-up");
+      newContent.classList.add("slide-active", "slide-enter-down");
+
+      setTimeout(() => {
+        if (oldContent) oldContent.classList.remove("active", "slide-leave-up", "slide-active");
+      }, 170);
+
+      if (pageHeader) pageHeader.textContent = tab.querySelector(".label").textContent;
+      currentTabIndex = index;
     });
   });
 
+  // Initialize indicator position after layout is stable
+  function initIndicator() {
+    const selected = document.querySelector(".win-nav-item.is-selected");
+    if (!selected) return;
+    const indicatorEl = document.getElementById("nav-indicator");
+    if (!indicatorEl) return;
+    const y = getIndicatorY(selected);
+    // Verify position is reasonable (within panel bounds)
+    if (y >= 0 && y < 500) {
+      setIndicatorStyle(indicatorEl, y);
+    } else {
+      // Retry after layout settles
+      requestAnimationFrame(() => initIndicator());
+    }
+  }
+  requestAnimationFrame(() => requestAnimationFrame(initIndicator));
+
+  // 侧栏折叠/窗口缩放时重算指示条 Y（header 高度变化会使导航项垂直位移）
+  function repositionIndicator() {
+    const selected = document.querySelector(".win-nav-item.is-selected");
+    const indicatorEl = document.getElementById("nav-indicator");
+    if (!selected || !indicatorEl) return;
+    // 取消进行中的指示条动画（Web Animations 会覆盖直接写 style.transform）
+    indicatorEl.getAnimations().forEach(a => a.cancel());
+    const y = getIndicatorY(selected);
+    if (y >= 0 && y < 500) {
+      setIndicatorStyle(indicatorEl, y);
+    }
+  }
+  let repositionRaf = 0;
+  function scheduleReposition() {
+    cancelAnimationFrame(repositionRaf);
+    repositionRaf = requestAnimationFrame(repositionIndicator);
+  }
+  window.addEventListener("resize", scheduleReposition);
+  window.matchMedia("(max-width: 820px)").addEventListener("change", scheduleReposition);
+}
+
+async function runUpdateCheck(btnId) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  const originalText = btn.textContent;
+  btn.textContent = "检测中...";
+  btn.disabled = true;
+  const timeoutId = setTimeout(() => {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }, 30000);
+
   try {
-    config = await invoke("get_config");
-
-    // Auto-start toggle
-    const toggle = document.getElementById("toggle-autostart");
-    toggle.checked = config.auto_start;
-    toggle.addEventListener("change", async () => {
-      config.auto_start = toggle.checked;
-      await saveConfig();
+    const status = await invoke("check_for_update", {
+      includePrerelease: config.include_prerelease || false
     });
-
-    // Hardware acceleration toggle
-    const hwAccel = document.getElementById("toggle-hardware-acceleration");
-    hwAccel.checked = config.hardware_acceleration || false;
-    hwAccel.addEventListener("change", async () => {
-      config.hardware_acceleration = hwAccel.checked;
-      await saveConfig();
-    });
-
-    // Filter toggle
-    const filterToggle = document.getElementById("toggle-filter");
-    const filterWrap = document.getElementById("filter-regex-wrap");
-    filterToggle.checked = config.filter_enabled;
-    filterWrap.style.display = config.filter_enabled ? "block" : "none";
-    filterToggle.addEventListener("change", async () => {
-      config.filter_enabled = filterToggle.checked;
-      filterWrap.style.display = filterToggle.checked ? "block" : "none";
-      await saveConfig();
-      await loadDevicesAsync();
-    });
-
-    // Filter regex input
-    const regexInput = document.getElementById("filter-regex");
-    regexInput.value = config.filter_regex || "";
-    let debounceTimer = null;
-    regexInput.addEventListener("input", () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(async () => {
-        config.filter_regex = regexInput.value;
-        await saveConfig();
-        await loadDevicesAsync();
-      }, 500);
-    });
-
-    // Dedup toggle
-    const dedupToggle = document.getElementById("toggle-dedup");
-    dedupToggle.checked = config.dedup_devices;
-    dedupToggle.addEventListener("change", async () => {
-      config.dedup_devices = dedupToggle.checked;
-      await saveConfig();
-      await loadDevicesAsync();
-    });
-
-    // Show unnamed BT devices toggle
-    const unnamedBtToggle = document.getElementById("toggle-unnamed-bt");
-    unnamedBtToggle.checked = config.show_unnamed_bt;
-    unnamedBtToggle.addEventListener("change", async () => {
-      config.show_unnamed_bt = unnamedBtToggle.checked;
-      await saveConfig();
-      await loadDevicesAsync();
-    });
-
-    // Use system Bluetooth connection toggle
-    const useSystemBtToggle = document.getElementById("toggle-use-system-bt");
-    useSystemBtToggle.checked = config.use_system_bt;
-    useSystemBtToggle.addEventListener("change", async () => {
-      config.use_system_bt = useSystemBtToggle.checked;
-      await saveConfig();
-    });
-
-    // Logging settings
-    const logToggle = document.getElementById("toggle-log");
-    logToggle.checked = config.log_enabled;
-    logToggle.addEventListener("change", async () => {
-      config.log_enabled = logToggle.checked;
-      await saveConfig();
-    });
-
-    const logRetentionSelect = document.getElementById("log-retention");
-    logRetentionSelect.value = config.log_retention || "one_day";
-    logRetentionSelect.addEventListener("change", async () => {
-      config.log_retention = logRetentionSelect.value;
-      await saveConfig();
-    });
-
-    document.getElementById("btn-log-dir").addEventListener("click", async () => {
-      try {
-        await invoke("open_log_dir");
-      } catch (e) {
-        console.error("Failed to open log dir:", e);
+    clearTimeout(timeoutId);
+    renderUpdateInfobar(status);
+    if (status.status === "update") {
+      showToast(
+        `检测到新版本 ${status.latestVersion}（当前 ${status.currentVersion}）\n点击前往下载`,
+        () => invoke("open_url", { url: status.releaseUrl })
+      );
+    } else if (status.status === "storeUpdate") {
+      showToast(
+        "Microsoft Store 存在更新版本\n点击前往更新",
+        () => invoke("open_url", { url: status.releaseUrl })
+      );
+    } else if (status.status === "latest") {
+      showToast("已是最新版本");
+    } else if (status.status === "error") {
+      const err = status.error || "";
+      if (err.includes("超时") || err.includes("timeout")) {
+        showToast("检测超时，请检查网络后重试");
+      } else if (err.includes("频繁") || err.includes("rate_limited")) {
+        showToast("GitHub API 请求过于频繁，请稍后再试");
+      } else {
+        showToast("检测失败：" + err);
       }
+    }
+  } catch (e) {
+    clearTimeout(timeoutId);
+    const err = String(e);
+    renderUpdateInfobar({
+      status: "error",
+      currentVersion: "",
+      latestVersion: "",
+      releaseUrl: "",
+      error: err
     });
+    if (err.includes("超时") || err.includes("timeout")) {
+      showToast("检测超时，请检查网络后重试");
+    } else if (err.includes("频繁") || err.includes("rate_limited")) {
+      showToast("GitHub API 请求过于频繁，请稍后再试");
+    } else {
+      showToast("检测失败：" + err);
+    }
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
 
-    const checkUpdatesToggle = document.getElementById("toggle-check-updates");
-    checkUpdatesToggle.checked = config.check_updates !== false;
-    checkUpdatesToggle.addEventListener("change", async () => {
-      config.check_updates = checkUpdatesToggle.checked;
-      await saveConfig();
-    });
+function selectTab(tab) {
+  const nav = document.querySelector(`.win-nav-item[data-tab="${tab}"]`);
+  if (nav) nav.click();
+}
 
-    const includePrereleaseToggle = document.getElementById("toggle-include-prerelease");
-    includePrereleaseToggle.checked = config.include_prerelease || false;
-    includePrereleaseToggle.addEventListener("change", async () => {
-      config.include_prerelease = includePrereleaseToggle.checked;
-      await saveConfig();
-    });
+const UPDATE_ICONS = {
+  success: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm3.53 4.03l-4.28 4.28-1.78-1.77a.75.75 0 1 0-1.06 1.06l2.31 2.31c.29.3.77.3 1.06 0l4.81-4.81a.75.75 0 1 0-1.06-1.06z"/></svg>',
+  warning: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5L.75 14.5h14.5L8 1.5zm0 3.26l5.04 8.74H2.96L8 4.76zM8.75 7.5v3a.75.75 0 1 1-1.5 0v-3a.75.75 0 1 1 1.5 0zM8 12.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5z"/></svg>',
+  error: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12A5.5 5.5 0 1 1 8 2.5a5.5 5.5 0 0 1 0 11zm2.03-8.53L8 6.94 5.97 4.97 4.97 5.97 6.94 8l-1.97 2.03 1 1L8 9.06l2.03 1.97 1-1L9.06 8l1.97-2.03-1-1z"/></svg>'
+};
 
-    document.getElementById("btn-check-update").addEventListener("click", async () => {
-      const btn = document.getElementById("btn-check-update");
-      const originalText = btn.textContent;
-      btn.textContent = "检测中...";
-      btn.disabled = true;
-      const timeoutId = setTimeout(() => {
-        btn.textContent = originalText;
-        btn.disabled = false;
-      }, 30000);
+const RELEASES_URL = "https://github.com/oneday5799/PeriTray/releases";
 
-      try {
-        const info = await invoke("check_for_update", {
-          includePrerelease: config.include_prerelease || false
-        });
-        clearTimeout(timeoutId);
-        if (info.has_update) {
-          showToast(
-            `发现新版本 ${info.latest_version}（当前 ${info.current_version}）<br>点击前往下载`,
-            () => invoke("open_url", { url: info.release_url })
-          );
-        } else {
-          showToast("已是最新版本");
-        }
-      } catch (e) {
-        clearTimeout(timeoutId);
-        const err = String(e);
-        if (err.includes("超时") || err.includes("timeout")) {
-          showToast(
-            "检测超时，请检查网络后重试<br>点击前往 Release 页面",
-            () => invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor/releases" })
-          );
-        } else if (err.includes("频繁") || err.includes("rate_limited")) {
-          showToast("GitHub API 请求过于频繁，请稍后再试");
-        } else {
-          showToast("检测失败：" + err);
-        }
-      } finally {
-        btn.textContent = originalText;
-        btn.disabled = false;
-      }
-    });
+function hideUpdateErrorFlyout() {
+  const flyout = document.getElementById("about-update-flyout");
+  if (flyout) flyout.hidden = true;
+  if (window.__updateFlyoutDismiss) {
+    document.removeEventListener("pointerdown", window.__updateFlyoutDismiss);
+    window.__updateFlyoutDismiss = null;
+  }
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      ok ? resolve() : reject(new Error("copy failed"));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function classifyUpdateError(err) {
+  if (err.includes("超时") || err.includes("timeout")) return "检测超时，请检查网络后重试";
+  if (err.includes("频繁") || err.includes("rate_limited")) return "GitHub API 请求过于频繁，请稍后再试";
+  if (err.includes("403")) return "GitHub API 请求被拒绝（403），请稍后再试";
+  if (err.includes("404")) return "未找到发布资源（404），请确认仓库地址";
+  if (err.includes("解析失败")) return "响应数据解析失败，请稍后再试";
+  if (err.includes("Store 服务")) return "Microsoft Store 服务不可用，请稍后再试";
+  if (err.includes("Store")) return "Store 更新查询失败，请稍后再试";
+  return "";
+}
+
+function extractErrorCode(err) {
+  const m = String(err).match(/\((\d{2,5})\)\s*$/);
+  return m ? m[1] : "";
+}
+
+function showUpdateErrorFlyout(errorText, anchorBtn) {
+  const flyout = document.getElementById("about-update-flyout");
+  const summaryEl = document.getElementById("about-update-error-summary");
+  const textEl = document.getElementById("about-update-error-text");
+  if (!flyout || !textEl) return;
+  const detail = errorText || "未知错误";
+  const code = extractErrorCode(detail);
+  const message = code ? detail.replace(/\(\d{2,5}\)\s*$/, "").trim() : detail;
+  if (summaryEl) {
+    const summary = classifyUpdateError(detail);
+    summaryEl.textContent = summary;
+    summaryEl.hidden = !summary;
+  }
+  textEl.textContent = code ? `${message}，错误代码：${code}` : message;
+  flyout.hidden = false;
+  const rect = anchorBtn.getBoundingClientRect();
+  let left = rect.right - flyout.offsetWidth;
+  let top = rect.bottom + 8;
+  if (left < 8) left = 8;
+  if (top + flyout.offsetHeight > window.innerHeight - 8) {
+    top = Math.max(8, rect.top - flyout.offsetHeight - 8);
+  }
+  flyout.style.left = left + "px";
+  flyout.style.top = top + "px";
+
+  const copyBtn = document.getElementById("about-update-error-copy");
+  copyBtn.onclick = async () => {
+    try {
+      await copyToClipboard(detail);
+      showToast("已复制到剪贴板");
+    } catch (e) {
+      showToast("复制失败");
+    }
+    hideUpdateErrorFlyout();
+  };
+
+  const dismiss = (e) => {
+    if (!flyout.contains(e.target) && e.target !== anchorBtn && !anchorBtn.contains(e.target)) {
+      hideUpdateErrorFlyout();
+    }
+  };
+  window.__updateFlyoutDismiss = dismiss;
+  document.addEventListener("pointerdown", dismiss);
+}
+
+function renderUpdateInfobar(status) {
+  const bar = document.getElementById("about-update-infobar");
+  if (!bar) return;
+  if (!status || !status.status) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  bar.classList.remove("win-infobar-success", "win-infobar-warning", "win-infobar-error");
+
+  const icon = document.getElementById("about-update-icon");
+  const content = document.getElementById("about-update-content");
+  const action = document.getElementById("about-update-action");
+  if (!icon || !content || !action) return;
+  action.hidden = false;
+
+  const isStore = status.releaseUrl && status.releaseUrl.startsWith("ms-windows-store://");
+
+  if (status.status === "latest") {
+    bar.classList.add("win-infobar-success");
+    icon.innerHTML = UPDATE_ICONS.success;
+    if (isStore) {
+      content.textContent = `当前版本 v${status.currentVersion} ，已是最新版本。通过 Microsoft Store 自动更新。`;
+      action.hidden = true;
+    } else {
+      content.textContent = `当前版本 v${status.currentVersion} ，已是最新版本。`;
+      action.textContent = "查看更新日志";
+      action.onclick = () => invoke("open_url", { url: RELEASES_URL });
+    }
+  } else if (status.status === "update") {
+    bar.classList.add("win-infobar-warning");
+    icon.innerHTML = UPDATE_ICONS.warning;
+    content.textContent = `检测到新版本 v${status.latestVersion} ，当前版本 v${status.currentVersion} 。`;
+    action.textContent = "下载最新版本";
+    action.onclick = () => invoke("open_url", { url: status.releaseUrl || RELEASES_URL });
+  } else if (status.status === "storeUpdate") {
+    bar.classList.add("win-infobar-warning");
+    icon.innerHTML = UPDATE_ICONS.warning;
+    content.textContent = "Microsoft Store 存在更新版本，点击跳转更新。";
+    action.textContent = "前往更新";
+    action.onclick = () => invoke("open_url", { url: status.releaseUrl });
+  } else {
+    bar.classList.add("win-infobar-error");
+    icon.innerHTML = UPDATE_ICONS.error;
+    content.textContent = "无法检测更新，请检查网络状况或稍后再试。";
+    action.textContent = "查看详细信息";
+    action.onclick = () => showUpdateErrorFlyout(status.error, action);
+  }
+}
+
+async function init() {
+  initNavigation();
+
+  // 从托盘「关于」打开时定位到对应标签页
+  const hash = location.hash.slice(1);
+  if (hash) selectTab(hash);
+
+  try {
+    // 首份快照：本页还没有任何本地改动，**这是全仓唯一显式 `keepLocalEdits: false`**。
+    // 其余调用点（含下方 config-changed 处理器与各分区脚本的「重新拉取」）一律
+    // 走默认的 `true` —— 保留本页未落盘改动（B14）。
+    acceptConfig(await invoke("get_config"), { keepLocalEdits: false });
+
+    applyThemeMode(config.theme_mode || "follow_system");
+    initGeneralTab();
+    initUpdateSettings();
+    initLogSettings();
+    initDeviceFilterTab();
+    initAboutTab();
+    initLowBatteryNotifyTab();
+    initMaterialEffects();
+
+    // 跟随系统时，实时响应系统主题切换 → 刷新 flyout 背景颜色
+    new MutationObserver(() => updateFlyoutBackdrop(config?.window_material || "default"))
+      .observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
     loadDevicesAsync();
     loadAudioDevicesAsync();
+    initAudioCardToggle();
+    initMuteLockSettings();
+    initFineAdjustSettings();
+    initForceMuteSettings();
+    initSpatialSoundSettings();
+    initSimplifyNamesSettings();
     initShutdownVolumeSettings();
+    initA2dpSinkSettings();
+    initTaskbarTab();
     initShortcutSettings();
-
-    // Open 2.4G device list button
-    document.getElementById("btn-add-24g").addEventListener("click", async () => {
-      try {
-        await invoke("open_24g_device_file");
-      } catch (e) {
-        console.error("Failed to open file:", e);
-      }
-    });
-
-    // Help link for 2.4G device
-    document.getElementById("help-24g").addEventListener("click", async () => {
-      try {
-        await invoke("open_url", { url: "https://github.com/oneday5799/PeriphMonitor#%E6%B7%BB%E5%8A%A0%E8%87%AA%E5%AE%9A%E4%B9%89-24g-%E8%AE%BE%E5%A4%87" });
-      } catch (e) {
-        console.error("Failed to open URL:", e);
-      }
-    });
+    initDeviceShortcutSettings();
+    setupCardHoverSuppression();
   } catch (e) {
     console.error("Failed to load settings:", e);
   }
+
+  // 预热：提前完成各面板首次布局/绘制，避免首次切换动画被渲染耗时吃掉
+  document.querySelectorAll(".tab-content").forEach(p => {
+    p.style.display = "block";
+    void p.offsetHeight;
+    p.style.display = "";
+  });
+
+  // 无条件放行导航（配置加载失败也必须可操作），并补执行就绪前的待处理切换
+  settingsNavReady = true;
+  if (pendingNavTab) {
+    const t = pendingNavTab;
+    pendingNavTab = null;
+    t.click();
+  }
+}
+
+// config-changed: 使用 payload 中的 config 快照，无需再调用 get_config
+onTauriEvent("config-changed", async (event) => {
+  // 后端传递完整 config 快照，直接使用。
+  // ⚠️ B14：这是**外部**变更（弹窗侧改名/隐藏、另一窗口保存），到达时本页可能有
+  // 「刚点、还没落盘」的改动，整份替换会静默吞掉它们。`keepLocalEdits: true`
+  // 是 `acceptConfig` 的**默认值**，这里仍显式写出——它是本条缺陷的原始现场，
+  // 显式声明便于检索与评审。
+  // 另注意：下面 `loadDevicesAsync()` / `loadAudioDevicesAsync()` 内部也会
+  // `acceptConfig(await invoke("get_config"))`，**它们同样必须保留本地改动**，
+  // 否则本处理器刚保住的那点改动会在紧随其后的渲染里被二次覆盖
+  // （只改本函数是无效的，实测已确认）。
+  if (event.payload) {
+    acceptConfig(event.payload, { keepLocalEdits: true });
+  } else {
+    // 向后兼容：旧版后端可能传递空 payload
+    acceptConfig(await invoke("get_config"), { keepLocalEdits: true });
+  }
+  await loadDevicesAsync();
+  await loadAudioDevicesAsync();
+  await renderShutdownVolumeDevices();
+  // ⭐ 任务栏卡片的「已添加清单」是**后端命令**的结果（`get_pinned_taskbar_list`），
+  //   不随 `config` 快照自动更新 ⇒ 改名 / 钉移出后必须显式重拉，
+  //   否则用户停在任务栏 tab 上会一直看到旧名字。
+  if (typeof window.refreshTaskbarWidgetCardList === "function") {
+    window.refreshTaskbarWidgetCardList();
+  }
+  const listEl = document.getElementById("device-shortcut-list");
+  if (listEl) initDeviceShortcutSettings();
+  await renderLowBatteryContent();
+  // 材质切换进行中时跳过 initMaterialEffects，避免 data-material 被提前设置
+  if (!window.__materialChangeInProgress) {
+    initMaterialEffects();
+  }
+});
+
+// 托盘「关于」指向设置页关于标签（窗口已存在时）
+onTauriEvent("settings-tab", (e) => {
+  selectTab(e.payload);
+});
+
+// 折叠卡 hover 抑制（事件委托，兼容动态添加的分组卡片）
+function setupCardHoverSuppression() {
+  document.addEventListener("mouseover", (e) => {
+    const card = e.target.closest?.(".card.expandable");
+    if (!card) return;
+    const items = card.querySelector(".card-items");
+    if (!items) return;
+    card.classList.toggle("no-hover", items.contains(e.target));
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 窗口材质辅助函数
+// ═══════════════════════════════════════════════════════════════
+
+/// 更新 flyout 背景模糊效果（Acrylic backdrop-filter）
+function updateFlyoutBackdrop(material) {
+  const root = document.documentElement;
+  if (material === "recommended" || material === "acrylic") {
+    root.style.setProperty("--flyout-backdrop", "blur(30px) saturate(125%)");
+    const isDark = root.getAttribute("data-theme") === "dark";
+    root.style.setProperty("--flyout-bg", isDark ? "rgba(44, 44, 44, 0.85)" : "rgba(252, 252, 252, 0.85)");
+  } else {
+    root.style.removeProperty("--flyout-backdrop");
+    root.style.removeProperty("--flyout-bg");
+  }
+}
+
+/// 初始化时应用当前材质的 CSS 效果
+function initMaterialEffects() {
+  const material = config?.window_material || "default";
+  updateFlyoutBackdrop(material);
+  applyMaterialMode(material);
 }
 
 init();

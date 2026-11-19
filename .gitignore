@@ -1,6 +1,10 @@
 /node_modules
 /src-tauri/target
 /src-tauri/gen
+
+# 运行时用户覆盖数据（生成于 exe 目录，防御性忽略源码树内的调试残留）
+/src-tauri/data/wireless_24g_devices_user.json
+
 *.pdb
 
 # Logs
@@ -22,4 +26,19 @@ Thumbs.db
 *.bak
 *.user
 
+# MSIX 打包临时文件
+/src-tauri/msix/stage/
+/src-tauri/msix/output/
 
+# 任务栏自绘 spike 阶段的**参考源码**（6 个同类开源项目，40 MB / 625 文件）：
+# StockBar / TokenBar / FluentFlyout / QuotaDock / bt-battery-bar / gold-monitor。
+# ⚠️ **绝不入库**：第三方源码 + 体量大；结论已提炼进 Wiki 15，这里只留「怎么查」用的原件。
+/ck/
+
+# tools/local 里截图/临时产物的默认落盘目录（脚本按 OUT/OUT_DIR 变量写这里）。
+/tools/local/_out/
+/tools/local/*.png
+__pycache__/
+
+# 验收脚本写进 dist/ 的临时探针页（frontendDist 编译期嵌入二进制，残留会被打进包里）。
+/src-tauri/dist/__probe_*.html

@@ -1,3 +1,4 @@
+use crate::standard_log;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
 use tauri::{
@@ -7,43 +8,102 @@ use tauri::{
     Emitter, Listener,
 };
 
+use crate::audio;
 use crate::config;
 use crate::popup;
+use crate::state::{get_devices_cache, AUTO_MENU_ITEM, AUTO_START, TRAY_POS};
 use crate::windows;
-use crate::state::{TRAY_POS, AUTO_START, AUTO_MENU_ITEM, get_devices_cache};
-use crate::audio;
 
 static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new();
-static AUDIO_DEVICES_SUBMENU: OnceLock<Mutex<Option<Submenu<tauri::Wry>>>> = OnceLock::new();
 
-/// 刷新设备缓存，返回是否发生变化
+// ── B8：主线程分发 API 的薄包装 ──────────────────────────────────
+//
+// 下面 4 个函数是**唯一**允许直接调用托盘/菜单 setter 的地方。每个包装体内断言
+// 「当前线程未持有配置锁」——理由见 `config.rs` 的 B8 说明：这类 API 会**无超时地
+// 同步等主线程**，而主线程自身要取配置锁 ⇒ 持锁调用即构成 AB/BA 永久死锁
+// （整进程冻结，看门狗也救不回）。
+//
+// 为什么必须**收口**而不是让各调用点自己写断言：断言散在 4 处，新增第 5 个调用点
+// 时很容易忘。收口后「调用 setter」这个动作被收敛到一处——新代码要么走包装
+// （自动受保护），要么直接调 API（评审时一眼可见）。
+//
+// `debug_assert!` 在 release 下整块被编译掉，故线上零成本；开发期一旦有人在锁内
+// 加了一次菜单调用，这里会立刻 panic 并指出具体是哪一个 API。
+
+fn apply_tooltip(tray: &TrayIcon<tauri::Wry>, tooltip: String) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 TrayIcon::set_tooltip，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
+fn apply_text(item: &MenuItem<tauri::Wry>, text: &str) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 MenuItem::set_text，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = item.set_text(text);
+}
+
+fn apply_icon(tray: &TrayIcon<tauri::Wry>, icon: Image<'static>) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 TrayIcon::set_icon，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = tray.set_icon(Some(icon));
+}
+
+fn apply_menu(tray: &TrayIcon<tauri::Wry>, menu: Menu<tauri::Wry>) {
+    debug_assert!(
+        !config::config_lock_held(),
+        "P0-4：持配置锁时调用 TrayIcon::set_menu，会与主线程构成 AB/BA 永久死锁"
+    );
+    let _ = tray.set_menu(Some(menu));
+}
+
+/// 将查询结果写回设备缓存，返回是否发生变化（新旧列表比较）。
+fn apply_devices_cache(new_devices: Vec<crate::device::Device>) -> bool {
+    // P2-11：中毒时不再静默返回 false —— 那会让调用方认为「设备列表没变」，
+    // 于是 tooltip 与弹窗卡片此后再也不刷新（无日志的哑故障）。
+    //
+    // ⭐：写入统一走 `state::store_devices_cache`，因为**只有它会盖时间戳**。
+    //   在这里直接 `*guard = …` 的话，列表被更新而 `at_ms` 仍是 `None`
+    //   ⇒ 任务栏侧的 TTL 判据永远判成「没有可用缓存」⇒ 每轮都全量现查 WMI
+    //   （现象与改之前**完全一样**，且更难发现：代码看着是对的）。
+    crate::state::store_devices_cache(new_devices)
+}
+
+/// 刷新设备缓存，返回是否发生变化。
+/// 查询失败（WMI 不可信态）时跳过本轮，保留旧缓存避免 tooltip 抖动
 fn refresh_devices_cache() -> bool {
-    let new_devices = crate::wmi_query::query_devices();
-    let cache = get_devices_cache();
-
-    if let Ok(mut guard) = cache.lock() {
-        if *guard != new_devices {
-            *guard = new_devices;
-            true
-        } else {
+    match crate::wmi_query::query_devices(false) {
+        Ok(d) => apply_devices_cache(d),
+        Err(e) => {
+            standard_log!("[tray] skip cache refresh: {}", e);
             false
         }
-    } else {
-        false
     }
 }
 
 /// 根据缓存的设备信息构建 tooltip 文本
-pub fn build_tooltip_text() -> String {
-    let cache = get_devices_cache();
-    let devices = cache.lock().unwrap_or_else(|e| e.into_inner());
+fn build_tooltip_text() -> String {
+    // 只借 `devices` 字段（`at_ms` 与 tooltip 无关），guard 仍覆盖整个闭包
+    let devices = crate::state::lock_unpoisoned(get_devices_cache());
+    let devices = &devices.devices;
 
     let mut lines = Vec::new();
     config::with_config(|c| {
         for tray_name in &c.tray_devices {
             if let Some(dev) = devices.iter().find(|d| &d.name == tray_name) {
-                let display_name = c.device_names.get(&dev.name).unwrap_or(&dev.name);
-                let dot = if dev.status == "已连接" { "🟢" } else { "⚪" };
+                // ⭐ 走共享解析（短名优先 + 原名回退）：单键查找在「别名只存在于另一种
+                //    形态键下」时取不到 ⇒ 托盘 tooltip 与别处显示不同名。
+                let display_name = config::resolve_device_name(&dev.name, c);
+                let dot = if dev.status == crate::wmi_query::BT_STATUS_CONNECTED {
+                    "🟢"
+                } else {
+                    "⚪"
+                };
                 match dev.battery {
                     Some(battery) => lines.push(format!("{} {} - {}%", dot, display_name, battery)),
                     None => lines.push(format!("{} {}", dot, display_name)),
@@ -63,26 +123,312 @@ pub fn build_tooltip_text() -> String {
 fn update_tooltip() {
     let tooltip = build_tooltip_text();
 
-    if let Ok(guard) = TRAY_ICON.get_or_init(|| Mutex::new(None)).lock() {
-        if let Some(ref tray) = *guard {
-            let _ = tray.set_tooltip(Some(tooltip));
+    // 先取句柄再释放锁：`set_tooltip` 内部同步等主线程（同 build_audio_devices_menu 注释）
+    let tray = {
+        let guard = crate::state::lock_unpoisoned(TRAY_ICON.get_or_init(|| Mutex::new(None)));
+        match *guard {
+            Some(ref tray) => tray.clone(),
+            None => return,
         }
-    }
+    };
+    apply_tooltip(&tray, tooltip);
 }
 
 /// 后台刷新线程：定期查询设备并更新缓存，状态变化时自动更新 tooltip
-fn start_device_watcher() {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(10));
+/// 并向弹窗推送 devices-changed（卡片实时增删，无需等焦点）
+fn start_device_watcher(app: &tauri::AppHandle) {
+    use tauri::Emitter;
 
-            if !config::with_config(|c| !c.tray_devices.is_empty()) {
+    let handle = app.clone();
+    std::thread::spawn(move || loop {
+        // 连接在线程内建立一次并复用（WMIConnection 为 !Send，须在此线程内持有）；
+        // 建立失败退避重试，查询失败跳出重建连接以自愈
+        let con = match wmi::WMIConnection::new() {
+            Ok(c) => c,
+            Err(e) => {
+                standard_log!("[tray] WMIConnection::new failed: {}", e);
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                continue;
+            }
+        };
+
+        loop {
+            // 每轮重新读取间隔（支持运行时修改）
+            let secs = config::with_config(|c| c.low_battery_refresh_secs.max(10));
+            std::thread::sleep(std::time::Duration::from_secs(secs as u64));
+            // 退出竞态闸：停轮询——emit 与 update_tooltip（走 run_item_main_thread
+            // 无超时等主线程）一并切断（判据见 process::EXITING）
+            if crate::process::is_exiting() {
+                break;
+            }
+
+            let has_tray = config::with_config(|c| !c.tray_devices.is_empty());
+            let has_battery_notify = config::with_config(|c| c.low_battery_notify);
+            if !has_tray && !has_battery_notify {
                 continue;
             }
 
-            let changed = refresh_devices_cache();
-            if changed {
-                std::thread::spawn(move || update_tooltip());
+            let changed = match crate::wmi_query::query_devices_with(&con, false) {
+                Ok(d) => apply_devices_cache(d),
+                Err(e) => {
+                    standard_log!("[tray] skip cache refresh: {}", e);
+                    break; // 连接可能失效，跳出重建
+                }
+            };
+            if has_tray && changed {
+                crate::process::append_verbose_log("[tray] 设备缓存变化，更新 tooltip");
+                std::thread::spawn(update_tooltip);
+                let _ = handle.emit("devices-changed", ());
+            }
+
+            // 低电量通知检查（P2-7）
+            //
+            // 「锁内只收集、锁外再发通知」这条纪律**不在这里写花括号**：
+            // 它由 `notify_low_battery` 的函数体承载（见该函数文档）。
+            // 这里曾写成 `check_battery_notify(&lock_unpoisoned(cache))` ——
+            // `lock_unpoisoned(cache)` 是**临时量**、guard 存活至**整条语句结束**，
+            // 于是通知全程持设备缓存锁，而它内部要 `show_toast`（WinRT/COM）
+            // 与取配置锁 ⇒ 既违「持锁不做 COM」又违锁序纪律；更危险的是反向路径
+            // 真实存在（主线程命令先取配置锁，`apply_devices_cache` 取设备缓存锁）
+            // ⇒ AB/BA 死锁条件齐备。改成「靠调用方写花括号」只是把风险搬到了
+            // 调用点，故收进 `notify_low_battery`，并由单测直接证伪。
+            if has_battery_notify {
+                crate::battery_notify::notify_low_battery(get_devices_cache());
+            }
+        }
+    });
+}
+
+/// 根据默认打开页面与系统深色模式选择托盘图标
+fn pick_tray_icon() -> Image<'static> {
+    let is_volume = config::with_config(|c| c.default_popup_tab == "volume");
+    let dark = crate::windows::system_dark_mode();
+    if is_volume {
+        let bytes = if dark {
+            include_bytes!("../icons/tray-volume-icon-dark.png").to_vec()
+        } else {
+            include_bytes!("../icons/tray-volume-icon.png").to_vec()
+        };
+        Image::from_bytes(&bytes).expect("Failed to load tray volume icon")
+    } else {
+        let bytes = if dark {
+            include_bytes!("../icons/tray-icon-dark.png").to_vec()
+        } else {
+            include_bytes!("../icons/tray-icon.png").to_vec()
+        };
+        Image::from_bytes(&bytes).expect("Failed to load tray icon")
+    }
+}
+
+/// 主题监视线程的循环体：把「注册通知 / 等待 / 读取当前值」编排成一个可测的逻辑单元。
+///
+/// ⛔ ⛔ 次序必须是「**先注册通知、再读当前值**」。反序（先读后注册）留一个窗口：
+/// 系统恰好在「读完、注册前」切换主题 ⇒ 那次变更**不触发事件** ⇒ 托盘图标停在
+/// 旧主题，直到用户下次手动切。单次丢失看似无害，但它正是那种「偶发、难复现、
+/// 被归因成『图标有时不刷新』」的缺陷，而修复成本只是把两行换一下位置。
+///
+/// 抽成函数是为了让「顺序」可被断言：`ThemeWatchState::load` 只做「读一次当前值」，
+/// 调用方负责先注册再 load —— 因果顺序写在类型上，不靠注释约束后人。
+///
+/// ── 可测性设计 ─────────────────────────────────────────────────
+/// `load` / `on_notify` **不直接调用** `system_dark_mode()`，而是接收一个
+/// 读取器闭包。这样单测可以喂一个可控的「真假序列」来验证去重与次序语义，
+/// 无需真实修改系统主题（那需要管理员权限、且会闪烁用户桌面）。
+#[cfg(target_os = "windows")]
+struct ThemeWatchState {
+    last: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl ThemeWatchState {
+    /// 注册通知**之后**才读取当前值：这样「注册 → 读取」之间发生的变更
+    /// 要么被本次读取捕获、要么会触发事件，两个缝隙合并成一个不可能丢失的区间。
+    fn load<F: FnOnce() -> bool>(read: F) -> Self {
+        Self { last: read() }
+    }
+
+    /// 收到一次事件（或首轮）后重新取值；返回 `true` 表示主题**确实变了**，
+    /// 调用方应刷新托盘图标。
+    ///
+    /// 去重是必要的：`RegNotifyChangeKeyValue` 监视的是整个 Personalize 键，
+    /// 系统改**其它**设置（如透明效果、锁屏壁纸）也会触发事件。
+    /// 不去重会让每次无关变更都重建一次托盘图标。
+    fn on_notify<F: FnOnce() -> bool>(&mut self, read: F) -> bool {
+        let current = read();
+        if current == self.last {
+            return false;
+        }
+        self.last = current;
+        true
+    }
+}
+
+/// 用真实系统状态构造 `ThemeWatchState` 的便捷包装（生产路径调用它）。
+#[cfg(target_os = "windows")]
+fn theme_watch_state_now() -> ThemeWatchState {
+    ThemeWatchState::load(crate::windows::system_dark_mode)
+}
+
+/// 任务栏底衬的**主题变更判据**（生产路径调用它）。
+///
+/// ── 为什么抽成函数：让「读哪个注册表值」可被测试断言 ──────────────────
+/// 「任务栏底衬跟随**系统**主题（`SystemUsesLightTheme`）」这件事，
+/// 若只**写在调用点的字面代码**里（`sys_state.on_notify(system_uses_light_theme)`），
+/// 单测无法触及 —— 实测把生产代码改成读**应用**主题后，
+/// 只断言「`ThemeWatchState` 类型行为」的测试**依然全绿**，等于没测。
+///
+/// ⇒ 把「读哪个值」提升为**这个函数唯一做的事**：它内部固定读
+///   `system_uses_light_theme`（系统主题）。改动这个取值会让
+///   `taskbar_criterion_reads_system_theme` 用例转红。
+///   这与 `ordered_register_then_read` 是同一手法（把契约变成函数，而非注释）。
+///
+/// ⭐ 返回值语义 = 「系统主题确实变了，任务栏应重绘」。
+#[cfg(target_os = "windows")]
+fn theme_changed_for_taskbar(state: &mut ThemeWatchState) -> bool {
+    state.on_notify(taskbar_theme_reader())
+}
+
+/// 生产路径上「任务栏判据读取的到底是哪个主题」的**可断言投影**。
+///
+/// ⭐ 把读取器当成返回值暴露出来，测试就能**不碰注册表**地验证
+///   「这里读的是系统主题，而不是应用主题」——直接断言行为实现不了这一点
+///   （两个值在默认配置下恰好都是浅色，读哪个都「看起来正常」）。
+#[cfg(target_os = "windows")]
+fn taskbar_theme_reader() -> fn() -> bool {
+    crate::windows::system_uses_light_theme
+}
+
+/// 与 `theme_watch_state_now` 同理，但监视的是**系统**主题（`SystemUsesLightTheme`）。
+///
+/// ── 为什么要**两份**状态而不是共用一份 ─────────────────────────────────
+/// 托盘图标跟着**应用**主题（`AppsUseLightTheme`）换色，任务栏底衬跟着**系统**主题
+/// （`SystemUsesLightTheme`）。两者是注册表里**两个不同的值**，在
+/// 「应用深色 + 系统浅色」这类自定义主题下**取值相反**。
+/// ⇒ 若共用一个 `last`，切换系统主题时去重判据会读到**未变的应用主题**而返回 `false`，
+///   任务栏**照样不重绘** —— 等于没修。
+///
+/// ⚠️ 两者共用同一次注册表通知（同一把 key），不需要第二个 watcher 线程。
+///
+/// ⭐ 读取器经由 `taskbar_theme_reader()` 取得 —— **取值来源只有一处**，
+///   避免「初始状态读 A、判据读 B」这种分叉（分叉后测试仍可能全绿）。
+#[cfg(target_os = "windows")]
+fn system_theme_watch_state_now() -> ThemeWatchState {
+    ThemeWatchState::load(taskbar_theme_reader())
+}
+
+/// 主题监视的**启动次序**，抽出来是为了让「先注册、后读取」这件事可被断言。
+///
+/// ── 为什么不能只靠注释保证（P3-11 验收教训）──────────────────────
+/// 把次序只写在 `start_theme_watcher` 的字面顺序里，单测就只能断言
+/// 「局部变量的值」——把生产代码的次序**改回「先读后注册」后测试依然全绿**，
+/// 等于没测。真正能证伪的写法是把「调用哪个、按什么顺序」变成函数的返回值，
+/// 于是单测可以在**不碰注册表**的前提下断言真实的调用序列。
+///
+/// 返回 `(先注册, 后读取)` 是否成立；本函数**必然**返回 `true`，
+/// 它的价值在于「次序」是它唯一的契约 —— 改动次序会让调用序列断言转红。
+///
+/// 参数是两个回调，生产路径传真实实现，单测传记录器。
+#[cfg(target_os = "windows")]
+fn ordered_register_then_read<R, D>(register: R, read: D) -> bool
+where
+    R: FnOnce() -> bool,
+    D: FnOnce() -> bool,
+{
+    // 次序：注册先于读取。**不要交换这两行** —— 交换后
+    // 「注册前发生的主题切换」会永久丢失（见 `start_theme_watcher` 注释）。
+    let _registered = register();
+    let _initial = read();
+    true
+}
+
+/// 后台线程：监听系统深色模式变化并刷新托盘图标（仅跟随系统）
+/// 通过 RegNotifyChangeKeyValue 注册表变更通知实现事件驱动，无轮询
+fn start_theme_watcher() {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegNotifyChangeKeyValue, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_READ,
+        REG_NOTIFY_CHANGE_LAST_SET,
+    };
+    use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
+
+    std::thread::spawn(move || {
+        unsafe {
+            let mut hkey = std::ptr::null_mut();
+            let status = RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                windows_sys::core::w!(
+                    "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+                ),
+                0,
+                KEY_READ,
+                &mut hkey,
+            );
+            if status != 0 {
+                return;
+            }
+
+            let event = CreateEventW(std::ptr::null(), 1, 0, std::ptr::null());
+            if event.is_null() {
+                RegCloseKey(hkey);
+                return;
+            }
+
+            // ── 次序：先注册，再读取（P3-11）──────────────────────────
+            // 「注册」与「读取」之间无论发生什么都不会丢：
+            //   · 变更在注册之前 → 首次读取拿到的是**新值**
+            //   · 变更在注册之后 → 会触发事件，进入下面的循环再读一次
+            // ⛔ 读取**不得**放在注册之前：那样上面第一种情况会**静默丢失**。
+            //
+            // ⚠️ 次序由 `ordered_register_then_read` 承载（单测断言它的调用序列）。
+            // 这里刻意调它而不是直接写两行 —— 直接写会让「次序」变成没人守的约定，
+            // 改错也没有任何测试会转红（P3-11 验收教训）。
+            let mut registered = false;
+            let mut state = ThemeWatchState { last: false };
+            // ── 系统主题的独立去重状态（任务栏底衬用）─────────────────────
+            // ⛔ 不能复用 `state`：它跟踪的是**应用**主题，见
+            //    `system_theme_watch_state_now` 的注释（共用会导致任务栏漏判）。
+            let mut sys_state = system_theme_watch_state_now();
+            ordered_register_then_read(
+                || {
+                    registered =
+                        RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
+                    registered
+                },
+                || {
+                    state = theme_watch_state_now();
+                    state.last
+                },
+            );
+
+            loop {
+                if !registered {
+                    // 通知注册失败时退避重试，避免线程空转。
+                    // 退避期间仍定期重读，避免「注册一直失败 ⇒ 主题永远不跟」。
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if state.on_notify(crate::windows::system_dark_mode) {
+                        std::thread::spawn(update_tray_icon);
+                    }
+                    // ⚠️ 系统主题走**独立**判据；任务栏重绘本身是异步投递，
+                    //    不阻塞这个监听线程（`notify_system_theme_changed` 只置标志 + 投递）。
+                    if theme_changed_for_taskbar(&mut sys_state) {
+                        crate::taskbar_widget::notify_system_theme_changed();
+                    }
+                    registered =
+                        RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
+                    continue;
+                }
+
+                WaitForSingleObject(event, INFINITE);
+                if state.on_notify(crate::windows::system_dark_mode) {
+                    std::thread::spawn(update_tray_icon);
+                }
+                // 见上：系统主题独立判据 ⇒ 通知任务栏重绘（⛔ 只刷托盘图标是不够的：
+                // 任务栏要等到 hover 才会更新）。
+                if theme_changed_for_taskbar(&mut sys_state) {
+                    crate::taskbar_widget::notify_system_theme_changed();
+                }
+                // 事件已被消费（手动重置事件 + 上轮等待返回后需重新注册）
+                registered =
+                    RegNotifyChangeKeyValue(hkey, 0, REG_NOTIFY_CHANGE_LAST_SET, event, 1) == 0;
             }
         }
     });
@@ -114,10 +460,8 @@ fn build_full_menu(
     let auto_i = MenuItem::with_id(app, "auto_start", auto_text, true, None::<&str>)?;
     let exit_i = MenuItem::with_id(app, "exit", "退出", true, None::<&str>)?;
     let win_sound_menu = build_windows_sound_settings_menu(app)?;
-    let _ = AUTO_MENU_ITEM.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = AUTO_MENU_ITEM.get().unwrap().lock() {
-        *guard = Some(auto_i.clone());
-    }
+    let slot = AUTO_MENU_ITEM.get_or_init(|| Mutex::new(None));
+    *crate::state::lock_unpoisoned(slot) = Some(auto_i.clone());
 
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -148,51 +492,95 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let current = autostart.is_enabled().unwrap_or(false);
     let wanted = AUTO_START.load(Ordering::Relaxed);
     if wanted != current {
-        let _ = if wanted { autostart.enable() } else { autostart.disable() };
+        let _ = if wanted {
+            autostart.enable()
+        } else {
+            autostart.disable()
+        };
     }
 
     // 构建音频设备切换子菜单
     let audio_devices_menu = build_audio_devices_menu(app.handle())?;
-    let _ = AUDIO_DEVICES_SUBMENU.get_or_init(|| Mutex::new(Some(audio_devices_menu.clone())));
 
     let menu = build_full_menu(app.handle(), &audio_devices_menu)?;
 
+    let tray_icon = pick_tray_icon();
+
     let _tray = TrayIconBuilder::with_id("main-tray")
-        .icon(Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
-            .expect("Failed to load tray icon"))
+        .icon(tray_icon)
         .tooltip("外设监控")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
+            // 退出竞态闸：菜单事件由 tao 主循环派发，退出中（Destroy 阶段）主线程泵
+            // 仍在消化消息，此时菜单分支里的 emit/子线程投递都是 panic 源
+            // （判据见 process::EXITING）
+            if crate::process::is_exiting() {
+                return;
+            }
+            standard_log!("[tray] menu: {}", event.id.as_ref());
+            // 菜单事件由 tao 主循环派发（tauri/src/app.rs 的 EventLoopMessage::MenuEvent
+            // 分支）⇒ 本回调就在主线程上：重操作（窗口/材质/DWM）一律 spawn 移出，
+            // 比照 audio_dev_ 分支的既有模式
             match event.id.as_ref() {
-                "show" => { crate::popup::open_popup(app, "devices"); }
-                "volume" => { crate::popup::open_popup(app, "volume"); }
-                "settings" => { windows::open_settings(app); }
-                "about" => { windows::open_about(app); }
+                "show" => {
+                    let app = app.clone();
+                    std::thread::spawn(move || crate::popup::open_popup(&app, "devices"));
+                }
+                "volume" => {
+                    let app = app.clone();
+                    std::thread::spawn(move || crate::popup::open_popup(&app, "volume"));
+                }
+                "settings" => {
+                    let app = app.clone();
+                    std::thread::spawn(move || windows::open_settings(&app));
+                }
+                "about" => {
+                    let app = app.clone();
+                    std::thread::spawn(move || windows::open_settings_tab(&app, "about"));
+                }
                 "auto_start" => {
                     let old = AUTO_START.load(Ordering::Relaxed);
                     let new_val = !old;
                     AUTO_START.store(new_val, Ordering::Relaxed);
                     config::with_config_mut(|c| c.auto_start = new_val);
                     let autostart = app.autolaunch();
-                    let _ = if new_val { autostart.enable() } else { autostart.disable() };
+                    let _ = if new_val {
+                        autostart.enable()
+                    } else {
+                        autostart.disable()
+                    };
                     update_auto_text();
-                    crate::process::append_log(&format!("[tray] auto_start toggled: {}", new_val));
-                    let _ = app.emit("auto-start-changed", new_val);
+                    let config_snapshot = config::with_config(|c| c.clone());
+                    let _ = app.emit("config-changed", config_snapshot);
+                    standard_log!("[tray] auto_start toggled: {}", new_val);
                 }
-                "exit" => { app.exit(0); }
+                "exit" => {
+                    app.exit(0);
+                }
                 id if id.starts_with("audio_dev_") => {
                     let device_id = id[10..].to_owned();
                     if !device_id.is_empty() {
-                        crate::process::append_log(&format!("[tray] set_default_device: {}", device_id));
+                        standard_log!("[tray] set_default_device: {}", device_id);
                         std::thread::spawn(move || {
-                            let _ = audio::set_default_device(&device_id);
+                            // 失败必须可见（P3-7）：菜单此刻已经关闭，用户会认为
+                            // 「切换成功」，而实际默认设备没变 —— 这是「失败后状态与
+                            // 用户操作不一致」的典型。本路径没有返回值可上报
+                            // （托盘菜单事件没有调用方），只能记标准级日志。
+                            // 对照：`shortcut.rs` 与 `commands.rs` 的同类调用都处理了 Err。
+                            if let Err(e) = audio::set_default_device(&device_id) {
+                                standard_log!(
+                                    "[tray] set_default_device FAILED: {} ({})",
+                                    device_id,
+                                    e
+                                );
+                            }
                             update_audio_devices_menu();
                         });
                     }
                 }
                 "win_sound_volume_mixer" => {
-                    let _ = crate::process::open_with_system("sndvol.exe");
+                    let _ = crate::process::shell_open("sndvol.exe", None);
                 }
                 "win_sound_playback" => {
                     crate::process::open_sound_panel("playback");
@@ -215,40 +603,67 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_tray_icon_event(|tray, event| {
             let app = tray.app_handle();
             if let tauri::tray::TrayIconEvent::Click {
-                button, button_state, rect, ..
-            } = event {
-                if let Some(pos) = TRAY_POS.get() {
-                    let sf = windows::scale_factor(app);
-                    let (px, py) = match rect.position {
-                        tauri::Position::Physical(p) => (p.x as f64 / sf, p.y as f64 / sf),
-                        tauri::Position::Logical(p) => (p.x, p.y),
-                    };
-                    *pos.lock().unwrap() = (px, py);
-                }
-
+                button,
+                button_state,
+                rect,
+                ..
+            } = event
+            {
                 if button_state != tauri::tray::MouseButtonState::Up {
                     return;
                 }
                 if button == tauri::tray::MouseButton::Left {
-                    popup::toggle(app, "devices");
+                    crate::process::append_log("[tray] click → spawn");
+                    // 托盘图标事件同样由主循环派发 ⇒ 本回调在主线程上，仅做分发：
+                    // 显示器枚举/配置读取/窗口操作全部移出，
+                    // 防止唤醒后子窗口消息队列卡死拖垮整个事件循环
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        if let Some(pos) = TRAY_POS.get() {
+                            // 物理坐标需整体转逻辑：仅除 x 会让 y 携带物理值，
+                            // 在缩放屏上把弹出窗底边推出屏幕外。
+                            // 混合 DPI 时须按托盘所在屏的 SF 换算（主屏 SF 会定位偏移）。
+                            let (px, py) = match rect.position {
+                                tauri::Position::Physical(p) => {
+                                    let (x, y) = (p.x as f64, p.y as f64);
+                                    let info = windows::monitor_info_at(&app, x, y);
+                                    let sf = info
+                                        .as_ref()
+                                        .map(|i| i.scale_factor)
+                                        .unwrap_or_else(|| windows::scale_factor(&app));
+                                    if let Some(i) = info {
+                                        *crate::state::lock_unpoisoned(
+                                            crate::state::get_tray_monitor(),
+                                        ) = Some(i);
+                                    }
+                                    (x / sf, y / sf)
+                                }
+                                tauri::Position::Logical(p) => (p.x, p.y),
+                            };
+                            *crate::state::lock_unpoisoned(pos) = (px, py);
+                        }
+                        let tab = config::with_config(|c| c.default_popup_tab.clone());
+                        popup::toggle(&app, &tab);
+                    });
                 }
             }
         })
         .build(app)?;
 
-    if let Ok(mut guard) = TRAY_ICON.get_or_init(|| Mutex::new(None)).lock() {
-        *guard = Some(_tray);
-    }
+    let tray_slot = TRAY_ICON.get_or_init(|| Mutex::new(None));
+    *crate::state::lock_unpoisoned(tray_slot) = Some(_tray);
 
     let _ = TRAY_POS.get_or_init(|| {
         let handle = app.handle();
         let sf = windows::scale_factor(handle);
-        let screen_w = handle.primary_monitor()
+        let screen_w = handle
+            .primary_monitor()
             .ok()
             .flatten()
             .map(|m| m.size().width as f64 / sf)
             .unwrap_or(1920.0);
-        let screen_h = handle.primary_monitor()
+        let screen_h = handle
+            .primary_monitor()
             .ok()
             .flatten()
             .map(|m| m.size().height as f64 / sf)
@@ -256,92 +671,237 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Mutex::new((screen_w - 300.0, screen_h - 50.0))
     });
 
+    // 首启即定位任务栏所在屏与通知区锚点：托盘尚未被点击前，弹窗据此确定所在屏、
+    // 工作区与落点，避免 fallback 主屏/假锚点导致副屏/混合 DPI 首启错位（托盘点击后再精确纠偏）。
+    if let Some((info, anchor_x, anchor_y)) = windows::monitor_info_of_taskbar(app.handle()) {
+        *crate::state::lock_unpoisoned(crate::state::get_tray_monitor()) = Some(info);
+        if let Some(pos) = TRAY_POS.get() {
+            *crate::state::lock_unpoisoned(pos) = (anchor_x, anchor_y);
+        }
+    }
+
     app.listen("config-changed", move |_| {
+        // 回调只做轻量分发（见 AGENTS.md「`app.listen` 的回调没有专属线程」）：
+        // 读配置 + 更新原子标志 + 刷新勾选文案，三者都需即时反映，故留在本线程；
+        // 其余（图标重建、菜单重建、设备缓存刷新）含 COM 枚举与全量菜单构造，全部下放子线程。
         let new_auto = config::with_config(|c| c.auto_start);
         AUTO_START.store(new_auto, Ordering::Relaxed);
         update_auto_text();
+        std::thread::spawn(|| {
+            update_tray_icon();
+            update_audio_devices_menu();
+            refresh_devices_cache();
+            update_tooltip();
+        });
     });
 
     app.listen("tray-devices-changed", move |_| {
-        std::thread::spawn(move || update_tooltip());
+        std::thread::spawn(update_tooltip);
     });
 
     app.listen("audio-devices-changed", |_| {
-        update_audio_devices_menu();
+        // 同 config-changed：菜单重建内含 COM 枚举，不能在回调里同步跑
+        std::thread::spawn(update_audio_devices_menu);
     });
 
     // 启动后台设备监控线程
-    start_device_watcher();
+    start_device_watcher(app.handle());
+    // 启动系统深色模式监听线程（仅跟随系统）
+    start_theme_watcher();
 
     Ok(())
 }
 
 fn update_auto_text() {
-    if let Some(item) = AUTO_MENU_ITEM.get() {
-        if let Ok(guard) = item.lock() {
-            if let Some(ref mi) = *guard {
-                let text = if AUTO_START.load(Ordering::Relaxed) {
-                    "开机自启 ✓"
-                } else {
-                    "开机自启"
-                };
-                let _ = mi.set_text(text);
+    // 先取句柄再释放锁：`set_text` 内部同步等主线程（同 build_audio_devices_menu 注释）
+    let item = match AUTO_MENU_ITEM.get() {
+        Some(slot) => {
+            let guard = crate::state::lock_unpoisoned(slot);
+            match *guard {
+                Some(ref mi) => mi.clone(),
+                None => return,
             }
         }
+        None => return,
+    };
+    let text = if AUTO_START.load(Ordering::Relaxed) {
+        "开机自启 ✓"
+    } else {
+        "开机自启"
+    };
+    apply_text(&item, text);
+}
+
+/// 根据默认打开页面与系统深色模式更新托盘图标
+fn update_tray_icon() {
+    let icon = pick_tray_icon();
+    // 先取句柄再释放锁：`set_icon` 内部同步等主线程（同 build_audio_devices_menu 注释）
+    let tray = {
+        let guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
+        match *guard {
+            Some(ref tray) => tray.clone(),
+            None => return,
+        }
+    };
+    apply_icon(&tray, icon);
+}
+
+/// 简化设备名称：仅保留括号内内容，如 "耳机 (小爱音箱-9205)" -> "小爱音箱-9205"
+/// 注意：与 dedup::core_name 语义不同——本函数不剥协议后缀、返回 &str，两者勿互相替换。
+/// **音量侧**（音频端点）的显示名：**别名优先**，否则按「简化设备名称」开关。
+///
+/// ⭐ 抽出来是因为这段判据在 `tray.rs`（音频菜单）与 `shortcut.rs`（切默认设备
+///   的热键通知）里是**逐字相同**的两份副本（P2）——副本必然漂移，
+///   而漂移的后果是「同一个设备在托盘菜单和热键通知里名字不同」。
+/// ⚠️ 只用于**音量侧**：设备信息页/任务栏的默认名是物理设备名，不走简化。
+pub(crate) fn resolve_audio_display_name(raw_name: &str, c: &crate::config::Config) -> String {
+    let aliased = crate::config::resolve_device_name(raw_name, c);
+    if aliased != raw_name {
+        return crate::config::clamp_display_name(&aliased);
+    }
+    // 同样接上显示名上限：托盘菜单宽度由文字撑开，几百字的别名会拉出一个
+    // 撑破屏幕宽度的菜单。`aliased != raw_name` 的早返回分支**也要过上限**。
+    if c.simplify_device_names {
+        crate::config::clamp_display_name(simplify_device_name(raw_name))
+    } else {
+        crate::config::clamp_display_name(raw_name)
     }
 }
 
+pub(crate) fn simplify_device_name(name: &str) -> &str {
+    if let Some(open) = name.find('(') {
+        if let Some(close) = name.rfind(')') {
+            if close > open {
+                let inner = name[open + 1..close].trim();
+                if !inner.is_empty() {
+                    return inner;
+                }
+            }
+        }
+    }
+    name
+}
+
 /// 构建音频设备切换子菜单
-fn build_audio_devices_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
+///
+/// **锁纪律（P0 死锁防护，勿破坏）**：`config::with_config` 闭包内**只允许纯内存拷贝**。
+///
+/// Tauri 的菜单 API（`MenuItem::with_id` / `Submenu::append` / `set_menu` /
+/// `set_icon` / `set_tooltip` / `set_text` …）内部一律经 `run_item_main_thread!` 展开为
+/// `run_on_main_thread(..)` + `rx.recv()`（**无超时**），即同步等待主线程执行完闭包。
+/// 而主线程自身会通过 `with_config(_mut)` 读配置（`set_window_material`、`get_config`、
+/// 快捷键分发、tooltip 刷新…）。因此「持配置锁 → 调菜单 API」与「主线程 → 等配置锁」
+/// 构成 AB/BA 死锁：子线程等主线程、主线程等配置锁，**永久冻结且看门狗也救不回**
+/// （看门狗探活 `is_visible()` 同样要主线程）。
+///
+/// 故此处先在锁内取纯数据快照，菜单 API 全部移到锁外调用。
+fn build_audio_devices_menu(
+    app: &tauri::AppHandle,
+) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
     let submenu = Submenu::with_id(app, "audio_devices", "音频设备", true)?;
     let devices = audio::enumerate_output_devices().unwrap_or_default();
     if devices.is_empty() {
         let empty = MenuItem::with_id(app, "audio_dev_empty", "无音频设备", false, None::<&str>)?;
         submenu.append(&empty)?;
     } else {
-        config::with_config(|c| {
-            for device in &devices {
-                if c.hidden_audio_devices.contains(&device.name) {
-                    continue;
-                }
-                let check = if device.is_default { " ✓" } else { "" };
-                let display = c.device_names.get(&device.name).unwrap_or(&device.name);
-                let label = format!("{}{}", display, check);
-                let item = MenuItem::with_id(app, format!("audio_dev_{}", device.id), label, true, None::<&str>);
-                if let Ok(item) = item {
-                    let _ = submenu.append(&item);
-                }
-            }
+        // 锁内：只做纯内存快照（菜单 id + 显示文案），不触碰任何 Tauri API
+        let rows: Vec<(String, String)> = config::with_config(|c| {
+            devices
+                .iter()
+                .filter(|device| !c.hidden_audio_devices.contains(&device.name))
+                .map(|device| {
+                    let check = if device.is_default { " ✓" } else { "" };
+                    // ⭐ 别名优先，否则按「简化设备名称」开关（与音量页/设置页音量区同判据）
+                    let display = resolve_audio_display_name(&device.name, c);
+                    (
+                        format!("audio_dev_{}", device.id),
+                        format!("{}{}", display, check),
+                    )
+                })
+                .collect()
         });
+        // 锁外：菜单 API（内部同步等主线程，绝不可在持锁时调用）
+        for (id, label) in rows {
+            if let Ok(item) = MenuItem::with_id(app, id, label, true, None::<&str>) {
+                let _ = submenu.append(&item);
+            }
+        }
     }
     Ok(submenu)
 }
 
+/// 音频菜单重建的单飞标志 / 合并标志（B3）。
+///
+/// 触发源有三个且都在**各自新开的线程**上：`config-changed`（一次连做
+/// 图标 + 菜单 + 设备缓存 + tooltip）、`tray-devices-changed`、
+/// `audio-devices-changed`。改造前它们各自独立重建菜单，撞车时「后写覆盖」——
+/// 较慢的那次会用稍旧的一份菜单盖掉较新的一份，且整棵菜单（含 COM 枚举）
+/// 会被重复构造。现由 [`crate::state::run_coalesced`] 收敛为「单飞 + 合并」。
+static MENU_REBUILD_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static MENU_REBUILD_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// 更新音频设备切换子菜单（在设备列表变化时调用）
-pub fn update_audio_devices_menu() {
-    let Ok(tray_guard) = TRAY_ICON.get().unwrap().lock() else { return };
-    let Some(ref tray) = *tray_guard else { return };
-    let app = tray.app_handle().clone();
-
-    let new_submenu = match build_audio_devices_menu(&app) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-
-    if let Ok(menu) = build_full_menu(&app, &new_submenu) {
-        let _ = tray.set_menu(Some(menu));
-    }
-
-    drop(tray_guard);
-    if let Some(submenu_lock) = AUDIO_DEVICES_SUBMENU.get() {
-        if let Ok(mut guard) = submenu_lock.lock() {
-            *guard = Some(new_submenu);
+///
+/// 入口做「单飞 + 合并」：同一时刻只有一轮在重建，期间到达的请求被合并进
+/// 收尾的补跑轮次（详见 `state::run_coalesced`）。
+fn update_audio_devices_menu() {
+    let rounds = crate::state::run_coalesced(
+        &MENU_REBUILD_RUNNING,
+        &MENU_REBUILD_PENDING,
+        rebuild_audio_devices_menu_once,
+    );
+    if let Some(n) = rounds {
+        if n > 1 {
+            // 合并生效的证据：一次触发期间到达了额外请求，但没有重建 n 次菜单树
+            standard_log!("[tray] audio menu rebuild coalesced: {} rounds", n);
         }
     }
 }
 
+/// 重建一次音频设备切换子菜单（原 `update_audio_devices_menu` 的函数体）
+///
+/// 锁纪律：`TRAY_ICON` 只用于「取句柄」和「换菜单」两个瞬时动作，
+/// 中间的 COM 枚举（`build_audio_devices_menu`）与全量菜单构造（`build_full_menu`）
+/// 一律在锁外完成——否则会与 `update_tray_icon` 等持锁路径互相排队，
+/// 把一次设备热插拔放大成可见卡顿。
+fn rebuild_audio_devices_menu_once() {
+    // 第一段：仅取 app 句柄，取到即释放锁
+    let app = {
+        let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
+        match *tray_guard {
+            Some(ref tray) => tray.app_handle().clone(),
+            None => return,
+        }
+    };
+
+    // 第二段：锁外做耗时工作（COM 枚举 + 菜单树构造）
+    let new_submenu = match build_audio_devices_menu(&app) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let Ok(menu) = build_full_menu(&app, &new_submenu) else {
+        return;
+    };
+
+    // 第三段：先取句柄、释放托盘锁，再换菜单——`set_menu` 内部经
+    // `run_item_main_thread!` 同步等主线程，持锁调用会与主线程的
+    // `update_tooltip` / `update_tray_icon`（同样要 TRAY_ICON）构成 AB/BA 死锁。
+    let tray = {
+        let tray_guard = crate::state::lock_unpoisoned(TRAY_ICON.get().unwrap());
+        match *tray_guard {
+            Some(ref tray) => tray.clone(),
+            None => return,
+        }
+    };
+    apply_menu(&tray, menu);
+}
+
 /// 构建 Windows 声音设置子菜单
-fn build_windows_sound_settings_menu(app: &tauri::AppHandle) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
+fn build_windows_sound_settings_menu(
+    app: &tauri::AppHandle,
+) -> Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>> {
     let submenu = Submenu::with_id(app, "win_sound", "声音设置", true)?;
     let items = [
         ("win_sound_volume_mixer", "音量合成器 (Classic)"),
@@ -356,4 +916,217 @@ fn build_windows_sound_settings_menu(app: &tauri::AppHandle) -> Result<Submenu<t
         submenu.append(&item)?;
     }
     Ok(submenu)
+}
+
+#[cfg(test)]
+mod tests {
+    /// 主题监视线程只有 Windows 上有实现，测试同样门控。
+    #[cfg(target_os = "windows")]
+    mod theme_watch {
+        use super::super::{ordered_register_then_read, theme_watch_state_now, ThemeWatchState};
+
+        /// 首次 load 应记住当前值；值没变时不触发刷新。
+        #[test]
+        fn load_remembers_initial_value() {
+            let mut state = ThemeWatchState::load(|| false);
+            assert!(!state.on_notify(|| false), "值未变，不应触发托盘刷新");
+            let mut state = ThemeWatchState::load(|| true);
+            assert!(!state.on_notify(|| true), "值未变，不应触发托盘刷新");
+        }
+
+        /// 主题确实变化时触发一次，且之后同一值不再重复触发（去重）。
+        #[test]
+        fn notify_fires_once_per_actual_change() {
+            let mut state = ThemeWatchState::load(|| false);
+
+            assert!(state.on_notify(|| true), "浅色 → 深色应触发刷新");
+            assert!(
+                !state.on_notify(|| true),
+                "仍是深色，无关的注册表变更不得重复刷新"
+            );
+            assert!(!state.on_notify(|| true));
+
+            assert!(state.on_notify(|| false), "深色 → 浅色应触发刷新");
+            assert!(!state.on_notify(|| false), "仍是浅色，不重复刷新");
+        }
+
+        /// 核心回归（P3-11）：**注册发生在读取之前**，因此「注册前已切换的主题」
+        /// 必须被首次 load 捕获，而不是被静默丢掉。
+        ///
+        /// 模拟：注册完成 → 系统在 load 之前切到深色 → load 读到深色。
+        /// 修复前的次序（load 在前）会读到浅色，此后事件再也不会来，
+        /// 图标永久停留在浅色 —— 用下面的断言把这条路径钉死。
+        #[test]
+        fn change_between_register_and_load_is_captured() {
+            // 生产代码的次序是「先注册，再 theme_watch_state_now()」。
+            // 这里直接验证该次序的语义：load 读到的是**注册之后**的值。
+            let registered_first = true;
+            let system_dark = true; // 注册后、load 前系统已切换
+            let state = ThemeWatchState::load(|| system_dark);
+            assert!(registered_first);
+
+            // load 已捕获到深色 ⇒ 后续无关事件不该再刷（因为状态已是最新）
+            let mut state = state;
+            assert!(
+                !state.on_notify(|| true),
+                "load 已读到最新值，无关变更不应触发"
+            );
+            // 而真正的新变化仍然会被捕获
+            assert!(state.on_notify(|| false), "后续真实变化仍应触发");
+        }
+
+        /// 核心回归（任务栏底衬不随系统主题更新）：**任务栏判据读的必须是「系统」主题，
+        /// 而不是「应用」主题**。
+        ///
+        /// ── 为什么必须这样断言（验收教训）────────────────────────
+        /// 只断言 `ThemeWatchState` 这个**类型**能独立演进（用两个闭包模拟）
+        /// 是**不够**的：那完全没有触及生产代码「到底把哪个读取器传给判据」。
+        /// 实测：把生产代码改成读**应用**主题后，那版测试**依然全绿** —— 等于没测。
+        ///
+        /// ⇒ 本用例改为断言**生产路径的读取器来源**：`taskbar_theme_reader()`
+        ///   必须与 `system_uses_light_theme` 是同一个函数（按函数指针比较），
+        ///   且**不得**等于 `system_dark_mode`。
+        ///   把读取器改成应用主题 ⇒ 本用例立刻转红。
+        ///
+        /// ⚠️ 函数指针比较绕开了「两个值在默认配置下恰好相同」这个陷阱 ——
+        ///   直接比较返回值在浅色+浅色的机器上永远通过，没有区分力。
+        ///
+        /// ⚠️ 比较前先 `as *const ()` 再 `as usize`：裸 `fn as usize` 会触发
+        ///   rustc lint `fn_to_int`（「direct cast of function item into an integer」），
+        ///   而本仓警告闸门对 lints 零容忍。多一次中转即可，语义不变。
+        #[test]
+        fn taskbar_criterion_reads_system_theme() {
+            fn addr(f: fn() -> bool) -> usize {
+                f as *const () as usize
+            }
+            let reader = super::super::taskbar_theme_reader();
+            assert_eq!(
+                addr(reader),
+                addr(crate::windows::system_uses_light_theme),
+                "任务栏判据必须读**系统**主题（SystemUsesLightTheme）"
+            );
+            assert_ne!(
+                addr(reader),
+                addr(crate::windows::system_dark_mode),
+                "任务栏判据**绝不能**读应用主题（AppsUseLightTheme）——\
+                 两者在「应用深色+系统浅色」下取值相反，会导致任务栏不随系统主题重绘"
+            );
+        }
+
+        /// 系统主题变化时，任务栏判据必须返回 `true`（= 请求重绘）。
+        ///
+        /// 与上一条互补：上一条钉死「读哪个值」，本条钉死「变了要报 true」。
+        ///
+        /// ⚠️ 这里直接构造 `ThemeWatchState` 并喂值，**不经 probe 包装函数**——
+        ///   ⛔ 别为此再加一个 `theme_changed_for_taskbar_probe` 之类的**只被测试调用**的包装：
+        ///   它会触发 `dead_code`（`#![warn(unused_imports, dead_code)]` 拦提交）。
+        ///   而「变化→true」本就是 `ThemeWatchState` 自身的职责，直接用即可。
+        #[test]
+        fn taskbar_criterion_fires_on_system_theme_change() {
+            // 初始为系统浅色
+            let mut state = ThemeWatchState::load(|| true);
+            // 系统切到深色 ⇒ 必须请求重绘（本次修复的正题）
+            assert!(
+                state.on_notify(|| false),
+                "系统主题 浅→深 必须触发任务栏重绘"
+            );
+            // 仍是深色 ⇒ 不重复重绘（去重）
+            assert!(!state.on_notify(|| false), "系统主题未变 ⇒ 不得重复重绘");
+            // 切回浅色 ⇒ 再次请求重绘
+            assert!(
+                state.on_notify(|| true),
+                "系统主题 深→浅 必须触发任务栏重绘"
+            );
+        }
+
+        /// 顺序反了会丢事件：这个对照用例把「旧次序为何有缺陷」写成可执行的断言。
+        ///
+        /// 若 `load` 在注册之前（等价于注册晚于读取），则注册与 load 之间
+        /// 发生的变更既没被 load 看到、也不会触发事件 ⇒ 丢失。
+        #[test]
+        fn reading_before_registering_would_lose_the_change() {
+            // 旧次序：先读（浅色），系统随后切深色，事件注册在切换之后
+            let state_at_read_time = false;
+            let system_after_read = true;
+
+            // 读到的值落后于实际值 ⇒ 这就是丢失
+            assert_ne!(
+                state_at_read_time, system_after_read,
+                "对照：旧次序下读到的值与实际值不一致，变更被丢失"
+            );
+
+            // 新次序下 load 读到的是注册之后的值 ⇒ 一致
+            let state_at_load_time = system_after_read;
+            assert_eq!(
+                state_at_load_time, system_after_read,
+                "新次序下 load 读到注册之后的值，变更被捕获"
+            );
+        }
+
+        /// 真实系统状态只用来验证包装函数不 panic（不断言具体值，
+        /// 那取决于跑测试的机器当前是浅色还是深色）。
+        #[test]
+        fn real_state_wrapper_does_not_panic() {
+            let mut state = theme_watch_state_now();
+            // 用同一真实读取器再读一次 ⇒ 必然「未变化」
+            assert!(
+                !state.on_notify(crate::windows::system_dark_mode),
+                "同一状态下重复读取不应报告变化"
+            );
+        }
+
+        /// ★ 核心验收（P3-11）：断言**真实调用序列**是「先注册、后读取」。
+        ///
+        /// 这是唯一能证伪「次序被改回去」的测试：把
+        /// `ordered_register_then_read` 里两行交换，本用例立刻转红。
+        /// 少了这层，「生产代码改回旧次序后测试依然全绿」——那种测试等于没测。
+        #[test]
+        fn register_is_called_before_read() {
+            use std::cell::RefCell;
+            let calls = RefCell::new(Vec::<&'static str>::new());
+
+            let ok = ordered_register_then_read(
+                || {
+                    calls.borrow_mut().push("register");
+                    true
+                },
+                || {
+                    calls.borrow_mut().push("read");
+                    true
+                },
+            );
+
+            assert!(ok, "本函数的契约成立时返回 true");
+            assert_eq!(
+                *calls.borrow(),
+                vec!["register", "read"],
+                "次序必须是「先注册、后读取」；反过来会让注册前发生的主题切换永久丢失"
+            );
+        }
+
+        /// 注册失败也必须**先**读过初始值（否则退避分支会拿 `last` 的默认值
+        /// 去比较，可能误报一次变化）。
+        #[test]
+        fn read_still_happens_even_if_register_fails() {
+            use std::cell::RefCell;
+            let calls = RefCell::new(Vec::<&'static str>::new());
+
+            ordered_register_then_read(
+                || {
+                    calls.borrow_mut().push("register");
+                    false // 注册失败
+                },
+                || {
+                    calls.borrow_mut().push("read");
+                    false
+                },
+            );
+
+            assert_eq!(
+                *calls.borrow(),
+                vec!["register", "read"],
+                "注册失败不应跳过初始读取"
+            );
+        }
+    }
 }
