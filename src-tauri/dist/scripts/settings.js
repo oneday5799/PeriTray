@@ -1,5 +1,5 @@
 /* settings.js — 设置页·入口框架：init 装配/导航与 tab 切换/ComboBox 装配薄壳/更新检测横切流程/
- *            NumberBox 焦点装配/材质浮层背景/config-changed 与 settings-tab 监听
+ *            NumberBox 焦点装配/材质浮层背景/config-changed 与 settings-tab 监听/自绘标题栏装配
  * 加载序 8/8（最后执行，调用各分区脚本提供的 init 系列与刷新函数）
  * 提供：saveConfig/createCheckableMenu/bindToggle/createToggle/createExpandableCard/
  *       initComboBox/runUpdateCheck/copyToClipboard/showUpdateErrorFlyout/renderUpdateInfobar/
@@ -610,8 +610,62 @@ function renderUpdateInfobar(status) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 自绘标题栏（无框化：原生标题栏废除，判据见 settings.html 顶部注释）
+// ═══════════════════════════════════════════════════════════════
+
+/// 三键走核心窗口命令；拖拽由 header 的 data-tauri-drag-region 承担（Tauri
+/// 内部脚本，需 ACL allow-start-dragging）；边缘缩放由 .settings-resize-edge
+/// 热区经 startResizeDragging 发起（THICKFRAME 全摘后 tauri 的样式位缩放
+/// 失效，判据见 windows.rs FramelessProfile）；最大化走系统 toggleMaximize
+/// （窗口矩形=工作区由后端子类钳制），图标经 resize 事件同步。⛔ 关闭必须
+/// 走 close()——后端 CloseRequested 流程是 hide 先行 + 延迟销毁
+/// （Wiki 06 §4.1 假死判据），不得改成 destroy 直拆。
+function initTitleBar() {
+  const bar = document.querySelector(".settings-title-bar");
+  if (!bar) return;
+  const tauriWin = window.__TAURI__ && window.__TAURI__.window
+    ? window.__TAURI__.window.getCurrentWindow()
+    : null;
+  const callWin = (method) => {
+    if (tauriWin && typeof tauriWin[method] === "function") {
+      tauriWin[method]().catch(() => {});
+    }
+  };
+  document.getElementById("btn-titlebar-min")?.addEventListener("click", () => callWin("minimize"));
+  document.getElementById("btn-titlebar-max")?.addEventListener("click", () => callWin("toggleMaximize"));
+  document.getElementById("btn-titlebar-close")?.addEventListener("click", () => callWin("close"));
+  // 无框缩放热区：THICKFRAME 全摘后边缘缩放经 startResizeDragging 发起
+  // （方向为变体名直传，data-dir ∈ Rust ResizeDirection 变体名，plain
+  // Deserialize；⛔ 最大化态跳过，防破坏最大化形态）。右缘热区盖住滚动条
+  // 最外 5px，为可缩放性的既定取舍。
+  document.querySelectorAll(".settings-resize-edge").forEach((el) => {
+    el.addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || !tauriWin) return;
+      if (typeof tauriWin.startResizeDragging !== "function") return;
+      e.preventDefault();
+      tauriWin.isMaximized().then((maximized) => {
+        if (!maximized) {
+          tauriWin.startResizeDragging(el.dataset.dir).catch(() => {});
+        }
+      }).catch(() => {});
+    });
+  });
+  // 最大化态还原图标同步（系统最大化，窗口矩形=工作区由后端子类钳制，
+  // 判据见 windows.rs maximize_workarea_proc）
+  const syncMaximized = () => {
+    if (!tauriWin) return;
+    tauriWin.isMaximized()
+      .then((maximized) => bar.classList.toggle("is-maximized", !!maximized))
+      .catch(() => {});
+  };
+  syncMaximized();
+  onTauriEvent("tauri://resize", syncMaximized);
+}
+
 async function init() {
   initNavigation();
+  initTitleBar();
 
   // 从托盘「关于」打开时定位到对应标签页
   const hash = location.hash.slice(1);

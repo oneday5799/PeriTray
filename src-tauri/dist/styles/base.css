@@ -101,6 +101,7 @@ img {
   --material-card: rgba(255, 255, 255, 0.88);
   --material-card-hover: rgba(255, 255, 255, 0.5);
   --material-border: rgba(255, 255, 255, 0.3);
+  --material-topbar: rgba(255, 255, 255, 0.97);
   --page-padding: 0 20px 20px;
   /* WinUI 缓动曲线 */
   --ease-standard: cubic-bezier(0, 0, 0, 1);    /* 标准过渡 */
@@ -172,6 +173,7 @@ html[data-theme="dark"] {
   --material-card: rgba(0, 0, 0, 0.55);
   --material-card-hover: rgba(0, 0, 0, 0.3);
   --material-border: rgba(255, 255, 255, 0.15);
+  --material-topbar: rgba(20, 20, 20, 0.97);
 }
 
 html, body {
@@ -193,10 +195,7 @@ html[data-material] body {
   background: transparent !important;
 }
 
-/* 页面容器与内容层透明；顶栏（popup 导航条 / settings 标题栏）一并透明：
-   两窗顶栏都是流内元素（relative / flex 首项），内容不会滚进顶栏区，
-   且无框化根治后 DWM 不再在窗口顶合成标题带（判据演变见 Wiki 07 §17.1），
-   顶栏与窗体其余部分统一透磨砂。 */
+/* 页面容器与内容层透明 */
 html[data-material] .popup-container,
 html[data-material] .settings-container,
 html[data-material] .tab-viewport,
@@ -204,8 +203,7 @@ html[data-material] .tab-content,
 html[data-material] .device-list,
 html[data-material] .volume-control,
 html[data-material] .section-title,
-html[data-material] .win-nav-page-header,
-html[data-material] .win-nav-top-bar {
+html[data-material] .win-nav-page-header {
   background: transparent !important;
 }
 
@@ -216,6 +214,12 @@ html[data-material] .win-nav-left-panel {
 }
 
 html[data-material] .win-nav-top-bar {
+  /* ⛔ 不得透明：DWM 会在窗口**失焦重画**时于窗口顶合成不透明标题 band
+     （20348 上 NCRP / DWMWA_CAPTION_COLOR / 样式位 patch / accent 类型
+     全部无法关闭——真机穷尽实证），透过透明像素露出。恒铺 0.97 不透明
+     底衬遮盖是唯一稳定解；「聚焦透明、失焦瞬切底衬」的动态遮盖实测
+     因 JS 延迟追不上 DWM 重画而闪烁，已被否决。判据链见 Wiki 07 §17.1。 */
+  background: var(--material-topbar) !important;
   border-bottom-color: var(--material-border) !important;
 }
 

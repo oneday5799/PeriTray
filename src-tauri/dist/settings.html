@@ -8,6 +8,48 @@
   <link rel="stylesheet" href="styles/settings.css">
 </head>
 <body>
+  <!-- 自绘标题栏（无框化：原生标题栏废除——Win10 SWCA 路径 DWM 无法让原生
+       NC 区参与磨砂，且描边环无开关）。header 带 data-tauri-drag-region 作
+       拖拽区；标题文字 pointer-events:none 使点击穿透到拖拽区；三键行为由
+       settings.js initTitleBar 装配（关闭走后端 CloseRequested：隐藏+延迟销毁） -->
+  <header class="settings-title-bar" data-tauri-drag-region>
+    <span class="settings-title-text">设置 - 外设监控</span>
+    <div class="settings-caption-btns">
+      <button class="caption-btn" id="btn-titlebar-min" aria-label="最小化">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M0 5h10"/>
+        </svg>
+      </button>
+      <button class="caption-btn" id="btn-titlebar-max" aria-label="最大化">
+        <svg class="icon-max" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1">
+          <rect x="0.5" y="0.5" width="9" height="9"/>
+        </svg>
+        <svg class="icon-restore" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1">
+          <!-- 后框只画上/右/下右段（前框覆盖处留口），与 WinUI 还原图标一致，
+               避免两框线段交叉（此前起笔画进前框内部，真机实测样式混乱） -->
+          <path d="M3.5 0.5h6v6h-3"/>
+          <rect x="0.5" y="3.5" width="6" height="6"/>
+        </svg>
+      </button>
+      <button class="caption-btn caption-btn--close" id="btn-titlebar-close" aria-label="关闭">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M0 0l10 10M10 0L0 10"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+  <!-- 无框缩放热区：THICKFRAME 已全摘（保留它 DWM 会在激活/帧重算时绘制 NC
+       框架带 = 左/右/下白框，NCRP 压不住，见 windows.rs FramelessProfile），
+       边缘缩放由这里经 startResizeDragging 发起（settings.js initTitleBar
+       装配；最大化态跳过）。5px 边缘 + 12px 角，右缘盖住滚动条最外 5px。 -->
+  <div class="settings-resize-edge edge-n" data-dir="North"></div>
+  <div class="settings-resize-edge edge-s" data-dir="South"></div>
+  <div class="settings-resize-edge edge-e" data-dir="East"></div>
+  <div class="settings-resize-edge edge-w" data-dir="West"></div>
+  <div class="settings-resize-edge edge-nw" data-dir="NorthWest"></div>
+  <div class="settings-resize-edge edge-ne" data-dir="NorthEast"></div>
+  <div class="settings-resize-edge edge-sw" data-dir="SouthWest"></div>
+  <div class="settings-resize-edge edge-se" data-dir="SouthEast"></div>
   <div class="settings-container">
     <!-- Left Sidebar (NavigationView Pane) -->
     <nav class="win-nav-left-panel">

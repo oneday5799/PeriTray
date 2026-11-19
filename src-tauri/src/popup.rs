@@ -223,7 +223,11 @@ fn show(
     // 沉到 topmost 波段内任务栏正下方：动画期间高于普通窗口、不遮挡任务栏
     if let Ok(hwnd) = window.hwnd() {
         windows::place_below_taskbar(hwnd.0 as isize);
+        // 修剪 WS_SYSMENU 必须放在 tao 最后一次样式重算之后：show/always_on_top
+        // 都会触发 tao 按其 WindowFlags 重写 GWL_STYLE（SYSMENU 永远被写回）。
+        windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
     }
+    windows::spawn_frameless_healer(window.clone(), windows::FramelessProfile::Popup);
     let win = window.clone();
     spawn_animation(guard, move || {
         animate_open(&win, target_x, start_y, target_y);
@@ -250,9 +254,12 @@ fn create(
         let mut b =
             tauri::WebviewWindowBuilder::new(app, "popup", tauri::WebviewUrl::App(url.into()))
                 .additional_browser_args(&crate::windows::browser_args())
+                // 标题带根治依赖 tao 本地 patch（判据见 windows.rs settings
+                // builder 注释）；popup 无任务栏项，title 无 UI 消费点
                 .title("外设信息")
                 .inner_size(popup_w, popup_h)
                 .decorations(false)
+                .shadow(false)
                 .resizable(false)
                 .skip_taskbar(true)
                 .always_on_top(true)
@@ -298,6 +305,7 @@ fn create(
             // 首启无滑动动画，但层级不变式一致：低于任务栏、高于普通窗口
             if let Ok(hwnd) = win.hwnd() {
                 windows::place_below_taskbar(hwnd.0 as isize);
+                windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
             }
             if let Some(pos) = POPUP_POS.get() {
                 *crate::state::lock_unpoisoned(pos) = (target_x, target_y);
@@ -312,7 +320,12 @@ fn create(
                     popup_h
                 );
                 let _ = rewin.set_size(tauri::LogicalSize::new(popup_w, popup_h));
+                // set_size 亦可能触发 tao 样式重算：SYSMENU 修剪随其后补一次
+                if let Ok(hwnd) = rewin.hwnd() {
+                    windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
+                }
             });
+            windows::spawn_frameless_healer(win, windows::FramelessProfile::Popup);
         }
         Err(e) => {
             standard_log!("[popup] create window failed: {}", e);
@@ -366,6 +379,9 @@ fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64)
     // set_focus 的激活可能把窗口抬回波段顶，重新沉降到任务栏之下（静止态恒低于任务栏）
     if let Ok(hwnd) = window.hwnd() {
         windows::place_below_taskbar(hwnd.0 as isize);
+        // set_focus 触发 tao 按其 WindowFlags 重写 GWL_STYLE（WS_SYSMENU 被写回），
+        // WS_SYSMENU 修剪必须跟在它之后，否则 Win10 亚克力下三键重新浮现
+        windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
     }
 }
 

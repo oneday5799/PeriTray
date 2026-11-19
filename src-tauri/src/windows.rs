@@ -8,8 +8,26 @@ use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
 use crate::{standard_log, verbose_log};
+// 最大化钳工作区子类（maximize_workarea_proc）：MINMAXINFO/显示器查询/
+// comctl32 子类链，均在 WindowsAndMessaging / Gdi / Shell 三个已启用 feature 内
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::WindowsAndMessaging::MINMAXINFO;
 pub(crate) fn browser_args() -> String {
     let mut args = String::from("--renderer-process-limit=1 --disable-breakpad --disable-features=AudioServiceOutOfProcess,TranslateUI,msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+    // 调试开关：`PM_DEV_CDP_PORT` 存在时开启 WebView2 远程调试（tools/cdp-eval.mjs
+    // 的前置）。⛔ 不用 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 环境变量：应用
+    // 显式设置 additional_browser_args 时该变量不参与 WebView2 命令行（实测无效）
+    if std::env::var_os("PM_DEV_CDP_PORT").is_some() {
+        args.push_str(" --remote-debugging-port=9222");
+    }
     if !config::with_config(|c| c.hardware_acceleration) {
         args.push_str(
             " --disable-gpu --disable-gpu-compositing --disable-features=GpuProcessPerClient",
@@ -60,6 +78,18 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             let _ = win.unminimize();
             let _ = win.show();
             let _ = win.set_focus();
+            // 无框修剪跟在 show/set_focus 之后：tao 在边界事件重写 GWL_STYLE
+            // （与 popup.rs show 路径同款时序），FRAMECHANGED 重算经 strip 统一获得
+            #[cfg(target_os = "windows")]
+            if let Ok(hwnd) = win.hwnd() {
+                strip_sysmenu_style(hwnd.0 as isize, FramelessProfile::Settings);
+                // 子类必须装在窗口所属线程（主线程），见 ensure 的 ⛔ 注
+                let h = hwnd.0 as isize;
+                let _ = app.run_on_main_thread(move || {
+                    ensure_maximize_workarea_subclass(h);
+                });
+            }
+            spawn_frameless_healer(win.clone(), FramelessProfile::Settings);
         });
         return;
     }
@@ -71,9 +101,19 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
     tauri::async_runtime::spawn(async move {
         let mut builder =
             tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App(url.into()))
+                // ⛔ 标题带根治依赖 tao 本地 patch（Cargo.toml [patch.crates-io]：
+                //   无框窗不产 WS_CAPTION|WS_SYSMENU ⇒ DWM 无 caption 渲染缓存，
+                //   title 无任何消费点）。⛔ 若移除该 patch，这里必须回空 title，
+                //   否则 DWM 会在窗口顶合成标题文字带并透过透明顶栏露出。
                 .title("设置 - 外设监控")
                 .inner_size(960.0, 720.0)
-                .resizable(true)
+                .decorations(false)
+                .shadow(false)
+                // ⛔ resizable(true) + decorations(false) 会让 tauri-runtime-wry
+                // 创建 TAURI_DRAG_RESIZE_BORDERS 子窗口盖在 webview 上，吃掉
+                // 边缘点击（前端热区收不到 mousedown，真机实测）；缩放改由
+                // 前端热区经 start_resize_dragging 发起，不依赖该标志
+                .resizable(false)
                 .visible(false)
                 .min_inner_size(720.0, 420.0)
                 .prevent_overflow();
@@ -91,6 +131,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
         if let Ok(win) = builder.build() {
             #[cfg(target_os = "windows")]
             if let Ok(hwnd) = win.hwnd() {
+                set_rounded_corners(hwnd.0 as isize);
                 let material = config::with_config(|c| c.window_material.clone());
                 crate::window_material::apply_window_material(hwnd.0 as isize, &material);
                 crate::webview::ensure_webview_bg_transparent(win.as_ref());
@@ -103,6 +144,18 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             clamp_window_to_work_area(&win);
             let _ = win.show();
             let _ = win.set_focus();
+            // 无框修剪跟在 show/set_focus 之后：tao 在边界事件重写 GWL_STYLE
+            // （与 popup.rs show 路径同款时序），FRAMECHANGED 重算经 strip 统一获得
+            #[cfg(target_os = "windows")]
+            if let Ok(hwnd) = win.hwnd() {
+                strip_sysmenu_style(hwnd.0 as isize, FramelessProfile::Settings);
+                // 子类必须装在窗口所属线程（主线程），见 ensure 的 ⛔ 注
+                let h = hwnd.0 as isize;
+                let _ = app.run_on_main_thread(move || {
+                    ensure_maximize_workarea_subclass(h);
+                });
+            }
+            spawn_frameless_healer(win.clone(), FramelessProfile::Settings);
         }
     });
 }
@@ -424,6 +477,346 @@ pub fn set_rounded_corners(hwnd: isize) {
             std::mem::size_of::<u32>() as u32,
         );
     }
+}
+
+/// 自愈步进的一步结果：healer 线程据此决定线程去留与「是否需要抖动回正」。
+pub enum SysmenuHealOutcome {
+    /// 窗口已隐藏或句柄失效：线程退出（show 路径会重新拉起）
+    WindowGone,
+    /// 窗口在场且样式干净：本步零 poke
+    Clean,
+    /// 窗口在场但脏位刚被摘除：tao 的异步重写被回滚，客户区矩形可能翻转
+    Repaired,
+}
+
+/// 无框窗口的修剪画像：两窗均已无框（原生标题栏废除，网页自绘），脏位掩码
+/// 相同（SYSMENU|CAPTION|THICKFRAME 全摘）。⛔ settings 不得为「边缘缩放」
+/// 保留 THICKFRAME——保留它 DWM 会在激活切换/帧重算时绘制 NC 框架带（浅色
+/// 主题白色，叠在 webview 外沿 = 左/右/下白框；NCRP_DISABLED 只在部分合成
+/// 趟生效、激活切换与样式重算会无视它，真机实测）。缩放改由前端边缘热区经
+/// `start_resize_dragging` 发起（settings.js initTitleBar 装配，ACL
+/// core:window:allow-start-resize-dragging），且 builder 必须
+/// resizable(false)：resizable(true)+decorations(false) 会让 tauri-runtime-wry
+/// 创建 TAURI_DRAG_RESIZE_BORDERS 子窗口盖住边缘吃掉点击（真机实测）。
+#[derive(Clone, Copy)]
+pub enum FramelessProfile {
+    Popup,
+    Settings,
+}
+
+impl FramelessProfile {
+    /// 该画像下视为「脏」的样式位掩码：任一位被 tao 的样式重写写回即触发修剪
+    fn dirty_mask(self) -> i32 {
+        const WS_SYSMENU: i32 = 0x0008_0000;
+        const WS_CAPTION: i32 = 0x00C0_0000;
+        const WS_THICKFRAME: i32 = 0x0004_0000;
+        match self {
+            FramelessProfile::Popup => WS_SYSMENU | WS_CAPTION | WS_THICKFRAME,
+            FramelessProfile::Settings => WS_SYSMENU | WS_CAPTION | WS_THICKFRAME,
+        }
+    }
+}
+
+/// 无框窗口自愈单步：读回 GWL_STYLE——窗口隐藏则返回 WindowGone（值守线程
+/// 退出）；画像脏位任一被 tao 的样式重写写回（show/always_on_top/set_focus/
+/// DPI 等边界事件触发；Win10 DWM 在 accent 背景板下会为它们绘制原生三键并
+/// 压平 WebView2 子视觉 alpha）则修剪并返回 Repaired；可见且干净返回 Clean。
+/// ⛔ 只许对无框窗口调用。位置：spawn_frameless_healer 调用，本函数唯一实现。
+#[cfg(target_os = "windows")]
+pub fn sysmenu_heal_step(hwnd: isize, profile: FramelessProfile) -> SysmenuHealOutcome {
+    unsafe {
+        const GWL_STYLE: i32 = -16;
+        const WS_VISIBLE: i32 = 0x1000_0000;
+        let style = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+            hwnd as *mut core::ffi::c_void,
+            GWL_STYLE,
+        ) as i32;
+        if (style & WS_VISIBLE) == 0 {
+            return SysmenuHealOutcome::WindowGone;
+        }
+        if (style & profile.dirty_mask()) != 0 {
+            strip_sysmenu_style(hwnd, profile);
+            return SysmenuHealOutcome::Repaired;
+        }
+        SysmenuHealOutcome::Clean
+    }
+}
+
+/// 无框窗口的样式修剪：把 GWL_STYLE 恢复成 tao 创建期的无框形态（摘
+/// profile.dirty_mask()，两窗同为 SYSMENU|CAPTION|THICKFRAME 三位）。tao 的
+/// 无框修正只在创建期生效，样式重写会把位写回。位置：sysmenu_heal_step 与
+/// popup.rs / open_settings_inner 的 show 后修剪调用，本函数唯一实现。
+#[cfg(target_os = "windows")]
+pub fn strip_sysmenu_style(hwnd: isize, profile: FramelessProfile) {
+    unsafe {
+        const GWL_STYLE: i32 = -16;
+        const SWP_NOSIZE: u32 = 1;
+        const SWP_NOMOVE: u32 = 2;
+        const SWP_NOZORDER: u32 = 4;
+        const SWP_FRAMECHANGED: u32 = 0x20;
+        let style = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(
+            hwnd as *mut core::ffi::c_void,
+            GWL_STYLE,
+        ) as i32;
+        windows_sys::Win32::UI::WindowsAndMessaging::SetWindowLongPtrW(
+            hwnd as *mut core::ffi::c_void,
+            GWL_STYLE,
+            (style & !profile.dirty_mask()) as isize,
+        );
+        // SetWindowLongPtr 只改样式值，渲染帧不会自动重算：必须补一次
+        // SWP_FRAMECHANGED 让 DWM 按新样式重算边框，否则带框渲染条滞留——
+        // popup 顶部透出系统标题栏（真机实测，strip 与 poke 必须成对）。
+        // 位置：所有 strip 调用点（show / animate_open / create / heal）经本函数
+        // 统一获得即时重算。
+        windows_sys::Win32::UI::WindowsAndMessaging::SetWindowPos(
+            hwnd as *mut core::ffi::c_void,
+            core::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+/// webview 子窗口对齐：把 popup 的全部子窗口（WebView2 层级）对齐到**全窗
+/// 矩形**（映射到客户坐标，可带负 x/y 以覆盖客户原点内缩带）。tao 的样式位
+/// 拉锯会让客户区矩形在「全窗」与「内缩」两态间翻转，子窗口停留在旧位置
+/// ⇒ 窗口边缘露出白边、webview 内容错位成左右两条。返回是否真的修了东西
+/// （客户区被强制重算或子窗口被挪动），healer 据此决定是否抖动回正。
+/// ⭐ SWP_FRAMECHANGED 强制重算**只许在客户区实测 stale 时执行**（原点/尺寸
+/// 与全窗不符）：样式位回滚后的帧重算由 strip_sysmenu_style 自带 poke 负责，
+/// 不在本函数重复。两条件皆否时零 poke——无条件 poke + 无条件抖动 = 每
+/// 250ms 一次的 1px 边框抖动（真机实测肉眼可见）。位置：popup.rs 自愈线程
+/// 调用，本函数唯一实现。
+#[cfg(target_os = "windows")]
+pub fn fix_webview_child_bounds(top: isize) -> bool {
+    use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumChildWindows, GetClientRect, GetWindowRect, SetWindowPos,
+    };
+    const SWP_NOSIZE: u32 = 1;
+    const SWP_NOMOVE: u32 = 2;
+    const SWP_NOZORDER: u32 = 4;
+    const SWP_FRAMECHANGED: u32 = 0x20;
+    unsafe {
+        let top_h = top as *mut core::ffi::c_void;
+        let mut wr = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let _ = GetWindowRect(top_h, &mut wr);
+        let mut origin = POINT { x: 0, y: 0 };
+        let _ = ClientToScreen(top_h, &mut origin);
+        let mut cr = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let _ = GetClientRect(top_h, &mut cr);
+        // 客户区 stale 探测：无框窗修剪后客户区必须与全窗重合（原点重合 + 尺寸
+        // 相等）。样式位拉锯会把客户区滞留在「内缩」态（框架 7px 未被 tao 的
+        // NCCALCSIZE 处理摘掉）⇒ wry 每次按客户区推子窗口 bounds，与全窗目标
+        // 永久错位。SWP_FRAMECHANGED 让 tao 的处理器重跑，客户区恢复全窗。
+        // 最大化态同样成立：maximize_workarea_proc 已把系统最大化的窗口矩形
+        // 钳到工作区 ⇒ client 恒与全窗重合，无需特判
+        let client_stale = origin.x != wr.left
+            || origin.y != wr.top
+            || (cr.right - cr.left) != (wr.right - wr.left)
+            || (cr.bottom - cr.top) != (wr.bottom - wr.top);
+        let fixed_any = client_stale;
+        if client_stale {
+            let _ = SetWindowPos(
+                top_h,
+                core::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
+            // 重算后重读窗口矩形与客户原点：目标矩形必须基于修好的客户区
+            let _ = GetWindowRect(top_h, &mut wr);
+            let _ = ClientToScreen(top_h, &mut origin);
+        }
+        // 目标矩形（客户坐标）与客户原点经静态槽传给枚举回调（回调无法捕获局部变量）
+        static TX: AtomicI32 = AtomicI32::new(0);
+        static TY: AtomicI32 = AtomicI32::new(0);
+        static TW: AtomicI32 = AtomicI32::new(0);
+        static TH: AtomicI32 = AtomicI32::new(0);
+        static OX: AtomicI32 = AtomicI32::new(0);
+        static OY: AtomicI32 = AtomicI32::new(0);
+        static MOVED: AtomicBool = AtomicBool::new(false);
+        MOVED.store(false, Ordering::Relaxed);
+        unsafe extern "system" fn enum_cb(h: *mut core::ffi::c_void, _: isize) -> i32 {
+            let tx = TX.load(Ordering::Relaxed);
+            let ty = TY.load(Ordering::Relaxed);
+            let tw = TW.load(Ordering::Relaxed);
+            let th = TH.load(Ordering::Relaxed);
+            let mut r = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            let _ = GetWindowRect(h, &mut r);
+            // GetWindowRect 是屏幕坐标，目标 TX/TY 是客户坐标：必须先换算再比较，
+            // ⛔ 直接比较会在「窗口不在屏幕原点」时恒判错位 ⇒ 每 tick 白挪一次
+            // 子窗口 + healer 抖动自持（真机实测：popup 恒在屏幕 (1150,291)）
+            let cl = r.left - OX.load(Ordering::Relaxed);
+            let ct = r.top - OY.load(Ordering::Relaxed);
+            if cl != tx || ct != ty || (r.right - r.left) != tw || (r.bottom - r.top) != th {
+                let _ = SetWindowPos(h, core::ptr::null_mut(), tx, ty, tw, th, SWP_NOZORDER);
+                MOVED.store(true, Ordering::Relaxed);
+            }
+            1
+        }
+        TX.store(wr.left - origin.x, Ordering::Relaxed);
+        TY.store(wr.top - origin.y, Ordering::Relaxed);
+        TW.store(wr.right - wr.left, Ordering::Relaxed);
+        TH.store(wr.bottom - wr.top, Ordering::Relaxed);
+        OX.store(origin.x, Ordering::Relaxed);
+        OY.store(origin.y, Ordering::Relaxed);
+        EnumChildWindows(top_h, Some(enum_cb), 0isize);
+        fixed_any || MOVED.load(Ordering::Relaxed)
+    }
+}
+
+// ── 最大化钳到工作区（settings 无框窗） ─────────────────────
+
+static MAX_SUBCLASS_HWND: core::sync::atomic::AtomicIsize = core::sync::atomic::AtomicIsize::new(0);
+
+/// 「系统最大化钳到工作区」子类过程：先让默认链（tao 的 min/max 约束 +
+/// DefWindowProc）填充 MINMAXINFO，再覆写 ptMaxSize/ptMaxPosition 为最近
+/// 显示器工作区。判据：无框窗系统最大化的窗口矩形默认=整屏，DWM 判定
+/// 全屏窗口后 explorer 隐藏任务栏（真机实测，客户区钳制救不了——任务栏
+/// 看的是窗口矩形）；覆写后系统最大化（含 Win+Up 快捷键）的窗口矩形=
+/// 工作区，任务栏保持可见。
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn maximize_workarea_proc(
+    hwnd: HWND,
+    umsg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _uidsubclass: usize,
+    _dwrefdata: usize,
+) -> LRESULT {
+    const WM_GETMINMAXINFO: u32 = 0x0024;
+    if umsg == WM_GETMINMAXINFO {
+        let result = DefSubclassProc(hwnd, umsg, wparam, lparam);
+        let mmi = &mut *(lparam as *mut MINMAXINFO);
+        let mut mi: MONITORINFO = core::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if GetMonitorInfoW(hmon, &mut mi) != 0 {
+            mmi.ptMaxSize.x = mi.rcWork.right - mi.rcWork.left;
+            mmi.ptMaxSize.y = mi.rcWork.bottom - mi.rcWork.top;
+            mmi.ptMaxPosition.x = mi.rcWork.left;
+            mmi.ptMaxPosition.y = mi.rcWork.top;
+            mmi.ptMaxTrackSize = mmi.ptMaxSize;
+        }
+        return result;
+    }
+    DefSubclassProc(hwnd, umsg, wparam, lparam)
+}
+
+/// 给窗口安装最大化钳制子类（见 maximize_workarea_proc 的判据）。
+/// ⛔ SetWindowSubclass 与窗口子类链按线程绑定，必须经 run_on_main_thread
+/// 在窗口所属线程安装；同 hwnd 幂等（重开路径不重复装）。
+#[cfg(target_os = "windows")]
+pub fn ensure_maximize_workarea_subclass(hwnd: isize) {
+    use core::sync::atomic::Ordering;
+    if MAX_SUBCLASS_HWND.load(Ordering::Acquire) == hwnd {
+        return;
+    }
+    let ok = unsafe {
+        SetWindowSubclass(
+            hwnd as *mut core::ffi::c_void,
+            Some(maximize_workarea_proc),
+            0x4D58, // 子类 id（'MX'），窗口内任意唯一即可
+            0,
+        )
+    };
+    if ok != 0 {
+        MAX_SUBCLASS_HWND.store(hwnd, Ordering::Release);
+        standard_log!("[window] maximize workarea subclass installed");
+    } else {
+        standard_log!("[window] maximize workarea subclass install failed");
+    }
+}
+
+/// 每画像一个换代计数器：新拉起 healer 时 +1，旧线程发现代数不符即在下一
+/// 个 250ms 周期退出。settings 可见期间被重开（托盘反复点「设置」）会重复
+/// 调 spawn——纯 AtomicBool 存活标志有「旧线程恰在退出、新 spawn 被跳过」
+/// 的竞态窗口，换代计数让旧线程必然让位、新线程必然在场。
+fn healer_generation(profile: FramelessProfile) -> &'static core::sync::atomic::AtomicU64 {
+    use core::sync::atomic::AtomicU64;
+    static POPUP: AtomicU64 = AtomicU64::new(0);
+    static SETTINGS: AtomicU64 = AtomicU64::new(0);
+    match profile {
+        FramelessProfile::Popup => &POPUP,
+        FramelessProfile::Settings => &SETTINGS,
+    }
+}
+
+/// 无框窗口自愈线程（popup / settings 共用）：tao 在 show/hide/focus/DPI 等
+/// **边界事件**会重写 GWL_STYLE（画像脏位写回 = 三键重现 + 客户区矩形翻转
+/// ⇒ WebView2 视觉与窗口错位），且翻转时窗口矩形会被带框样式撑大
+/// （AdjustWindowRectEx 按带框样式补框架一圈 = 「窗口大一圈」）。
+/// 窗口可见期间每 250ms 值守一步：样式读回脏了才修；子窗口偏了才对齐。
+/// 窗口隐藏（WS_VISIBLE 清零）线程退出，show / 重开路径重新拉起（换代计数
+/// 保证同画像同时只有一个值守线程）。
+///
+/// ⭐ 尾部的「+1px 抖动回正」只许在**本步真的修过东西**（样式位被回滚或
+/// 子窗口被挪正）时执行：同尺寸的 SetWindowPos 不触发 WM_SIZE，wry 就不会
+/// 重推 WebView2 控制器 bounds——样式位翻转后控制器 bounds 停在旧客户区
+/// 原点，视觉整体错位（洋红覆盖层只出现在窗口右侧一段），+1px 触发一次
+/// 真实 WM_SIZE 让 wry 重推，60ms 后回正。⛔ 干净时零 poke——无条件抖动 =
+/// 每 250ms 一次的 1px 边框抖动，真机实测肉眼可见。
+/// 基线尺寸动态读 `outer_size()`（物理像素）：settings 可缩放，固定值会与
+/// 用户拉锯；⛔ 最大化态跳过抖动——对最大化窗口 set_size 会破坏最大化形态。
+#[cfg(target_os = "windows")]
+pub fn spawn_frameless_healer(window: tauri::WebviewWindow, profile: FramelessProfile) {
+    let gen = healer_generation(profile).fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if healer_generation(profile).load(core::sync::atomic::Ordering::Relaxed) != gen {
+                return;
+            }
+            let Ok(hwnd) = window.hwnd() else { return };
+            let dirty = match sysmenu_heal_step(hwnd.0 as isize, profile) {
+                SysmenuHealOutcome::WindowGone => return,
+                SysmenuHealOutcome::Clean => false,
+                SysmenuHealOutcome::Repaired => true,
+            };
+            let child_fixed = fix_webview_child_bounds(hwnd.0 as isize);
+            if !dirty && !child_fixed {
+                continue;
+            }
+            if window.is_maximized().unwrap_or(true) {
+                continue;
+            }
+            // 窗口矩形回正：宽 +1px 触发一次真实 WM_SIZE 让 wry 重推 WebView2
+            // 控制器 bounds，60ms 后比对基线回正；基线取抖动前的 outer_size()
+            let Ok(base) = window.outer_size() else {
+                return;
+            };
+            let _ = window.set_size(tauri::PhysicalSize::new(base.width + 1, base.height));
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            if let Ok(now) = window.outer_size() {
+                if now.width != base.width || now.height != base.height {
+                    let _ = window.set_size(tauri::PhysicalSize::new(base.width, base.height));
+                }
+            }
+        }
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════

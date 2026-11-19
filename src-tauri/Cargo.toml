@@ -110,6 +110,15 @@ features = [
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# ⛔ 本地 fork 替换（根治 DWM 标题带）：tao 上游给无框顶层窗无条件强制
+#   WS_CAPTION|WS_SYSMENU（window_state.rs to_window_styles），DWM 因此在
+#   窗口整个生命周期持有 caption 渲染缓存，失焦重画标题 band 且
+#   NCRP / DWMWA_CAPTION_COLOR（20348 不支持）均无法关闭。fork 只改一处：
+#   无框窗不再产这两位（C:\code\tao-0.35.3-frameless）。⛔ fork 目录在仓库外，
+#   换机器需按 Wiki 08 的步骤重建；tao 升级时 patch 会失配，需重做。
+[patch.crates-io]
+tao = { path = "C:/code/tao-0.35.3-frameless" }
+
 [profile.release]
 opt-level = "s"
 lto = true

@@ -2,8 +2,91 @@
  *       过滤正则 → 快捷键 → About → 设置页专属组件五件套(过滤文本域/NumberBox/
  *       ComboBox/Infobar/版本infobar/更新错误浮层)
  * 共享基类在 base.css；本文件仅设置页布局与专属组件 */
-.settings-container {
+
+/* ── 自绘标题栏（无框化：原生标题栏废除，见 settings.html 顶部注释） ── */
+/* body 只在本页带标题栏时改 flex column：base.css 的 body 是两页共享规则，
+ * popup 布局不受影响（作用域经 :has 收窄，settings.css 本就是设置页专属文件） */
+body:has(.settings-title-bar) {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-title-bar {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 16px;
+  background: var(--page-bg, #f3f3f3);
+  border-bottom: 1px solid var(--panel-border);
+  user-select: none;
+}
+
+/* ⛔ 不得透明：DWM 在窗口失焦重画时于窗口顶合成不透明标题 band（20348 上
+ * 全部属性开关无效，穷尽实证见 Wiki 07 §17.1），透过透明像素露出——恒铺
+ * 0.97 不透明底衬遮盖（「聚焦透明、失焦瞬切底衬」的动态遮盖因 JS 延迟
+ * 追不上 DWM 重画而闪烁，已实测否决）。 */
+html[data-material] .settings-title-bar {
+  background: var(--material-topbar) !important;
+  border-bottom-color: var(--material-border) !important;
+}
+
+.settings-title-text {
+  font-size: 12px;
+  color: var(--text-primary);
+  /* 点击穿透到 header 的 data-tauri-drag-region（文字本身不响应指针） */
+  pointer-events: none;
+}
+
+.settings-caption-btns {
+  display: flex;
   height: 100%;
+}
+
+/* WinUI 惯例：命中区全高 46px 宽；图标 10px 细线 */
+.caption-btn {
+  width: 46px;
+  height: 100%;
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+.caption-btn:hover { background: var(--hover-overlay); }
+.caption-btn:active { background: var(--active-overlay); }
+.caption-btn--close:hover { background: var(--danger); color: #ffffff; }
+.caption-btn--close:active { background: var(--danger); color: rgba(255, 255, 255, 0.8); }
+
+/* 最大化态图标切换（□ ↔ 双框还原图标），由 settings.js initTitleBar 同步 */
+.icon-restore { display: none; }
+.settings-title-bar.is-maximized .icon-max { display: none; }
+.settings-title-bar.is-maximized .icon-restore { display: block; }
+
+/* ── 无框缩放热区（THICKFRAME 全摘后的边缘缩放，判据见 settings.html 注释）── */
+.settings-resize-edge {
+  position: fixed;
+  z-index: 2147483000;
+  user-select: none;
+}
+
+.edge-n { top: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
+.edge-s { bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
+.edge-w { top: 0; bottom: 0; left: 0; width: 5px; cursor: ew-resize; }
+.edge-e { top: 0; bottom: 0; right: 0; width: 5px; cursor: ew-resize; }
+.edge-nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+.edge-ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+.edge-sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+.edge-se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+
+.settings-container {
+  flex: 1;
+  min-height: 0;
   display: flex;
   overflow: hidden;
   background: transparent;
