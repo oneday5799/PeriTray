@@ -193,7 +193,10 @@ html[data-material] body {
   background: transparent !important;
 }
 
-/* 页面容器与内容层透明 */
+/* 页面容器与内容层透明；顶栏（popup 导航条 / settings 标题栏）一并透明：
+   两窗顶栏都是流内元素（relative / flex 首项），内容不会滚进顶栏区，
+   且无框化根治后 DWM 不再在窗口顶合成标题带（判据演变见 Wiki 07 §17.1），
+   顶栏与窗体其余部分统一透磨砂。 */
 html[data-material] .popup-container,
 html[data-material] .settings-container,
 html[data-material] .tab-viewport,
@@ -201,7 +204,8 @@ html[data-material] .tab-content,
 html[data-material] .device-list,
 html[data-material] .volume-control,
 html[data-material] .section-title,
-html[data-material] .win-nav-page-header {
+html[data-material] .win-nav-page-header,
+html[data-material] .win-nav-top-bar {
   background: transparent !important;
 }
 
@@ -212,7 +216,6 @@ html[data-material] .win-nav-left-panel {
 }
 
 html[data-material] .win-nav-top-bar {
-  background: transparent !important;
   border-bottom-color: var(--material-border) !important;
 }
 

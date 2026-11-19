@@ -535,7 +535,9 @@ const VALID_LOG_LEVELS: &[&str] = &["off", "standard", "verbose"];
 const VALID_POPUP_TABS: &[&str] = &["devices", "volume"];
 const VALID_POPUP_SIZES: &[&str] = &["small", "default", "large"];
 const VALID_THEME_MODES: &[&str] = &["follow_system", "light", "dark"];
-const VALID_WINDOW_MATERIALS: &[&str] = &["default", "acrylic", "mica"];
+// ⛔ 必须覆盖前端材质下拉的全部 `data-value`（settings.html win-combo-item 四项）；
+//   漏项不会报错，而是每次写入都被归一化静默回退成 default ⇒ 该档位永远存不住。
+const VALID_WINDOW_MATERIALS: &[&str] = &["default", "recommended", "acrylic", "mica"];
 const VALID_TASKBAR_POSITIONS: &[&str] = &[
     "auto_left",
     "auto_right",
@@ -2167,6 +2169,27 @@ mod tests {
             !normalize_config(&mut d),
             "Config::default() 必须是归一化的不动点，否则默认值与前端口径不一致"
         );
+    }
+
+    /// `window_material` 的四个合法值**逐个**钉住。
+    ///
+    /// ⭐ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是默认档 `default`，
+    ///   白名单漏项对 default 自身永远测不出来；漏掉的档位每次写入都会被
+    ///   静默回退成 default ⇒ 该选项在界面上永远存不住。本条用
+    ///   `assert!(!changed)` 把「四个前端可发值不被改写」钉住，漏一个即转红。
+    #[test]
+    fn window_material_accepts_all_four_values_verbatim() {
+        for value in ["default", "recommended", "acrylic", "mica"] {
+            let mut cfg = Config {
+                window_material: value.to_string(),
+                ..Default::default()
+            };
+            assert!(
+                !normalize_config(&mut cfg),
+                "window_material 合法值 {value:?} 不得被归一化改写（漏出白名单会让该档位静默回退默认）"
+            );
+            assert_eq!(cfg.window_material, value);
+        }
     }
 
     /// `taskbar_position` 的六个合法值**逐个**钉住。

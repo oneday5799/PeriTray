@@ -12,12 +12,16 @@ mod material {
 
     const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
     const DWMWA_MICA_EFFECT: u32 = 1029;
+    const DWM_BB_ENABLE: u32 = 1;
     const DWMSBT_NONE: u32 = 1;
     const DWMSBT_MAINWINDOW: u32 = 2;
     const DWMSBT_TRANSIENTWINDOW: u32 = 3;
 
     const ACCENT_DISABLED: u32 = 0;
-    const ACCENT_ENABLE_BLURBEHIND: u32 = 4;
+    // 数值 4 = ACRYLIC（3 才是普通 BLURBEHIND），命名必须与 API 数值一一对应
+    const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+    // SWCA 的属性 ID：WCA_ACCENT_POLICY（未文档化；数值与 window-vibrancy 同款调用一致）
+    const WCA_ACCENT_POLICY: u32 = 0x13;
 
     #[repr(C)]
     #[allow(dead_code)]
@@ -28,6 +32,19 @@ mod material {
         animation_id: u32,
     }
 
+    /// SetWindowCompositionAttribute 第二实参是**属性数据**结构：Attrib 必须为
+    /// WCA_ACCENT_POLICY，pvData 指向 ACCENT_POLICY，cbData = 策略字节数。
+    /// ⛔ 不得把 ACCENT_POLICY 裸指针直接当第二实参——按属性数据布局解读得
+    /// Attrib = accent_state（4 ≠ 0x13）、cbData = gradient_color（≈16MB）⇒
+    /// 调用静默无效；返回 BOOL，**非零**才是成功（0 = 失败）。
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct WindowCompositionAttribData {
+        attrib: u32,
+        pv_data: *mut core::ffi::c_void,
+        cb_data: usize,
+    }
+
     #[repr(C)]
     struct DwmMargins {
         cx_left: i32,
@@ -36,8 +53,10 @@ mod material {
         cy_bottom: i32,
     }
 
-    type SetWindowCompositionAttrFn =
-        unsafe extern "system" fn(*mut core::ffi::c_void, *const AccentPolicy) -> i32;
+    type SetWindowCompositionAttrFn = unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const WindowCompositionAttribData,
+    ) -> i32;
 
     static SET_WINDOW_COMPOSITION: OnceLock<Option<SetWindowCompositionAttrFn>> = OnceLock::new();
 
@@ -60,38 +79,79 @@ mod material {
         })
     }
 
-    unsafe fn set_acrylic(hwnd: isize) -> bool {
+    /// SWCA 设置/清除的唯一实现点（亚克力降级路径：不支持
+    /// DWMWA_SYSTEMBACKDROP_TYPE 的系统）。调用契约见 WindowCompositionAttribData。
+    unsafe fn set_accent_policy(hwnd: isize, accent_state: u32, gradient_color: u32) -> bool {
         let Some(fn_ptr) = get_set_window_composition() else {
             return false;
         };
         let policy = AccentPolicy {
-            accent_state: ACCENT_ENABLE_BLURBEHIND,
+            accent_state,
             accent_flags: 0,
-            gradient_color: 0x01000000,
+            gradient_color,
             animation_id: 0,
         };
-        fn_ptr(hwnd as *mut core::ffi::c_void, &policy) == 0
+        let data = WindowCompositionAttribData {
+            attrib: WCA_ACCENT_POLICY,
+            pv_data: &policy as *const _ as *mut _,
+            cb_data: std::mem::size_of::<AccentPolicy>(),
+        };
+        fn_ptr(hwnd as *mut core::ffi::c_void, &data) != 0
+    }
+
+    /// SWCA 亚克力生效前把 blur behind 的 region 从 tao 的「空区域」改为**满窗**：
+    /// 空 region 虽能让窗口透明、accent 也能挂上，但 Win10 系 DWM 上子视觉
+    /// （WebView2）的合成会出条纹/白块伪影（客户区磨砂被不透明白底和乱纹
+    /// 打断）；满窗 region 后磨砂铺满客户区。依据：Server 20348 裸宿主
+    /// A/B 实测（空 region=通道混叠条纹，满 region=磨砂正确虚化背景）。
+    /// ⭐ 必须在 accent 挂上之前调用（先 region 后 accent 的顺序与探针
+    /// 一致）。位置：唯一实现点（仅 set_acrylic 调用）。
+    unsafe fn set_full_region_blur_behind(hwnd: isize) {
+        let mut rect = windows_sys::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let _ = windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect(
+            hwnd as *mut core::ffi::c_void,
+            &mut rect,
+        );
+        let rgn = windows_sys::Win32::Graphics::Gdi::CreateRectRgn(
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+        );
+        let bb = windows_sys::Win32::Graphics::Dwm::DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE,
+            fEnable: 1,
+            hRgnBlur: rgn,
+            fTransitionOnMaximized: 0,
+        };
+        let _ = windows_sys::Win32::Graphics::Dwm::DwmEnableBlurBehindWindow(
+            hwnd as *mut core::ffi::c_void,
+            &bb,
+        );
+        let _ = windows_sys::Win32::Graphics::Gdi::DeleteObject(rgn);
+    }
+
+    unsafe fn set_acrylic(hwnd: isize) -> bool {
+        set_full_region_blur_behind(hwnd);
+        // 底衬 alpha 不得为 0（0 ⇒ 不出现模糊）；0x01 = 近乎全透明黑底衬，
+        // 与 window-vibrancy「acrylic alpha=0 时强制 1」口径一致
+        set_accent_policy(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, 0x01000000)
     }
 
     unsafe fn remove_acrylic(hwnd: isize) -> bool {
-        let Some(fn_ptr) = get_set_window_composition() else {
-            return false;
-        };
-        let policy = AccentPolicy {
-            accent_state: ACCENT_DISABLED,
-            accent_flags: 0,
-            gradient_color: 0,
-            animation_id: 0,
-        };
-        fn_ptr(hwnd as *mut core::ffi::c_void, &policy) == 0
+        set_accent_policy(hwnd, ACCENT_DISABLED, 0)
     }
 
-    pub unsafe fn apply(hwnd: isize, material: &str) -> bool {
-        if material == "default" {
-            remove(hwnd);
-            return true;
-        }
-
+    /// DWM 玻璃框全幅延伸进客户区（margins 全 -1）。仅 Win11 背景板路径使用
+    /// （文档要求）。⛔ Win10 SWCA 路径不得用全幅——玻璃片盖住客户区后
+    /// WebView2 子窗口的透明 alpha 隔着玻璃片合成，客户区磨砂消失、只剩 NC
+    /// 环磨砂（真机实测）；无框窗调它还会在客户区四周描白圈。
+    unsafe fn extend_frame_all_glass(hwnd: isize) {
         let margins = DwmMargins {
             cx_left: -1,
             cx_right: -1,
@@ -102,6 +162,13 @@ mod material {
             hwnd as *mut core::ffi::c_void,
             &margins as *const _ as *const _,
         );
+    }
+
+    pub unsafe fn apply(hwnd: isize, material: &str) -> bool {
+        if material == "default" {
+            remove(hwnd);
+            return true;
+        }
 
         let effective = if material == "recommended" {
             "mica"
@@ -121,6 +188,8 @@ mod material {
             std::mem::size_of::<u32>() as u32,
         );
         if hr == 0 {
+            // 背景板路径（Win11）：按文档要求扩展框架进客户区
+            extend_frame_all_glass(hwnd);
             return true;
         }
 
@@ -135,9 +204,18 @@ mod material {
             if hr2 == 0 {
                 return true;
             }
+            // ⛔ mica 在 Win10（build < 22000）两处 DWM 调用必败：到此返回
+            // false 会让「推荐」进入未定义态——前端 data-material 已置透明、
+            // DWM 层却残留旧值（默认→推荐=透出桌面 / 亚克力→推荐=观感错乱，
+            // 真机实测）。「推荐」的语义是本系统最佳可用磨砂 ⇒ fallback 到
+            // SWCA 亚克力（CSS 半透明规则对 data-material 无值限定，两端一致）。
+            return set_acrylic(hwnd);
         }
 
         if effective == "acrylic" {
+            // ⛔ 两窗均已无框（settings 已废除原生标题栏，网页自绘）：SWCA 路径
+            // 零 extend-frame——无框窗调任何玻璃片形态，DWM 都会以为存在边框
+            // 而描圈/盖磨砂（真机实测）。钉死单测：swca_frameless_paths_skip_extend。
             return set_acrylic(hwnd);
         }
 
@@ -173,6 +251,99 @@ mod material {
         );
 
         remove_acrylic(hwnd);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// SWCA 属性数据 ABI（x64/arm64）：{ u32, 4 字节对齐垫, 指针, usize }
+        /// ⇒ size 24、pv_data 偏移 8、cb_data 偏移 16。repr 或字段顺序错动
+        /// 会让调用按错误偏移取值，在此必然失败。
+        #[test]
+        fn swca_attrib_data_layout() {
+            assert_eq!(std::mem::size_of::<WindowCompositionAttribData>(), 24);
+            assert_eq!(
+                std::mem::offset_of!(WindowCompositionAttribData, pv_data),
+                8
+            );
+            assert_eq!(
+                std::mem::offset_of!(WindowCompositionAttribData, cb_data),
+                16
+            );
+        }
+
+        /// ACCENT_POLICY ABI：四个 u32 紧排 16 字节（与 window-vibrancy 同构）。
+        #[test]
+        fn accent_policy_layout() {
+            assert_eq!(std::mem::size_of::<AccentPolicy>(), 16);
+            assert_eq!(std::mem::offset_of!(AccentPolicy, gradient_color), 8);
+        }
+
+        /// ⛔⛔ **调用点钉死**：SWCA 实参必须是「属性数据包裹 ACCENT_POLICY」结构
+        ///   （attrib = WCA_ACCENT_POLICY），返回按 BOOL 判（非零 = 成功）。亚克力
+        ///   渲染无单测可看 ⇒ 只能钉调用点文本（判据切片先剔掉本函数自身，防
+        ///   「断言字符串自己命中」）。
+        /// 可证伪：退回「裸 AccentPolicy 直传」或「`== 0` 反判成功」（修复前的
+        ///   两种形态）⇒ 转红。
+        #[test]
+        fn swca_call_wraps_policy_in_attrib_data() {
+            let src = include_str!("window_material.rs");
+            let fn_start = src
+                .find("fn swca_call_wraps_policy_in_attrib_data")
+                .expect("判据函数自身必须还在");
+            let body = &src[..fn_start];
+            assert!(
+                body.contains("attrib: WCA_ACCENT_POLICY,"),
+                "SWCA 调用必须以属性数据包裹（attrib = WCA_ACCENT_POLICY）"
+            );
+            assert!(
+                body.contains("pv_data: &policy"),
+                "属性数据必须指向 ACCENT_POLICY，不得传裸指针"
+            );
+            assert!(
+                body.contains(", &data) != 0"),
+                "返回值必须按 BOOL 判（非零 = 成功）"
+            );
+            assert!(
+                !body.contains("&policy) == 0"),
+                "⛔ 不得退回「裸 AccentPolicy 直传 + `== 0` 反判」的形态"
+            );
+        }
+
+        /// ⛔ **调用点钉死**：两窗均已无框（settings 已废除原生标题栏，网页自绘），
+        ///   SWCA 降级路径必须零玻璃片——无框窗调任何 DwmExtendFrameIntoClientArea
+        ///   形态，DWM 都会以为存在边框而描圈/盖磨砂（真机实测）。
+        /// 可证伪：SWCA 路径重新出现玻璃片调用或 decorated 分流 ⇒ 转红。
+        #[test]
+        fn swca_frameless_paths_skip_extend() {
+            let src = include_str!("window_material.rs");
+            let fn_start = src
+                .find("fn swca_frameless_paths_skip_extend")
+                .expect("判据函数自身必须还在");
+            let body = &src[..fn_start];
+            assert!(
+                !body.contains("extend_frame_nc_only"),
+                "⛔ NC-only 玻璃片已随有框窗退役，不得复活"
+            );
+            assert!(
+                !body.contains("if decorated"),
+                "⛔ decorated 分流已随无框化退役，不得复活"
+            );
+            // extend_frame_all_glass 只许出现在 Win11 背景板路径（hr == 0 分支）：
+            // 从 acrylic 分支起（SWCA 降级段）不得再有任何 extend-frame 形态
+            let swca = body
+                .rfind("if effective == \"acrylic\" {")
+                .expect("SWCA acrylic 分支必须还在");
+            assert!(
+                !body[swca..].contains("extend_frame"),
+                "SWCA 降级段不得出现任何 extend-frame 形态"
+            );
+            assert!(
+                body.contains("return set_acrylic(hwnd);"),
+                "SWCA 分支必须仍以 set_acrylic 收尾（不得绕过 SWCA 挂载）"
+            );
+        }
     }
 }
 
