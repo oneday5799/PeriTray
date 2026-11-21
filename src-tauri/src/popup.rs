@@ -223,9 +223,14 @@ fn show(
     // 沉到 topmost 波段内任务栏正下方：动画期间高于普通窗口、不遮挡任务栏
     if let Ok(hwnd) = window.hwnd() {
         windows::place_below_taskbar(hwnd.0 as isize);
-        // 修剪 WS_SYSMENU 必须放在 tao 最后一次样式重算之后：show/always_on_top
-        // 都会触发 tao 按其 WindowFlags 重写 GWL_STYLE（SYSMENU 永远被写回）。
-        windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
+        // 复用路径必须重申材质，不得只依赖 create 时的一次应用：settings 重开
+        // 路径同款先例（windows.rs open_settings_inner）。⛔ popup 不做
+        // strip_sysmenu_style：Win11 fork 在创建期保留 topmost 无框窗 caption 位
+        // （SystemBackdrop 依赖，Wiki 07 §17.6），strip 会翻转样式位诱发 DWM
+        // 绘制系统三键（真机实测）；Win10 fork 本就不产位，strip 纯空转。
+        let material = crate::config::with_config(|c| c.window_material.clone());
+        standard_log!("[material] reopen popup, material={}", material);
+        window_material::apply_window_material(hwnd.0 as isize, &material);
     }
     windows::spawn_frameless_healer(window.clone(), windows::FramelessProfile::Popup);
     let win = window.clone();
@@ -305,7 +310,6 @@ fn create(
             // 首启无滑动动画，但层级不变式一致：低于任务栏、高于普通窗口
             if let Ok(hwnd) = win.hwnd() {
                 windows::place_below_taskbar(hwnd.0 as isize);
-                windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
             }
             if let Some(pos) = POPUP_POS.get() {
                 *crate::state::lock_unpoisoned(pos) = (target_x, target_y);
@@ -320,10 +324,6 @@ fn create(
                     popup_h
                 );
                 let _ = rewin.set_size(tauri::LogicalSize::new(popup_w, popup_h));
-                // set_size 亦可能触发 tao 样式重算：SYSMENU 修剪随其后补一次
-                if let Ok(hwnd) = rewin.hwnd() {
-                    windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
-                }
             });
             windows::spawn_frameless_healer(win, windows::FramelessProfile::Popup);
         }
@@ -379,9 +379,6 @@ fn animate_open(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64)
     // set_focus 的激活可能把窗口抬回波段顶，重新沉降到任务栏之下（静止态恒低于任务栏）
     if let Ok(hwnd) = window.hwnd() {
         windows::place_below_taskbar(hwnd.0 as isize);
-        // set_focus 触发 tao 按其 WindowFlags 重写 GWL_STYLE（WS_SYSMENU 被写回），
-        // WS_SYSMENU 修剪必须跟在它之后，否则 Win10 亚克力下三键重新浮现
-        windows::strip_sysmenu_style(hwnd.0 as isize, windows::FramelessProfile::Popup);
     }
 }
 

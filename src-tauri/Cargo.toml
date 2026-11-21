@@ -27,6 +27,8 @@ windows-core = "0.62"
 # 必须显式声明，版本要与 windows 0.62.2 内部依赖的 0.3.2 对齐。
 windows-future = "0.3.2"
 windows-collections = "0.3.2"
+# 设置窗标题栏形态判据（Win11 ≥ build 22000 → 原生标题栏）；与 tao 0.35.3 同款依赖
+windows-version = "0.1"
 # WebView2 类型安全基座：sys 0.38 绑定在 windows-core 0.61 上（与 audio_notify
 # 的 implement 宏所需 0.62 不同版本，rename 共存，勿合并）
 windows-core-061 = { package = "windows-core", version = "0.61" }

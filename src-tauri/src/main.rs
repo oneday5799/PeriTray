@@ -716,6 +716,27 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     match event {
         tauri::WindowEvent::Focused(focused) => {
             if window.label() == "popup" && !focused {
+                // ⛔ 焦点移入自家 webview 子窗不算失焦：点页面空白时 Chromium
+                // 子窗经附件输入队列取走键盘焦点，popup 收 WM_KILLFOCUS 而前台/
+                // 激活/捕获不变（真机取证：fg=popup focus=Chrome 子窗 active=
+                // popup capture=popup）——照单全收即「点页面空白就收起」。
+                // 只有前台真的离开 popup 才收起；tao 的 set_active 与
+                // set_focused 是两套独立状态，吞掉本条不影响后续真失焦
+                // （WM_NCACTIVATE(0)）的 Focused(false) 派发。位置：唯一入口。
+                #[cfg(target_os = "windows")]
+                {
+                    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+                    let popup_hwnd = match window.hwnd() {
+                        Ok(h) => h.0,
+                        Err(_) => core::ptr::null_mut(),
+                    };
+                    if !popup_hwnd.is_null() && unsafe { GetForegroundWindow() } == popup_hwnd {
+                        return;
+                    }
+                }
+                // 失焦关闭此前全程沉默，排障时无法与其它关闭路径区分
+                // （「点顶部即收起」排查靠它定罪），状态变化留 standard
+                standard_log!("[popup] blur-close triggered");
                 // close_popup 内部自带 ANIMATING/is_visible 防护，
                 // 重复分发安全，且 compute_position/Win32 调用不阻塞事件循环
                 let app = window.app_handle().clone();
@@ -749,6 +770,8 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                     crate::process::append_log("[window] settings destroyed");
                 });
             } else if label == "popup" {
+                // 与失焦关闭区分：CloseRequested 是独立关闭路径（JS close 等）
+                standard_log!("[window] popup CloseRequested → hide");
                 api.prevent_close();
                 let _ = window.hide();
                 if let Some(popup_wv) = window.app_handle().get_webview_window("popup") {
@@ -835,6 +858,22 @@ fn main() {
             tauri_plugin_window_state::Builder::default()
                 // popup 每次点击都重定位，持久化无意义且会以旧物理坐标覆盖新算位置
                 .with_denylist(&["popup"])
+                // ⛔ 必须剔除 DECORATIONS 位：插件恢复时按存量文件调
+                // set_decorations（旧版有框时代的 decorated:true 已固化在
+                // .window-state.json）⇒ tao flags 的 MARKER_DECORATIONS 永久
+                // 置位 ⇒ 此后每次 apply_diff（含 toggleMaximize 的 MAXIMIZED
+                // 翻转）都经 to_window_styles 写回 CAPTION|SYSMENU——最大化态
+                // 下这次样式重写 + FRAMECHANGED 会让 Windows 对带边框的 zoomed
+                // 窗内部重排出「原生过扫描最大化矩形」（四周 ~9px 出屏，
+                // GetWindowRect/GetClientRect/DWM 帧边界全按它回报）⇒ 最大化
+                // 跳变 + 内容裁一圈（真机 toggleMaximize 探针 + fork
+                // apply_diff 日志钉死）。剔除后 apply_diff 恒写净样式，
+                // 写回战争与幽灵矩形同源消灭。存量文件里的 decorated:true
+                // 不再被消费，下次保存自愈为 false。→ Wiki 07 §17.9
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())

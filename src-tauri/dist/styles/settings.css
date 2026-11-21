@@ -3,12 +3,19 @@
  *       ComboBox/Infobar/版本infobar/更新错误浮层)
  * 共享基类在 base.css；本文件仅设置页布局与专属组件 */
 
-/* ── 自绘标题栏（无框化：原生标题栏废除，见 settings.html 顶部注释） ── */
+/* ── 标题栏双形态（无框自绘 / 原生，判据见 settings.html 顶部注释） ── */
 /* body 只在本页带标题栏时改 flex column：base.css 的 body 是两页共享规则，
  * popup 布局不受影响（作用域经 :has 收窄，settings.css 本就是设置页专属文件） */
 body:has(.settings-title-bar) {
   display: flex;
   flex-direction: column;
+}
+
+/* 原生标题栏形态（URL ?ntb=1，initTitleBar 首帧前移除自绘栏）：body 不再
+ * 命中上面的 flex column，容器退回块级流——块级子元素不会自动拉伸到父级
+ * 高度，缺本规则容器高度=内容高度，页面下方留大片空白（真机实测）。 */
+body:not(:has(.settings-title-bar)) .settings-container {
+  height: 100%;
 }
 
 .settings-title-bar {

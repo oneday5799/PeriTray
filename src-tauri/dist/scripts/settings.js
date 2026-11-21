@@ -611,17 +611,28 @@ function renderUpdateInfobar(status) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 自绘标题栏（无框化：原生标题栏废除，判据见 settings.html 顶部注释）
+// 标题栏装配（双形态：Win11 原生 / Win10 无框自绘，判据见 settings.html 顶部注释）
 // ═══════════════════════════════════════════════════════════════
 
-/// 三键走核心窗口命令；拖拽由 header 的 data-tauri-drag-region 承担（Tauri
-/// 内部脚本，需 ACL allow-start-dragging）；边缘缩放由 .settings-resize-edge
-/// 热区经 startResizeDragging 发起（THICKFRAME 全摘后 tauri 的样式位缩放
-/// 失效，判据见 windows.rs FramelessProfile）；最大化走系统 toggleMaximize
-/// （窗口矩形=工作区由后端子类钳制），图标经 resize 事件同步。⛔ 关闭必须
-/// 走 close()——后端 CloseRequested 流程是 hide 先行 + 延迟销毁
+/// 标题栏双形态（后端判据见 windows.rs native_titlebar_mode）：Win11 原生
+/// 标题栏——系统三键/系统缩放/系统 min/max/restore 动画接管，创建时经 URL
+/// 参数 ?ntb=1 同步形态，此处同步读 location.search 在首帧前整块移除自绘
+/// 标题栏与缩放热区（body 的 :has 布局随元素移除自动回退；不走异步
+/// command——会晚于首帧造成闪烁）；Win10 无框自绘——三键走核心窗口命令
+/// （min/max/restore 为瞬时切换，动画不补——caption 位会引出 DWM 系统 band
+/// 且摘不掉，判据见 windows.rs FramelessProfile）；拖拽由 header 的
+/// data-tauri-drag-region 承担（Tauri 内部脚本，需 ACL allow-start-dragging）；
+/// 边缘缩放由 .settings-resize-edge 热区经 startResizeDragging 发起
+/// （THICKFRAME 全摘后 tauri 的样式位缩放失效，判据见 windows.rs
+/// FramelessProfile），最大化态图标经 resize 事件同步。⛔ 关闭必须走
+/// close()——后端 CloseRequested 流程是 hide 先行 + 延迟销毁
 /// （Wiki 06 §4.1 假死判据），不得改成 destroy 直拆。
 function initTitleBar() {
+  if (new URLSearchParams(location.search).has("ntb")) {
+    document.querySelector(".settings-title-bar")?.remove();
+    document.querySelectorAll(".settings-resize-edge").forEach((el) => el.remove());
+    return;
+  }
   const bar = document.querySelector(".settings-title-bar");
   if (!bar) return;
   const tauriWin = window.__TAURI__ && window.__TAURI__.window

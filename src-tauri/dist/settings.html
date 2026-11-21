@@ -8,10 +8,13 @@
   <link rel="stylesheet" href="styles/settings.css">
 </head>
 <body>
-  <!-- 自绘标题栏（无框化：原生标题栏废除——Win10 SWCA 路径 DWM 无法让原生
-       NC 区参与磨砂，且描边环无开关）。header 带 data-tauri-drag-region 作
-       拖拽区；标题文字 pointer-events:none 使点击穿透到拖拽区；三键行为由
-       settings.js initTitleBar 装配（关闭走后端 CloseRequested：隐藏+延迟销毁） -->
+  <!-- 自绘标题栏（无框化：Win10 上原生标题栏废除——SWCA 路径 DWM 无法让
+       原生 NC 区参与磨砂，且描边环无开关；Win11 走原生标题栏，后端创建时经
+       URL 参数 ?ntb=1 通知，settings.js initTitleBar 在首帧前整块移除本节点
+       与缩放热区，判据见 windows.rs native_titlebar_mode）。header 带
+       data-tauri-drag-region 作拖拽区；标题文字 pointer-events:none 使点击
+       穿透到拖拽区；三键行为由 settings.js initTitleBar 装配（关闭走后端
+       CloseRequested：隐藏+延迟销毁） -->
   <header class="settings-title-bar" data-tauri-drag-region>
     <span class="settings-title-text">设置 - 外设监控</span>
     <div class="settings-caption-btns">
@@ -38,10 +41,12 @@
       </button>
     </div>
   </header>
-  <!-- 无框缩放热区：THICKFRAME 已全摘（保留它 DWM 会在激活/帧重算时绘制 NC
-       框架带 = 左/右/下白框，NCRP 压不住，见 windows.rs FramelessProfile），
-       边缘缩放由这里经 startResizeDragging 发起（settings.js initTitleBar
-       装配；最大化态跳过）。5px 边缘 + 12px 角，右缘盖住滚动条最外 5px。 -->
+  <!-- 无框缩放热区（仅 Win10 无框形态；Win11 原生缩放边框接管，节点被
+       settings.js 首帧前移除）：THICKFRAME 已全摘（保留它 DWM 会在激活/帧
+       重算时绘制 NC 框架带 = 左/右/下白框，NCRP 压不住，见 windows.rs
+       FramelessProfile），边缘缩放由这里经 startResizeDragging 发起
+       （settings.js initTitleBar 装配；最大化态跳过）。5px 边缘 + 12px 角，
+       右缘盖住滚动条最外 5px。 -->
   <div class="settings-resize-edge edge-n" data-dir="North"></div>
   <div class="settings-resize-edge edge-s" data-dir="South"></div>
   <div class="settings-resize-edge edge-e" data-dir="East"></div>
