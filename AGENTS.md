@@ -317,11 +317,11 @@ MSIX/AppX 打包链保持 PowerShell（MakeAppx/signtool 母语；**含非 ASCII
   ⭐ **交付用户复测前**用 `node tools/cdp-eval.mjs popup "typeof window.<新符号>"`
   确认新符号在运行时确实存在（闸门全绿 ≠ 用户能看见）。
 - **调试开关**：环境变量 `PM_DEV_OPEN_SETTINGS=1` 启动时延迟 1.5s 自动打开设置窗口
-- ⛔ **tao 是本地 fork**（`C:\code\tao-0.35.3-frameless`，`[patch.crates-io]` 指向）：
-  无框顶层窗不产 `WS_CAPTION|WS_SYSMENU`（根治 DWM 失焦重画标题 band，判据链
-  → Wiki 08 §4.5.7 / 07 §17.1）。fork 目录**在仓库外**，换机器 / 升级 tao 必须
-  重做（版本不一致会直接编译失败——故意的机械防线）。⛔ 无关这个 fork 时**不得**
-  顺手改它；改 fork 的提交必须在 body 里声明。
+- ⛔ **tao 是本地 fork**（入库于 `src-tauri/tao-fork/`，`[patch.crates-io]` 指向）：
+  无框顶层窗不产 `WS_CAPTION|WS_SYSMENU` + Win11 topmost 无框窗保留 caption 位
+  （判据链 → Wiki 08 §4.5.7 / 07 §17.1 / §17.6）。fork 随仓 checkout，CI 与
+  换机器零重建（版本不一致会直接编译失败——故意的机械防线）。⛔ 无关这个 fork
+  时**不得**顺手改它；改 fork 的提交必须在 body 里声明。
 - **日志**：`<可写根>/logs/debug_YYYYMMDD.log`（保留策略为「仅一次」时 `debug_once_<pid>.log`）；
   排查启动问题先看 `[main] startup complete`
 - ⛔ **持久化路径一律经 `process::writable_root()`**，不得直接用 `exe_dir()`。
