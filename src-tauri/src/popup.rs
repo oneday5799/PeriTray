@@ -143,7 +143,7 @@ pub fn open_popup(app: &tauri::AppHandle, tab: &str) {
 /// 在后台线程执行一段滑动动画，动画期间持有 `ANIMATING` 单飞守卫。
 ///
 /// **`guard` 是必需参数**，这不是风格偏好：漏传即编译错误，从类型层面堵死
-/// 「置位了却没人复位」这条 P1-8 的复发路径——靠手工 `store(false)` 复位时
+/// 「置位了却没人复位」这条复发路径——靠手工 `store(false)` 复位时
 /// 漏一处，弹窗就永久打不开也关不掉。
 ///
 /// 闭包体内显式 `let _guard = guard;` 是**必须**的：`move` 闭包只有在体内
@@ -224,7 +224,7 @@ fn show(
     if let Ok(hwnd) = window.hwnd() {
         windows::place_below_taskbar(hwnd.0 as isize);
         // 复用路径必须重申材质，不得只依赖 create 时的一次应用：settings 重开
-        // 路径同款先例（windows.rs open_settings_inner）。⛔ popup 不做
+        // 路径同款先例（windows.rs open_settings_inner）。✗ popup 不做
         // strip_sysmenu_style：Win11 fork 在创建期保留 topmost 无框窗 caption 位
         // （SystemBackdrop 依赖，Wiki 07 §17.6），strip 会翻转样式位诱发 DWM
         // 绘制系统三键（真机实测）；Win10 fork 本就不产位，strip 纯空转。
@@ -388,8 +388,8 @@ fn animate_close(window: &tauri::WebviewWindow, x: f64, start_y: f64, end_y: f64
     // popup 关闭后 Suspend WebView2 渲染进程：
     // - 释放 CPU/内存（渲染进程休眠）
     // - 系统睡眠时已处于 Suspended 状态，不阻塞事件循环（仅针对**休眠唤醒**这一类）
-    //   ⚠️ 范围限定：这**不是**「运行期窗口冻结」的解释——实测根因是
-    //   **锁序死锁（P0-4）**，与挂起态无关；遇到「窗口完全无响应」请先查锁序
+    //   ⚠ 范围限定：这**不是**「运行期窗口冻结」的解释——实测根因是
+    //   **锁序死锁**，与挂起态无关；遇到「窗口完全无响应」请先查锁序
     //   （登记表见 `state.rs` 模块文档）。
     let wv: &tauri::Webview = window.as_ref();
     webview::suspend_webview(wv);

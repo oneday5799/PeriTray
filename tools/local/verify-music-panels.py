@@ -80,7 +80,7 @@ def run_case(dev_on, music_on, panel=None, label=""):
 def main():
     g.io_write(CFG_BAK, g.io_read(CFG))
     try:
-        # ⭐ 三条判据都**跟着「当次会话数」走**——这不是放宽，是规格本身：
+        # ✓ 三条判据都**跟着「当次会话数」走**——这不是放宽，是规格本身：
         #   回落链的第一条就是「音乐会话存在」。会话数会随用户开/关音乐 App 变化，
         #   写死期望值 = 把「环境状态变了」误判成「产品坏了」（我第一版就踩了这个）。
         #   判据的正确写法是「**给定**会话数下应当是什么」。
@@ -127,7 +127,7 @@ def main():
             check("E 记住 music + 开关开 -> 音乐面板", r[0] == want,
                   "面板=%s 会话数=%d 期望=%s" % (r[0], r[1], want))
 
-        # F ⭐ 回落**不改写**记住的选择：无会话时配置里仍应是 music
+        # F ✓ 回落**不改写**记住的选择：无会话时配置里仍应是 music
         s2 = g.io_read(CFG)
         check("F 回落不改写用户的选择（配置仍是 music）",
               'taskbar_panel = "music"' in s2,

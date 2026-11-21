@@ -8,7 +8,7 @@
  * 前置：应用以 PM_DEV_CDP_PORT=1 启动（windows.rs::browser_args 会附加
  *   --remote-debugging-port=9222），例如：
  *   PM_DEV_CDP_PORT=1 ./target/debug/PeriTray.exe
- * ⛔ 勿改用 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 环境变量：应用显式设置了
+ * ✗ 勿改用 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 环境变量：应用显式设置了
  *   additional_browser_args 时该变量不参与 WebView2 命令行（实测无效）。
  *
  * 为什么需要它：本仓的前端验收（B14 / L1-L2）用的是「无头 Edge + 探针 HTML」——

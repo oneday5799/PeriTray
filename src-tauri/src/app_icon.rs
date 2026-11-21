@@ -13,15 +13,15 @@ static EXE_PATH_CACHE: OnceLock<Mutex<LruCache<u32, Arc<str>>>> = OnceLock::new(
 
 /// 从 pid 取 **exe 文件完整路径**（小写），如 `C:\Program Files\Spotify\Spotify.exe`。
 ///
-/// ⭐ **与 `get_process_name_by_pid` 是两件事、两个缓存**：后者给的是文件
+/// ✓ **与 `get_process_name_by_pid` 是两件事、两个缓存**：后者给的是文件
 ///   版本信息里的 `FileDescription`（本地化描述，`Spotify` / `网易云音乐`），
 ///   用来做界面显示名；本函数给的是**身份事实**（可执行文件路径），
 ///   用来和 SMTC 的 AUMID 做匹配（口径见 `audio::media_aumid_matches`）。
 ///   混用会把「本地化改名 / 商店版改名」带进身份判定。
-/// ⚠️ 给完整路径（不是只有文件名）是有意的：匹配方要按 `file_stem`（不含
+/// ⚠ 给完整路径（不是只有文件名）是有意的：匹配方要按 `file_stem`（不含
 ///   `.exe`）与 `file_name`（含 `.exe`）**分别取两条证据**，只给其中之一
 ///   就得在匹配方重复拆路径。
-/// ⚠️ 走 OpenProcess + 查扩展名路径（实测单次毫秒级），故按 pid 缓存。
+/// ⚠ 走 OpenProcess + 查扩展名路径（实测单次毫秒级），故按 pid 缓存。
 pub fn get_process_exe_path(pid: u32) -> Option<Arc<str>> {
     let cache =
         EXE_PATH_CACHE.get_or_init(|| Mutex::new(LruCache::new(NonZeroUsize::new(256).unwrap())));
@@ -75,7 +75,7 @@ fn query_exe_path_by_openprocess(pid: u32) -> Option<String> {
                 return None;
             }
         };
-        // ── 为什么用堆上的 `Vec<u16>` 而不是 `[0u16; 32768]`（P3-5）──────
+        // ── 为什么用堆上的 `Vec<u16>` 而不是 `[0u16; 32768]`──────
         // 32768 个 `u16` = **64 KiB**，直接压在栈上。这个函数是**逐进程**调用的
         // （会话列表里通常几十个 PID），而且调用点分布在 Tauri 命令 / 托盘刷新等
         // 线程上 —— 栈默认 1 MiB（后台线程常被调小到 256 KiB），64 KiB 的
@@ -135,7 +135,7 @@ fn query_exe_path_by_nt(pid: u32) -> Option<String> {
     use ntapi::ntexapi::{NtQuerySystemInformation, SystemProcessIdInformation};
 
     unsafe {
-        // 同理改堆分配（P3-5）：4 KiB 压栈虽不致命，但这条路径本身就在
+        // 同理改堆分配：4 KiB 压栈虽不致命，但这条路径本身就在
         // 「OpenProcess 被拒」的兜底分支上，不该再给栈加无谓开销。
         let mut name_buf = vec![0u16; 2048];
         let mut info = SystemProcessIdInformation {
@@ -182,7 +182,7 @@ fn query_exe_path_by_nt(pid: u32) -> Option<String> {
 
 /// 把 `\Device\HarddiskVolumeN\rest` 拆成 `(volume, after)`，供盘符映射使用。
 ///
-/// 抽成不依赖任何 Win32 调用的纯函数（P3-5 附带）：`normalize_image_path` 的
+/// 抽成不依赖任何 Win32 调用的纯函数（附带）：`normalize_image_path` 的
 /// 前两步（剥命名空间前缀、识别已含盘符）逻辑简单，但第三步的拆分一旦
 /// 写错（比如 `\Device\` 后面没有反斜杠、或 `volume` 为空）就会退化成
 /// 「返回原路径」或「返回 None」，只能靠在 Windows 上真机跑才能发现。
@@ -260,7 +260,7 @@ fn normalize_image_path(path: &str) -> Option<String> {
 /// 从进程 PID 查询 exe 路径：主路径（OpenProcess）→ 内核兜底（NtQuerySystemInformation）。
 /// 从 pid 查 exe 完整路径（公开给「按 pid 启动应用」用）。
 ///
-/// ⭐ 与 [`get_process_exe_path`] 的区别：那个给**小写**（身份匹配用），
+/// ✓ 与 [`get_process_exe_path`] 的区别：那个给**小写**（身份匹配用），
 ///   这个给**原样**（交给 `ShellExecuteW` 启动用，路径大小写须保持）。
 pub fn get_process_exe_path_raw(pid: u32) -> Option<Arc<str>> {
     query_exe_path_by_pid(pid).map(Arc::from)
@@ -547,7 +547,7 @@ fn bitmap_to_base64(img: &RgbaImage) -> Option<Arc<str>> {
 mod tests {
     use super::*;
 
-    // ── P3-5：`\Device\...` 路径拆分的边界 ──────────────────────────
+    // ── `\Device\...` 路径拆分的边界 ──────────────────────────
 
     #[test]
     fn split_device_path_splits_volume_and_rest() {

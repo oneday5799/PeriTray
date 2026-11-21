@@ -20,7 +20,7 @@ SRCCOPY = 0x00CC0020
 u = ctypes.windll.user32
 g = ctypes.windll.gdi32
 
-# ⛔⛔ 必须把本进程设为 **DPI 感知**，否则 `GetSystemMetrics` / `GetWindowRect` 返回的是
+# ✗ 必须把本进程设为 **DPI 感知**，否则 `GetSystemMetrics` / `GetWindowRect` 返回的是
 #    被缩放的**逻辑坐标**，而 `BitBlt` 用的是**物理坐标** ⇒ 截图位置整体错位
 #    （实测：125% 缩放下任务栏逻辑 top=1104，物理 top=1380，截出来的是编辑器内容）。
 #    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
@@ -59,7 +59,7 @@ def grab_strip(y0, height):
     mem = g.CreateCompatibleDC(hdc)
     hbm = g.CreateCompatibleBitmap(hdc, cx, height)
     g.SelectObject(mem, hbm)
-    # ⛔ CAPTUREBLT: 否则抓不到分层窗口（ULW 绘制的内容）
+    # ✗ CAPTUREBLT: 否则抓不到分层窗口（ULW 绘制的内容）
     g.BitBlt(mem, 0, 0, cx, height, hdc, 0, y0, SRCCOPY | CAPTUREBLT)
     class BIH(ctypes.Structure):
         _fields_ = [('biSize', w.DWORD), ('biWidth', w.LONG), ('biHeight', w.LONG),

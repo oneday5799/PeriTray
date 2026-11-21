@@ -1,7 +1,7 @@
 """诊断 tooltip 文字是否真的画出来，以及最暗像素有多暗。
 
 用法：先跑 shot-tooltip.py，再跑本脚本。
-⛔ 与上一版量脚本同一个坑：`at()` 必须在**窗口矩形内**取样（壁纸里也有 #FCFCFC）。
+✗ 与上一版量脚本同一个坑：`at()` 必须在**窗口矩形内**取样（壁纸里也有 #FCFCFC）。
 """
 import struct
 import sys
@@ -68,7 +68,7 @@ def main():
     rows = [y for y in range(by0, by0 + bh)
             if sum(1 for x in range(bx0, bx0 + bw) if is_bg(at(x, y))) > bw // 2]
     if not rows:
-        print("❌ 没找到气泡底色行")
+        print("✗ 没找到气泡底色行")
         return
     T, B = min(rows), max(rows)
     print("气泡实测行 %d..%d" % (T, B))
@@ -77,7 +77,7 @@ def main():
             for x in range(bx0 + 2, bx0 + bw - 2)
             if sum(at(x, y)) / 3 < 200]
     if not dark:
-        print("❌ 气泡内**没有任何**暗像素 ⇒ 文字没画出来")
+        print("✗ 气泡内**没有任何**暗像素 ⇒ 文字没画出来")
         return
     xs = [a for a, _, _ in dark]
     ys = [b for _, b, _ in dark]

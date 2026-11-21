@@ -12,17 +12,17 @@
  *             createDialog/closeDialog/showToast/describeShortcutError/
  *             bindShortcutRecorder
  * 依赖：window.__TAURI__（由 Tauri 运行时注入）；被两页全部脚本依赖
- *       ⚠️ 本文件顶层的 `const invoke` 同时是 **settings 页全部脚本的 invoke 来源**
+ *       ⚠ 本文件顶层的 `const invoke` 同时是 **settings 页全部脚本的 invoke 来源**
  *       （它们以裸 `invoke(...)` 跨脚本词法绑定使用，见下方注释） */
 //
-// Tauri API 一律「惰性获取 + 防御式降级」（P2-3）。
+// Tauri API 一律「惰性获取 + 防御式降级」。
 // 顶层直接解构 `window.__TAURI__.core` 会在运行时未注入（或注入晚于本文件执行）时
 // 抛 TypeError ⇒ **本文件后续所有 `window.*` API 都不再定义**，两页功能整体失效
 // ——这不是降级，是全崩。故：
 //   · `invoke` 包装为「每次调用重新解析」，未就绪时返回 rejected Promise，
 //     交给调用方既有的 `.catch()` / `try-catch` 走降级路径；
 //   · 顶层事件监听一律经 `onTauriEvent()`，未就绪时静默跳过并返回 false。
-//   · ⚠️ 下面这个 `invoke` 包装**同时是 settings 页的 invoke 来源**：settings*.js
+//   · ⚠ 下面这个 `invoke` 包装**同时是 settings 页的 invoke 来源**：settings*.js
 //     以裸 `invoke(...)` 跨脚本词法绑定使用它（顶层 `const` 不是 `window` 属性，
 //     但同页后续脚本可见）⇒ **不要搬出本文件、不要改成 `window.invoke`、不要让
 //     settings.html 把它排到 common.js 之前**。实测把本文件排到最后：`check.mjs`
@@ -39,7 +39,7 @@ const invoke = (...args) => {
   return core.invoke(...args);
 };
 
-// 顶层注册 Tauri 事件监听（P2-3）。用 `function` 声明以便被提升，文件内任意位置可用。
+// 顶层注册 Tauri 事件监听。用 `function` 声明以便被提升，文件内任意位置可用。
 function onTauriEvent(name, handler) {
   const ev = window.__TAURI__ && window.__TAURI__.event;
   if (!ev || typeof ev.listen !== "function") {
@@ -58,7 +58,7 @@ window.CATEGORIES = [
 ];
 
 // A2DP Sink「占用中」状态集合：popup 设备卡（标签/按钮）与设置页设备行共用
-// 同一判据。⛔ 物理只留这一份——两页各写一份必然漂移（审查实测已分叉）；
+// 同一判据。✗ 物理只留这一份——两页各写一份必然漂移（审查实测已分叉）；
 // 新增状态时两页行为同步变化，属预期。
 window.A2DP_ACTIVE_STATES = ["connecting", "backoff", "armed", "link_ready"];
 
@@ -117,7 +117,7 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 
 // config-changed: 设置页切主题时，主窗口/设置页实时同步
 //
-// ⭐ **顺带同步「显示设备信息组件」开关**：
+// ✓ **顺带同步「显示设备信息组件」开关**：
 //   弹出窗口是**隐藏而非销毁**，而开关值原先**只在加载时取一次**
 //   ⇒ 用户在设置页开关之后，popup 里那份**一直是陈旧的**，
 //   于是「第一次右键」仍按旧值显示「钉到任务栏」（下一次数据刷新才自愈）。
@@ -125,30 +125,30 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 //   ⇒ 在这个**共享** handler 里同步，是唯一需要改的地方（两页都覆盖，且
 //   **不新增监听器、不新增取数**）。
 //
-// ⚠️ `taskbarWidgetEnabled` 用 `let` 声明在下方（约 320 行），而这个监听器
+// ⚠ `taskbarWidgetEnabled` 用 `let` 声明在下方（约 320 行），而这个监听器
 //   在上方注册 —— **函数声明会提升、`let` 不会**，但事件是异步的，
 //   派发时整个脚本早已执行完毕 ⇒ 不存在 TDZ。仅此一处依赖该事实，已注记。
 onTauriEvent("config-changed", (event) => {
   initTheme();
   const cfg = event && event.payload;
-  // ⭐ 开关走 payload **同步**改（没有 await ⇒ 零陈旧窗口）
+  // ✓ 开关走 payload **同步**改（没有 await ⇒ 零陈旧窗口）
   if (cfg && typeof cfg.taskbar_widget_enabled === "boolean") {
     window.applyTaskbarWidgetEnabled(cfg);
   }
-  // ⭐ 已钉名单：必须另发一次 invoke —— payload 里的 `pinned_taskbar_devices`
+  // ✓ 已钉名单：必须另发一次 invoke —— payload 里的 `pinned_taskbar_devices`
   //   只有**身份键**（`DeviceKey`），**没有解析后的显示名**，构不出「钉到/移出」的文案。
   //
   //   触发形态：在**设置页**移除已钉设备 ⇒ popup 的名单
   //   陈旧 ⇒ 右键文案与真实状态相反；而 popup **重新打开并不会刷新**
   //   （只有刷新按钮 / 设备事件才重跑）⇒ 错文案会留到下一次设备事件。
   //
-  // ⚠️⚠️ 上面那条同步的与这一条**不是冗余，别「优化」掉其中任何一条**：
+  // ⚠ 上面那条同步的与这一条**不是冗余，别「优化」掉其中任何一条**：
   //   · 开关走 payload ⇒ **同步**生效 ⇒ 切换后**第一次**右键就对
   //   · 名单只能走 invoke ⇒ **最终一致**（且 payload 根本构不出它）
   //   而 `refreshTaskbarPinnedNames()` 内部那次 `get_config` 也会顺手同步开关，
   //   但它是 **await 回来的、晚一拍** ⇒ **替代不了**上面那条同步的。
   //
-  // ⚠️ 代价：每次 `config-changed` 多一次 `get_pinned_taskbar_list`。
+  // ⚠ 代价：每次 `config-changed` 多一次 `get_pinned_taskbar_list`。
   //   它是**内存读 + 小列表序列化**，且只在用户操作时触发（非紧循环）——
   //   与本仓反复较真的 WMI 数百毫秒不在一个量级，**不值得为省它再加一层判据**。
   window.refreshTaskbarPinnedNames();
@@ -175,30 +175,30 @@ onTauriEvent("material-changed", (e) => {
 
 // 设备别名查找：**短名键 → 精确键**两级（与后端 `config::resolve_device_name` 同序同义）。
 //
-// ⭐ `coreName` 由**调用方从后端数据里取**（`AudioDevice.core_name`）。
+// ✓ `coreName` 由**调用方从后端数据里取**（`AudioDevice.core_name`）。
 //   缺省时才退回 `simplifyDeviceName`（只取最外层括号、不剥蓝牙后缀）——
 //   那条退路在 `扬声器 (小爱音箱-9205 Stereo)` 这类名字上与后端 `core_name`
 //   不一致，曾导致「设备页改的别名、音量页查不到」。有后端值就别自己推。
 //
-// ⛔⛔ 为什么必须两级（这是「两页重命名不同步」的根因）：同一台设备在两页的 `name`
+// ✗ 为什么必须两级（这是「两页重命名不同步」的根因）：同一台设备在两页的 `name`
 //   **不是同一个字符串** —— 音量页是**音频端点名**（「耳机 (小爱音箱-9205)」），
 //   设备信息页是**物理设备名**（「小爱音箱-9205」）。后端写入侧
 //   `apply_device_rename` 会把**两种形态归并**（长形态键 + 短名键都写），
 //   可**从设备页发起时入口键本身就是短名**，长形态键未必已存在 ⇒ 只写短名键。
 //   若读取侧只查精确键，音量页就永远查不到 ⇒「设备页改了名、音量页不变」。
 //   后端 `resolve_device_name` 本来就是两级查找，前端此前却是单键 ⇒ 两侧口径不一致。
-// ⚠️ 边界：此处「短名」= `simplifyDeviceName`（取最外层括号内内容），而后端 `core_name`
+// ⚠ 边界：此处「短名」= `simplifyDeviceName`（取最外层括号内内容），而后端 `core_name`
 //   还会剥蓝牙协议后缀（` Stereo` / ` LE` …）。「类型 (设备名)」这种常见形态两者一致；
 //   带后缀的长形态回退会落空（此时退回显示括号内容，与关闭简化时的观感相同）。
 window.lookupDeviceAlias = function (customNames, name, coreName) {
   if (!customNames || !name) return undefined;
-  // ⚠️ 空白值一律当「无别名」：后端 `resolve_device_name_in` 同样跳过，
+  // ⚠ 空白值一律当「无别名」：后端 `resolve_device_name_in` 同样跳过，
   //    两侧必须一致（否则任务栏显示空白、页面显示原名）。
   const usable = (v) => v !== undefined && v !== null && String(v).trim() !== "";
   const short = coreName || window.simplifyDeviceName(name);
   if (short !== name && usable(customNames[short])) return customNames[short];
   if (usable(customNames[name])) return customNames[name];
-  // ⭐ 第 3 级：**任一形态**的同源键（与后端第 3 级一一对应）。
+  // ✓ 第 3 级：**任一形态**的同源键（与后端第 3 级一一对应）。
   //    少了它，「短名键空白 + 长形态键有效」时设备页回落原名、音量页显示别名
   //    ⇒ 同一设备两套名字。按键名排序取首个，保证同一个配置每次都一样。
   const keys = Object.keys(customNames).sort();
@@ -342,17 +342,17 @@ window.clampMenuPosition = function (menu, x, y) {
 
 // ── 任务栏「已钉设备」名单（**设备页与音量页共用**）────────────────────
 //
-// ⭐ 为什么放 `common.js` 而不是某个 tab 的脚本：两个 tab 的右键菜单都要读它，
+// ✓ 为什么放 `common.js` 而不是某个 tab 的脚本：两个 tab 的右键菜单都要读它，
 // 而 `popup-audio.js`（加载序 2/4）**先于** `popup-devices.js`（3/4）执行
 // ⇒ 放在 devices 里会让 audio 在定义时拿到 `undefined`。共用状态必须回到
 // 最先加载的公共层——这是加载序决定的，不是风格偏好。
 //
-// ⛔ 名单按**显示名**存：音量页的卡片名是**音频端点名**、设备页是
+// ✗ 名单按**显示名**存：音量页的卡片名是**音频端点名**、设备页是
 //   `PhysicalDevice.name`，两者字符串不同但指向同一台设备。按名判只是**文案**用途，
 //   真正的写入一律由后端按身份键裁决，前端不参与判据。
-// ⭐ 两份名单：**显示名**（设备页用）与**音频端点 id**（音量页用）。
+// ✓ 两份名单：**显示名**（设备页用）与**音频端点 id**（音量页用）。
 //
-// ⛔ 两者**必须分开**，因为两页卡片的原生标识不同：
+// ✗ 两者**必须分开**，因为两页卡片的原生标识不同：
 //   · 设备信息页卡片是 `Device`，名字就是 `PhysicalDevice.name`；
 //   · 音量控制页卡片是 `AudioDevice`，名字是**音频端点名**（`耳机 (小爱音箱-9205)`），
 //     与 `PhysicalDevice.name`（`小爱音箱-9205`）**不是同一个字符串**。
@@ -361,11 +361,11 @@ window.clampMenuPosition = function (menu, x, y) {
 //   判据本身仍全在后端：这里只用于**菜单文案**。
 let taskbarPinnedNameSet = new Set();
 let taskbarPinnedAudioIdSet = new Set();
-// ⭐ 「显示设备信息组件」开关（`config.taskbar_widget_enabled`）。
+// ✓ 「显示设备信息组件」开关（`config.taskbar_widget_enabled`）。
 //   设备卡片的右键菜单里「钉到任务栏/移出任务栏」**只在它开启时出现**
 //   ——组件关着时那个入口没有意义。
 //
-// ⚠️ 初值 `false` 是**刻意 fail-closed**（取不到就当关）：这条规则的方向是
+// ⚠ 初值 `false` 是**刻意 fail-closed**（取不到就当关）：这条规则的方向是
 //   「开启时才显示」，所以「未知」必须归到「不显示」，否则会在组件关闭时
 //   漏出一个点不动的菜单项。
 let taskbarWidgetEnabled = false;
@@ -382,8 +382,8 @@ window.isTaskbarWidgetEnabled = function () {
   return taskbarWidgetEnabled;
 };
 
-// ⭐ 用**已有的 config 对象**同步开关，供 `config-changed` handler 零取数调用。
-// ⛔ 只在字段**确实是布尔**时才写：`emit` 的 payload 理论上可能缺字段
+// ✓ 用**已有的 config 对象**同步开关，供 `config-changed` handler 零取数调用。
+// ✗ 只在字段**确实是布尔**时才写：`emit` 的 payload 理论上可能缺字段
 //   （旧版后端传空 payload），那时**保持上一份已知值**而不是回落 false。
 window.applyTaskbarWidgetEnabled = function (cfg) {
   if (cfg && typeof cfg.taskbar_widget_enabled === "boolean") {
@@ -394,10 +394,10 @@ window.applyTaskbarWidgetEnabled = function (cfg) {
 window.refreshTaskbarPinnedNames = async function () {
   const inv = window.getInvoke ? window.getInvoke() : null;
   if (!inv) return;
-  // ⭐ 顺带取「显示设备信息组件」开关 ⇒ 与共用名单**同一处、同一次刷新**。
+  // ✓ 顺带取「显示设备信息组件」开关 ⇒ 与共用名单**同一处、同一次刷新**。
   //   两页都已在加载时调用本函数，菜单项的可见性因此与菜单文案**同源同新鲜**。
   //
-  // ⛔⛔ 两个取数**各自兜底、互不牵连**：若直接 `Promise.all` 而不各自 catch，
+  // ✗ 两个取数**各自兜底、互不牵连**：若直接 `Promise.all` 而不各自 catch，
   //   任一 reject 会把另一个的结果一起丢掉 ⇒ 开关一次瞬时失败就会拖垮
   //   **名单刷新**（那驱动菜单文案「钉到/移出」的翻转）。两者故障域不同，
   //   必须独立成败。
@@ -411,7 +411,7 @@ window.refreshTaskbarPinnedNames = async function () {
       return null;
     }),
   ]);
-  // ⚠️ 失败（null）时**不清空**已有集合：菜单文案退到「钉到任务栏」比「全部显示已钉」更安全
+  // ⚠ 失败（null）时**不清空**已有集合：菜单文案退到「钉到任务栏」比「全部显示已钉」更安全
   //    （最坏是文案不准，点下去仍由后端按身份键翻转真实状态）。
   if (rows) {
     taskbarPinnedNameSet = new Set(rows.map((r) => r.name));
@@ -421,7 +421,7 @@ window.refreshTaskbarPinnedNames = async function () {
     }
     taskbarPinnedAudioIdSet = new Set(ids);
   }
-  // ⚠️ 同理：取失败时**保持上一份已知值**，而不是回落 `false`。
+  // ⚠ 同理：取失败时**保持上一份已知值**，而不是回落 `false`。
   //   否则一次瞬时失败就会让「已钉到任务栏」暂时失去取消入口（设置页仍可移除，
   //   但那是另一处、另一条路径）。只有真的读到配置才覆盖。
   window.applyTaskbarWidgetEnabled(cfg);
@@ -478,7 +478,7 @@ window.createSubmenuShell = function (menu, label, positionFn) {
   const groupItem = document.createElement("div");
   groupItem.className = "context-menu-item context-menu-subitem";
   // label 来自调用点（含设备名等外部数据），一律以 textContent 写入，
-  // 不拼 innerHTML —— 拼字符串会把设备名里的标记当结构解析（见 P1-10 残留注入面）
+  // 不拼 innerHTML —— 拼字符串会把设备名里的标记当结构解析（残留注入面）
   const labelEl = document.createElement("span");
   labelEl.textContent = label;
   groupItem.appendChild(labelEl);
@@ -585,7 +585,7 @@ window.createSubmenuShell = function (menu, label, positionFn) {
 // ── ComboBox（WinUI 风格下拉的行为核心，设置页与「修改信息」对话框共用） ──
 
 // 绑定一个 .win-combo-box 子树（静态 HTML 或 createComboBox 动态构造皆可）。
-// 由 settings.js 的 initComboBox **逐字上移**而来 —— ⛔ 开合/定位/动画判据只此一份，
+// 由 settings.js 的 initComboBox **逐字上移**而来 —— ✗ 开合/定位/动画判据只此一份，
 // 两页不许各写一份（漂移即两页下拉行为不一致）。
 // 返回 { getValue }：取当前选中值（对话框「确定」要在收尾时读值）。
 window.bindComboBox = function (combo, selectedValue, onChange) {
@@ -773,7 +773,7 @@ window.bindComboBox = function (combo, selectedValue, onChange) {
 
   return {
     getValue: () => currentValue,
-    // ⭐ 宿主关闭时必须调用：开启浮层会把 flyout **搬到 document.body**、并挂上
+    // ✓ 宿主关闭时必须调用：开启浮层会把 flyout **搬到 document.body**、并挂上
     //   document 级 pointerdown / scroll / resize 监听 —— 对话框 remove 掉自身
     //   DOM 时够不到这些，不销毁就泄漏（设置页静态下拉与页面同寿命，无需调用）。
     destroy: () => {
@@ -849,7 +849,7 @@ window.createComboBox = function ({ options, value, onChange }) {
 
 // 下拉选项与后端白名单（config::DEVICE_TYPES / CONN_KINDS）一一对应；
 // 空值 = 自动探测（后端把空值当清除键，恢复自动派生）。
-// ⛔ 选项增删必须与后端两个常量数组同步，前端不单方面扩集合。
+// ✗ 选项增删必须与后端两个常量数组同步，前端不单方面扩集合。
 const DEVICE_TYPE_OPTIONS = [
   ["", "默认"],
   ["phone", "手机"],
@@ -1005,7 +1005,7 @@ window.showDeviceInfoDialog = function ({
 window.describeShortcutError = function (err, display) {
   const msg = String(err);
   // 顺序要紧：「已被其他程序占用」不含「已被占用」子串，但仍显式先判，
-  // 以免日后有人把文案改成含该子串而落到下面那条更含糊的提示上（P2-12）。
+  // 以免日后有人把文案改成含该子串而落到下面那条更含糊的提示上。
   if (msg.includes("被其他程序占用")) {
     return `"${display}" 已被其他程序占用，请换一个快捷键。`;
   }
@@ -1291,10 +1291,10 @@ window.closeDialog = function (overlay) {
 /**
  * 弹出一条 toast。
  *
- * ⚠️ **文案是纯文本，不是 HTML**：本函数用 `textContent` 写入（防 XSS，必须保持），
+ * ⚠ **文案是纯文本，不是 HTML**：本函数用 `textContent` 写入（防 XSS，必须保持），
  * 所以文案里若写 HTML 换行标签，会被原样显示成字面量的标签文本。
  * 需要换行请写 `\n`——`.toast` 已设 `white-space: pre-line`（见 base.css）。
- * `tools/check.mjs` 会扫描本函数的实参并在出现 HTML 标签时报错（P1-6）。
+ * `tools/check.mjs` 会扫描本函数的实参并在出现 HTML 标签时报错。
  */
 window.showToast = function (msg, onClick, isError, durationMs) {
   let el = document.querySelector(".toast");
@@ -1318,7 +1318,7 @@ window.showToast = function (msg, onClick, isError, durationMs) {
   }, durationMs || 5000);
 };
 
-// ── 启动时配置解析失败提示（P1-7）───────────────────────
+// ── 启动时配置解析失败提示───────────────────────
 // 后端解析 config.toml 失败时会回退默认值，并把磁盘原文备份为 config.toml.bak。
 // 不提示的话，用户只会看到「设置全变回默认」，容易误判成静默丢数据。
 // 两个页面都加载 common.js，故提示逻辑放在这里（非清除式，两个窗口都能看到）。
@@ -1338,7 +1338,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     // 提示失败不得影响主流程
   }
 
-  // P2-12：注册失败的设备快捷键。**必须主动拉取**——失败事件在启动同步时发出，
+  // 注册失败的设备快捷键。**必须主动拉取**——失败事件在启动同步时发出，
   // 那一刻本页面还没加载、监听器尚未注册，事件必然落空。而「开机时快捷键被别的
   // 程序抢走」正是这类失效最常见也最隐蔽的场景（界面显示已设置、按键却无反应）。
   try {
@@ -1360,7 +1360,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-// ── 设备快捷键注册失败（P2-12）─────────────────────────
+// ── 设备快捷键注册失败─────────────────────────
 // 被**其他程序**占用的键，只有真正调注册 API 时才会失败——本进程的注册表查不到外部占用。
 // 后端在失败时广播本事件，避免「界面显示已设置、按键却毫无反应」这种无从察觉的失效。
 // 注：用户主动设键走 `set_device_shortcut`，那条路径会返回错误并自行提示；
@@ -1375,7 +1375,7 @@ onTauriEvent("shortcut-register-failed", (event) => {
     8000
   );
   // 留一条后端记录：证明提示链路真的走到了前端（否则异常会被静默吞掉，
-  // 而「用户到底有没有被告知」将无从查证）——与 P1-7 的 config 提示同一手法。
+  // 而「用户到底有没有被告知」将无从查证）——与 config 提示同一手法。
   const invoke = getInvoke();
   if (invoke) {
     invoke("frontend_log", {

@@ -244,7 +244,7 @@ impl WindowFlags {
     // PATCH(frameless): 无框窗（decorations(false)，不含 MARKER_DECORATIONS）不产
     // WS_CAPTION|WS_SYSMENU —— DWM 的 caption 渲染缓存归零、healer 样式位写回源
     // 归零、窗口 title 无渲染消费点。判据与机理链：PeriTray Wiki 08 §4.5.7 / 07 §17.1。
-    // ⛔ 不得为「系统最小化/最大化动画」恢复此位：动画只播给带 WS_CAPTION 的窗，
+    // ✗ 不得为「系统最小化/最大化动画」恢复此位：动画只播给带 WS_CAPTION 的窗，
     // 但位一出现 DWM 即叠画系统标题 band + 三键且**单向不可消**（创建期缓存 +
     // 事后补位均触发、摘位与 FRAMECHANGED 不消、NCRP_DISABLED 在 26300 已移除），
     // 会盖在自绘标题栏上（2026-11 真机 26300 红显法 + 帧差实测否决，→ Wiki 07

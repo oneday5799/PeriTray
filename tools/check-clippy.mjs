@@ -14,13 +14,10 @@
  * ── 为什么不直接用 `cargo clippy -- -D warnings` ─────────────────
  * 在当前 HEAD 上实测：默认 lint 集报 **88 条**（bin 44 个唯一位置，
  * 另加 test 编译单元的重复计数）。裸 `-D warnings` 会让 CI **首次运行即红**；
- * 而这 88 条**全是风格类**（当时的分布：`redundant_closure` 16 /
- * `field_reassign_with_default` 16 / `manual_clamp` 8 / `manual_c_str_literals` 8 /
- * `type_complexity` 5 …——**当前剩余量只看下面的 `BASELINE_ALLOW`，别引本段数字**），
+ * 而这 88 条**全是风格类**（**当前剩余量只看下面的 `BASELINE_ALLOW`**），
  * 与本次代码审查的 40 条发现**零交集** ⇒ 在「收尾批」里批量改它们**纯风险无收益**
- * （当时记的两条顾虑：`manual_clamp` 改 `.clamp()` 有 NaN 语义差异；`derivable_impls`
- * 被记成「直指 P1-7 刚整过的 `Config::default`」——**后者是错的**：实测命中的是
- * `LogRetention` 这个枚举的 `Default`，与 `Config::default` 无关，批 3 已订正并改掉）。
+ * （两条顾虑：`manual_clamp` 改 `.clamp()` 有 NaN 语义差异；`derivable_impls`
+ * 实测命中的是 `LogRetention` 枚举的 `Default`，与 `Config::default` 无关）。
  * 故采用**显式基线**：存量按 lint 粒度封存，新增违规一律拦下；
  * **每修掉一条，就从 `BASELINE_ALLOW` 删一条**（基线即待办清单）。
  *
@@ -37,20 +34,17 @@
  * · 实测**默认集不含** `.lock().unwrap()` 的对应 lint：`clippy::unwrap_used`
  *   属 restriction 组、**默认关闭**；显式开启后全仓 **94 条**
  *   （`unwrap_used` 44 + `expect_used` 50）⇒ **不可能 `-D`**。
- *   即：审查报告点名的「`.lock().unwrap()`」这一类，clippy **默认不覆盖**。
- *   （主方案 §8.3 第 5 条与决策 10 称 clippy「已覆盖 `.lock().unwrap()`」——
- *   **该立论经实测不成立**，见计划文件 §7.4 的订正。）
+ *   即：`.lock().unwrap()` 这一类，clippy **默认不覆盖**。
  * · `let _ =` 丢弃 must_use：`SingleFlightGuard` **没有 `#[must_use]`**
  *   （`src-tauri/src/state.rs`），故 `let _ = guard` 抓不到；而 `let _x = guard`
  *   的 `unused_variables` 按语言规范**主动豁免** ⇒ **这一类同样没有机械防线**
- *   （出处：主方案 §8.3 第 3 条 + §二 的对照表；报告 P3-8）。
- *   ⚠️ 注意别引成「避坑清单第 18 条」——那条讲的是「闸门边界要写在闸门旁边」，
- *   与本条的「无机械检查」是两件事（本次初稿引错过一次，已订正）。
+ *   ⚠ 别引成「避坑清单第 18 条」——那条讲「闸门边界要写在闸门旁边」，
+ *   与本条「无机械检查」是两件事。
  * · 异步上下文里的 `thread::sleep`（全仓 24 处）：clippy **无对应 lint**。
  * · **基线写错 lint 名不会静默失效**：`-D warnings` 会把 `unknown_lints`
  *   升级为 `error[E0602]` ⇒ 但**改基线必须实跑一次**，否则 CI 会以
  *   「unknown lint」的形式变红（已实测）。
- * · **工具链版本已固定（，本节此前写「CI 用浮动 @stable」）**：版本由仓库根的
+ * · **工具链版本已固定**：版本由仓库根的
  *   `rust-toolchain.toml` 指定；`ci.yml` / `release.yml` 都**从该文件读 channel 再安装**，
  *   并在同一步断言「生效工具链 == 文件里的值」⇒ 本地与 CI 同版，
  *   **「Rust 往 clippy::all 加新 lint ⇒ CI 无故变红」这一类风险已消除**。
@@ -79,11 +73,11 @@ const OPTIONAL = process.argv.includes("--optional");
  * 编译单元里各报一次，故 `cargo` 输出的原始告警行数约为它的两倍。两种口径都写清，
  * 免得下一个人对着 `cargo clippy` 的条数说「对不上」。
  *
- * ⚠️ 每次改动本数组都必须**实跑一次** `node tools/check-clippy.mjs`：lint 名写错会以
+ * ⚠ 每次改动本数组都必须**实跑一次** `node tools/check-clippy.mjs`：lint 名写错会以
  *    `unknown lint (E0602)` 的形式让 CI 变红，而不是静默失效（已实测）。
  */
 const BASELINE_ALLOW = [
-  // ⚠️ 这是**有意保留的决定，不是遗漏**（批 3 逐处判过）：
+  // ⚠ 这是**有意保留的决定，不是遗漏**（批 3 逐处判过）：
   // 两处命中是 `dedup.rs::try_insert`（14 参 / 107 行 / 2 个调用点）与
   // `wmi_query.rs::query_pnp_devices`（8 参 / 115 行 / 1 个调用点）。
   // 清掉它得把参数收进结构体——那是**真重构**（约 222 行 + 3 个调用点），
@@ -119,14 +113,14 @@ try {
 if (!clippyAvailable) {
   if (OPTIONAL) {
     console.warn(
-      "[check-clippy] ⚠️ 未找到 cargo clippy 组件，本次**跳过** Rust clippy 闸门。\n" +
+      "[check-clippy] ⚠ 未找到 cargo clippy 组件，本次**跳过** Rust clippy 闸门。\n" +
         "[check-clippy]    本机补装：rustup component add clippy\n" +
         "[check-clippy]    注意：CI 上这一步是硬失败，跳过只影响本地提交。"
     );
     process.exit(0);
   }
   console.error(
-    "[check-clippy] ❌ 未找到 cargo clippy 组件，Rust clippy 闸门无法执行。\n" +
+    "[check-clippy] ✗ 未找到 cargo clippy 组件，Rust clippy 闸门无法执行。\n" +
       "[check-clippy]    本机补装：rustup component add clippy"
   );
   process.exit(1);
@@ -153,7 +147,7 @@ if (pinned) {
     }).trim();
     if (!active.startsWith(pinned)) {
       console.warn(
-        `[check-clippy] ⚠️ 生效工具链「${active}」与 rust-toolchain.toml 固定的「${pinned}」不一致\n` +
+        `[check-clippy] ⚠ 生效工具链「${active}」与 rust-toolchain.toml 固定的「${pinned}」不一致\n` +
           "[check-clippy]    本次 clippy 结果**不代表 CI 的结果**。常见原因：设了 RUSTUP_TOOLCHAIN。"
       );
     }
@@ -169,12 +163,12 @@ console.log(
 const res = spawnSync("cargo", args, { cwd: CARGO_DIR, stdio: "inherit" });
 
 if (res.error) {
-  console.error(`[check-clippy] ❌ 无法启动 cargo：${res.error.message}`);
+  console.error(`[check-clippy] ✗ 无法启动 cargo：${res.error.message}`);
   process.exit(1);
 }
 if (res.status !== 0) {
   console.error(
-    "\n[check-clippy] ❌ clippy 闸门未通过，提交/CI 被拦截。\n" +
+    "\n[check-clippy] ✗ clippy 闸门未通过，提交/CI 被拦截。\n" +
       `[check-clippy]    若命中的是 BASELINE_ALLOW 里那 ${BASELINE_ALLOW.length} 类` +
         "**存量**风格问题，\n" +
       "[check-clippy]    正确做法是**就地修掉并从基线删掉那一行**，不要新加 `-A`；\n" +

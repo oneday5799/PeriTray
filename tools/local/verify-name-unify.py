@@ -6,16 +6,16 @@
               音量控制页（弹出窗口 / 设置窗口）+ 托盘右键音频设备 ⇒ `耳机 (小爱音箱-9205)`（未开简化）
   · 改名之后：**所有**表面都显示同一个名字（与任务栏一致）
 
-⛔⛔ **为什么拆成两个进程跑**（实测踩出来的硬约束）：设置窗口打开时，**隐藏的弹出
+✗ **为什么拆成两个进程跑**（实测踩出来的硬约束）：设置窗口打开时，**隐藏的弹出
    窗口页面发起的 `invoke` 永不返回**（渲染进程还活着：CDP `Runtime.evaluate`
    正常，但 `window.__TAURI__.core.invoke` 的 Promise 永不 settle，且 Rust 侧
    连 `[cmd] rename_device` 日志都没有 ⇒ 消息没派发到主线程）。
-   ⚠️ 这与本缺陷无关，是「一个 webview 可见 + 另一个隐藏」的环境行为；
+   ⚠ 这与本缺陷无关，是「一个 webview 可见 + 另一个隐藏」的环境行为；
    但它会让「一个进程里既改名又读两个页面」的验收脚本**必然超时**。
    ⇒ 阶段 1 只开弹出窗口（改名 + 读弹出两页）；阶段 2 只开设置窗口
    （**用 config.toml 预置前置状态**，只读不写）。
 
-⚠️ 能直接读到的只有前端 DOM。任务栏 tooltip / 托盘 tooltip / 托盘右键菜单 /
+⚠ 能直接读到的只有前端 DOM。任务栏 tooltip / 托盘 tooltip / 托盘右键菜单 /
    低电量通知都在 Rust 侧（`resolved_display_name` / `resolve_device_name`），
    由 `cargo test` + 代码走查覆盖，本脚本不重复断言。
 """
@@ -71,7 +71,7 @@ def cdp(page, expr, timeout=60, retries=1):
 def port_9222_alive():
     """调试端口是否还有人在监听（= 上一个实例是否真的退干净了）。
 
-    ⛔ 为什么不用 `tasklist` 数进程：Python 捕获 `tasklist` 的输出时**不按
+    ✗ 为什么不用 `tasklist` 数进程：Python 捕获 `tasklist` 的输出时**不按
     本机 locale 解码**（重定向场景下常是 UTF-16），`count("peritray.exe")`
     恒为 0 ⇒ 误判成「应用已消失」。这个坑让我把两次正常启动判成启动失败。
     ⇒ 改用「HTTP 端点 + Popen 句柄」两个与编码无关的判据。
@@ -98,7 +98,7 @@ def kill_all(tries=20):
 def launch(settings=False, page="popup.html"):
     """杀掉旧实例 → 等端口空出来 → 起新实例 → **等 IPC 真的通**。
 
-    ⛔ 必做的等待：`taskkill` 返回后进程仍在收尾（WebView2 子进程未退、
+    ✗ 必做的等待：`taskkill` 返回后进程仍在收尾（WebView2 子进程未退、
     调试端口未释放），此时 `/json` 里可能还挂着**上一个进程的孤儿页面**——
     它能执行 JS（`1+1` 有结果），但 IPC 通道已随进程被杀而断裂，
     任何 `invoke` 永不 settle。**看着像代码坏了，其实是探到了僵尸页面。**
@@ -153,7 +153,7 @@ RENAME = ("(async()=>{await window.__TAURI__.core.invoke("
 
 
 def set_simplify(on):
-    # ⚠️⚠️ `update_config(base, new_config)` 走 `merge_config(c, base, new_config)`，
+    # ⚠ `update_config(base, new_config)` 走 `merge_config(c, base, new_config)`，
     #    只应用**两者之间的差异** ⇒ 把同一个对象同时当 base 和 newConfig 传
     #    等于**空补丁、什么都不改**（实测：前置状态没生效，判据全红）。
     #    正确姿势：base = 改之前，newConfig = 改之后。
@@ -181,7 +181,7 @@ SETTINGS_PROBE = ("(async()=>{const grab=async(tab)=>{"
 def seed_config(simplify, names):
     """直接改 config.toml 作为**前置状态**（应用启动时读入），避免跨页面 invoke。"""
     s = io_read(CFG)
-    # ⚠️ TOML 布尔必须**小写**：Python 的 str(False) 会写出 `False`，
+    # ⚠ TOML 布尔必须**小写**：Python 的 str(False) 会写出 `False`，
     #    应用解析失败会**整体回落默认值** ⇒ 前置状态根本没生效（实测踩过）。
     s = re.sub(r"^simplify_device_names = .*$",
                "simplify_device_names = %s" % ("true" if simplify else "false"),
@@ -303,7 +303,7 @@ def main():
         print(f"\n=== {ok}/{len(RESULTS)} 通过 ===")
         return 0 if ok == len(RESULTS) else 2
     finally:
-        # ⚠️ 顺序要紧：**先杀应用再还原配置**。反过来的话，运行中的实例内存里
+        # ⚠ 顺序要紧：**先杀应用再还原配置**。反过来的话，运行中的实例内存里
         #    仍是被本脚本改过的值（simplify=false），任何一次落盘都会把
         #    false 重新写回文件 ⇒ 用户的设置被悄悄改掉（这个坑我踩了两次：
         #    下一个脚本因「音量页显示端点原名」而误报失败）。

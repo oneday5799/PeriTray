@@ -35,7 +35,7 @@ pub const NULL_CONTAINERS: [&str; 2] = [
 
 /// 归一化容器 GUID：去空白、剥花括号、转小写。
 ///
-/// ⚠️ 这一步是**判据的一部分**，不是美化：实测音频侧常输出「无花括号小写」而
+/// ⚠ 这一步是**判据的一部分**，不是美化：实测音频侧常输出「无花括号小写」而
 /// devnode 侧是「带花括号 REG_SZ」，字符串直接比较**恒不等** ⇒ 曾得到
 /// 「6/6 全部未命中」的**假阴性**（期望值没错，错的是两侧取材/归一化不一致）。
 pub fn normalize_guid(raw: &str) -> String {
@@ -129,7 +129,7 @@ fn format_guid_bytes(b: &[u8]) -> String {
 /// 从 PnP 实例路径读容器 GUID（CFGMGR32）。
 ///
 /// 失败（定位不到 / 属性缺失 / 占位容器）一律返回 `None` ⇒ 调用方降级。
-/// ⛔ `CM_Get_DevNode_PropertyW` **首次调用只为取长度，必然返回
+/// ✗ `CM_Get_DevNode_PropertyW` **首次调用只为取长度，必然返回
 /// `CR_BUFFER_SMALL`(0x1A)，不能当成错误** —— 这是本 API 最常见的误用点。
 pub fn container_of_instance(instance: &str) -> Option<String> {
     let wide: Vec<u16> = instance.encode_utf16().chain(std::iter::once(0)).collect();
@@ -198,7 +198,7 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
 /// 变换规则（实机验证见下）：
 ///   1. 剥掉开头的 `\\?\`（或 `\\.\`）；
 ///   2. **从最后一个 `#{` 处截断** —— 那是接口类 GUID 后缀。
-///      ⛔ **不能用第一个 `#{`**：蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头
+///      ✗ **不能用第一个 `#{`**：蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头
 ///      （形如 `HID#{00001812-…}_Dev_VID&021532_…`），按第一个切会把设备 ID 段整段丢掉；
 ///      同时这一步也顺带丢掉了尾部偶发的 `\KBD` 后缀（实机见过）；
 ///   3. `#` → `\`。
@@ -209,12 +209,12 @@ pub fn container_of_audio_endpoint(endpoint_id: &str) -> Option<String> {
 /// 刻意不转大写是为了不破坏蓝牙 HID 设备 ID 段里 `{00001812-…}_Dev_VID&…_c6947e50a677`
 /// 那种「大小写混合且必须逐字匹配（对注册表而言）」的形态。
 ///
-/// ⭐ **实机验证（Razer Orochi V2 `1532:0094`）**：hidapi 枚举到的
+/// ✓ **实机验证（Razer Orochi V2 `1532:0094`）**：hidapi 枚举到的
 /// **12 个集合全部**解析出容器，且与设备自身容器
 /// `40e11c06-72bd-5b38-9bd2-0e15079b3b45` 一致（分域后仍是 12 个，一个不少）
 /// ⇒ 映射与容器解析在真机上 **12/12** 成立。
 ///
-/// ⚠️ **诚实边界**：`HID#{GUID}_Dev_…` 这一形态本机未接设备 ⇒ 其
+/// ⚠ **诚实边界**：`HID#{GUID}_Dev_…` 这一形态本机未接设备 ⇒ 其
 /// `CM_Locate_DevNodeW` 命中**未经实测**，属结构外推；已由单测钉住结构变换。
 pub fn devnode_from_hidapi_path(path: &str) -> Option<String> {
     let s = path
@@ -239,7 +239,7 @@ pub fn devnode_from_hidapi_path(path: &str) -> Option<String> {
 
 /// 枚举指定枚举器下的**设备实例路径**（CFGMGR32 `CM_Get_Device_ID_ListW`）。
 ///
-/// ⚠️ **本函数返回的列表包含「非在场（phantom）」设备** —— 只传了
+/// ⚠ **本函数返回的列表包含「非在场（phantom）」设备** —— 只传了
 /// `CM_GETIDLIST_FILTER_ENUMERATOR`，**没有**叠加 `CM_GETIDLIST_FILTER_PRESENT`。
 /// 实测：HID `ENUMERATOR` = **87** 条，而 `ENUMERATOR|PRESENT` = **29** 条；
 /// 差集 58 条用 `CM_LOCATE_DEVNODE_NORMAL` **全部失败**、用 `..._PHANTOM` **全部成功**
@@ -247,7 +247,7 @@ pub fn devnode_from_hidapi_path(path: &str) -> Option<String> {
 ///
 /// **当前无影响**：唯一调用方 `bluetooth_container_map()` 只用 `BTHENUM` / `BTHLE`，
 /// 而这两个枚举器上两者结果**完全相同**（14 vs 14、3 vs 3，差集 0）。
-/// ⛔ **但这颗雷要记住**：若日后有人拿本函数去枚举 `HID` / `USB` / `SWD`，
+/// ✗ **但这颗雷要记住**：若日后有人拿本函数去枚举 `HID` / `USB` / `SWD`，
 /// 会拿到**一批非在场设备**，且它们 `CM_Locate_DevNodeW(NORMAL)` 必然失败 ——
 /// 表现为「映射莫名缺失」，很难定位到根因。
 /// 是否加 `..._PRESENT` 属独立决策（加了会改变语义），故**不加**。
@@ -298,7 +298,7 @@ fn enumerator_instance_ids(enumerator: &str) -> Vec<String> {
 ///     —— 经典蓝牙与 BLE 都有此形态（`BTHLE\Dev_<mac>\…` 同构，仅大小写不同）
 ///   · 服务节点：`BTHENUM\{0000110b-…}_VID&…\8&1d39e19e&0&5088112E80E8_C00000000`
 ///
-/// ⛔ **绝不能用「第一个 12 位十六进制串」**：服务节点形态下它会命中 A2DP 服务 GUID 里的
+/// ✗ **绝不能用「第一个 12 位十六进制串」**：服务节点形态下它会命中 A2DP 服务 GUID 里的
 /// `00805F9B34FB` —— 本机实测该错误取法在 3/3 服务节点上**全部**返回这个值。
 pub fn mac_from_bluetooth_instance(instance: &str) -> Option<String> {
     // 实例路径恒为 ASCII；非 ASCII 直接放弃，避免下面的字节下标切片踩到字符边界。
@@ -335,7 +335,7 @@ fn hex12_at(s: &str, start: usize) -> Option<String> {
 
 /// 建立「大写 MAC → 容器 GUID」映射（覆盖经典蓝牙与 BLE）。
 ///
-/// ⭐ 实测：同一 MAC 会命中 **3~4 个** BTHENUM 服务实例（A2DP / AVRCP / HFP…），
+/// ✓ 实测：同一 MAC 会命中 **3~4 个** BTHENUM 服务实例（A2DP / AVRCP / HFP…），
 /// 但它们的容器**完全一致** ⇒ 可以安全地建单值映射，不会因多实例产生歧义。
 /// 这使「蓝牙设备（WinRT 来源，只有 device_id）↔ 音频端点」得以落到同一容器。
 pub fn bluetooth_container_map() -> HashMap<String, String> {
@@ -360,7 +360,7 @@ pub fn bluetooth_container_map() -> HashMap<String, String> {
 ///
 /// 依据（本机 `Get-PnpDevice -PresentOnly` 实测）：`110A`（AudioSource）只在手机
 /// 容器出现 —— 它是「把声音送给对方」的角色，耳机 / 眼镜 / 音箱全在 Sink（`110B`）
-/// 侧，刻意排除。⛔ AVRCP（`110C` TG / `110E` CT）**不是**手机专属：本机四台
+/// 侧，刻意排除。✗ AVRCP（`110C` TG / `110E` CT）**不是**手机专属：本机四台
 /// 经典蓝牙设备（手机 / 眼镜 / 耳机 / 音箱）全部两种都暴露，按它判会把
 /// 音频外设误标成手机。
 const PHONE_SERVICE_MARKERS: [&str; 1] = ["{0000110A"];
@@ -371,15 +371,15 @@ const PHONE_SERVICE_MARKERS: [&str; 1] = ["{0000110A"];
 /// 定位成功（`CM_LOCATE_DEVNODE_NORMAL` 只对在场 devnode 成功，幻影行必然失败，
 /// 见 [`enumerator_instance_ids`] 文档）⇒ 该容器的手机专属服务**已启用**。
 ///
-/// ⛔ 图标判据为什么不靠组名里的 `A2DP SNK` / `Avrcp 传输` 行名
+/// ✗ 图标判据为什么不靠组名里的 `A2DP SNK` / `Avrcp 传输` 行名
 ///   （[`names_indicate_phone`]）：那些行由 PnP 枚举产生，`wireless_only`、
 ///   用户过滤正则、dedup 合并都可能把它们截杀在 Grouper 之前（真机实测：
 ///   wireless_only 开启后手机图标退回默认鼠标）。本扫描直接走 cfgmgr32，
 ///   与 WMI 数据管线无关，不受上述任何一层影响。
-/// ⛔ **服务行在场 ≠ 手机在线**：已配对手机的服务 devnode **不随链路断开移除**
+/// ✗ **服务行在场 ≠ 手机在线**：已配对手机的服务 devnode **不随链路断开移除**
 ///   （本机实测：手机关蓝牙后 BTHENUM 服务行仍全部 Present / CM_PROB_NONE）⇒
 ///   本集合只证「配过对 ∧ 服务启用」，可安全用作**图标**判据（离场手机显示
-///   置灰的手机图标优于默认鼠标占位），⛔ 不得用作**连接态**判据——
+///   置灰的手机图标优于默认鼠标占位），✗ 不得用作**连接态**判据——
 ///   连接态只能由链路证据合成（Sink 会话 LinkReady / 转发会话在场，
 ///   见 `bind_relay_sessions`）；WinRT `ConnectionStatus` 对链中手机假阴性
 ///   （本机 Xiaomi 17：转发会话在场却报 Disconnected），离场时才可信。
@@ -410,23 +410,23 @@ pub enum BatterySource {
 
 /// 设备的**连接类型**（任务栏在电量或音量缺失时用它占下排占位）。
 ///
-/// ⛔ 派生判据**只许**在 [`Grouper::finish`] 一处实现，优先级从高到低：
+/// ✗ 派生判据**只许**在 [`Grouper::finish`] 一处实现，优先级从高到低：
 /// ① 本轮电量合并赢家的来源——经 dongle 应答（`Hid24g`）= 2.4G 在线、
 ///    经蓝牙属性读得（`Bluetooth`）= BT 在线，本轮**真读到的**链路应答；
 /// ② 组内存在「蓝牙枚举且在线」的行（[`Grouper::set_bt_link`]）——没有电量
-///    的蓝牙设备（音箱等）靠它判 BT。⛔ 必须带在线状态：仅配对的蓝牙行
+///    的蓝牙设备（音箱等）靠它判 BT。✗ 必须带在线状态：仅配对的蓝牙行
 ///    只证「配过」；
 /// ③ 识别为 2.4G 设备（dongle 驱动登记的鼠标/键盘/手柄）——电量与在线证据
 ///    都读不出时的兜底；
 /// ④ 手机——必经蓝牙；⑤ 其余（有线 DAC、证据全无）→ `Unknown`，
 ///    前端保持 `N/A` 不占位（没有可信证据就**不猜**）。
-/// ⚠️ 行级标志（`is_wireless_24g` 等）只证「dongle 在场」，不证「设备正走 dongle」
+/// ⚠ 行级标志（`is_wireless_24g` 等）只证「dongle 在场」，不证「设备正走 dongle」
 ///   ——双模式设备离场后 dongle 行仍在枚举里；故 ③ 排在两个在线证据之后，
 ///   且双模式设备走蓝牙时蓝牙行在线（②命中）、走 dongle 时蓝牙行离线（②不命中）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnKind {
-    /// 证据全无（占位条目 / 未知）。⚠️ **有线设备的用户覆盖**是 `Wired`，
+    /// 证据全无（占位条目 / 未知）。⚠ **有线设备的用户覆盖**是 `Wired`，
     ///   不是这里——自动派生没有「有线」证据可用（USB 在线不证传输方式）。
     #[default]
     Unknown,
@@ -434,7 +434,7 @@ pub enum ConnKind {
     Bluetooth,
     /// 2.4G 接收器链路（鼠标、键盘、手柄的 dongle 模式）
     Wireless24g,
-    /// 用户在「修改信息」里指定的**有线**。⛔ 自动派生**永不产生**本变体
+    /// 用户在「修改信息」里指定的**有线**。✗ 自动派生**永不产生**本变体
     ///   （派生唯一实现点 `Grouper::finish` 只在证据不足时给 `Unknown`）；
     ///   它只经 `apply_user_overrides` 从用户覆盖进入显示链。
     Wired,
@@ -442,7 +442,7 @@ pub enum ConnKind {
 
 /// 「修改信息」指定的设备类型 → 任务栏图标（[`AudioKind`]）。
 ///
-/// ⛔ 映射只存在于这一处：类型枚举是 UI 层语义（用户心智），`AudioKind` 是
+/// ✗ 映射只存在于这一处：类型枚举是 UI 层语义（用户心智），`AudioKind` 是
 ///   图标层语义（绘制资源），两层靠本函数对齐；平板与手机共用手机图标
 ///   （图标资源里没有平板形态，手机图标是最接近项）。
 pub fn audio_kind_from_user_type(v: &str) -> Option<AudioKind> {
@@ -470,12 +470,12 @@ pub fn conn_kind_from_user(v: &str) -> Option<ConnKind> {
 /// 把「修改信息」的用户覆盖应用到**聚合后的**物理设备列表上
 /// （优先级：用户指定 > 自动探测；未指定的设备保持派生结果不动）。
 ///
-/// ⛔ 只能用在 `group_taskbar_devices` **之后**、任何消费之前——它覆写的是
+/// ✗ 只能用在 `group_taskbar_devices` **之后**、任何消费之前——它覆写的是
 ///   `conn` / `audio_kind` 两个字段，而不是重新派生；`Grouper::finish` 的
 ///   派生判据（唯一实现点）保持原样不被穿透。
-/// ⛔ 两条取数路径（`get_taskbar_devices` 异步 / `taskbar_devices_snapshot_within`
+/// ✗ 两条取数路径（`get_taskbar_devices` 异步 / `taskbar_devices_snapshot_within`
 ///   同步）都必须走本函数，否则 widget 与弹窗显示分叉（同一判据同一函数）。
-/// ⭐ 未指定的键完全不动：覆盖表是**例外表**，不是第二套派生。
+/// ✓ 未指定的键完全不动：覆盖表是**例外表**，不是第二套派生。
 pub fn apply_user_overrides(
     devices: &mut [PhysicalDevice],
     types: &std::collections::HashMap<String, String>,
@@ -522,7 +522,7 @@ pub enum AudioKind {
 
 /// 身份名的归一化形式：去全部空白 + 小写。
 ///
-/// ⛔ 凡「名字 A 是否属于名字 B」类的匹配都必须经由这里或基于它实现的判据，
+/// ✗ 凡「名字 A 是否属于名字 B」类的匹配都必须经由这里或基于它实现的判据，
 ///   不许各调用点自行 `replace(' ', "")`——归一化口径一旦变化，所有匹配点必须同步。
 pub fn compact_name(s: &str) -> String {
     s.to_lowercase()
@@ -535,10 +535,10 @@ pub fn compact_name(s: &str) -> String {
 /// [`phone_service_containers`] 主判据的兜底，只服务「PnP 行恰好进组」的窗口。
 ///
 /// 依据（本机 `Get-PnpDevice` 实测）：配对手机的容器下常驻 `A2DP SNK`
-/// （AudioSource 服务，MEDIA 类）行名；⛔ `Avrcp 传输` 行名**不是**手机专属
+/// （AudioSource 服务，MEDIA 类）行名；✗ `Avrcp 传输` 行名**不是**手机专属
 /// ——手机 / 眼镜 / 耳机 / 音箱四台经典蓝牙设备全都有（与 [`PHONE_SERVICE_MARKERS`]
 /// 排除 110C/110E 同一份实测），按它判会把无输出端点窗口里的音频外设误标成手机。
-/// ⛔ 判据是「归一化后包含」（[`compact_name`]）：行名的空格/大小写随系统措辞浮动，
+/// ✗ 判据是「归一化后包含」（[`compact_name`]）：行名的空格/大小写随系统措辞浮动，
 ///   用精确等值会在部分机型上漏判。
 pub fn names_indicate_phone(names: &[String]) -> bool {
     names
@@ -553,7 +553,7 @@ pub fn names_indicate_phone(names: &[String]) -> bool {
 /// 「麦克风 (<蓝牙名> A2DP SNK)」的转发会话——音量控制页「应用音量」卡片里的
 /// 那条滑块就是它；`A2DP SNK` 记号来自 Windows 蓝牙驱动的命名，非本地化文案。
 /// 两条同时成立：会话名含 `A2DP SNK` 记号 ∧ 含设备名（两侧都过 [`compact_name`]）。
-/// ⛔ 设备名归一化后为空 ⇒ 一律不匹配（空串 `contains` 恒真，会把转发会话
+/// ✗ 设备名归一化后为空 ⇒ 一律不匹配（空串 `contains` 恒真，会把转发会话
 ///   错绑到任何无名条目上）；只含记号不含设备名也不匹配
 ///   （两台手机同时放声时不得串台）。
 pub fn relay_session_matches(device_name: &str, session_name: &str) -> bool {
@@ -570,14 +570,14 @@ pub fn relay_session_matches(device_name: &str, session_name: &str) -> bool {
 ///
 /// 判据：只绑「链路就绪 ∧ 会话 active ∧ 钉住 ∧ [`AudioKind::Phone`] ∧ 无输出端点
 /// ∧ 音量尚空」的条目——
-/// ⛔ `link_up`（Sink 状态机 LinkReady，捕获端点激活）是**总闸门**：手机离场后
+/// ✗ `link_up`（Sink 状态机 LinkReady，捕获端点激活）是**总闸门**：手机离场后
 ///   转发会话仍以 active 挂在渲染设备上（重定向图不随源端点失活拆除，真机实测），
 ///   armed（武装等待）也不证链路——不过闸会把陈旧音量与「在线」绑给离场手机；
-/// ⛔ 有输出端点的条目音量来自端点本身（`Grouper::finish` 派生），转发会话**不得覆盖**；
+/// ✗ 有输出端点的条目音量来自端点本身（`Grouper::finish` 派生），转发会话**不得覆盖**；
 ///   未钉住的条目不进 widget，绑了无人消费，还平白改变 `get_taskbar_devices` 的输出。
 /// 会话命中规则见 [`relay_session_matches`]：显示（快照绑定）与滚轮（写回前现查）
 /// 走**同一份**判据 ⇒ 不会各认各的会话。
-/// ⭐ 命中即 `connected = true`：链路证据齐备（LinkReady + 会话 active）= 手机在线
+/// ✓ 命中即 `connected = true`：链路证据齐备（LinkReady + 会话 active）= 手机在线
 ///   —— 服务行在场证不了在线（[`phone_service_containers`]）；WinRT
 ///   `ConnectionStatus` 对链中手机假阴性。
 pub fn bind_relay_sessions(
@@ -608,12 +608,12 @@ pub fn bind_relay_sessions(
 
 /// 从**音频端点原始名**归一化出图标类别。
 ///
-/// ⚠️ 判据是「**前缀**匹配」而不是「包含」：Windows 的端点名形如
+/// ⚠ 判据是「**前缀**匹配」而不是「包含」：Windows 的端点名形如
 ///   `扬声器 (Realtek(R) Audio)`、`耳机 (WH-1000XM5)`，
 ///   语义在**开头那两个字**里。用 `contains` 会让「某设备叫『耳机支架』的扬声器」
 ///   被误判成耳机 ⇒ 只取 ` (` 之前的**前缀**再判等。
 ///
-/// ⚠️ 兼容**本地化**：不同系统语言下前缀可能是英文（`Speakers` / `Headphones`）
+/// ⚠ 兼容**本地化**：不同系统语言下前缀可能是英文（`Speakers` / `Headphones`）
 ///   ⇒ 同时接受中英两种写法，避免英文系统上全部退化成 Speaker。
 pub fn audio_kind_from_endpoint_name(name: Option<&str>) -> AudioKind {
     let Some(n) = name else {
@@ -653,7 +653,7 @@ pub fn audio_kind_from_wireless_kind(kind: Option<crate::device::Wireless24gKind
 ///
 /// 这是任务栏信息窗的数据单元：电量来自蓝牙属性 / HID，音量来自该设备的**输出**端点。
 ///
-/// ⛔ **「置灰占位」条目的判据**：`connected == false` 且 `node_count == 0` 时，
+/// ✗ **「置灰占位」条目的判据**：`connected == false` 且 `node_count == 0` 时，
 /// 这条是「被用户固定、但此刻枚举不到（未连接/未插）」的反向补建。前端应置灰呈现
 /// 而非隐藏；已连接但暂时读不出电量的 Xbox 等设备不能因此被误判为离线。
 /// 电量仍须保留三态：`Some(0)` 是合法电量，不能用布尔真假判断。
@@ -663,7 +663,7 @@ pub struct PhysicalDevice {
     pub key: String,
     /// 展示名，由组内候选名按 `pick_display_name` 挑出；占位条目由 `pinned_placeholder_name` 给
     pub name: String,
-    /// 电量百分比。⚠️ `Some(0)` 是**合法**的（电量耗尽），与 `None`（读不出）语义完全不同
+    /// 电量百分比。⚠ `Some(0)` 是**合法**的（电量耗尽），与 `None`（读不出）语义完全不同
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery: Option<i32>,
     /// 该物理设备当前的**输出**端点 id（供音量使用）；无音频端点时为 `None`（如键鼠）
@@ -671,10 +671,10 @@ pub struct PhysicalDevice {
     pub audio_device_id: Option<String>,
     /// 上面那个端点的音量（`0.0`–`1.0`）；无音频端点时为 `None`。
     ///
-    /// ⚠️ 唯一例外：钉住的手机条目（`audio_device_id` 为 `None` 却有音量），
+    /// ⚠ 唯一例外：钉住的手机条目（`audio_device_id` 为 `None` 却有音量），
     ///   值来自 A2DP SNK 转发会话（`bind_relay_sessions` 绑定）。
     ///
-    /// ⭐ **随设备一起返回，而不是让前端自己去 `get_audio_devices` 里 join** ——
+    /// ✓ **随设备一起返回，而不是让前端自己去 `get_audio_devices` 里 join** ——
     /// 否则「用 `audio_device_id` 匹配 `AudioDevice.id`」就成了**未文档化的隐式契约**：
     /// 前端写错（例如改用 `name` 匹配）既不报错也不告警，只会静默显示错误的音量。
     /// 聚合时 `AudioDevice` 本来就在手边，带上它零成本，还省掉一次 IPC。
@@ -689,7 +689,7 @@ pub struct PhysicalDevice {
     /// 音频端点的**原始名**（如 `扬声器 (Realtek Audio)`、`耳机 (WH-1000XM5)`）；
     /// 无音频端点时为 `None`。
     ///
-    /// ⭐ 为什么必须**原样**带上，而不是只带 `audio_device_id`：
+    /// ✓ 为什么必须**原样**带上，而不是只带 `audio_device_id`：
     ///   任务栏图标要按「**出现在音量页**（即本字段存在）且原始名是**扬声器**还是**耳机**」
     ///   来决定画哪个图标（见 `AudioKind`）。端点名是 Windows 给的本地化字符串，
     ///   形如 `扬声器 (设备名)` / `耳机 (设备名)` —— **括号前缀**才承载「扬声器/耳机」语义，
@@ -703,7 +703,7 @@ pub struct PhysicalDevice {
     pub categories: Vec<DevType>,
     /// 参与聚合的条目数（设备行 + 音频端点行）；占位条目为 0。
     ///
-    /// ⚠️ 这**不是** devnode 数：PeriTray 的设备列表在 WMI 层已过滤掉大部分子节点
+    /// ⚠ 这**不是** devnode 数：PeriTray 的设备列表在 WMI 层已过滤掉大部分子节点
     /// （`is_generic_hid` 滤 `&COL*`、`is_bt_service` 滤蓝牙服务节点），所以这里通常很小。
     /// 「10 个 devnode 并成 1 台」是 ContainerId 在 devnode 层面的性质，不由此字段体现。
     pub node_count: usize,
@@ -714,7 +714,7 @@ pub struct PhysicalDevice {
     pub conn: ConnKind,
     /// 是否被用户固定（由 config 决定，`Grouper` 本身不关心）。
     ///
-    /// ⚠️ 语义是「**强制显示**」：为真的条目即使此刻无数据也会保留
+    /// ⚠ 语义是「**强制显示**」：为真的条目即使此刻无数据也会保留
     /// （见 `group_taskbar_devices` 的保留规则与补建循环）；只有 `connected == false`
     /// 的占位条目由前端置灰。
     pub pinned: bool,
@@ -757,7 +757,7 @@ impl Grouper {
     /// 加入一个节点。`key` 为 `None` 的节点**直接丢弃** —— 没有身份的设备不该出现在任务栏。
     ///
     /// `audio` 是该节点命中的输出端点：**音频端点行传 `Some`，设备行传 `None`**。
-    /// ⛔ `add` 的**参数个数不得变动**（第 4 参用整条 `AudioDevice` 顶替设备行 id），
+    /// ✗ `add` 的**参数个数不得变动**（第 4 参用整条 `AudioDevice` 顶替设备行 id），
     /// 否则 clippy 的 `too_many_arguments` 转红 —— 本仓 clippy 以 `-D warnings` 收紧。
     pub fn add(
         &mut self,
@@ -827,7 +827,7 @@ impl Grouper {
     }
 
     /// 记录组内出现过「蓝牙枚举且**在线**」的行；与 [`set_phone`](Self::set_phone)
-    /// 同款「只置真」语义。⛔ 必须带**在线**状态：仅配对（离线）的蓝牙行只证
+    /// 同款「只置真」语义。✗ 必须带**在线**状态：仅配对（离线）的蓝牙行只证
     /// 「配过」，不证「此刻走蓝牙」。
     pub fn set_bt_link(&mut self, key: &str, bt_link: bool) {
         if bt_link {
@@ -849,7 +849,7 @@ impl Grouper {
                     volume: audio.as_ref().map(|a| a.volume),
                     is_muted: audio.as_ref().map(|a| a.is_muted),
                     is_default: audio.as_ref().map(|a| a.is_default),
-                    // ⭐ 原始端点名与由其派生的图标类别必须**同生同灭**
+                    // ✓ 原始端点名与由其派生的图标类别必须**同生同灭**
                     //    （都来自同一个 `audio`）—— 分开算就可能出现「有名字没类别」的半截状态
                     audio_endpoint_name: audio.as_ref().map(|a| a.name.clone()),
                     audio_kind: match audio.as_ref() {
@@ -863,7 +863,7 @@ impl Grouper {
                     categories: g.categories,
                     node_count: g.node_count,
                     connected: g.connected,
-                    // ⭐ 连接类型派生的**唯一实现点**（判据 → `ConnKind` 文档）：
+                    // ✓ 连接类型派生的**唯一实现点**（判据 → `ConnKind` 文档）：
                     //    电量合并赢家的来源、在线蓝牙行是当下链路的直接证据，
                     //    读不出再按 2.4G 登记 / 手机兜底，全无证据保持 Unknown。
                     conn: match g.battery.map(|(_, s)| s) {
@@ -912,17 +912,17 @@ fn pick_display_name(names: &[String]) -> String {
 /// 音频端点 → 身份键。有**可用**容器用容器；否则退回端点自己的 devnode 实例路径
 /// （`SWD\MMDEVAPI\{id}`），这样它仍能与 PnP 侧同一端点的 `Device.device_key` 对齐。
 ///
-/// ⭐ **虚拟音频设备走的正是降级这条路** —— 它们落在**占位容器**上，
+/// ✓ **虚拟音频设备走的正是降级这条路** —— 它们落在**占位容器**上，
 /// 而 `container_of_audio_endpoint` 内部已过 `usable_container` ⇒ 传进来时
 /// `container_id` **就是 `None`**（不是「占位容器字符串」）。此处再兜一道底：
 /// 万一上游哪天把占位容器原样填进来，这里也必须降级，否则占位容器上的多条无关设备
 /// （实测网易×2 + Steam×1 共享 `{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`）
 /// 会被 `Grouper` **并成一条** —— 比现状更糟。
 ///
-/// ⛔ **此处必须自己复核、不得只信任调用方**（与 `normalize_encoded_key` 同一条纪律）：
+/// ✗ **此处必须自己复核、不得只信任调用方**（与 `normalize_encoded_key` 同一条纪律）：
 /// 本函数把「容器串已归一化/已排除占位」的责任收回来自己承担，
 /// 代价是一次 `usable_container` 调用，换来的是**不依赖上游不出错**。
-// ⭐ **pub**：音量页的「钉到任务栏」要按**音频端点**反查物理身份，
+// ✓ **pub**：音量页的「钉到任务栏」要按**音频端点**反查物理身份，
 //   而唯一权威公式就在这里 —— 提成 pub 是为了让命令**复用**它，
 //   而不是在前端或命令里另写一份（另写必然与 grouper 漂移）。
 pub fn audio_endpoint_key(audio: &crate::audio::AudioDevice) -> DeviceKey {
@@ -947,7 +947,7 @@ pub fn audio_endpoint_key_from(container_id: Option<&str>, endpoint_id: &str) ->
 ///   · **被固定（pin）⇒ 一律保留**，即使此刻读不出任何数据。固定是用户的显式意图，
 ///     「pin 了却看不见」会让用户以为设置丢了；这类条目由前端**置灰**呈现。
 ///
-/// ⛔ 「强制显示」由**两条互补**的路径实现，**缺一不可**：
+/// ✗ 「强制显示」由**两条互补**的路径实现，**缺一不可**：
 ///   ① 上面的保留条件 —— 设备**在**枚举结果里、只是读不出数据（HID 层不响应等）。
 ///      走这条能保住**真实设备信息**（名字、类别、`node_count`）；
 ///   ② 函数末尾的**反向补建** —— 设备**根本枚举不到**（未连接的耳机、没插的接收器在
@@ -963,7 +963,7 @@ pub fn group_taskbar_devices(
     let mut grouper = Grouper::new();
 
     // 先入音频端点：音量所需的是端点 id，端点自己也提供一份展示名。
-    // ⚠️ 同一容器可能有**多个**输出端点（实测 `084fb1b9-…` 覆盖 3 个），
+    // ⚠ 同一容器可能有**多个**输出端点（实测 `084fb1b9-…` 覆盖 3 个），
     // 而 `Grouper` 取先到的那个 ⇒ 这里先把**系统默认**端点排到前面，
     // 让「哪个端点的音量代表这台设备」有确定且符合直觉的答案。
     // `sort_by_key` 是稳定排序 ⇒ 同为默认/非默认时保持原有枚举顺序，结果仍确定。
@@ -1061,7 +1061,7 @@ pub fn group_taskbar_devices(
     kept
 }
 
-/// 选择器条目：设备的**来源**标记（第 3 层 T3-3「每项标注来源」用）。
+/// 选择器条目：设备的**来源**标记（「每项标注来源」用）。
 ///
 /// 刻意不做成 `bool` 二元组 —— 一台设备可以**同时**来自两侧（这正是合并的常见结果），
 /// 用位标记表达「两侧都出现」比两个布尔字段更难写错（不会出现「两个都 true 却没处理」）。
@@ -1075,7 +1075,7 @@ pub struct DeviceSources {
 
 /// 选择器条目：两页的**并集**里的一台（物理）设备。
 ///
-/// ⛔ 与 `PhysicalDevice` 的**关键区别**：本类型**不做数据可用性过滤** ——
+/// ✗ 与 `PhysicalDevice` 的**关键区别**：本类型**不做数据可用性过滤** ——
 /// 凡出现在两页里就保留，即使读不出电量也读不出音量。理由：选择器的职责是
 /// 「让用户选择要固定/显示的设备」，**不是**「显示当前数据」；用数据可用性筛掉条目
 /// 会让用户根本无法为「此刻没读到数据的设备」做设置。
@@ -1085,7 +1085,7 @@ pub struct MergedDevice {
     pub key: String,
     /// 组内候选名按 `pick_display_name` 挑出的名字（与 `PhysicalDevice` 同一规则）
     pub name: String,
-    /// 电量；两侧都没有则为 `None`（⛔ `Some(0)` 是合法值，判空必须用 `is_none()`）
+    /// 电量；两侧都没有则为 `None`（✗ `Some(0)` 是合法值，判空必须用 `is_none()`）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery: Option<i32>,
     /// 组内命中的端点 id（输出优先，详见 `merge_by_identity` 的排序约定）
@@ -1095,7 +1095,7 @@ pub struct MergedDevice {
     pub categories: Vec<DevType>,
     /// 参与聚合的条目数（设备行 + 端点行）
     pub node_count: usize,
-    /// 该设备来自哪一页（用于 T3-3 的「仅设备页 / 仅音量页」标注）
+    /// 该设备来自哪一页（用于「仅设备页 / 仅音量页」标注）
     pub sources: DeviceSources,
 }
 
@@ -1108,13 +1108,13 @@ pub struct MergedDevice {
 /// 若上游填入占位容器（`{…-ffffffffffff}`），占位容器上的多条无关设备就会
 /// **静默并成一条**（Spec §3.1：「比现状更糟」）。
 ///
-/// ⛔ 今天的上游是安全的（`wmi_query.rs:242/333` 走 `device_key`，内部已过 `usable_container`），
+/// ✗ 今天的上游是安全的（`wmi_query.rs:242/333` 走 `device_key`，内部已过 `usable_container`），
 /// 所以本函数在生产路径上**恒返回 `Some`** —— 它是**结构性防御**，不是补漏。
 /// 判据刻意做得极保守：**只拒绝 `c:` 级里不可用的容器**，其余一律原样放行
 /// （`i:` / `n:` 无可校验的语义，且它们的降级代价是「拆细」而非「串号」，方向安全）。
 fn normalize_encoded_key(encoded: &str, name: &str) -> Option<String> {
     if let Some(raw) = encoded.strip_prefix("c:") {
-        // 复用 `usable_container` —— ⛔ 绝不自己判占位（Spec §3.1 纪律）
+        // 复用 `usable_container` —— ✗ 绝不自己判占位（Spec §3.1 纪律）
         return usable_container(Some(raw)).map(|g| DeviceKey::Container(g).encode());
     }
     if encoded.starts_with("i:") || encoded.starts_with("n:") {
@@ -1127,19 +1127,18 @@ fn normalize_encoded_key(encoded: &str, name: &str) -> Option<String> {
 
 /// 选择器数据源：`设备页 ∪ 输出端点 ∪ 输入端点`，按**物理设备身份**合并。
 ///
-/// ⛔⛔ **本函数刻意不复用 `group_taskbar_devices`** —— 后者末尾的**反向补建循环**
+/// ✗ **本函数刻意不复用 `group_taskbar_devices`** —— 后者末尾的**反向补建循环**
 /// （见该函数文档 ②）会为「被 pin 但本次枚举完全没出现」的设备**凭空造条目**，
 /// 而那些设备在设备页与音量页里**根本不存在** ⇒ 会让选择器**超出并集**。
-/// 见 Spec §0.4（三）与 §4 T3-1。
 ///
-/// ⛔ 同样**不做**数据可用性过滤（那是任务栏窗口的语义，不是选择器的）。
+/// ✗ 同样**不做**数据可用性过滤（那是任务栏窗口的语义，不是选择器的）。
 ///
 /// 身份判据（**只用 `device_key`，绝不用 `name` 反推** —— 见 Spec §3.1）：
 ///   · 设备行：`d.device_key` 优先；为 `None` 时降级 `DeviceKey::Name(core_name(&d.name))`
 ///     （与 `group_taskbar_devices` 同一降级，保证两台设备不会因「一个有键一个没键」而错分）；
 ///   · 端点行：`audio_endpoint_key(a)` —— 有容器用容器，无容器退 `SWD\MMDEVAPI\{id}`。
 ///
-/// ⛔ **容器串只从上述既有字段取**，不得自行拼接 / 手工解析字符串形态的 ContainerId
+/// ✗ **容器串只从上述既有字段取**，不得自行拼接 / 手工解析字符串形态的 ContainerId
 /// （`audio_endpoint_key` 不做归一化，责任在调用方 —— 见 Spec §6 末）。
 ///
 /// 端点排序：同一容器可能有**多个**端点（实测一个容器覆盖过 3 个），
@@ -1186,13 +1185,13 @@ pub fn merge_by_identity(
         } else {
             BatterySource::Unknown
         };
-        // ⛔ **键必须过 `usable_container` 重置**，不可直接信任 `d.device_key`。
+        // ✗ **键必须过 `usable_container` 重置**，不可直接信任 `d.device_key`。
         //
         // 今天的生产端是安全的：`Device.device_key` 来自
         // `wmi_query.rs:242`（PnP）与 `:333`（蓝牙）的 `device_identity::device_key(..)`，
         // 而它内部的 `usable_container` 已排除占位容器 ⇒ 占位时该字段本就是 `None`。
         //
-        // ⚠️ 但那是**上游的巧合**，不是本函数的保证。若沿用 `d.device_key` 原文，
+        // ⚠ 但那是**上游的巧合**，不是本函数的保证。若沿用 `d.device_key` 原文，
         // 一旦上游哪天把未过滤的容器串填进来（或有人给 `Device` 加一条新生产者），
         // 占位容器上的多条设备就会在这个函数里**静默并成一条** ——
         // 正是 Spec §3.1 说的「比现状更糟」。
@@ -1214,7 +1213,7 @@ pub fn merge_by_identity(
     }
 
     // `Grouper::finish` 已按 key 排序（内部 `BTreeMap`）⇒ 顺序稳定，UI 不会跳动。
-    // ⚠️ 这里**不做任何 filter**（尤其不做 `battery.is_some() || audio_device_id.is_some()`）。
+    // ⚠ 这里**不做任何 filter**（尤其不做 `battery.is_some() || audio_device_id.is_some()`）。
     grouper
         .finish()
         .into_iter()
@@ -1255,7 +1254,7 @@ fn pinned_placeholder_name(p: &crate::config::PinnedDevice) -> String {
         .unwrap_or_else(|| p.key.clone())
 }
 
-/// ⭐⭐ 「这台设备此刻该显示的名字」的**唯一实现**。
+/// ✓ 「这台设备此刻该显示的名字」的**唯一实现**。
 ///
 /// **为什么必须抽出来（不能各写一份）**：任务栏 widget 与设置页选择器**都要**显示
 /// 同一个名字，而两者的数据结构不同（`PhysicalDevice` vs `MergedDevice`）。
@@ -1266,14 +1265,14 @@ fn pinned_placeholder_name(p: &crate::config::PinnedDevice) -> String {
 ///
 /// 三级优先级（与选择器既有行为**逐字相同**）：
 /// 1. `PinnedDevice.alias`（用户给固定设备起的别名）——**仅当本设备确实被固定**；
-///    ⚠️ **该级自 `normalize_config` 起恒为空**：它的
+///    ⚠ **该级自 `normalize_config` 起恒为空**：它的
 ///    `fold_pinned_alias_into_device_names` 会把旧 alias 折进 `device_names` 并清空它
 ///    （否则它压住全局改名 ⇒ 任务栏一个名、别处另一个名）。
 ///    **字段保留仅为旧配置反序列化不丢数据**，别再往这里加新的语义。
 /// 2. `config.device_names` 全局重命名（`resolve_device_name` 的两级回退）；
 /// 3. 传入的 `raw_name`（= `pick_display_name` 的输出）。
 ///
-/// ⛔ `fallback` 的算法**必须与显示侧 / 选择器侧逐字相同**
+/// ✗ `fallback` 的算法**必须与显示侧 / 选择器侧逐字相同**
 /// （都是 `DeviceKey::Name(core_name(&name)).encode()`）——这是 AGENTS.md 点名的
 /// 「偷懒传 `None` ⇒ 已固定却显示未勾选」那个坑的同一个根。
 pub fn resolved_display_name(
@@ -1291,16 +1290,16 @@ pub fn resolved_display_name(
         .filter(|a| !a.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| crate::config::resolve_device_name(raw_name, config));
-    // ⭐ B：截断放在**渲染前最后这一步**，而不是 `resolve_device_name` 里——
+    // ✓ B：截断放在**渲染前最后这一步**，而不是 `resolve_device_name` 里——
     //   重命名对话框的输入框预填也走后者，截在那里会让用户编辑长名字时
     //   看到被削过的初值、存回去就把别名毁了（且配置里也会跟着变短）。
     crate::config::clamp_display_name(&resolved)
 }
 
-/// 选择器里的一台设备：并集口径 + 已套用显示名的**最终**形态（第 3 层 T3-1）。
+/// 选择器里的一台设备：并集口径 + 已套用显示名的**最终**形态。
 ///
 /// 与 `MergedDevice` 的关系：本类型是它的**装配结果** —— 多出两个「只有命令层才知道
-/// 上下文」的字段（用户自定义名、是否已固定），少一个仅供 T3-3 内部使用的 `sources`
+/// 上下文」的字段（用户自定义名、是否已固定），少一个仅供内部使用的 `sources`
 /// 之外的中间态。刻意不复用 `PhysicalDevice`：后者带 `volume` / `is_muted` /
 /// `is_default`，而选择器**不需要**这些实时值（它只负责选设备，不显示音量），
 /// 多带出去反而让前端误以为可以显示。
@@ -1313,7 +1312,7 @@ pub struct SelectableDevice {
     /// 固定的**兜底键**（`n:<core_name(显示名)>`），前端原样回传给
     /// `toggle_pinned_taskbar_device` 的 `fallback` 参数。
     ///
-    /// ⛔⛔ **必须由后端算好返回，绝不可让前端用 `simplifyDeviceName` 现算** ——
+    /// ✗ **必须由后端算好返回，绝不可让前端用 `simplifyDeviceName` 现算** ——
     /// 那个 JS 函数与 Rust 的 `core_name` **不等价**（JS 取**第一个** `(`，Rust 取 `" ("`；
     /// 且 Rust 会**剥 17 种协议后缀**而 JS 不剥）。前端一旦自算，写入的 `fallback`
     /// 就与显示侧的判据（`DeviceKey::Name(core_name(&p.name))`）**对不上** ⇒
@@ -1322,7 +1321,7 @@ pub struct SelectableDevice {
     pub fallback: String,
     /// 该设备来自哪一页（设备页 / 音量页，见 `DeviceSources`）
     ///
-    /// ⛔ **当前前端不使用**：来源标注已取消（演进见 Wiki 16 §11）。
+    /// ✗ **当前前端不使用**：来源标注已取消（演进见 Wiki 16 §11）。
     /// 保留字段的理由：它是并集的**固有信息**，后端算好只花一次 `BTreeSet` 查找；
     /// 删掉则将来想加回标注必须重跑一遍合并逻辑。若确定永不需要，可连同
     /// `DeviceSources` 一起删除（届时 `merge_by_identity` 内的两个 `BTreeSet` 也可去掉）。
@@ -1338,7 +1337,7 @@ pub struct SelectableDevice {
 ///   2. `resolve_device_name` —— 全局自定义名（覆盖两页的键口径差异）；
 ///   3. 并集自带的 `name`     —— `pick_display_name` 挑出的短名兜底。
 ///
-/// ⛔ **本函数不做 pin 补建**（决策 7）：只对**并集里真实存在**的设备判定固定态。
+/// ✗ **本函数不做 pin 补建**（决策 7）：只对**并集里真实存在**的设备判定固定态。
 /// `group_taskbar_devices` 那条「为 pinned 但本次枚举没出现的设备凭空造条目」的循环
 /// **绝不能**引入 —— 那会让选择器出现「两页都没有、用户也没法取消」的幽灵条目。
 ///
@@ -1355,7 +1354,7 @@ pub fn build_selectable_devices(
             // 固定态与别名一起取：命中哪条 pin，就用它的 alias —— 两者必须来自**同一条**记录，
             // 否则会出现「已固定但用着别的设备的别名」。
             //
-            // ⛔ **`fallback` 必须与显示侧（本文件 `group_taskbar_devices` 的
+            // ✗ **`fallback` 必须与显示侧（本文件 `group_taskbar_devices` 的
             // `p.pinned = …` 那一行）逐字一致**：那边传的是 `n:core_name(显示名)`。
             // 若这里偷懒传 `None`，「`key` 存容器 + `fallback` 存名称键」这类 pin
             // （`PinnedDevice` 文档推荐的形态，用于容忍换机/重装驱动）就会在这里失配：
@@ -1365,7 +1364,7 @@ pub fn build_selectable_devices(
             let hit = pinned
                 .iter()
                 .find(|p| crate::config::pinned_device_matches(p, &m.key, Some(&fallback)));
-            // ⭐ 名称解析**委托给共享函数**（与任务栏 widget 侧同一份实现），
+            // ✓ 名称解析**委托给共享函数**（与任务栏 widget 侧同一份实现），
             //   避免两处各写一份后分叉（`resolved_display_name` 的文档有实测背景）。
             let name = resolved_display_name(&m.name, &m.key, pinned, config);
             SelectableDevice {
@@ -1401,7 +1400,7 @@ mod tests {
         );
     }
 
-    /// ⭐ **跨路径判据**：两个**独立**的容器生产者必须产出逐字相等的载荷。
+    /// ✓ **跨路径判据**：两个**独立**的容器生产者必须产出逐字相等的载荷。
     ///
     /// 为什么需要它：`wireless_24g` 的 HID 分域靠**字符串相等**把两侧对上 ——
     ///
@@ -1424,11 +1423,11 @@ mod tests {
     /// **可证伪**：把 `format_guid_bytes` 的 `{:02x}` 改成 `{:02X}`（或去掉
     /// `device_key` 路径上的 `usable_container` 归一化）本用例即转红。
     ///
-    /// ⚠️ **本用例证明不了什么**：它不证明 `CM_Get_DevNode_PropertyW` 真的返回这 16 字节
+    /// ⚠ **本用例证明不了什么**：它不证明 `CM_Get_DevNode_PropertyW` 真的返回这 16 字节
     /// （那需要实机）。实机侧由只读探针覆盖：全部**在场**设备 245 条上 200 轮
     /// = **49000/49000 次读到容器（100%）**；在**在场 HID** 29 条上 200 轮
     /// = **5800/5800（100%）**。
-    /// （⚠️ 245 是「全部在场设备」，**不是** HID 数 —— HID 在场是 29。）
+    /// （⚠ 245 是「全部在场设备」，**不是** HID 数 —— HID 在场是 29。）
     #[test]
     fn both_container_producers_agree_byte_for_byte() {
         // 取本机真实容器 `0d85362f-9ba5-11f1-b7f2-105fadd8248b` 的**属性缓冲区字节**
@@ -1598,11 +1597,11 @@ mod tests {
         assert_ne!(a, other, "不同容器的设备必须分开");
     }
 
-    /// ⭐⭐ **T1-0.5（前置门）**：PnP 侧 `device_key` 与音频侧 `audio_endpoint_key`
+    /// ✓ **前置门**：PnP 侧 `device_key` 与音频侧 `audio_endpoint_key`
     /// 对**同一条音频端点**必须产出逐字相同的键。
     ///
-    /// 为什么这条单测必须先于 T1-1 存在：
-    /// 任务栏设备选择器的第 1 层（`merge_by_identity`）**整条合并判据**建立在这个等式上。
+    /// 为什么这条单测必须最先存在：
+    /// 任务栏设备选择器（`merge_by_identity`）的**整条合并判据**建立在这个等式上。
     /// 此前只有 `probe-keyalign.py`（用 **Python 重实现**两个 key 函数）得出「相等」的结论
     /// —— 那是**文档级验证，不是可执行验证**。若两键实际不逐字相等，
     /// 合并会在真机上**静默不合并**（不报错、不告警、不 panic），
@@ -1643,7 +1642,7 @@ mod tests {
         // ④ 反控：容器存在时**两侧都**走 Container 级 —— 音频侧不得只看 id 而忽略容器。
         //    （避免有人「简化」成永远用 Instance，那样真机上有容器的设备就合不上了）
         //
-        //    ⚠️ 这里刻意喂**归一化形态**的容器串 —— 因为 `AudioDevice.container_id` 的唯一
+        //    ⚠ 这里刻意喂**归一化形态**的容器串 —— 因为 `AudioDevice.container_id` 的唯一
         //    生产者是 `container_of_instance` → `usable_container(format_guid_bytes(..))`，
         //    它**必然**产出小写无花括号形态。见下面 ④b 的契约钉板。
         const C: &str = "40e11c06-72bd-5b38-9bd2-0e15079b3b45";
@@ -1652,15 +1651,15 @@ mod tests {
         assert_eq!(pnp_c, audio_c, "有真实容器时两侧都必须走容器级");
         assert_eq!(pnp_c.encode(), "c:40e11c06-72bd-5b38-9bd2-0e15079b3b45");
 
-        // ④b ⛔ **契约钉板（本单测的真正价值所在）**：
-        //    ⛔ 两条路径对容器 GUID 的归一化责任必须**一致**：
+        // ④b ✗ **契约钉板（本单测的真正价值所在）**：
+        //    ✗ 两条路径对容器 GUID 的归一化责任必须**一致**：
         //      · `device_key(Some(raw), ..)` 内部经 `usable_container` ⇒ **会** `normalize_guid`；
         //      · `audio_endpoint_key(..)` 必须是 `DeviceKey::Container(normalize_guid(c))`
         //        ⇒ 早期它是**裸克隆**，把「容器串必须已归一化」的责任**推给了调用方**；
         //        新调用方（`merge_by_identity`）
         //      若从别处取得容器串，就会**静默分叉** —— 键不等 ⇒ 不合并、不报错。
         //
-        //    ⭐ **本钉板首次运行时抓到了更糟的一种：占位容器被原样接受**
+        //    ✓ **本钉板首次运行时抓到了更糟的一种：占位容器被原样接受**
         //      （探针实测：两条落在占位容器上的端点被并成 1 条）。
         //    ⇒ **已修**：`audio_endpoint_key` 现在自己过 `usable_container`（责任收回自己承担）。
         //      这条断言随之更新为钉住**修复后**的契约：
@@ -1705,7 +1704,7 @@ mod tests {
         );
     }
 
-    /// T1-0.5 的**反向自检**：等式不是恒真 —— 换成**另一条**端点必须得到**不同的**键。
+    /// 反向自检：等式不是恒真 —— 换成**另一条**端点必须得到**不同的**键。
     ///
     /// 上面那条单测若因为两个函数都「退化成常量」而通过，本用例会把它暴露出来。
     /// 可证伪：把 `audio_endpoint_key` 改成返回固定值即转红。
@@ -1960,7 +1959,7 @@ mod tests {
         assert_eq!(g2.finish()[0].battery, Some(70));
     }
 
-    /// ⭐ 连接类型派生的五级优先级（判据 → `ConnKind` 文档；唯一实现点 = `finish`）。
+    /// ✓ 连接类型派生的五级优先级（判据 → `ConnKind` 文档；唯一实现点 = `finish`）。
     /// 可证伪：删掉任一分支或调换优先级，对应断言立刻转红。
     #[test]
     fn conn_kind_follows_battery_source_then_fallbacks() {
@@ -2004,7 +2003,7 @@ mod tests {
         assert_eq!(conn_of("c:wired"), ConnKind::Unknown);
     }
 
-    /// ⭐ 双模式设备（BT + dongle 行并存）：连接类型必须跟**电量合并赢家**走
+    /// ✓ 双模式设备（BT + dongle 行并存）：连接类型必须跟**电量合并赢家**走
     ///   （赢家来源 = 当下链路证据；合并取更可信来源的判据见上一个用例）。
     #[test]
     fn conn_kind_follows_battery_merge_winner() {
@@ -2028,7 +2027,7 @@ mod tests {
         assert_eq!(p.conn, ConnKind::Bluetooth);
     }
 
-    /// ⭐ 没有电量的蓝牙设备（音箱）：靠「蓝牙行在线」判 BT（真机小爱音箱实例）。
+    /// ✓ 没有电量的蓝牙设备（音箱）：靠「蓝牙行在线」判 BT（真机小爱音箱实例）。
     /// 在线证据压过 2.4G 产品登记——行级登记只证 dongle 在场，在线行证当下链路。
     /// 可证伪：删掉 `finish` 的 `bt_link` 分支，两条断言立刻转红。
     #[test]
@@ -2057,7 +2056,7 @@ mod tests {
         );
     }
 
-    /// ⛔ 蓝牙行**离线**（仅配对）不算证据：双模设备走 dongle 时蓝牙行离线 ⇒ 仍判
+    /// ✗ 蓝牙行**离线**（仅配对）不算证据：双模设备走 dongle 时蓝牙行离线 ⇒ 仍判
     ///   2.4G；音箱离线全无证据 ⇒ Unknown 不猜。
     /// 可证伪：把 `set_bt_link` 的「只置真」改成「恒置真」，两条断言立刻转红。
     #[test]
@@ -2225,7 +2224,7 @@ mod tests {
             out[0].battery.is_none() && out[0].audio_device_id.is_none(),
             "前置：这台设备确实读不出数据"
         );
-        // ⭐ 这两条断言把「保留条件」与「反向补建」**区分开** —— 否则本用例是**假绿**：
+        // ✓ 这两条断言把「保留条件」与「反向补建」**区分开** —— 否则本用例是**假绿**：
         //    设备被 filter 掉后，末尾的补建循环会照着 `pinned` 再造一条，键与 `pinned`
         //    标记照样对得上，`battery` 也照样是 `None`，三条断言全满足。
         //    但补建条目丢失了**真实设备信息**（名字退化成配置里的 alias/fallback、
@@ -2443,7 +2442,7 @@ mod tests {
         );
     }
 
-    /// ⛔ 关键判据：**必须从最后一个 `#{` 截断**。
+    /// ✗ 关键判据：**必须从最后一个 `#{` 截断**。
     ///
     /// 蓝牙 HID 的设备 ID 段本身以 `{00001812-…}` 开头（`HID#{GUID}_Dev_…`）。
     /// 若按**第一个** `#{` 切，设备 ID 段会被整段丢掉，映射结果变成 `HID\a&…`，
@@ -2451,7 +2450,7 @@ mod tests {
     ///
     /// 可证伪：把 `rfind("#{")` 改成 `find("#{")`，本用例必转红。
     ///
-    /// ⚠️ 本机当前**未接**这类设备 ⇒ 期望值取自只读注册表探针
+    /// ⚠ 本机当前**未接**这类设备 ⇒ 期望值取自只读注册表探针
     /// （`BaseContainers` 的成员实例路径），属**结构外推**，未经 `CM_Locate_DevNodeW` 实测。
     #[test]
     fn hidapi_path_keeps_guid_prefixed_device_id_segment() {
@@ -2489,7 +2488,7 @@ mod tests {
         );
     }
 
-    // ── 第 1 层：选择器并集合并（T1-1）─────────────────────────────
+    // ── 选择器并集合并─────────────────────────────
 
     /// 验收判据 3：**同一台设备在两侧名字不同时仍合并为一条**
     /// —— `扬声器 (DUNU DTC100pro)`（音量页）与 `DUNU DTC100pro`（设备页）。
@@ -2524,14 +2523,14 @@ mod tests {
 
     /// 验收判据 4：**占位容器上的多条设备不得互相合并**（网易×2 + Steam×1 必须仍是 3 条）。
     ///
-    /// ⛔ 这是「比现状更糟」的防线：三条虚拟设备挤在
+    /// ✗ 这是「比现状更糟」的防线：三条虚拟设备挤在
     /// `{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`，若 `merge_by_identity` 自己判容器
     /// （而不复用 `usable_container`）就会并成一条。
     ///
-    /// ⛔ 用例必须用**无容器**的真实形态喂入：`container_of_audio_endpoint` 已过
+    /// ✗ 用例必须用**无容器**的真实形态喂入：`container_of_audio_endpoint` 已过
     /// `usable_container` ⇒ 占位容器在 `AudioDevice.container_id` 上**表现为 `None`**，
     /// 于是三条各走 `i:SWD\MMDEVAPI\{id}`、id 互不相同 ⇒ 天然不合并。
-    /// ⛔ 若改成「手动喂占位容器串」，测的就是**另一条代码路径**（`device_key` 的排除逻辑），
+    /// ✗ 若改成「手动喂占位容器串」，测的就是**另一条代码路径**（`device_key` 的排除逻辑），
     /// 见下一条单测。两条必须都在，否则会漏掉一半。
     #[test]
     fn merge_by_identity_keeps_placeholder_container_devices_separate() {
@@ -2565,21 +2564,21 @@ mod tests {
         );
     }
 
-    /// ⛔ **防御性契约**：即使有人把**占位容器**填进 `Device.device_key`
+    /// ✗ **防御性契约**：即使有人把**占位容器**填进 `Device.device_key`
     /// （今天 `wmi_query.rs:242/333` 不会 —— 它走 `device_key`，内部已过 `usable_container`），
     /// `merge_by_identity` 也必须**自己复核**，不得把「键已过滤」的责任全押给上游。
     ///
-    /// ⚠️ 本用例**会转红**：它暴露过「直接信任 `d.device_key`」的实现
+    /// ⚠ 本用例**会转红**：它暴露过「直接信任 `d.device_key`」的实现
     /// （三条占位容器设备被并成一条）。修复方式是在本函数内加
     /// `normalize_encoded_key` 复核 `c:` 级键，而非删掉用例。
     ///
-    /// 理由：这是 T1-0.5 记下的**同一类**问题 —— 一个函数把不变量的把关责任推给调用方，
+    /// 理由：这是**同一类**问题 —— 一个函数把不变量的把关责任推给调用方，
     /// 今天安全、明天脆弱，且失配时**静默**（不报错）。上游一动，这里就悄悄坏。
-    /// ⛔ **防御性契约（音频侧）**：若 `AudioDevice.container_id` 被填入**占位容器**
+    /// ✗ **防御性契约（音频侧）**：若 `AudioDevice.container_id` 被填入**占位容器**
     /// （今天 `container_of_audio_endpoint` 已过 `usable_container` ⇒ 传进来就是 `None`），
     /// `audio_endpoint_key` 也必须**自己降级**，不得原样接受。
     ///
-    /// ⛔ 本用例来自一次**探针实测**：修复前，两条落在占位容器上的端点被并成 **1 条**
+    /// ✗ 本用例来自一次**探针实测**：修复前，两条落在占位容器上的端点被并成 **1 条**
     /// （键 `c:{00000000-0000-0000-FFFF-FFFFFFFFFFFF}`）——
     /// 与设备侧是**同一个洞**，只是当时只堵了设备侧。**这就是「防御必须对称」的证据。**
     #[test]
@@ -2620,10 +2619,10 @@ mod tests {
 
     #[test]
     fn merge_by_identity_never_trusts_upstream_null_container_key() {
-        // ⛔ 必须是**已编码**形态（带 `c:` 前缀）—— 这才是 `Device.device_key` 的真实形态
+        // ✗ 必须是**已编码**形态（带 `c:` 前缀）—— 这才是 `Device.device_key` 的真实形态
         //    （`wmi_query.rs` 里 `.map(|k| k.encode())`）。
         //    若传裸 GUID，`normalize_encoded_key` 会走「前缀未知」分支而**与拆掉防御同路**，
-        //    用例便失去区分力（这一点在 T1-2 注入时被实测抓到，故在此显式标注）。
+        //    用例便失去区分力（这一点在注入实测中被抓到，故在此显式标注）。
         const NULL_C: &str = "c:00000000-0000-0000-ffff-ffffffffffff";
         // 三条不同设备**错误地**共享同一个占位容器（真机实测形态）
         let devices = vec![
@@ -2652,12 +2651,12 @@ mod tests {
 
         let out = merge_by_identity(&devices, &[], &[]);
 
-        // ⚠️ 降级到 `n:core_name(name)` 后，**两条「网易」会并成一条** ——
+        // ⚠ 降级到 `n:core_name(name)` 后，**两条「网易」会并成一条** ——
         // 因为它们的 `core_name` 都是 `网易虚拟音频设备`。这是 `n:` 级的**固有代价**
         // （按名字合并），方向是「可能少一条」，**不是**「把无关设备串成一台」。
         // ⇒ 只有 2 条：`网易虚拟音频设备`（合并）+ `Steam Streaming Speakers`。
-        // ⛔ **关键**：若不复核而直接信任 `c:` 键，则会并成 **1 条**（全落在同一占位容器键下）
-        //    —— 这个 2 vs 1 的差值就是本用例的区分力所在（T1-2 注入已验证）。
+        // ✗ **关键**：若不复核而直接信任 `c:` 键，则会并成 **1 条**（全落在同一占位容器键下）
+        //    —— 这个 2 vs 1 的差值就是本用例的区分力所在（注入已验证）。
         assert_eq!(
             out.len(),
             2,
@@ -2668,7 +2667,7 @@ mod tests {
             "占位容器被 `usable_container` 拒掉 ⇒ 降级到 n: 级；实际 {:?}",
             out.iter().map(|d| &d.key).collect::<Vec<_>>()
         );
-        // ⭐ 关键断言：**绝不存在 `c:` 级的占位容器键**
+        // ✓ 关键断言：**绝不存在 `c:` 级的占位容器键**
         assert!(
             !out.iter().any(|d| d.key.contains("ffffffffffff")
                 || d.key.contains("00000000-0000-0000-0000-000000000000")),
@@ -2699,7 +2698,7 @@ mod tests {
         assert_eq!(out.iter().filter(|d| d.key.starts_with("i:")).count(), 1);
     }
 
-    /// ⛔ **不做数据可用性过滤** —— 与 `group_taskbar_devices` 的关键语义差异。
+    /// ✗ **不做数据可用性过滤** —— 与 `group_taskbar_devices` 的关键语义差异。
     ///
     /// 一台设备若「无电量、无音量」，任务栏窗口会丢弃它（对用户无意义），
     /// 但**选择器必须保留** —— 否则用户无法为它做任何设置（这正是 Spec §0.4 的纪律）。
@@ -2728,7 +2727,7 @@ mod tests {
     /// 这是 `Grouper` 的既有契约，本函数必须继承 —— 用断言把它钉住。
     #[test]
     fn merge_by_identity_is_order_independent_and_deterministic() {
-        // ⚠️ `audio()` 的 container 参数吃**裸 GUID**（与 `AudioDevice.container_id` 一致），
+        // ⚠ `audio()` 的 container 参数吃**裸 GUID**（与 `AudioDevice.container_id` 一致），
         // 而 `dev()` 的 key 参数吃**已编码键**（与 `Device.device_key` 一致）——
         // 两者形态不同，正是生产里的真实形态。混用会得到 `c:c:...` 双前缀的假键。
         const CID: &str = "11111111-2222-3333-4444-555555555555";
@@ -2820,7 +2819,7 @@ mod tests {
         );
     }
 
-    /// ⛔⛔ **验收判据 8 的单元级版本**：`merge_by_identity` **绝不凭空造条目**。
+    /// ✗ **验收判据 8 的单元级版本**：`merge_by_identity` **绝不凭空造条目**。
     ///
     /// 这是它与 `group_taskbar_devices` 的**根本区别** ——
     /// 后者会为「被 pin 但未枚举到」的设备补建条目，而那些设备两页里都不存在。
@@ -2852,9 +2851,9 @@ mod tests {
         );
     }
 
-    // ── T3-1：`build_selectable_devices` 装配 ──────────────────────────────
+    // ── `build_selectable_devices` 装配 ──────────────────────────────
 
-    /// ⛔⛔ **验收判据 8 的装配级版本**：选择器**不出现**「两页都没有的假 pin 条目」。
+    /// ✗ **验收判据 8 的装配级版本**：选择器**不出现**「两页都没有的假 pin 条目」。
     ///
     /// 与单元级那条的区别：这里喂**非空**并集（两页都有东西），同时给一条指向
     /// **不存在设备**的 pin。若装配时误把 `group_taskbar_devices` 的补建循环搬进来，
@@ -2923,7 +2922,7 @@ mod tests {
         assert_eq!(by(&key_a), Some("别名甲"), "alias 优先于自定义名");
         assert_eq!(by(&key_b), Some("自定义乙"), "无 alias 时用自定义名");
         assert_eq!(by(&key_c), Some("设备丙"), "都无则用短名兜底");
-        // ⚠️ 丙若被错当成自定义名会显示「耳机C」—— 那说明 `pick_display_name` 没生效
+        // ⚠ 丙若被错当成自定义名会显示「耳机C」—— 那说明 `pick_display_name` 没生效
         assert_ne!(by(&key_c), Some("耳机C"));
     }
 
@@ -2967,7 +2966,7 @@ mod tests {
         );
     }
 
-    /// 来源标注：仅设备页 / 仅音量页 / 两侧都有，三种都要标对（T3-3 的数据来源）。
+    /// 来源标注：仅设备页 / 仅音量页 / 两侧都有，三种都要标对（数据来源）。
     #[test]
     fn selectable_devices_report_sources_for_each_case() {
         const CID_BOTH: &str = "084fb1b9-0000-0000-0000-0000000000b1";
@@ -3044,7 +3043,7 @@ mod tests {
     /// ② Rust 剥 17 种协议后缀而 JS 不剥。实测 `"耳机 (WH-1000XM5 Stereo)"`：
     /// Rust 得 `WH-1000XM5`、JS 得 `WH-1000XM5 Stereo` ⇒ **两函数确实不等价**。
     ///
-    /// ⚠️ **但这条不等价在「选择器 → fallback」路径上不可达**：`m.name` 经 `pick_display_name`
+    /// ⚠ **但这条不等价在「选择器 → fallback」路径上不可达**：`m.name` 经 `pick_display_name`
     /// 时**已经过一次 `core_name`**（该函数 `:526`），故它**恒为短名、不含括号**
     /// ⇒ 前端即便拿它去喂 `simplifyDeviceName` 也是**恒等返回**，与后端结果**必然相同**。
     ///
@@ -3053,7 +3052,7 @@ mod tests {
     /// 若让前端自算，就得在前端**复制一份后缀表**，那才会真正分叉。
     ///
     /// ── 判据的**可证伪性说明**（重要，避免后人误以为测得更严）────────────────
-    /// ⛔ 「fallback 必须精确等于 `core_name` 的算式」这条**无法被证伪** ——
+    /// ✗ 「fallback 必须精确等于 `core_name` 的算式」这条**无法被证伪** ——
     /// 实测把它换成 `DeviceKey::Name(m.name)`（去掉 `core_name`）**单测仍全绿**，
     /// 因为 `core_name` 对短名**幂等**。故**不写**那条假判据（写了只会制造虚假的安全感）。
     /// 本单测只钉**能转红**的部分：往返一致性 + 与显示侧同真同假。
@@ -3092,9 +3091,9 @@ mod tests {
             sel[0].fallback
         );
 
-        // ③ ⭐ 往返（**可证伪**）：pin 里存**显示侧算式的产物**，且 `key` 用**另一个容器**
+        // ③ ✓ 往返（**可证伪**）：pin 里存**显示侧算式的产物**，且 `key` 用**另一个容器**
         //    （模拟换机/重装驱动后容器变化）⇒ 精确比较必然失败，只能靠 fallback 命中。
-        //    ⛔ 两个坑都会让本判据**失效**，已实测确认：
+        //    ✗ 两个坑都会让本判据**失效**，已实测确认：
         //       · 用 `sel[0].fallback` 构造 pin ⇒ **循环论证**（拿输出喂输入再验输出）；
         //       · `pinned.key` 用**同一个**容器键 ⇒ 被 `p.key == key` **短路**，根本走不到 fallback。
         let display_side_fallback = DeviceKey::Name(core_name(&sel[0].name)).encode();
@@ -3109,7 +3108,7 @@ mod tests {
             "容器已变、只能靠兜底键命中 ⇒ 必须仍判已固定（若本字段与显示侧分叉，这里会掉）"
         );
 
-        // ④ ⭐ 两侧一致（**可证伪**）：显示侧对同一个 pin 的结论必须相同。
+        // ④ ✓ 两侧一致（**可证伪**）：显示侧对同一个 pin 的结论必须相同。
         let window = group_taskbar_devices(&devices, &[], &pinned);
         assert_eq!(
             window[0].pinned, sel2[0].pinned,
@@ -3152,7 +3151,7 @@ mod tests {
         );
     }
 
-    /// ⛔ 判据必须是**前缀**匹配，不是 `contains`：
+    /// ✗ 判据必须是**前缀**匹配，不是 `contains`：
     /// 「某扬声器叫『耳机支架』」不能被误判成耳机。
     #[test]
     fn audio_kind_uses_prefix_not_contains() {
@@ -3404,7 +3403,7 @@ mod tests {
             "会话不是它的：不绑定、不标在线（防串台）"
         );
 
-        // ⛔ 链路闸门：非 LinkReady（armed 等待 / 手机离场）时一个会话都不绑——
+        // ✗ 链路闸门：非 LinkReady（armed 等待 / 手机离场）时一个会话都不绑——
         //   转发会话会以 active 残留在渲染设备上（真机实测），不过闸会把陈旧
         //   音量与「在线」绑给离场手机。
         let mut gated = vec![pinned_phone_or_default()];

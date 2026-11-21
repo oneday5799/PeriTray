@@ -79,11 +79,11 @@ def main() -> int:
     try:
         for i, (desc, old, new, test_name) in enumerate(INJECTIONS, 1):
             if old not in original:
-                print(f"[{i}] ⛔ 注入锚点未命中，跳过：{desc}")
+                print(f"[{i}] ✗ 注入锚点未命中，跳过：{desc}")
                 failures.append((i, desc, "锚点未命中"))
                 continue
             if original.count(old) != 1:
-                print(f"[{i}] ⛔ 锚点不唯一（{original.count(old)} 处），跳过：{desc}")
+                print(f"[{i}] ✗ 锚点不唯一（{original.count(old)} 处），跳过：{desc}")
                 failures.append((i, desc, "锚点不唯一"))
                 continue
 
@@ -92,11 +92,11 @@ def main() -> int:
             SRC.write_text(original, encoding="utf-8")
 
             if passed:
-                print(f"[{i}] ❌ 注入后**仍然通过** —— 用例没有区分力：{desc}")
+                print(f"[{i}] ✗ 注入后**仍然通过** —— 用例没有区分力：{desc}")
                 print(f"      期望转红用例：{test_name}")
                 failures.append((i, desc, "未转红"))
             else:
-                print(f"[{i}] ✅ 转红（{test_name}）：{desc}")
+                print(f"[{i}] ✓ 转红（{test_name}）：{desc}")
     finally:
         # 无条件还原：注入脚本中途崩了也必须把源文件放回去
         SRC.write_text(original, encoding="utf-8")
@@ -104,16 +104,16 @@ def main() -> int:
     now = digest(SRC.read_text(encoding="utf-8"))
     print(f"\n还原后 sha256[:16] = {now}")
     if now != base:
-        print("⛔⛔ 还原校验失败！源文件与注入前**不一致**，请手工检查。")
+        print("✗ 还原校验失败！源文件与注入前**不一致**，请手工检查。")
         return 2
-    print("✅ 还原校验通过（与注入前逐字节一致）")
+    print("✓ 还原校验通过（与注入前逐字节一致）")
 
     if failures:
-        print(f"\n❌ 有 {len(failures)} 条注入未达到预期：")
+        print(f"\n✗ 有 {len(failures)} 条注入未达到预期：")
         for i, desc, why in failures:
             print(f"   [{i}] {why} —— {desc}")
         return 1
-    print(f"\n✅ 全部 {len(INJECTIONS)} 条注入均按预期转红 ⇒ 用例有区分力")
+    print(f"\n✓ 全部 {len(INJECTIONS)} 条注入均按预期转红 ⇒ 用例有区分力")
     return 0
 
 

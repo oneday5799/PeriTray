@@ -6,15 +6,16 @@
  * `doc-table-audit` 只查 `AGENTS.md` / `README.md`）。
  * 而「清理冗余注释」这件事本身有**不可逆的风险**：删掉的注释里
  * 混着两种东西 ——
- *   · 承重的判据（「⛔ 持锁区不得调 `SetWindowText`」这类，删了就没人知道为什么）
+ *   · 承重的判据（「✗ 持锁区不得调 `SetWindowText`」这类，删了就没人知道为什么）
  *   · 纯叙事（「报『…』」「早先写成…改成…」这类，删了只丢历史）
  * 两者在文本上**无法机械区分** ⇒ 必须先把「承重的那些」锚定成可校验的清单，
  *   否则「清理」就退化成「凭感觉删」，而删错的代价是**静默的知识丢失**。
  *
  * ── 它保证什么、不保证什么 ──────────────────────────────────────
- * ✅ 保证：登记表里的每个 (文件, 锚点) 仍在、该处 `⛔`/`⭐` 数量没减少、
- *         全仓总数不低于 FLOOR、`§` 指针能解析到真实章节。
- * ⛔ **不保证**「留下的解释都是对的」—— 哪些解释值得留是判断题，只能靠评审。
+ * 保证：登记表里的每个 (文件, 锚点) 仍在、该处 `✗`/`✓` 数量没减少、
+ *         全仓总数不低于 FLOOR、`§` 指针能解析到真实章节、
+ *         注释里没有白名单外符号（仅 ✓/✗/⚠/↔）/ 变体选择符 / 符号连用。
+ * ✗ **不保证**「留下的解释都是对的」—— 哪些解释值得留是判断题，只能靠评审。
  *    登记表文件头已写明这条边界，避免它被当成「注释已达标」的证明。
  *
  * 用法：`node tools/check-comment-invariants.mjs`
@@ -25,7 +26,7 @@ import path from "node:path";
 const ROOT = path.resolve(import.meta.dirname, "..");
 const REGISTRY = path.join(ROOT, "tools", "comment-invariants.txt");
 const SCAN_DIRS = ["src-tauri/src", "tools"];
-const MARKERS = ["⛔", "⭐"];
+const MARKERS = ["✗", "✓"];
 const WIKI_DIR = path.resolve(ROOT, "..", "PeriTray.wiki");
 
 const MOD_RE = /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z0-9_]+)/;
@@ -64,7 +65,8 @@ function scanFile(abs) {
     if (m) { anchor = `const ${m[1]}`; continue; }
     if (IMPL_RE.test(l)) anchor = `${anchor.split(" fn ")[0]} impl`;
     if (!COMMENT_RE.test(l)) continue;
-    commentLines.push(l);
+    // ✓ 注释行带行号：断言⑤（符号体检）需要报到 file:line
+    commentLines.push({ no: i + 1, text: l });
     const hit = MARKERS.find((k) => l.includes(k));
     if (!hit) continue;
     const byMark = marks.get(anchor) || new Map();
@@ -102,19 +104,19 @@ if (process.argv.includes("--write")) {
   const head = fs
     .readFileSync(REGISTRY, "utf-8")
     .split("\n")
-    // ⛔ FLOOR 行是尾部元数据、每次重写都会新追加一份——必须排除，否则旧 FLOOR
+    // ✗ FLOOR 行是尾部元数据、每次重写都会新追加一份——必须排除，否则旧 FLOOR
     //   会并进 head，每次重生成累积一条重复 FLOOR（实测：1308/1311 两条并存）。
     .filter((l) => l.startsWith("#") && !l.startsWith("# FLOOR"))
     .join("\n");
   const body = rows.map(([f, a2, mk, n]) => `${f}\t${a2}\t${mk}\t${n}`).join("\n");
-  fs.writeFileSync(REGISTRY, `${head}\n\n${body}\n\n# FLOOR\t⛔+⭐ 总数下界\t${total}\n`);
+  fs.writeFileSync(REGISTRY, `${head}\n\n${body}\n\n# FLOOR\t✗+✓ 总数下界\t${total}\n`);
   console.log(`[check-comment-invariants] 已重写登记表：${rows.length} 个锚条目，FLOOR=${total}`);
   process.exit(0);
 }
 
 // ── 读登记表 ──
 if (!fs.existsSync(REGISTRY)) {
-  console.error("⛔ 缺少 tools/comment-invariants.txt（承重不变量登记表）");
+  console.error("✗ 缺少 tools/comment-invariants.txt（承重不变量登记表）");
   process.exit(1);
 }
 const regText = fs.readFileSync(REGISTRY, "utf-8");
@@ -122,8 +124,8 @@ const entries = [];
 let floor = null;
 for (const raw of regText.split("\n")) {
   if (!raw) continue;
-  // ⛔ FLOOR 行以 `#` 开头（它是注释性元数据），**必须在跳过注释之前解析** ——
-  //   早先先 `startsWith("#")` 就 continue ⇒ 永远读不到 ⇒ 恒报「没有 FLOOR 行」。
+  // ✗ FLOOR 行以 `#` 开头（它是注释性元数据），**必须在跳过注释之前解析** ——
+  //   先跳注释再解析的话，FLOOR 行永远读不到（恒报「没有 FLOOR 行」）。
   const cols = raw.replace(/^#\s*/, "").split("\t");
   if (cols[0] === "FLOOR") {
     floor = Number(cols[cols.length - 1]);
@@ -135,7 +137,7 @@ for (const raw of regText.split("\n")) {
   entries.push({ file: parts[0], anchor: parts[1], mark: parts[2], n: Number(parts[3]) });
 }
 if (floor === null || !Number.isFinite(floor)) {
-  console.error("⛔ 登记表里没有 FLOOR 行");
+  console.error("✗ 登记表里没有 FLOOR 行");
   process.exit(1);
 }
 
@@ -164,24 +166,22 @@ if (total < floor) {
 }
 
 // ── 断言 ④：`§` 指针可解析 ──
-// ⚠️ Wiki 目录不在主仓内（`../PeriTray.wiki`），缺失时**降级为 INFO**而不是硬失败
+// ⚠ Wiki 目录不在主仓内（`../PeriTray.wiki`），缺失时**降级为 INFO**而不是硬失败
 //    ——「拿不到输入」不等于「有问题」，也不等于「没问题」。
 const pointers = new Map();     // `${page}|${sec}`
 let barePointers = 0;
-// ⛔⛔ 早先的正则是「有 Wiki 前缀就用它、没有就**默认当 Wiki 13**」⇒
-//   `Spec §0.4`（device_identity.rs / commands.rs 里指向**外部 Spec 文档**）
-//   被误判成 Wiki 指针 ⇒ 恒红。
-//   ⇒ 改为**只硬校验显式带 `Wiki NN` 前缀的**；裸 `§x.y` 无法判定指向哪份文档，
-//     报 INFO 而不是失败 —— 「拿不到输入」不等于「有问题」。
+// ✗ 指针校验**只硬校验显式带 `Wiki NN` 前缀的**：裸 `§x.y` 无法判定指向哪份文档
+//   （`Spec §0.4` 这类外部文档指针混进去会把校验判死），
+//   报 INFO 而不是失败 —— 「拿不到输入」不等于「有问题」。
 const PTR_RE = /Wiki\s*(\d{2})[^\n]{0,16}?§(\d+(?:\.\d+)*)/g;
 const BARE_RE = /§(\d+(?:\.\d+)*)/g;
 for (const rec of scanned.values()) {
-  for (const line of rec.commentLines) {
+  for (const { text } of rec.commentLines) {
     PTR_RE.lastIndex = 0;
     let m;
-    while ((m = PTR_RE.exec(line)) !== null) pointers.set(`${m[1]}|${m[2]}`, 1);
+    while ((m = PTR_RE.exec(text)) !== null) pointers.set(`${m[1]}|${m[2]}`, 1);
     BARE_RE.lastIndex = 0;
-    const masked = line.replace(PTR_RE, " ");
+    const masked = text.replace(PTR_RE, " ");
     while (BARE_RE.exec(masked) !== null) barePointers++;
   }
 }
@@ -213,8 +213,38 @@ if (fs.existsSync(WIKI_DIR)) {
   );
 } else {
   info.push(
-    `⛔ 指针校验**已跳过**：找不到 ${WIKI_DIR} —— 属「拿不到输入」，既不算通过也不算失败`,
+    `✗ 指针校验**已跳过**：找不到 ${WIKI_DIR} —— 属「拿不到输入」，既不算通过也不算失败`,
   );
+}
+
+// ── 断言 ⑤：注释符号体检（白名单外 emoji / 变体选择符 / 符号连用）──
+// ✓ 判据：注释里只许 ✓ / ✗ / ⚠（承重与事实）与 ↔（排版箭头，与 → ⇒ 同类的
+//   文字字形，非 emoji 呈现），其余 Extended_Pictographic 一律拦。
+//   变体选择符 U+FE0F 也拦——带 VS16 的 ⚠ 是 emoji 呈现，裸字符是唯一合规形态。
+//   同一符号双写、或 ✓ 与 ✗ 同行混排（含仅隔空格的形态）一律拦：登记表按
+//   「含符号的注释行」计数，双写与同行多符号会让计数与实际判据数脱节。
+const GLYPH_WHITELIST = new Set([0x2713, 0x2717, 0x26a0, 0x2194]);
+const STACK_RE = /✓\s*✓|✗\s*✗|⚠\s*⚠|✗\s*✓|✓\s*✗/;
+for (const rec of scanned.values()) {
+  for (const { no, text } of rec.commentLines) {
+    let reported = false;
+    for (const ch of text) {
+      const cp = ch.codePointAt(0);
+      if (cp === 0xfe0f) {
+        problems.push(`${rec.rel}:${no} 注释含变体选择符 U+FE0F——⚠ 等符号必须用裸字符`);
+        reported = true;
+        break;
+      }
+      if (/\p{Extended_Pictographic}/u.test(ch) && !GLYPH_WHITELIST.has(cp)) {
+        problems.push(`${rec.rel}:${no} 注释含未放行符号 U+${cp.toString(16)}（白名单仅 ✓ ✗ ⚠ ↔）`);
+        reported = true;
+        break;
+      }
+    }
+    if (!reported && STACK_RE.test(text)) {
+      problems.push(`${rec.rel}:${no} 符号连用（同行至多一个）`);
+    }
+  }
 }
 
 // ── 报告 ──
@@ -224,7 +254,7 @@ console.log(
 );
 for (const s of info) console.log(`[check-comment-invariants] ${s}`);
 if (problems.length) {
-  console.error(`[check-comment-invariants] ⛔ ${problems.length} 项不通过：`);
+  console.error(`[check-comment-invariants] ✗ ${problems.length} 项不通过：`);
   for (const p of problems.slice(0, 20)) console.error(`  · ${p}`);
   if (problems.length > 20) console.error(`  …… 另有 ${problems.length - 20} 项`);
   process.exit(1);

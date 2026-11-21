@@ -6,7 +6,7 @@
 // 迁移注记：由 verify-batch-4.sh 迁为 .mjs（工具脚本语言收敛）；判据集合与 PASS/FAIL
 //   输出口径不变，迁移对账 diff 为空。语言分工 → Wiki 08 §1.1。
 //
-// ⚠️ 硬约定（沿用 verify-batch-2.mjs）：
+// ⚠ 硬约定（沿用 verify-batch-2.mjs）：
 //   · `grep -c` 零匹配时退出码为 1 ⇒ 一律赋值后比较（sh 时代的坑；
 //     .mjs 自实现计数命中 0 是合法值）。
 //   · 判据只能锚在**会真正变化的符号**上；写不出命令的条目一律进 MANUAL，
@@ -41,7 +41,7 @@ const grepCount = (pat, file) =>
 
 // 统计「代码行」中匹配正则的行数：剔除 `//` 行注释与 `//` 之后的内容，
 // 并跳过块注释续行（首个非空白字符是 `*`）。
-// ⚠️ 已知局限：字符串字面量里的 `//`（如 URL）会被误当注释截断；本仓当前无此情形。
+// ⚠ 已知局限：字符串字面量里的 `//`（如 URL）会被误当注释截断；本仓当前无此情形。
 // sh 原版用 awk ERE；迁移后 pattern 一律传 RegExp（`[.]`/`[(]` 已手工改写为 JS 转义）。
 const codeCount = (pat, files) => {
   let n = 0;
@@ -77,7 +77,7 @@ const r = spawnSync("cargo test --no-default-features", {
 const RESULTS = `${r.stdout ?? ""}${r.stderr ?? ""}`;
 const resultLines = RESULTS.split("\n");
 // sh 口径：`grep -q "test result: ok"`——输出里出现「test result: ok」才算通过。
-// ⛔ 不得改判「没有 FAILED 就算过」：编译失败时输出里两者都没有，
+// ✗ 不得改判「没有 FAILED 就算过」：编译失败时输出里两者都没有，
 // 按「无 FAILED」会误 PASS，且 PASS 行打出 undefined。
 if (!RESULTS.includes("test result: ok")) {
   console.log("FAIL  测试套件未通过 —— 后续「命令类」判据将全部失败，请先看 cargo test 输出");
@@ -88,7 +88,7 @@ if (!RESULTS.includes("test result: ok")) {
 }
 
 // sh 口径：`grep -q "^test $2 [.]* ok$"`——`[.]` 是**方括号表达式 = 字面点号**（BRE 与 JS
-// 正则同义），匹配 cargo「名字 ... ok」里的分隔点串。⛔ 原样保留方括号形态，勿「等价改写」
+// 正则同义），匹配 cargo「名字 ... ok」里的分隔点串。✗ 原样保留方括号形态，勿「等价改写」
 // 成 `.*`：二者对真实 cargo 输出结果相同（名字后的空格已挡住同名前缀更长的行，注入 A/B
 // 实测），但字面忠实是 sh→mjs 对账逐行可比的前提——本次迁移漂移的根因正是把语义读反。
 const chkTest = (item, testName) => {
@@ -113,7 +113,7 @@ chkTest("P2-4", "tests::is_time_jump_is_strictly_greater_than_8s");
 chkTest("P2-5", "audio::tests::apartment_mode_conflict_is_recognized_and_not_over_broad");
 // P2-6：图标只写一次（比对两次调用的路径与 mtime）
 chkTest("P2-6", "windows::tests::toast_icon_is_written_once_then_cached");
-// P2-7：★ 本条的可证伪主判据——两个探针直接断言「发送阶段设备缓存锁已释放」。
+// P2-7：本条的可证伪主判据——两个探针直接断言「发送阶段设备缓存锁已释放」。
 //        注入旧形态（guard 活到发送处）后该用例转红，故它不是存在性检查。
 chkTest("P2-7", "battery_notify::tests::cache_lock_is_released_before_emit");
 // P2-8：上限判定抽成只接 `&mut Config` 的纯函数后，可脱离 AppHandle 直接测
@@ -181,7 +181,7 @@ chkEq("P2-3：惰性事件订阅入口 onTauriEvent 存在", grepCount("function
 // P2-7：锁内只收集、锁外发送——两个阶段必须拆成独立函数才可能做到
 chkEq("P2-7：收集阶段 collect_pending_notices 存在", grepCount("pub fn collect_pending_notices", "src-tauri/src/battery_notify.rs"), 1);
 chkEq("P2-7：发送阶段 emit_notifications 存在", codeCount(/fn emit_notifications\(/, ["src-tauri/src/battery_notify.rs"]), 1);
-// ★ 本条的**可证伪判据**是单测 `cache_lock_is_released_before_emit`（见上面「命令类」段），
+// 本条的**可证伪判据**是单测 `cache_lock_is_released_before_emit`（见上面「命令类」段），
 //   它用两个探针直接断言「发送阶段锁已释放」，注入旧形态即转红。
 //   下面三条结构判据只负责堵住「绕过唯一入口」这一层，不能替代上面的单测。
 chkEq(
@@ -197,7 +197,7 @@ chkEq(
 );
 
 // P2-8：读与写必须物理上落在同一次加锁内 ⇒ 调用方只允许出现一次 `with_config_mut`
-// ⚠️ 必须用 code_count 而非 `grep -c`：`commands.rs:333` 的**文档注释**里引用了同一调用
+// ⚠ 必须用 code_count 而非 `grep -c`：`commands.rs:333` 的**文档注释**里引用了同一调用
 //    形态（用来说明改法），`grep -c` 会把它算成第 2 处 —— 首次运行即产出这个假阳性。
 chkEq(
   "P2-8：toggle 的检查+写入合并在同一次 with_config_mut 内",
@@ -223,7 +223,7 @@ chkEq("P2-10：AGENTS.md 已登记「异步上下文禁止 std::thread::sleep」
 chkEq("P2-10：check.mjs 头部已登记该类别无法静态覆盖", grepCount("异步上下文里的阻塞 sleep", "tools/check.mjs"), 1);
 
 // P3-7：约定必须写进 AGENTS.md（分类表本身是评审类）
-// ⚠️ 原判据的 `.` 是 BRE 任意字符（匹配行内代码反引号），迁移后保留正则语义
+// ⚠ 原判据的 `.` 是 BRE 任意字符（匹配行内代码反引号），迁移后保留正则语义
 chkEq(
   "P3-7：AGENTS.md 已登记「忽略 Result / let _ = 必须写明为何安全」",
   grepCount(/忽略 .Result. \/ .let _ =. 必须写明/, "AGENTS.md"),
@@ -277,7 +277,7 @@ console.log(`MANUAL  以下条目按主方案 §六「验证」列只能靠**注
     桩把 \`window.__TAURI__\` 做成**部分注入**（\`event\` 在、\`core\` 不在）——
     这正是原注入项要构造的场景。其中 H0 是**前置断言**（此刻 \`getInvoke()\` 为 null，
     否则 H1/H2 是恒真）、H0b 是**对照**（旧形态确实抛 \`TypeError\` ⇒ 守卫非多余）。
-    ⚠️ 可证伪性已实测：\`--inject-broken=l1\` ⇒ H2 转红（多打一条误导性错误日志）；
+    ⚠ 可证伪性已实测：\`--inject-broken=l1\` ⇒ H2 转红（多打一条误导性错误日志）；
     正常模式 H 组全绿。上面那条结构判据（common.js 之外 0 处裸访问）只是**边界检查**，
     不能替代 H 组，但它负责堵住「别处又冒出一个裸访问」。
   · P2-5【评审】COM 公寓契约的文字部分（「进程内统一 STA，不做反初始化」）只能人读。

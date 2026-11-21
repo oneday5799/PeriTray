@@ -38,7 +38,7 @@ pub struct HidPath {
 /// 两步都是纯 Windows API 调用，无 IPC：`devnode_from_hidapi_path` 是字符串变换，
 /// `container_of_instance` 是 2 次 cfgmgr32 调用。
 ///
-/// ⚠️ **单次开销已实测，请勿在此加缓存**（两次实机采样，只读探针）：
+/// ⚠ **单次开销已实测，请勿在此加缓存**（两次实机采样，只读探针）：
 /// - 全部**在场**设备（245 条，跨枚举器）上 200 轮 = 49000 次：
 ///   `CM_Locate_DevNodeW` 27.3µs + `CM_Get_DevNode_PropertyW` 取长度 4.2µs + 取值 5.4µs
 ///   = **36.9µs/条**；
@@ -49,7 +49,7 @@ pub struct HidPath {
 /// 且该路径跑在 `refresh_worker` **后台线程** ⇒ 占比 ≤0.0004%。
 /// ⇒ 加缓存只会引入失效逻辑与拔插后陈旧映射的风险，**收益为零**。
 ///
-/// ⚠️ 别把「`CM_Get_Device_ID_ListW("HID")` 的条数」当成 HID 设备数：
+/// ⚠ 别把「`CM_Get_Device_ID_ListW("HID")` 的条数」当成 HID 设备数：
 /// 该 API 的过滤器是 **MULTI_SZ**，若按普通单 NUL 字符串传（或标志用了
 /// `..._PRESENT` 而非 `..._ENUMERATOR`），filter 会被**静默忽略**并返回
 /// **全部在场设备**（本机 245 条）。正确取值：HID 枚举器下 `ENUMERATOR` = **87**
@@ -66,7 +66,7 @@ fn container_of_hidapi_path(path: &str) -> Option<String> {
 /// 「解析不到」不该变成「没有电量」。
 ///
 /// `scope` 为 `Some` 时只保留解析出的容器与之一致的集合。
-/// ⚠️ 解析失败（`None`）**不放行，也不回退到全部集合**：
+/// ⚠ 解析失败（`None`）**不放行，也不回退到全部集合**：
 /// 回退会让分域静默失效，重新变成「读到另一台的值」——
 /// 而「暂时没电量」至少是诚实的。这条取舍由 `enumerate_paths` 的返回 `Err` 兜住。
 ///
@@ -245,7 +245,7 @@ mod tests {
         assert_eq!(kept.len(), 3, "无 scope 时不得过滤：{kept:?}");
     }
 
-    /// ⛔ 关键取舍：解析不出的集合在**有 scope 时不得放行**。
+    /// ✗ 关键取舍：解析不出的集合在**有 scope 时不得放行**。
     ///
     /// 若这里放行，同型号另一台的集合就会漏进来 ⇒ 重新变成「读到另一台的值」。
     /// 可证伪：把 `filter` 改成 `resolve(&p.path).as_deref() != Some(scope)` 之外的

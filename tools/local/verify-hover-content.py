@@ -11,7 +11,7 @@
 `c = 1 − shown / (bg + L)`（`L` = 底衬抬升，从永不落内容的左侧内边距列量出）。
 `c > 0.15` 记「有墨」，`c > 0.6` 记「实心墨」。
 
-⛔⛔ 为什么必须差分（两次踩坑换来的）：
+✗ 为什么必须差分（两次踩坑换来的）：
    · 任务栏**不是均匀底**：左侧有搜索框高亮区（+22），右端有**系统托盘**（图标 + 时钟）。
    · 首版用固定阈值 ⇒ 撞搜索框；改用「同行窗口外」参考 ⇒ 参考点离得太远，撞背景差。
    · 改用「局部背景（±7px 最大值）+ 相对覆盖度」后 **D 判据仍报 21.9%** ——
@@ -20,7 +20,7 @@
      ⇒ 是**托盘的时钟/图标**，不是我们的内容。差分法从根上消掉这一类干扰：
      `bg` 里已经含了托盘/应用按钮/搜索框，相减即净。
 
-⛔⛔ **态 A 必须真的是非 hover**（否则 D 变成「底衬态 vs 底衬态」，旧写法同样通过 ＝ 假绿）：
+✗ **态 A 必须真的是非 hover**（否则 D 变成「底衬态 vs 底衬态」，旧写法同样通过 ＝ 假绿）：
    新增 **A0 前置判据**（`L < 5`），不成立就**直接中止**，不输出可能为假的 D。
    自动摆位最多试 3 次，仍失败则提示用户把鼠标移开任务栏。
 
@@ -128,7 +128,7 @@ def grab(left, top, w, h):
     gdi.DeleteObject(bmp)
     gdi.DeleteDC(mem)
     u.ReleaseDC(None, hdc)
-    return buf.raw        # ⛔ 必须 .raw
+    return buf.raw        # ✗ 必须 .raw
 
 
 def rgb_at(d, w, x, y):
@@ -169,10 +169,10 @@ def write_png(path, data, w, h):
 def diff_stats(shown, bg, w, h):
     """返回 `(n_soft, n_ink, lift, darkest)`。
 
-    ⭐ `lift` = 底衬抬升，取**左内边距列**（local x=2）的中位差 —— 该列永不落内容，
+    ✓ `lift` = 底衬抬升，取**左内边距列**（local x=2）的中位差 —— 该列永不落内容，
        所以「显示态 − 背景态」就是纯底衬亮度；非 hover 时应 ≈ 0。
-    ⭐ `c = 1 − shown/(bg + lift)` 是**覆盖度**，与脚下背景亮度无关 ⇒ 两态可比。
-       ⛔ 不能直接用 `bg − shown` 当判据：底衬把背景抬亮后，同一覆盖度的边缘像素
+    ✓ `c = 1 − shown/(bg + lift)` 是**覆盖度**，与脚下背景亮度无关 ⇒ 两态可比。
+       ✗ 不能直接用 `bg − shown` 当判据：底衬把背景抬亮后，同一覆盖度的边缘像素
        差值会缩水（实测 c=0.2 时 47 → 33），两态阈值不等价 ⇒ 白送假红。
     """
     Ls = lum_map(shown, w, h)
@@ -218,7 +218,7 @@ def set_key(key, line):
 def drop_pins():
     """清空 pin 列表（TOML **数组表**，不是标量键）。
 
-    ⛔⛔ `pinned_taskbar_devices` 在 config.toml 里是 `[[pinned_taskbar_devices]]` **数组表**，
+    ✗ `pinned_taskbar_devices` 在 config.toml 里是 `[[pinned_taskbar_devices]]` **数组表**，
        而 `drop_key()` 用的是 `^key\\s*=` 这种**标量键**写法 ⇒ **匹配不到、静默无效**
        （实测：清了 key，pin 一个没少，widget 照旧显示 ⇒ 差分法的「背景态」抓到的还是
        带 widget 的画面 ⇒ 内容像素数 ≈ 0，四条判据全假红）。
@@ -337,8 +337,8 @@ def far_from_cursor(tb, cw):
 def hide_and_grab(rect):
     """清空 pin ⇒ widget 隐藏 ⇒ 抓同一块作**背景**（差分法的对照）。
 
-    ⛔ 顺序必须是 **先 kill 再改配置**：应用运行期间改文件，退出时可能被内存态写回覆盖。
-    ⛔ 抓之前**必须确认 widget 真的没了** —— 否则「背景态」抓到的还是带 widget 的画面，
+    ✗ 顺序必须是 **先 kill 再改配置**：应用运行期间改文件，退出时可能被内存态写回覆盖。
+    ✗ 抓之前**必须确认 widget 真的没了** —— 否则「背景态」抓到的还是带 widget 的画面，
       差分恒为 0 ⇒ 判据全假红（本脚本就踩过一次，根因见 `drop_pins` 的文档）。
     """
     kill()
@@ -381,7 +381,7 @@ def main():
                 break
             note(f"试 {attempt + 1}：widget = {rect}（光标仍在窗内 ⇒ 换另一端）")
         if cursor_in(rect):
-            print(f"  ⚠️ 自动摆位后光标仍在窗内 ⇒ 请把鼠标**移开任务栏**，最多等 {WAIT_LEAVE_S}s …")
+            print(f"  ⚠ 自动摆位后光标仍在窗内 ⇒ 请把鼠标**移开任务栏**，最多等 {WAIT_LEAVE_S}s …")
             t0 = time.time()
             while time.time() - t0 < WAIT_LEAVE_S:
                 time.sleep(1.0)
@@ -395,7 +395,7 @@ def main():
         a0 = off["lift"] < 5.0
         check("A0 态 A 确实**非** hover（底衬未出现）", a0,
               f"底衬抬升 {off['lift']:+.1f}（须 < 5）"
-              + ("" if not cursor_in(rect) else "；⚠️ 光标仍在窗内"))
+              + ("" if not cursor_in(rect) else "；⚠ 光标仍在窗内"))
         if not a0:
             print("!! 无法建立非 hover 对照态 ⇒ 此时 D 会是假绿（两态都带底衬），已中止")
             return 2
@@ -435,14 +435,14 @@ def main():
         print("\n=== 判据 ===")
         check("C hover 时底衬确实出现（背景被抬亮）", on["lift"] > 10.0,
               f"底衬抬升 {on['lift']:+.1f}（须 > 10）")
-        # ⛔ 旧写法（取最大 alpha）下，覆盖度 ≤ 0.6 的边缘像素被底衬顶掉 ⇒ 内容量会**明显掉**
+        # ✗ 旧写法（取最大 alpha）下，覆盖度 ≤ 0.6 的边缘像素被底衬顶掉 ⇒ 内容量会**明显掉**
         lo, hi = min(off["soft"], on["soft"]), max(off["soft"], on["soft"])
         ratio = (hi - lo) / hi if hi else 1.0
         check("D hover 态内容像素数与非 hover 态**同量级**（内容未被侵蚀变细）",
               ratio < 0.25,
               f"非 hover {off['soft']} vs hover {on['soft']}（相差 {ratio * 100:.1f}%，阈值 25%）")
-        # ⭐ D2 = D 的**区分力证明**：旧写法丢掉的是「软边」那批（覆盖度 ≤ 0.6）。
-        #    ⛔ 若软边数太少，D 即使通过也说明不了问题（判据对侵蚀不敏感）＝假绿。
+        # ✓ D2 = D 的**区分力证明**：旧写法丢掉的是「软边」那批（覆盖度 ≤ 0.6）。
+        #    ✗ 若软边数太少，D 即使通过也说明不了问题（判据对侵蚀不敏感）＝假绿。
         check("D2 判据有区分力（软边像素足够多，旧写法必转红）",
               off["edge"] > 300 and on["edge"] > 300,
               f"非 hover 软边 {off['edge']} vs hover {on['edge']}（均须 > 300）")
@@ -453,7 +453,7 @@ def main():
         ok = sum(1 for _, o, _ in RESULTS if o)
         for n, o, d in RESULTS:
             if not o:
-                print(f"  ❌ {n}  —— {d}")
+                print(f"  ✗ {n}  —— {d}")
         print(f"{ok}/{len(RESULTS)} 通过")
         print(f"图像：{OUT_DIR}\\hover-content-off.png / hover-content-on.png")
         return 0 if ok == len(RESULTS) else 1

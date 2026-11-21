@@ -50,13 +50,13 @@ impl UpdateStatus {
 static LAST_STATUS: Mutex<Option<UpdateStatus>> = Mutex::new(None);
 
 fn set_last_status(status: UpdateStatus) {
-    // P2-11：统一入口。`if let Ok(guard) = mutex.lock()` 会在中毒时静默丢弃状态，
+    // 统一入口。`if let Ok(guard) = mutex.lock()` 会在中毒时静默丢弃状态，
     // 设置页就永远显示不出「已是最新」。
     *crate::state::lock_unpoisoned(&LAST_STATUS) = Some(status);
 }
 
 pub fn get_last_status() -> Option<UpdateStatus> {
-    // P2-11：`Mutex::lock()` 后接 `ok().and_then(..)` 在中毒时静默返回 None（同上后果）
+    // `Mutex::lock()` 后接 `ok().and_then(..)` 在中毒时静默返回 None（同上后果）
     crate::state::lock_unpoisoned(&LAST_STATUS).clone()
 }
 
@@ -271,7 +271,7 @@ fn winhttp_get(host: &str, path: &str) -> Result<String, String> {
                 break;
             }
             body.extend_from_slice(&buffer[..bytes_read as usize]);
-            // 响应体上限（P3-1）：GitHub Releases 的 JSON 正常在百 KB 量级，
+            // 响应体上限：GitHub Releases 的 JSON 正常在百 KB 量级，
             // 4 MiB 已是两个数量级的余量。修复前这里**没有上限**，`body` 会一直
             // 增长到内存耗尽 —— 对端是 `api.github.com`，但 DNS / 代理被劫持时
             // 完全可能收到一个无底洞式的响应体。
@@ -304,7 +304,7 @@ const MAX_RESPONSE_BODY: usize = 4 * 1024 * 1024;
 
 /// 响应体是否已超上限。
 ///
-/// 抽成**纯函数**是为了能对边界本身做单测（P3-1）：`cargo check` 证明不了
+/// 抽成**纯函数**是为了能对边界本身做单测：`cargo check` 证明不了
 /// 「4 MiB 与 4 MiB+1 分别怎么走」，只有断言才能。判据取**严格大于**：
 /// 恰好等于上限的响应体是允许的，上限本身不是非法值。
 fn body_too_large(len: usize) -> bool {
@@ -369,7 +369,7 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     let (lat_nums, lat_pre) = split_version(latest);
 
     // 先比较数字部分。
-    // ⚠️ 必须**补齐到等长**再比（P3-2）：`Vec<u32>` 的 `Ord` 是字典序，
+    // ⚠ 必须**补齐到等长**再比：`Vec<u32>` 的 `Ord` 是字典序，
     // 短的排在短的后面 —— `[1,2] < [1,2,0]`，于是 `1.2` 会被判成「低于」`1.2.0`，
     // 明明两者是同一个版本。补齐 0 后长度一致，纯按数值比较。
     if !version_nums_equal(&cur_nums, &lat_nums) {
@@ -402,7 +402,7 @@ fn compare_versions(current: &str, latest: &str) -> bool {
 /// 得到的是一个**完全反转**的比较器，`max_by` 于是取到窗口内**最小**的版本。
 /// 判据见 `latest_release_picks_the_newest_not_the_oldest`。
 ///
-/// ⚠️ `releases` 接口默认 `per_page=30` ⇒ 列表只含最新 30 条。这对「取最大」无害
+/// ⚠ `releases` 接口默认 `per_page=30` ⇒ 列表只含最新 30 条。这对「取最大」无害
 /// （最新的一定在窗口内）；但**一旦方向写反，取的就不再是最大值**，而是窗口最旧的
 /// 那一端 —— 真实数据下实测取到 `v1.2.9`，于是所有用户都被告知「已是最新」。
 fn latest_release(releases: &[GitHubRelease], include_prerelease: bool) -> Option<&GitHubRelease> {
@@ -472,7 +472,7 @@ fn check_for_update(current_version: &str, include_prerelease: bool) -> Result<U
 mod tests {
     use super::*;
 
-    // ── P3-1：响应体上限 ────────────────────────────────────────────
+    // ── 响应体上限 ────────────────────────────────────────────
 
     /// 边界**两侧都断言**：恰好等于上限合法，超 1 字节即拒。
     /// 修复前不存在这个函数，也就无从断言 —— 这正是它被抽出来的理由。
@@ -497,7 +497,7 @@ mod tests {
         assert!(body_too_large(usize::MAX), "极端值不应 panic / 溢出");
     }
 
-    // ── P3-2：版本号数字段等长比较 ──────────────────────────────────
+    // ── 版本号数字段等长比较 ──────────────────────────────────
 
     /// `1.2` 与 `1.2.0` 数值上是同一个版本 ⇒ 不应判为「有更新」。
     /// 修复前 `Vec<u32>` 字典序把 `[1,2] < [1,2,0]` 判为 true，会误报有更新。
@@ -617,7 +617,7 @@ mod tests {
         REAL_WINDOW.iter().map(|(t, p)| mk(t, *p, false)).collect()
     }
 
-    /// ⭐ 靶心：必须取到最新的 `v1.3.7`，而不是窗口最旧的 `v1.2.9`。
+    /// ✓ 靶心：必须取到最新的 `v1.3.7`，而不是窗口最旧的 `v1.2.9`。
     ///
     /// 比较器写反时此处取到 `v1.2.9` ⇒ `has_update` 恒为 false
     /// ⇒ **所有用户都被告知「已是最新」**，更新提示彻底失效。

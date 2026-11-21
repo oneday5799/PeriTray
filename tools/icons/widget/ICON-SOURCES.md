@@ -113,7 +113,7 @@
 - **正合适（= 51.2）** → 直出：`radii` 全 0。
 - **偏细（< 51.2）或实心块** → **重画描边**：沿图形中线写 `stroke-width="51.2"` 的
   路径（参照脚本内 `SWITCH_STROKE` / `PHONE_STROKE` 的推导注释——偏移法只会「收」，
-  变粗必须重画）。⚠️ 内嵌重绘条目**别放进 `.svg` 文件再走 `PLAN`**：`buildOffsetSvg`
+  变粗必须重画）。⚠ 内嵌重绘条目**别放进 `.svg` 文件再走 `PLAN`**：`buildOffsetSvg`
   重发 path 时只保留 `d` 与 `fill`，`stroke-*` 属性会丢。
 
 ### 第 2 步 · 填脚本条目并生成
@@ -138,7 +138,7 @@
 |---|---|
 | `include_bytes` + `OnceLock` 缓存 | `taskbar_widget.rs` `mod icons` |
 | `icons::get` 穷尽 match | 同上（漏变体编译不过） |
-| `icons::slot_of` 槽位 | 同上（新类别取下一个序号，⛔ 缓存槽位必须唯一） |
+| `icons::slot_of` 槽位 | 同上（新类别取下一个序号，✗ 缓存槽位必须唯一） |
 | `main.rs::format_item_debug` 短标签 | 日志对照用 |
 
 再补 `all_icon_assets_decode_and_scale` 测试里的种类清单。

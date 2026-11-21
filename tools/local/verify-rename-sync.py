@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """验收：设备信息页与音量控制页的**重命名同步**。
 
-⛔ 缺陷背景（2026-09-28 用户报）：同一台设备在两页重命名不同步。
+✗ 缺陷背景（2026-09-28 用户报）：同一台设备在两页重命名不同步。
    根因不在后端 —— `apply_device_rename` 本就把「长形态键 + 短名键」归并写入，
    `resolve_device_name` 本就是两级查找；**前端两个解析器是单键查找**：
    音量页卡片的 `name` 是**音频端点名**（「耳机 (小爱音箱-9205)」），
@@ -9,9 +9,9 @@
    ⇒ 音量页精确查不到 ⇒ 「设备页改了名、音量页不变」。
 
 判据（`命令` 级，走真实进程 + 真实 dist + 真实 IPC）：
-   ⛔ **先清空两种形态的键**（模拟「从没改过名」），只从**设备页形态**改名，
+   ✗ **先清空两种形态的键**（模拟「从没改过名」），只从**设备页形态**改名，
       然后读**音量页形态**的解析结果 —— 这一步在修复前必然拿不到别名。
-   ⚠️ 之所以必须先清空：若长形态键**已存在**（哪怕值是旧的），旧代码也能读到，
+   ⚠ 之所以必须先清空：若长形态键**已存在**（哪怕值是旧的），旧代码也能读到，
       测出来的「通过」是假绿（锚点不对 ⇒ 判据不承重）。
 """
 import json
@@ -43,7 +43,7 @@ def check(name, ok, detail=""):
 def port_9222_alive():
     """调试端口是否还有人在监听（= 上一个实例是否真的退干净了）。
 
-    ⛔ 为什么不用 `tasklist` 数进程：Python 捕获 `tasklist` 输出时**不按本机
+    ✗ 为什么不用 `tasklist` 数进程：Python 捕获 `tasklist` 输出时**不按本机
     locale 解码**（重定向场景常是 UTF-16），`count("peritray.exe")` 恒为 0
     ⇒ 把正常启动误判成「应用已消失」。改用与编码无关的 HTTP 端点判据。
     """
@@ -56,7 +56,7 @@ def port_9222_alive():
 
 
 def kill_all(tries=20):
-    """⚠️ 必须**反复杀到真的没有为止**再启动下一个实例。
+    """⚠ 必须**反复杀到真的没有为止**再启动下一个实例。
 
     踩坑记录：`taskkill /F` 在 Git-Bash 里会被路径化成 `F:/` 而**静默失败**
     （要么用 `-F` 形式，要么像这里走 subprocess 不经 shell）⇒ 曾经同时活着
@@ -73,13 +73,13 @@ def kill_all(tries=20):
 
 
 def wait_ipc(tries=30):
-    """⛔ 孤儿 target 陷阱：`taskkill` 后 WebView2 子进程未退、调试端口未释放时，
+    """✗ 孤儿 target 陷阱：`taskkill` 后 WebView2 子进程未退、调试端口未释放时，
     `/json` 里可能还挂着上个进程的页面 —— 它能执行 JS，但 IPC 通道已断
     ⇒ 任何 invoke 永不 settle。必须等「进程真没了 + IPC 真通了」再断言。
     """
     for k in range(tries):
         try:
-            # ⚠️ 本文件的 `cdp` 只有 (expr, timeout) 两个形参、页面写死在内部 ⇒ 
+            # ⚠ 本文件的 `cdp` 只有 (expr, timeout) 两个形参、页面写死在内部 ⇒ 
             #    这里**不能**按 (page, expr, …) 调用（曾这么写，每次轮询都抛
             #    TypeError 又被 except 吞掉 ⇒ 表现为「IPC 永远不就绪」）。
             cdp("(async()=>{await window.__TAURI__.core.invoke('get_config');"
@@ -99,7 +99,7 @@ def cdp(expr, timeout=90):
     return json.loads(r.stdout.strip())
 
 
-# ⚠️ 只用**修复前后都存在**的两个公开解析器 —— 判据里出现新 API 会让「未修复」那次
+# ⚠ 只用**修复前后都存在**的两个公开解析器 —— 判据里出现新 API 会让「未修复」那次
 #    直接抛异常而不是给出**不同的结果**，那样的假绿/假红都说明判据不承重。
 #    `prefill` 取 `formatDeviceName(..., simplify=false)`：它在两版里都等于
 #    「别名 || 原名」，正是重命名对话框输入框的预填值。
@@ -155,7 +155,7 @@ def main():
         check("配置里只落了短名键（长形态键不存在）",
               list(r.get("map", {}).keys()) == [SHORT],
               f"map={r.get('map')}")
-        check("⛔ 音量页（长形态）也能解析到别名 —— 两页同步",
+        check("✗ 音量页（长形态）也能解析到别名 —— 两页同步",
               r.get("audio") == ALIAS, f"audio={r.get('audio')!r}，期望 {ALIAS!r}")
         check("设备页仍显示别名", r.get("device") == ALIAS, f"device={r.get('device')!r}")
         check("重命名对话框预填的是别名（恢复默认按钮会出现）",

@@ -159,12 +159,12 @@ def main():
             multi_bad.append((inst, members, cs))
 
     print(f"    多集合 + 容器唯一 : {len(multi_ok)} 台   ← 正例（去重成一条）")
-    print(f"    多集合 + 跨多容器 : {len(multi_bad)} 台   ← ⛔ 若 >0 则该设备会被拆开")
+    print(f"    多集合 + 跨多容器 : {len(multi_bad)} 台   ← ✗ 若 >0 则该设备会被拆开")
 
     for inst, members, cs in multi_ok[:10]:
         models = "/".join(sorted(inst_models.get(inst, {"?"})))
         c = sorted(cs)[0] if cs else "（全在占位容器）"
-        print(f"      ✅ {inst}  {models}  {len(members)} 个集合 → 容器 {c}")
+        print(f"      ✓ {inst}  {models}  {len(members)} 个集合 → 容器 {c}")
         for m in sorted(members)[:3]:
             print(f"           {m}")
         if len(members) > 3:
@@ -172,18 +172,18 @@ def main():
 
     if multi_bad:
         for inst, members, cs in multi_bad:
-            print(f"      ⛔ {inst} → {len(cs)} 个容器: {sorted(cs)}")
+            print(f"      ✗ {inst} → {len(cs)} 个容器: {sorted(cs)}")
             for m in sorted(members):
                 print(f"           {m}")
     else:
-        print("      ✅ 无跨容器设备 ⇒ 容器优先路径**不会**把一台设备拆成多台")
+        print("      ✓ 无跨容器设备 ⇒ 容器优先路径**不会**把一台设备拆成多台")
 
     # ── 3. 降级路径 B：i: 键必然是逐集合的 ───────────────────
     print(f"\n[B] 降级路径 `i:<实例路径>`：逐 HID 集合，天然会拆")
     demoted = [i for i, ms in inst_members.items() if len(ms) > 1]
     print(f"    本机「多集合」物理设备 {len(demoted)} 台；")
     print(f"    若容器解析失败，这 {len(demoted)} 台设备会各被拆成多份 `i:` 键")
-    print(f"    ⚠️ 注意方向：拆细**不会**跨设备串号（不同设备的实例路径必然不同），")
+    print(f"    ⚠ 注意方向：拆细**不会**跨设备串号（不同设备的实例路径必然不同），")
     print(f"       代价只是「一台设备出现多条、各显示同一个值」。")
 
     # ── 4. 占位容器里的 HID ──────────────────────────────────
@@ -206,7 +206,7 @@ def main():
         cs = set()
         for i in insts:
             cs |= inst_containers[i]
-        flag = "✅可分域" if len(cs) == len(insts) else ("⚠️容器数<设备数" if len(cs) > 1 else "⛔全部同容器")
+        flag = "✓可分域" if len(cs) == len(insts) else ("⚠容器数<设备数" if len(cs) > 1 else "✗全部同容器")
         print(f"    {mo}: {len(insts)} 台设备 / {len(cs)} 个容器  {flag}")
         for i in sorted(insts):
             print(f"         {i}  {len(inst_members[i])} 个集合  容器={sorted(inst_containers[i]) or '占位'}")
@@ -229,7 +229,7 @@ def main():
     print(f"    含 **多个** HID 集合的容器 {len(multi_c)} 个 —— 这些容器下的全部集合")
     print(f"    在容器优先路径下会拿到**同一个** `c:` 键 ⇒ 去重成 1 个查询目标。")
     for g, ms in sorted(multi_c.items(), key=lambda kv: -len(kv[1]))[:8]:
-        kind = "⛔占位" if g in NULL_CONTAINERS else "✅真实"
+        kind = "✗占位" if g in NULL_CONTAINERS else "✓真实"
         models = sorted({
             f"{m.split('\\')[1].upper().split('VID_')[1][:4]}:{m.split('\\')[1].upper().split('PID_')[1][:4]}"
             for m in ms if "VID_" in m.upper() and "PID_" in m.upper()

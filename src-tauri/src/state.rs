@@ -1,11 +1,11 @@
 //! 全局状态与锁。
 //!
-//! # 锁序登记（P3-10）
+//! # 锁序登记
 //!
 //! 本模块是**全局锁的登记处**。新增任何 `static … Mutex` / `RwLock` 之前，先在这里
 //! 登记它的层级以及它与既有锁的获取关系。
 //!
-//! ⛔ 为什么必须集中登记（判据全文 → Wiki 13 §2）：**锁序缺陷（AB/BA 死锁）
+//! ✗ 为什么必须集中登记（判据全文 → Wiki 13 §2）：**锁序缺陷（AB/BA 死锁）
 //!   不产生编译错误，也不产生 panic 栈**，表现是整个进程静默僵死（窗口点不动、
 //!   日志停在同一行）；锁序说明若只写在各调用点的行内注释里，就挡不住新调用点
 //!   ——新代码在闭包里顺手取一次另一把锁，死锁条件即齐备，而没有任何一处会报错。
@@ -16,7 +16,7 @@
 //!
 //! | # | 边（持 → 取） | 现存实例 | 为什么允许 |
 //! |---|---|---|---|
-//! | 1 | `DEVICES_CACHE` → `CONFIG` | `tray.rs::build_tooltip_text` | 两条临界区内都只剩纯内存操作（`format!` / 字段读）。落盘已被 P1-3 移出配置锁、B11 移出调用线程 |
+//! | 1 | `DEVICES_CACHE` → `CONFIG` | `tray.rs::build_tooltip_text` | 两条临界区内都只剩纯内存操作（`format!` / 字段读）。落盘已被 移出配置锁、移出调用线程 |
 //! | 2 | `PERSIST_LOCK` → `LAST_CONFIG_CONTENT` | `config.rs::persist_now` | 只在 `peritray-config` 写线程（或队列满时的同步兜底）上执行，不与 UI 线程争抢 |
 //! | 3 | `BT_LOCK` → `BLE_CONN` | `bluetooth.rs::bt_action` → `bt_ble::ble_connect` / `ble_disconnect` | `BT_LOCK` 是蓝牙操作的串行锁，`BLE_CONN` 是连接表。两条临界区内都只剩纯内存操作（查表/摘表/换表）——持锁的 WinRT 调用与日志 I/O 都已收敛到锁外，见「四」 |
 //!
@@ -36,7 +36,7 @@
 //!
 //! | 符号 | 定义处 | 说明 |
 //! |---|---|---|
-//! | `CONFIG` | `config.rs` | 配置。**临界区内只允许纯内存操作**（P1-3 / B11 已把落盘全部外移） |
+//! | `CONFIG` | `config.rs` | 配置。**临界区内只允许纯内存操作**（已把落盘全部外移） |
 //! | `DEVICES_CACHE` | 本文件 | 设备列表缓存 + 写入时刻（托盘 tooltip、低电量通知、**任务栏信息窗**三处共用； 起携带时间戳） |
 //! | `TRAY_ICON` | `tray.rs` | 托盘句柄。锁内只取句柄/换菜单，**调用 API 前必须先释放**（`set_icon` / `set_tooltip` / `set_menu` 会同步等主线程） |
 //! | `AUTO_MENU_ITEM` | 本文件 | 自启菜单项，同 `TRAY_ICON`（`set_text` 同步等主线程） |
@@ -73,16 +73,16 @@
 //! 登记锁序时顺带扫出三处「持锁做 I/O」（同属 `AGENTS.md`「持锁区不得调用…」），
 //! 判据留档于此以免回归：
 //!
-//! - ⛔ `bt_ble.rs` 的 `ble_connect` / `ble_disconnect`：持 `BLE_CONN` 时
+//! - ✗ `bt_ble.rs` 的 `ble_connect` / `ble_disconnect`：持 `BLE_CONN` 时
 //!   ① 调 WinRT（`session.Close()` / `device.Close()`）；② **写日志文件**
 //!   （`verbose_log!` / `append_verbose_log` / `append_log`，`sync_all` 在杀软实时
 //!   扫描下可达数十毫秒）——两条都违规。判据：锁内只「摘表/换表」，Close 与记日志
-//!   一律锁外，与 P2-7 的低电量通知同款：锁内取数据，锁外做 I/O。
-//! - ⛔ `audio.rs` 的 `toggle_device_mute`：持 `force_mute_prev_volume()` 时
+//!   一律锁外，与低电量通知同款：锁内取数据，锁外做 I/O。
+//! - ✗ `audio.rs` 的 `toggle_device_mute`：持 `force_mute_prev_volume()` 时
 //!   调 `SetMasterVolumeLevelScalar`（COM）即违规。这与 `toast.rs` 是**完全同类**的
 //!   edition 2021 临时量陷阱（`if let Some(x) = lock().take()` 会让守卫活到整个
 //!   `if` 块）；判据：`remove` 必须落到独立语句。
-//! - ⛔ `bt_ble.rs` 的 `.lock().map_err(..)`：**不得**把它当作「命令边界可上报中毒」
+//! - ✗ `bt_ble.rs` 的 `.lock().map_err(..)`：**不得**把它当作「命令边界可上报中毒」
 //!   的例外，一律收敛到 `state::lock_unpoisoned`。该例外理由在此站不住脚：
 //!   `BLE_CONN` 是无不变式的纯缓存，而 Mutex 中毒是**永久性**的
 //!   ⇒ 「上报」换不来任何安全性，只会把「一次 panic」放大成「蓝牙连接/断开在进程余下
@@ -105,11 +105,11 @@
 //! grep -rn -A6 "with_config_mut(" src-tauri/src/ | grep -E "lock_unpoisoned|read_unpoisoned|\.lock\(\)"
 //!
 //! # ③ 加锁入口唯一性：`.lock()` 只允许出现在本文件的 lock_unpoisoned 实现与中毒单测中。
-//! #    命中里会混进注释中的历史说明，需人工剔除（代码侧当前为 0 处；⛔ 别把注释命中当违规）。
+//! #    命中里会混进注释中的历史说明，需人工剔除（代码侧当前为 0 处；✗ 别把注释命中当违规）。
 //! grep -rn "\.lock()" src-tauri/src/
 //! ```
 //!
-//! ⚠️ 这三条命令只做**提示**：闭包可以跨很多行，也可能经由被调用函数间接取锁
+//! ⚠ 这三条命令只做**提示**：闭包可以跨很多行，也可能经由被调用函数间接取锁
 //! （白名单第 1、3 条正是这种形态）；③ 的命中还混有注释。真正的把关仍是人读代码。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -145,7 +145,7 @@ pub fn get_tray_monitor() -> &'static Mutex<Option<TrayMonitorInfo>> {
 
 /// 弹窗动画状态。
 ///
-/// **不要直接 `store` 它**（P1-8）：置位/复位一律经 [`try_begin_animation`] 取守卫，
+/// **不要直接 `store` 它**：置位/复位一律经 [`try_begin_animation`] 取守卫，
 /// 由 `SingleFlightGuard` 的 Drop 负责复位。手工 `store(false)` 一旦被漏写
 /// （或动画线程 panic 未展开到复位点），弹窗会**永久打不开也关不掉**。
 pub static ANIMATING: AtomicBool = AtomicBool::new(false);
@@ -217,7 +217,7 @@ fn try_begin_animation_with_timeout(timeout_ms: u64) -> Option<SingleFlightGuard
 
 /// 通用的「取动画单飞守卫」（为任务栏面板切换动画抽出）。
 ///
-/// ⭐ 抽出它的原因：任务栏的切换动画**不能**复用弹窗那对 `ANIMATING` /
+/// ✓ 抽出它的原因：任务栏的切换动画**不能**复用弹窗那对 `ANIMATING` /
 ///   `ANIMATION_STARTED`。二者共用会引入两条真实故障：
 ///   · 反向——弹窗开合动画（250ms）期间用户点了任务栏切换 ⇒ 守卫取不到
 ///     ⇒ **那一次点击被整个吞掉**（面板不换，且无任何日志）。
@@ -225,7 +225,7 @@ fn try_begin_animation_with_timeout(timeout_ms: u64) -> Option<SingleFlightGuard
 ///   守卫**类型**仍是共用的 [`SingleFlightGuard`]（AGENTS.md：不新建语义相同的类型），
 ///   这里只是把「占哪个标志」开放给调用方。
 ///
-/// ⚠️⚠️ `flag` 与 `started` **必须成对**传入，且 `started` 必须是**该 flag 专属**的：
+/// ⚠ `flag` 与 `started` **必须成对**传入，且 `started` 必须是**该 flag 专属**的：
 ///   守卫的 `Drop` 只复位 `flag`；而 release 是 `panic = "abort"` ⇒ 栈不展开、
 ///   `Drop` 根本不执行 ⇒ 复位只能靠 `started` 的单调时钟超时自愈。
 ///   两者配错（flag 属于 A、时钟属于 B）时，超时判据读到的是别处的时钟，
@@ -269,7 +269,7 @@ pub static SHORTCUT_RECORDING: AtomicBool = AtomicBool::new(false);
 /// 开机自启菜单项引用
 pub static AUTO_MENU_ITEM: OnceLock<Mutex<Option<MenuItem<tauri::Wry>>>> = OnceLock::new();
 
-/// **全仓唯一的 Mutex 加锁入口**（P2-11）。
+/// **全仓唯一的 Mutex 加锁入口**。
 ///
 /// 语义：**容忍中毒**——锁中毒（持锁线程 panic）时直接接管内部数据继续使用。
 /// 依据：本项目各静态量在 panic 后仅需「可用」而非「严格一致」，
@@ -346,7 +346,7 @@ impl Drop for SingleFlightGuard<'_> {
 
 /// 单飞 + 合并执行器：同一时刻只跑一轮 `job`，且**尽量不丢更新**。
 ///
-/// 语义（B3 引入，用于托盘菜单重建）：
+/// 语义（用于托盘菜单重建）：
 /// - 抢到单飞权者执行 `job`。每轮开始前先清掉积压的 `pending`（「认领」），
 ///   于是**启动前**积压的多个请求被合并成一轮；
 /// - 执行**期间**到达的请求把 `pending` 置起并**立即返回**（不阻塞事件分发），
@@ -388,7 +388,7 @@ pub(crate) fn run_coalesced(
 
 /// 设备缓存的内容 **+ 写入时刻**（`monotonic_ms` 刻度）。
 ///
-/// ⚠️⚠️ **时间戳必须与列表放在同一把锁里**：
+/// ⚠ **时间戳必须与列表放在同一把锁里**：
 ///   另起一把 `Mutex<Instant>` 就等于**新增一把锁**，而本文件头的锁序白名单
 ///   只登记了 `DEVICES_CACHE` ⇒ 新锁要么重新登记、要么引入一条**未登记的嵌套边**。
 ///   放在同一个结构里则白名单原样有效，零新增锁、零新增边。
@@ -419,7 +419,7 @@ pub fn get_devices_cache() -> &'static Mutex<DeviceCache> {
 /// 读一份缓存**副本**及其年龄（毫秒）。
 ///
 /// `age = None` 表示「**没有可用缓存**」——两种情形都归到这里：
-/// 从未写过，或上次写的是空列表。⚠️ 空列表**不算**可用缓存：
+/// 从未写过，或上次写的是空列表。⚠ 空列表**不算**可用缓存：
 /// 「查过、确实一台都没有」与「还没查过」在 TTL 判据里必须分开，
 /// 否则前者会让后者永远成立（表现为「永远不现查」）。
 pub fn devices_cache_snapshot() -> (Vec<Device>, Option<u64>) {
@@ -434,7 +434,7 @@ pub fn devices_cache_snapshot() -> (Vec<Device>, Option<u64>) {
 
 /// 写回设备列表并盖上时间戳。返回「**内容**是否变化」。
 ///
-/// ⚠️ 时间戳**每次真实查询都盖**，即便内容逐字没变：
+/// ⚠ 时间戳**每次真实查询都盖**，即便内容逐字没变：
 /// TTL 判据问的是「距上次**问过 WMI** 多久」，而返回值的「变没变」是
 /// 托盘事件（tooltip / `devices-changed`）关心的量 —— **两个问题不同**。
 /// 只在「变了」时盖戳会让 TTL 永久不成立（缓存每次都判成陈旧 ⇒ 退回全量现查）。
@@ -448,7 +448,7 @@ pub fn store_devices_cache(devices: Vec<Device>) -> bool {
     changed
 }
 
-/// ⚠️ 三条设备缓存判据共享**同一个 global**，而 `cargo test` 默认**并行**
+/// ⚠ 三条设备缓存判据共享**同一个 global**，而 `cargo test` 默认**并行**
 ///   ⇒ 不加这把锁时它们会互相踩：A 断言「首次写入变了」时 B 可能刚把缓存
 ///   写成别的内容 ⇒ A 的第二次写入就判成「变了」⇒ 假红。
 ///   （实测踩到：连跑 3 次有 2 次红，失败信息是「内容相同应报告没变」，
@@ -456,7 +456,7 @@ pub fn store_devices_cache(devices: Vec<Device>) -> bool {
 #[cfg(test)]
 static DEVICES_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-/// ⭐⭐ **写回必须每次都盖时间戳，哪怕内容逐字没变**。
+/// ✓ **写回必须每次都盖时间戳，哪怕内容逐字没变**。
 ///
 /// TTL 判据问的是「距上次**问过 WMI** 多久」，而「内容变没变」是托盘事件
 /// 关心的量 —— 两个问题不同。若只在「变了」时盖戳：内容长期不变时
@@ -490,7 +490,7 @@ fn storing_unchanged_content_still_refreshes_the_timestamp() {
     let first = lock_unpoisoned(get_devices_cache()).at_ms;
     assert!(first.is_some(), "写入后必须有时间戳");
 
-    // ⚠️ 必须跨过一个毫秒 tick：`monotonic_ms()` 是**毫秒**分辨率，两次写入
+    // ⚠ 必须跨过一个毫秒 tick：`monotonic_ms()` 是**毫秒**分辨率，两次写入
     //   落在同一毫秒里时刻本就相同。这不是缺陷（TTL 的尺度是 10s，
     //   1ms 抖动无关），但判据要能测出「有没有盖」就得先让时间走一格。
     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -509,7 +509,7 @@ fn storing_unchanged_content_still_refreshes_the_timestamp() {
     lock_unpoisoned(get_devices_cache()).at_ms = saved_at;
 }
 
-/// ⛔ **空内容不算「可用缓存」** —— 即使带着新鲜的时间戳。
+/// ✗ **空内容不算「可用缓存」** —— 即使带着新鲜的时间戳。
 ///
 /// 「查过、确实一台都没有」与「还没查过」在 TTL 判据里必须分开：
 /// 若空内容也算命中，`devices_for_taskbar_with` 里的
@@ -578,7 +578,7 @@ mod tests {
     /// 而测试默认并行 ⇒ 用一把测试专用锁串行化，避免相互干扰。
     static ANIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    // ── P1-8：弹窗动画守卫 ────────────────────────────────────────
+    // ── 弹窗动画守卫 ────────────────────────────────────────
 
     /// 超时判据的边界：**恰好等于上限**即视为超时（`<` 而非 `<=`）。
     /// 若把比较写反（`flag && elapsed > TIMEOUT`），正常动画在 2 秒内仍会被
@@ -668,7 +668,7 @@ mod tests {
         assert!(!animation_blocks(), "夺回并释放后应恢复正常");
     }
 
-    // ── B3：单飞 + 合并执行器 ────────────────────────────────────
+    // ── 单飞 + 合并执行器 ────────────────────────────────────
 
     /// 无竞争：只跑一轮，且结束后单飞权必须已释放（否则后续所有重建都会被永久吞掉）
     #[test]
@@ -739,7 +739,7 @@ mod tests {
 
     /// 并发场景：主线程先占住单飞权，8 个线程同时请求 —— 全部应立即返回 `None`
     /// 并只把 PENDING 置起（不各自开一轮），释放后由持权者合并成一轮。
-    /// 这条钉的是「多个事件撞车时不再重建多次」这一 B3 的核心收益。
+    /// 这条钉的是「多个事件撞车时不再重建多次」这一核心收益。
     #[test]
     fn concurrent_requests_do_not_each_rebuild() {
         let running = AtomicBool::new(true); // 主线程占位，等价于「一轮正在进行」
@@ -767,7 +767,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
-    // ── P2-2 / P2-11：中毒容忍的加锁入口 ──────────────────────────
+    // ── 中毒容忍的加锁入口 ──────────────────────────
 
     /// 让 `m` 处于中毒态：在持锁期间 panic，再用 `catch_unwind` 收住。
     ///
@@ -798,7 +798,7 @@ mod tests {
     /// `ENTRIES` **永远不再更新** ⇒ tooltip 永久消失且无任何日志。
     ///
     /// 本用例把两种写法并排跑，把差异钉成可证伪判据：跳过式那侧**分支体一次都不执行**
-    /// ⇒ 数据静默丢失（无报错、无痕迹）。⛔ 本文件是 P3-10 判据豁免的中毒单测所在处，
+    /// ⇒ 数据静默丢失（无报错、无痕迹）。✗ 本文件是判据豁免的中毒单测所在处，
     /// 故这里是全仓**唯一**允许出现裸 `.lock()` 的非 `state.rs` 场景的同族位置。
     #[test]
     fn skipped_style_write_silently_loses_data_while_recovered_write_lands() {

@@ -16,7 +16,7 @@
  *       是「可能返回 null」，所以这处是靠「处理器能跑 ⇒ core 一定在」这个隐式假设
  *       在工作——而 P2-3 那次改造的全部意义就是消除这类隐式假设（部分注入：
  *       `event` 在、`core` 不在）。
- *       ⚠️ 如实说明：旧形态**不会崩溃**，TypeError 被处理器自身的 try/catch 吃掉，
+ *       ⚠ 如实说明：旧形态**不会崩溃**，TypeError 被处理器自身的 try/catch 吃掉，
  *       唯一可观测差异是**多打一条误导性的 "Failed to reload mute lock config"**。
  *       本条价值在于「契约一致 + 少一条误导日志」，不是「修了一个崩溃」。
  *   L2  3 个文件 5 处裸 `window.__TAURI__.event.listen(...)` 统一改走
@@ -47,16 +47,16 @@
  * `finally` 中删除；`--inject-broken=*` 会临时改写对应源文件，同样在 `finally`
  * 中还原。运行后用 `git status --porcelain` 确认无残留。
  *
- * ⚠️ 这是一次性验收实用脚本（与 L1/L2 一起归档），**不是**每次提交都跑的回归闸门。
+ * ⚠ 这是一次性验收实用脚本（与 L1/L2 一起归档），**不是**每次提交都跑的回归闸门。
  * 它按当时的注册面**硬编码**了期望集合；日后正常新增事件监听时，请同步 EXPECTED
  * 而不是把它当 CI 用。若需要常规回归，应改为独立测试框架下的用例。
  * ── 2026-09-28 归档说明（本文件已移入 tools/local/）────────────────────
  * ① **判据对应的缺陷早已修复并结案**（见 Wiki 12-代码审查与整改复盘），本脚本是那一次的
  *    一次性验收器，**不被任何闸门调用**（`verify-final.mjs` / `verify-batch-4.mjs` 只在
  *    MANUAL 文本里提到它）。
- * ② ⛔ **观测通道在本机不可用**：`--headless=new --dump-dom` 实测**退出码 0 但 stdout
+ * ② ✗ **观测通道在本机不可用**：`--headless=new --dump-dom` 实测**退出码 0 但 stdout
  *    与 stderr 全为 0 字节** ⇒ 脚本必然走到「未取到断言输出」并 `exit 2`。
- *    ⚠️ 因此**退出码 2 不是判据转红，是探针根本没跑起来**——两者必须区分，否则就是
+ *    ⚠ 因此**退出码 2 不是判据转红，是探针根本没跑起来**——两者必须区分，否则就是
  *    「永远红的检查」，会训练出「红了就忽略」的习惯（AGENTS.md 验收纪律的反面）。
  *    在非沙箱 shell 里是否可用**未验证**，故文件保留而不删除。
  */
@@ -64,7 +64,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-// ⚠️ 本文件在 tools/local/ 下（2026-09-28 从 tools/ 归档过来）⇒ 要上跳**两级**。
+// ⚠ 本文件在 tools/local/ 下（2026-09-28 从 tools/ 归档过来）⇒ 要上跳**两级**。
 //    原来写 ".." 时它假定自己在 tools/ 下，搬进来后会把 ROOT 算成 tools/ ⇒
 //    报 ENOENT（src-tauri/dist/settings.html）。**搬家必查相对根**。
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
@@ -114,7 +114,7 @@ function applyInjection() {
     injected = "l1";
   } else if (INJECT === "l2") {
     // 删掉一条注册（模拟「删 wrapper 时顺手删掉一行 listen」）
-    // ⚠️ 本仓源码是 CRLF 行尾，正则必须写成 `\r?\n`，否则永远匹配不到。
+    // ⚠ 本仓源码是 CRLF 行尾，正则必须写成 `\r?\n`，否则永远匹配不到。
     const broken = originalDevices.replace(
       /onTauriEvent\("bt-battery-updated", scheduleSilentRefresh\);\r?\n/,
       ""
@@ -179,7 +179,7 @@ function readLines(file) {
 }
 
 // A2：非 common.js 的文件里，出现 window.__TAURI__ 的行**只允许是注释**。
-//     ⚠️ 收紧过程：本脚本第一版还允许「`if (window.__TAURI__) {` 捕获载体」，
+//     ⚠ 收紧过程：本脚本第一版还允许「`if (window.__TAURI__) {` 捕获载体」，
 //     后来把该载体改为问抽象层（`if (getInvoke())`），于是规则收紧到「零代码」。
 {
   const bad = [];
@@ -303,7 +303,7 @@ const STUB = `<script>
 </script>`;
 
 // ── 浏览器侧：页面末尾的断言脚本 ─────────────────────────────────
-// ⚠️ 本段会被塞进 HTML，避免反引号与 ${ 以免与 Node 模板字符串冲突。
+// ⚠ 本段会被塞进 HTML，避免反引号与 ${ 以免与 Node 模板字符串冲突。
 const EXPECTED = {
   "config-changed": 2, // common.js + popup-audio.js
   "material-changed": 1,
@@ -474,7 +474,7 @@ try {
     console.error("  最可能原因：无头 Edge 的 --dump-dom 在本机无输出（实测 0 字节 / 退出码 0）。");
     console.error("  DOM 片段：");
     console.error(out.slice(0, 1200));
-    // ⛔ 这条 SKIP 分支在 try/finally **之外** ⇒ 不清理就会把探针 HTML 留在
+    // ✗ 这条 SKIP 分支在 try/finally **之外** ⇒ 不清理就会把探针 HTML 留在
     //    dist/ 里，而 dist/ 是 frontendDist（**编译期嵌入二进制**）⇒ 残留会被
     //    打进安装包，还可能被 git add -A 提交进去。2026-09-28 实测就这样漏了两个。
     if (fs.existsSync(PROBE)) fs.unlinkSync(PROBE);

@@ -1,6 +1,6 @@
 """实机验证：音量控制页右键菜单的「钉到任务栏 / 移出任务栏」**文案会翻转**。
 
-⛔ 为什么必须脚本化：这是「点一次 → 关菜单 → 再右键看文案」的两步交互，
+✗ 为什么必须脚本化：这是「点一次 → 关菜单 → 再右键看文案」的两步交互，
    人工点容易漏看其中一步；而回归的表现恰恰是「点了但文案不变」。
 
 判据：同一台设备连续两次右键，菜单文案必须**在两次之间翻转**。
@@ -65,7 +65,7 @@ def pinned_names():
 def main():
     rc = open_popup()
     if not rc:
-        print("❌ 弹窗未打开")
+        print("✗ 弹窗未打开")
         return 1
     print("popup rect=(%d,%d)-(%d,%d)" % (rc.l, rc.t, rc.r, rc.b))
     # 切到音量控制 tab
@@ -86,7 +86,7 @@ def main():
     print("已钉：%s" % before)
     print("点击后：%s" % after)
     print("变化：%s" % ("有 +%d 台" % (len(after) - len(before))
-                        if len(after) != len(before) else "无变化 ❌"))
+                        if len(after) != len(before) else "无变化 ✗"))
     return 0 if len(after) != len(before) else 1
 
 

@@ -6,16 +6,16 @@
  *       updateFlyoutBackdrop 等框架级共享函数
  * 依赖：common.js 全局 API + 各分区脚本(settings-general/shortcut/devices/audio/taskbar/about) */
 let config = null;
-// 「基线副本」= 本页**上次从后端收到的整份快照**（P1-11）。
+// 「基线副本」= 本页**上次从后端收到的整份快照**。
 // saveConfig() 会把它随请求一起发回，后端据此算出用户真正改了哪些字段，
 // 只套用这些字段 —— 否则整份覆盖会抹掉弹窗侧并发的改名/隐藏等改动。
-// ⚠️ 必须是独立深拷贝：各分区脚本都直接在 config 上就地改字段，
+// ⚠ 必须是独立深拷贝：各分区脚本都直接在 config 上就地改字段，
 // 若与 config 指向同一对象，差异永远是空集，修复即失效。
 let configBase = null;
 
 /**
  * 深比较两个配置值（字段级）。
- * ⚠️ **不能用引用相等**：本页各分区脚本大量**就地改嵌套对象**
+ * ⚠ **不能用引用相等**：本页各分区脚本大量**就地改嵌套对象**
  * （如 `config.device_names[id] = name`、`config.device_groups[id] = g`），
  * 引用不变但内容已变；而 `configBase` 是独立深拷贝，两边引用必然不同。
  * 数组与对象一律按「内容相等」判定，**元素顺序敏感**（本仓数组字段都是小集合，
@@ -55,7 +55,7 @@ function localPendingPatch() {
 }
 
 /**
- * 把「本页尚未落盘的改动」重放到一份新快照上（B14）。
+ * 把「本页尚未落盘的改动」重放到一份新快照上。
  *
  * 逐字段**三态判定**（`B` = 旧基线 `configBase`、`L` = 本页当前值 `config`、
  * `S` = 新快照）：
@@ -66,7 +66,7 @@ function localPendingPatch() {
  *   外部快照到达，这一下不能被吞掉。
  * - 三者互不相同（真三方冲突）：**采纳 `S`** 并 `console.warn` 点名。
  *   为什么不是「本页优先」：后端是唯一权威，且这种形态最常见的成因是
- *   **后端对我们刚保存的值做了归一化**（`normalize_config`，P3-9）——
+ *   **后端对我们刚保存的值做了归一化**（`normalize_config`）——
  *   若本页硬保留原值，UI 会永远显示未归一化的旧值且每次保存都被改回去。
  *   取舍：**宁可让外部覆盖，也不与后端对峙**；冲突有 warn 日志可追。
  */
@@ -93,12 +93,12 @@ function mergeLocalEdits(snapshot) {
  * **只有来自后端的快照**才走这里；本地派生的浅拷贝（如 `{ ...config }`）不走，
  * 否则会把用户的未落盘改动误当成基线，差异被清零。
  *
- * `keepLocalEdits`（B14）**默认为 `true`**——即「外部/后端快照到达时，
+ * `keepLocalEdits`**默认为 `true`**——即「外部/后端快照到达时，
  * 保留本页尚未落盘的改动」。这样设计是为了让**忘记传参**也不会造成静默丢改动
  * （安全的那一侧做默认值）；确实需要「无条件整份采纳」时，必须**显式**
  * 传 `false` 并写明理由。
  *
- * ⚠️ 本函数有**多处调用点**，改动语义时务必一并核对（`grep -rn "acceptConfig"`）：
+ * ⚠ 本函数有**多处调用点**，改动语义时务必一并核对（`grep -rn "acceptConfig"`）：
  *   `settings.js`（首份快照 = 唯一的 `false`、`config-changed` 处理器）
  *   `settings-audio.js:10/60`、`settings-devices.js:14/118`、
  *   `settings-shortcut.js:131/166`
@@ -131,7 +131,7 @@ document.addEventListener("pointerleave", (e) => {
 
 async function saveConfig() {
   try {
-    // base + newConfig 一起送：后端只套用两者之间的差异（P1-11）
+    // base + newConfig 一起送：后端只套用两者之间的差异
     await invoke("update_config", { base: configBase, newConfig: config });
   } catch (e) {
     console.error("Failed to save config:", e);
@@ -261,7 +261,7 @@ function createExpandableCard(items, arrow) {
 }
 
 // ComboBox 行为核心已上移 common.js（bindComboBox/createComboBox）——弹窗「修改信息」
-// 对话框与设置页共用同一份开合/定位/动画实现，⛔ 两页不许各写一份。
+// 对话框与设置页共用同一份开合/定位/动画实现，✗ 两页不许各写一份。
 // 本页只剩按 id 装配的薄壳（静态标记在 settings.html）。
 function initComboBox(comboId, selectedValue, onChange) {
   const combo = document.getElementById(comboId);
@@ -624,7 +624,7 @@ function renderUpdateInfobar(status) {
 /// data-tauri-drag-region 承担（Tauri 内部脚本，需 ACL allow-start-dragging）；
 /// 边缘缩放由 .settings-resize-edge 热区经 startResizeDragging 发起
 /// （THICKFRAME 全摘后 tauri 的样式位缩放失效，判据见 windows.rs
-/// FramelessProfile），最大化态图标经 resize 事件同步。⛔ 关闭必须走
+/// FramelessProfile），最大化态图标经 resize 事件同步。✗ 关闭必须走
 /// close()——后端 CloseRequested 流程是 hide 先行 + 延迟销毁
 /// （Wiki 06 §4.1 假死判据），不得改成 destroy 直拆。
 function initTitleBar() {
@@ -648,7 +648,7 @@ function initTitleBar() {
   document.getElementById("btn-titlebar-close")?.addEventListener("click", () => callWin("close"));
   // 无框缩放热区：THICKFRAME 全摘后边缘缩放经 startResizeDragging 发起
   // （方向为变体名直传，data-dir ∈ Rust ResizeDirection 变体名，plain
-  // Deserialize；⛔ 最大化态跳过，防破坏最大化形态）。右缘热区盖住滚动条
+  // Deserialize；✗ 最大化态跳过，防破坏最大化形态）。右缘热区盖住滚动条
   // 最外 5px，为可缩放性的既定取舍。
   document.querySelectorAll(".settings-resize-edge").forEach((el) => {
     el.addEventListener("mousedown", (e) => {
@@ -685,7 +685,7 @@ async function init() {
   try {
     // 首份快照：本页还没有任何本地改动，**这是全仓唯一显式 `keepLocalEdits: false`**。
     // 其余调用点（含下方 config-changed 处理器与各分区脚本的「重新拉取」）一律
-    // 走默认的 `true` —— 保留本页未落盘改动（B14）。
+    // 走默认的 `true` —— 保留本页未落盘改动。
     acceptConfig(await invoke("get_config"), { keepLocalEdits: false });
 
     applyThemeMode(config.theme_mode || "follow_system");
@@ -738,7 +738,7 @@ async function init() {
 // config-changed: 使用 payload 中的 config 快照，无需再调用 get_config
 onTauriEvent("config-changed", async (event) => {
   // 后端传递完整 config 快照，直接使用。
-  // ⚠️ B14：这是**外部**变更（弹窗侧改名/隐藏、另一窗口保存），到达时本页可能有
+  // ⚠ 这是**外部**变更（弹窗侧改名/隐藏、另一窗口保存），到达时本页可能有
   // 「刚点、还没落盘」的改动，整份替换会静默吞掉它们。`keepLocalEdits: true`
   // 是 `acceptConfig` 的**默认值**，这里仍显式写出——它是本条缺陷的原始现场，
   // 显式声明便于检索与评审。
@@ -755,7 +755,7 @@ onTauriEvent("config-changed", async (event) => {
   await loadDevicesAsync();
   await loadAudioDevicesAsync();
   await renderShutdownVolumeDevices();
-  // ⭐ 任务栏卡片的「已添加清单」是**后端命令**的结果（`get_pinned_taskbar_list`），
+  // ✓ 任务栏卡片的「已添加清单」是**后端命令**的结果（`get_pinned_taskbar_list`），
   //   不随 `config` 快照自动更新 ⇒ 改名 / 钉移出后必须显式重拉，
   //   否则用户停在任务栏 tab 上会一直看到旧名字。
   if (typeof window.refreshTaskbarWidgetCardList === "function") {

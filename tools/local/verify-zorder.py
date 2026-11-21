@@ -10,7 +10,7 @@
 
 判据（每条都可证伪）：
   P. **前提**：widget 已挂载、且「入侵者」确实压在我们之上（Z 序号更小 **且**
-     像素层面确实遮住我们）。⛔ 不做这一步，「恢复」可能只是「入侵者根本没上去」的假象。
+     像素层面确实遮住我们）。✗ 不做这一步，「恢复」可能只是「入侵者根本没上去」的假象。
   A. **维护把 Z 序拉回来**：入侵者上来后，≤ 8s 内 widget 回到第 0 位。
   B. **像素层面也恢复**：恢复后 widget 区域内不再是入侵者的品红色。
   G. 日志留下「Z 序被后来者压住 ⇒ 已重申到兄弟最顶」（可追溯）。
@@ -64,7 +64,7 @@ u = ctypes.WinDLL("user32", use_last_error=True)
 gdi = ctypes.WinDLL("gdi32", use_last_error=True)
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-# ⛔ 必须显式声明 argtypes：不声明时 ctypes 会把 64 位句柄**截断成 32 位**
+# ✗ 必须显式声明 argtypes：不声明时 ctypes 会把 64 位句柄**截断成 32 位**
 #    （本机句柄值恰好都不大，所以不声明也能"跑通" —— 正是这种"跑通了"最危险）。
 HWND, HANDLE, HDC, HGDIOBJ, HINSTANCE = (
     w.HANDLE, w.HANDLE, w.HANDLE, w.HANDLE, w.HANDLE,
@@ -134,7 +134,7 @@ RESULTS = []
 
 def check(name, ok, detail=""):
     RESULTS.append((name, ok, detail))
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  —— {detail}" if detail else ""))
+    print(f"  {'✓' if ok else '✗'} {name}" + (f"  —— {detail}" if detail else ""))
 
 
 # ── 基础 ──────────────────────────────────────────────────────────
@@ -178,9 +178,9 @@ def zindex_of(cls):
 
 
 def magenta_ratio(rect, step=16):
-    """⚠️ **仅作信息输出，不能当判据**。
+    """⚠ **仅作信息输出，不能当判据**。
 
-    ⛔ 踩过的坑：widget 大部分像素 `alpha = 0`（分层窗按 alpha 合成），
+    ✗ 踩过的坑：widget 大部分像素 `alpha = 0`（分层窗按 alpha 合成），
        下方入侵者的不透明品红**本来就会透过来** ⇒ 即使 widget 稳稳在 Z 序最顶，
        这个值依然是 0.94。把它当「是否被遮住」的判据 = **假红**（第一版就这样误判）。
        真正的判据是 Z 序号与 `owner_at`（命中测试归属）。
@@ -203,7 +203,7 @@ def magenta_ratio(rect, step=16):
 def owner_at(rect):
     """`rect` **中心点**的真实命中归属（类名）。
 
-    ⭐ 这才是「谁在这个点上、谁会收到鼠标」的判据：分层窗按 alpha 做命中测试，
+    ✓ 这才是「谁在这个点上、谁会收到鼠标」的判据：分层窗按 alpha 做命中测试，
        不透明像素才会命中 ⇒ 入侵者在上面时归入侵者，被重申拉回后归我们。
     """
     left, top, width, height = rect
@@ -374,7 +374,7 @@ def make_intruder(tray, target_rect):
     wc = WNDCLASSW()
     wc.lpfnWndProc = _proc
     wc.lpszClassName = INTRUDER
-    # ⛔ 必须用 `GetStockObject(WHITE_BRUSH)` 的**返回值**，不能猜一个数字：
+    # ✗ 必须用 `GetStockObject(WHITE_BRUSH)` 的**返回值**，不能猜一个数字：
     #    「可见四条件」第 4 条要求类**有背景刷**（`NULL` ⇒ 分层窗整块不显示）。
     wc.hbrBackground = gdi.GetStockObject(0)  # WHITE_BRUSH
     u.RegisterClassW(ctypes.byref(wc))
@@ -451,7 +451,7 @@ def build(label):
     errs = [ln for ln in ((r.stdout or "") + (r.stderr or "")).splitlines()
             if ln.startswith("error") or "error[" in ln]
     if errs:
-        print("⛔ 构建失败：\n" + "\n".join(errs[:15]))
+        print("✗ 构建失败：\n" + "\n".join(errs[:15]))
         return False
     return True
 
@@ -460,7 +460,7 @@ def apply_inj(inj):
     txt = original
     desc, old, new = inj
     if txt.count(old) != 1:
-        print(f"⛔ 注入锚点不唯一/未命中（{txt.count(old)} 处）：{desc}")
+        print(f"✗ 注入锚点不唯一/未命中（{txt.count(old)} 处）：{desc}")
         return None
     txt = txt.replace(old, new, 1)
     SRC.write_text(txt, encoding="utf-8")
@@ -471,7 +471,7 @@ def apply_inj(inj):
 def restore_src():
     SRC.write_text(original, encoding="utf-8")
     now = hashlib.sha256(SRC.read_text(encoding="utf-8").encode()).hexdigest()[:16]
-    print(f"还原后 sha256[:16] = {now}  {'✅ 一致' if now == base_sha else '⛔ 不一致'}")
+    print(f"还原后 sha256[:16] = {now}  {'✓ 一致' if now == base_sha else '✗ 不一致'}")
 
 
 # ══ 主流程 ═════════════════════════════════════════════════════
@@ -507,9 +507,9 @@ try:
         raise SystemExit(2)
     info_ratio = magenta_ratio(wr)
     print(f"  （信息）widget 区域品红占比 = {info_ratio:.2f}"
-          f"  ⚠️ 仅信息：widget 多为 alpha=0 像素，下方品红会透出来，**不能**当判据")
+          f"  ⚠ 仅信息：widget 多为 alpha=0 像素，下方品红会透出来，**不能**当判据")
 
-    # ⭐ 以 0.1s 采样 8s：既记录「被压下去」是否被观测到，也记录恢复时刻。
+    # ✓ 以 0.1s 采样 8s：既记录「被压下去」是否被观测到，也记录恢复时刻。
     t0 = time.time()
     seq = []
     saw_down = False
@@ -527,7 +527,7 @@ try:
     print(f"  8s 后：widget Z 序号={idx_now}  该点命中归属={owner_now}")
     for ln in log_lines:
         print("  LOG:", ln)
-    # ⛔⛔ 前提：必须证明「入侵者确实把我们压下去过」，否则「恢复」可能只是
+    # ✗ 前提：必须证明「入侵者确实把我们压下去过」，否则「恢复」可能只是
     #    「入侵者压根没上去」的假象。两个独立证据：
     #     ① 采样到过非 0 序号；② 应用自己打出「Z 序被后来者压住」——
     #        该日志**只在** `!is_top_sibling` 时写，不可能凭空出现。
@@ -553,7 +553,7 @@ try:
             break
         time.sleep(0.25)
     check("D-基线 10s 内**不**恢复（证明慢节拍确实是瓶颈）", not back,
-          f"实际 {time.time() - t0:.1f}s 就回来了" if back else "10s 内未回来 ✅")
+          f"实际 {time.time() - t0:.1f}s 就回来了" if back else "10s 内未回来 ✓")
 
     proc.terminate(); time.sleep(1); kill()
     if intruder:
@@ -581,7 +581,7 @@ try:
           f"入侵者={i_idx} < widget={w_idx}")
     took = wait_top(OURS, 8)
     check("C 注入后 **8s 内无法恢复**（证明 A 的判据可证伪）", took is None,
-          f"竟然 {took:.1f}s 就恢复了 ⇒ A 的判据失效" if took is not None else "8s 内未恢复 ✅")
+          f"竟然 {took:.1f}s 就恢复了 ⇒ A 的判据失效" if took is not None else "8s 内未恢复 ✓")
     owner_c = owner_at(wr)
     check("C 注入后 widget 区域的命中归属仍是入侵者", owner_c == INTRUDER,
           f"归属={owner_c}")
@@ -641,4 +641,4 @@ print(f"结果：{len(RESULTS) - len(bad)}/{len(RESULTS)} 通过")
 if bad:
     print("失败项：" + "、".join(bad))
     sys.exit(1)
-print("✅ 全部通过")
+print("✓ 全部通过")

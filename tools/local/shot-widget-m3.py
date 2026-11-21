@@ -3,7 +3,7 @@
 产出：`widget-m3-center.png`（任务栏整条，含 widget）、`widget-m3-left.png`、
 以及放大裁剪 `widget-m3-crop.png`（便于肉眼核对图标与数值）。
 
-⚠️ 只截「任务栏那一条」而不是整屏 —— 减少对用户的打扰，也避免泄露无关窗口内容。
+⚠ 只截「任务栏那一条」而不是整屏 —— 减少对用户的打扰，也避免泄露无关窗口内容。
 """
 import subprocess, os, time, ctypes, ctypes.wintypes as w, glob, re, shutil, struct, zlib
 
@@ -116,7 +116,7 @@ H = tray.bottom - tray.top
 def shot(tag):
     cx, px = grab(tray.top, H)
     save_png(os.path.join(OUT, f'widget-m3-{tag}.png'), cx, H, px)
-    # ⛔ 不能用 `FindWindowW(类名)`：widget 是**子窗**，`FindWindowW` 只找顶层窗。
+    # ✗ 不能用 `FindWindowW(类名)`：widget 是**子窗**，`FindWindowW` 只找顶层窗。
     #    句柄一律从日志的 mount report 取（与验收脚本同一口径）。
     hwnd = widget_hwnd()
     if hwnd:

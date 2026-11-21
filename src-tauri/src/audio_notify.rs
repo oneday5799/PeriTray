@@ -35,7 +35,7 @@ fn post_sync_callbacks(hwnd: HWND) -> windows::core::Result<()> {
 /// **投递失败必须回滚标志**：标志已置 `true` 而消息未入队时，消息处理器永不运行，
 /// 标志会**永久停在 `true`**，此后所有设备变更回调都在 CAS 处失败并静默跳过 ——
 /// 音频设备变更通知彻底失效，且不产生任何日志。
-/// ⛔ 因此 `PostMessageW` 的返回值**不得**写成 `let _ =` 丢弃（审查报告 P3-12）。
+/// ✗ 因此 `PostMessageW` 的返回值**不得**写成 `let _ =` 丢弃。
 ///
 /// 4 个 COM 回调统一走本函数，避免下次再漏改其中一处。
 fn request_sync_callbacks(hwnd: HWND) {
@@ -60,7 +60,7 @@ fn request_sync_callbacks_with(hwnd: HWND, post: fn(HWND) -> windows::core::Resu
 
 fn log_throttle_property(id: &str) {
     let lock = LAST_PROP_LOG.get_or_init(|| Mutex::new(HashMap::new()));
-    // 走统一入口（P2-2）：本函数由 COM 回调调用，若用 `Mutex::lock()` + `unwrap()`，
+    // 走统一入口：本函数由 COM 回调调用，若用 `Mutex::lock()` + `unwrap()`，
     // 锁中毒时的 panic 会穿过 FFI/COM 边界向外抛（未定义行为），
     // 且此后每次属性变更回调都会再炸一次。
     let mut map = crate::state::lock_unpoisoned(lock);
@@ -199,7 +199,7 @@ impl IAudioSessionEvents_Impl for SessionVolumeCallback_Impl {
 
 /// PCWSTR（通知参数，系统拥有内存，不得 CoTaskMemFree）转 String。
 ///
-/// ⛔ null 必须闸住返回空串——MMDevAPI 通知瞬窗可给 null，`to_string()` 内部
+/// ✗ null 必须闸住返回空串——MMDevAPI 通知瞬窗可给 null，`to_string()` 内部
 ///   直接 `wcslen(self.0)` 一触即 AV（判据同 `audio::pwstr_to_string`，本函数
 ///   不走那边是因为所有权不同：通知参数无需释放，闸的形态相同、实现点各自唯一）。
 fn pcwstr_to_string(p: &PCWSTR) -> String {
@@ -273,7 +273,7 @@ struct AudioMonitor {
     session_callbacks: HashMap<String, (IAudioSessionControl, IAudioSessionEvents)>,
     /// 退役回调隔离区：设备/会话消失时把「接口 + 回调」整体移入，**永不注销、
     /// 永不释放**（随 AudioMonitor 在退出路径 drop 归还系统）。
-    /// ⛔ 判据：通知回调一经注册就不得走「注销→释放」路径——Unregister 内部会
+    /// ✗ 判据：通知回调一经注册就不得走「注销→释放」路径——Unregister 内部会
     ///   同步 Release 系统侧引用，而音频工作线程的在途回调借裸指针，注销与
     ///   回调并发时最后一个引用可能在回调仍在途时归零 ⇒ UAF；唯一安全态是
     ///   对象与进程同寿命。依据：Register*Notification 文档原文「注册 AddRef /
@@ -288,7 +288,7 @@ struct AudioMonitor {
 
 impl Drop for AudioMonitor {
     fn drop(&mut self) {
-        // ⛔ 只注销 IMMNotificationClient：其契约是「系统不 AddRef、借裸指针
+        // ✗ 只注销 IMMNotificationClient：其契约是「系统不 AddRef、借裸指针
         //   调用」（RegisterEndpointNotificationCallback 文档原文），注销前释放
         //   = UAF。设备/会话回调与隔离区一律随 drop 归还系统、不逐个注销
         //   （判据见 retired_devices 字段文档）。
@@ -359,7 +359,7 @@ impl AudioMonitor {
                 .cloned()
                 .collect();
             for id in to_remove {
-                // ⛔ 不注销不释放：整体移入隔离区（判据见 retired_devices 字段文档）。
+                // ✗ 不注销不释放：整体移入隔离区（判据见 retired_devices 字段文档）。
                 //   设备回来时 id 不在 map ⇒ 走 register_device 重新注册，旧回调留在隔离区。
                 if let Some(entry) = self.callbacks.remove(&id) {
                     self.retired_devices.push(entry);
@@ -450,7 +450,7 @@ impl AudioMonitor {
                 .cloned()
                 .collect();
             for id in to_remove {
-                // ⛔ 不注销不释放：整体移入隔离区（判据见 retired_devices 字段文档）。
+                // ✗ 不注销不释放：整体移入隔离区（判据见 retired_devices 字段文档）。
                 //   会话实例 id 每次重建都不同 ⇒ 新会话走 register_session 重新注册。
                 if let Some(entry) = self.session_callbacks.remove(&id) {
                     self.retired_sessions.push(entry);
@@ -526,7 +526,7 @@ pub fn init_audio_notify(app_handle: tauri::AppHandle) {
     std::thread::spawn(move || unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         if hr.is_err() {
-            // 区分「公寓模型冲突」与真失败（P2-5）：前者说明有代码抢先把本线程初始化
+            // 区分「公寓模型冲突」与真失败：前者说明有代码抢先把本线程初始化
             // 成了 MTA（约定是进程内统一 STA）。冲突**必须带 HRESULT 上报**——
             // 混进一句 "failed" 会让整条音频通知链路静默失效，却无从归因。
             let code = hr.0;
@@ -715,7 +715,7 @@ extern "system" fn audio_msg_wnd_proc(
 mod tests {
     use super::*;
 
-    /// P3-12 的可证伪单测：**投递失败后合并标志必须回到 `false`**。
+    /// 可证伪单测：**投递失败后合并标志必须回到 `false`**。
     ///
     /// 修复前该路径写作 `let _ = PostMessageW(...)`，失败被吞掉、标志留在 `true`，
     /// 此后所有设备变更回调都在 CAS 处失败并静默跳过 —— 音频变更通知永久静默。

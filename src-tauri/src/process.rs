@@ -3,7 +3,7 @@
 //! Win32 互操作（to_wide/shell_open）与各类系统面板/文件打开器。
 //! 为全仓约三分之二模块提供公共依赖，新增跨模块基础工具优先落于此处。
 //!
-//! **日志写入自 B5 起是异步的**：`append_log` / `append_verbose_log` 只把行推入
+//! **日志写入是异步的**：`append_log` / `append_verbose_log` 只把行推入
 //! 有界队列（`try_send`，永不阻塞），落盘由独立线程 `peritray-log` 按批完成。
 //! 故进程退出前须调用 [`flush_log`] 等待队列排空，否则会丢掉最后几行。
 
@@ -27,14 +27,14 @@ pub fn exe_dir() -> PathBuf {
 /// - **其他（NSIS，Tauri 默认 per-user 装在 `%LOCALAPPDATA%`）**：沿用 [`exe_dir`]，
 ///   路径**一字不变** ⇒ 老用户零迁移、零回归。
 ///
-/// ⚠️ **为什么 MSIX 下不能用 `%LOCALAPPDATA%\<标识>`**（看起来更"常规"的那个选择）：
+/// ⚠ **为什么 MSIX 下不能用 `%LOCALAPPDATA%\<标识>`**（看起来更"常规"的那个选择）：
 /// MSIX 对 `AppData` 的写入是**虚拟化重定向**的。本机在包身份下实测（`Invoke-CommandInDesktopPackage`）：
 /// 写 `%LOCALAPPDATA%\PeriTray_probe` 之后，**该虚拟路径本身并不存在**，
 /// 内容落在 `…\Packages\<PFN>\LocalCache\Local\PeriTray_probe`。而 `explorer.exe`
 /// **不是打包进程**，它按字面路径去找 ⇒ 目录不存在 ⇒ 「查看日志」依旧打不开。
 /// 故必须落到**真实物理路径**（`LocalState` 实测为直写、不参与重定向）。
 ///
-/// ⚠️ 本函数位于**日志落盘路径**上（`log_path()` → `logs_dir()`），因此
+/// ⚠ 本函数位于**日志落盘路径**上（`log_path()` → `logs_dir()`），因此
 /// **严禁在此记日志**——那会在写线程里自我喂食。
 pub fn writable_root() -> PathBuf {
     #[cfg(target_os = "windows")]
@@ -128,7 +128,7 @@ macro_rules! verbose_log {
 static LOG_WRITE_FAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 // ═══════════════════════════════════════════════════════════════
-// 日志写入：独立写线程 + 有界队列（B5）
+// 日志写入：独立写线程 + 有界队列
 //
 // 旧实现是「全进程共用一把 `Mutex<Option<(PathBuf, File)>>` + 无缓冲 write_all」：
 // 调用方在锁内完成 `log_path()`（读配置锁）→ 建目录 → 打开文件 → `write_all`
@@ -183,7 +183,7 @@ fn note_drop(counter: &std::sync::atomic::AtomicU64) -> bool {
     counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0
 }
 
-/// 入队一行日志。**本函数永不阻塞**：这是 B5 的核心契约。
+/// 入队一行日志。**本函数永不阻塞**：这是核心契约。
 fn enqueue(line: String) {
     use std::sync::mpsc::TrySendError;
     match log_sender().try_send(line) {
@@ -268,8 +268,7 @@ pub fn flush_log() {
     }
 }
 
-/// 日志文件句柄缓存。**由写线程独占持有**，故不再需要任何锁
-/// （旧实现需要一把全进程共用的 Mutex，正是 B5 要消除的瓶颈）。
+/// 日志文件句柄缓存。**由写线程独占持有**，故不再需要任何锁。
 #[derive(Default)]
 struct LogSink {
     cached: Option<(std::path::PathBuf, std::fs::File)>,
@@ -317,7 +316,7 @@ fn write_log(msg: &str) {
 
 /// 判断 `name` 是否是**本应用产出的**日志文件名。
 ///
-/// 只认三种形态，其余一律不碰（P2-9）：
+/// 只认三种形态，其余一律不碰：
 /// - `debug_YYYYMMDD.log`：当前按天命名；
 /// - `debug_once_{pid}.log`：保留时长 = 「仅一次」时的命名（`{pid}` 为**纯数字**）；
 /// - `debug.log`：历史版本（迁移到 `logs/` 子目录前的根目录命名）。
@@ -463,7 +462,7 @@ pub fn clean_old_logs() {
     let retention = crate::config::with_config(|c| c.log_retention);
 
     // 根目录遗留：旧版本把日志写在 exe 根目录，这里无条件清除，避免根目录杂乱。
-    // 自 B5 起 `log_path()` 恒指向 `logs/`，故根目录不可能存在活动日志，无需探测。
+    // `log_path()` 恒指向 `logs/`，故根目录不可能存在活动日志，无需探测。
     remove_legacy_root_logs();
 
     let current_name = log_path().file_name().map(|n| n.to_owned());
@@ -476,7 +475,7 @@ pub fn clean_old_logs() {
 /// 清除可写根目录下旧版本遗留的 debug*.log（迁移至 logs/ 前的历史文件）
 ///
 /// 与 `clean_old_logs` 用同一套 `is_managed_log_name` 判定：根目录那种
-/// 「`debug` 开头 + `.log` 结尾」的宽匹配同样会误删用户的文件（P2-9）。
+/// 「`debug` 开头 + `.log` 结尾」的宽匹配同样会误删用户的文件。
 fn remove_legacy_root_logs() {
     if let Ok(entries) = std::fs::read_dir(writable_root()) {
         for entry in entries.flatten() {
@@ -485,7 +484,7 @@ fn remove_legacy_root_logs() {
             if is_managed_log_name(&name_str)
                 && entry.file_type().map(|t| t.is_file()).unwrap_or(false)
             {
-                // 失败记 verbose 级，与 `clean_old_logs` 对同类操作的处理保持一致（P3-7）。
+                // 失败记 verbose 级，与 `clean_old_logs` 对同类操作的处理保持一致。
                 // 清理失败不算状态不一致（下次启动会重试），但完全静默会让
                 // 「根目录日志删不掉」无从归因。
                 if let Err(e) = std::fs::remove_file(entry.path()) {
@@ -683,17 +682,17 @@ pub fn open_settings_page(page: &str) {
 
 /// 退出已启动标志。置位后进程必然在秒级内终止。
 ///
-/// ⛔ 置位后，**后台线程不得再向主线程事件泵投递**（`emit` / `run_on_main_thread`）：
+/// ✗ 置位后，**后台线程不得再向主线程事件泵投递**（`emit` / `run_on_main_thread`）：
 ///   一切自发投递的调用点都必须先查 [`is_exiting`] 早退。
-/// ⭐ 依据：tao 收到系统关机的 `WM_ENDSESSION` 时只把事件循环标为 `Destroyed`、
+/// ✓ 依据：tao 收到系统关机的 `WM_ENDSESSION` 时只把事件循环标为 `Destroyed`、
 ///   **不置退出码**（tao-0.35.3 event_loop.rs），主线程泵继续跑到系统杀进程为止；
 ///   期间任何代理事件 / `WM_PAINT` 都会推进 tao 状态机，命中
 ///   `(Destroyed, _) => panic!("cannot move state from Destroyed")`（runner.rs:371）。
 ///   现场取证与定性 → Wiki 07 §15。
-/// ⭐ 因此除闸门外还有第二道防线 [`install_session_watch_window`]：收到 ENDSESSION
+/// ✓ 因此除闸门外还有第二道防线 [`install_session_watch_window`]：收到 ENDSESSION
 ///   主动 flush + 退出，让泵尽快停转——闸门只挡我方投递，挡不住 tao 在 Destroyed 后
 ///   消化残留消息。
-/// ⚠️ 终态标志、**无**自愈兜底（不适用「全局标志需超时自愈」那条纪律）：
+/// ⚠ 终态标志、**无**自愈兜底（不适用「全局标志需超时自愈」那条纪律）：
 ///   三个置位点（ENDSESSION / ExitRequested / watchdog 自愈）之后进程都必然退出，
 ///   不存在「置位后长期运行」态；若加自愈反而会在退出过程中重新放行投递。
 static EXITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -710,8 +709,8 @@ pub fn is_exiting() -> bool {
 
 /// 关机/注销哨兵窗口：主线程（setup）建一次，消息由 tao 的主线程泵分发。
 ///
-/// ⛔ 必须是**顶层**窗口——`WM_ENDSESSION` 广播只送顶层窗口（HWND_MESSAGE 收不到）。
-/// ⛔ 收到 `WM_ENDSESSION`(wParam=TRUE) 必须 flush + 退出（判据见 [`EXITING`]）：
+/// ✗ 必须是**顶层**窗口——`WM_ENDSESSION` 广播只送顶层窗口（HWND_MESSAGE 收不到）。
+/// ✗ 收到 `WM_ENDSESSION`(wParam=TRUE) 必须 flush + 退出（判据见 [`EXITING`]）：
 ///   flush 放子线程（各自忙等 ≤2s，队列空则立即返回），wnd_proc 本身立即返回 0，
 ///   不阻塞系统向其余窗口继续广播。
 #[cfg(target_os = "windows")]
@@ -790,17 +789,17 @@ static CRASH_LOG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// 原生层未处理异常的崩溃过滤器：安装点在 main.rs setup。
 ///
-/// ⛔ 过滤器内**只许**直接系统调用与直写文件：不许走日志队列（写线程可能已死）、
+/// ✗ 过滤器内**只许**直接系统调用与直写文件：不许走日志队列（写线程可能已死）、
 ///   不许碰任何锁（崩溃线程可能正持着 audio/config/taskbar 的锁，等锁 = 取证
 ///   线程自己挂死，最后什么都不剩）。
-/// ⭐ 依据：本仓 release 为 `panic = "abort"`，Rust panic 走 `__fastfail` **绕过**
+/// ✓ 依据：本仓 release 为 `panic = "abort"`，Rust panic 走 `__fastfail` **绕过**
 ///   SEH 过滤器（panic 已由既有钩子写 panic_*.txt）；能到达这里的只有原生
 ///   硬异常（AV / 非法指令等）——正是用户侧「无 panic 文件的闪退」缺的那块证据。
-/// ⭐ 落盘顺序：先 txt（异常码 / 出错模块 / IP / 线程，最小必成），再 minidump
+/// ✓ 落盘顺序：先 txt（异常码 / 出错模块 / IP / 线程，最小必成），再 minidump
 ///   （尽力而为——堆若已损坏转储会失败，txt 仍在）。文件命名按 pid：一个进程
 ///   至多触发一次（返回后进程即终止），不会互相覆盖；`is_managed_log_name`
 ///   不含此命名 ⇒ 保留策略不清扫，与 panic_*.txt 同口径。
-/// ⭐ 返回 `EXCEPTION_CONTINUE_SEARCH`(0)：取证后交还系统默认流程（WER 照常），
+/// ✓ 返回 `EXCEPTION_CONTINUE_SEARCH`(0)：取证后交还系统默认流程（WER 照常），
 ///   对 WebView2 / 杀软回调等其它组件零干扰。
 #[cfg(target_os = "windows")]
 pub fn install_native_crash_capture() {
@@ -848,7 +847,7 @@ unsafe extern "system" fn native_crash_filter(
         tid,
         code as u32
     );
-    // ⛔ 匹配必须穷尽且不含 panic 路径——过滤器里任何 panic（=fastfail）都丢证据
+    // ✗ 匹配必须穷尽且不含 panic 路径——过滤器里任何 panic（=fastfail）都丢证据
     match (ip, module.as_ref()) {
         (Some(addr), Some((name, base, off))) => text.push_str(&format!(
             "IP=0x{addr:016X} 模块={name}\n基址=0x{base:016X} 偏移=0x{off:X}\n"
@@ -913,7 +912,7 @@ fn crash_ip(
 
 /// 在已加载模块表中定位地址：返回 (模块文件全路径, 基址, 偏移)。
 ///
-/// ⛔ 只按 EnumProcessModules + GetModuleInformation 的「基址 ≤ addr < 基址+镜像尺寸」
+/// ✗ 只按 EnumProcessModules + GetModuleInformation 的「基址 ≤ addr < 基址+镜像尺寸」
 ///   区间判定，不猜；返回 None 表示地址不在任何已加载模块内。
 #[cfg(target_os = "windows")]
 fn module_for_address(addr: usize) -> Option<(String, usize, usize)> {
@@ -1064,7 +1063,7 @@ mod tests {
         assert!(is_managed_log_name("debug_once_12345.log"), "仅一次模式");
         assert!(is_managed_log_name("debug.log"), "历史根目录命名");
 
-        // 用户自己放进 logs/ 的文件 —— 这是 P2-9 的核心：修复前会被删掉
+        // 用户自己放进 logs/ 的文件 —— 判据核心：这类文件任何策略下都不得删除
         assert!(
             !is_managed_log_name("debug_user.log"),
             "不应动用户的 debug_* 文件"
@@ -1263,7 +1262,7 @@ mod tests {
     ///
     /// 走 `enqueue` 而非 `append_log`，是为了绕开日志级别开关
     /// （`LOG_LEVEL` 是 `config.rs` 的私有静态量，单测里没有初始化配置的入口），
-    /// 直接验证 B5 新增的那条链路本身。
+    /// 直接验证这条链路本身。
     ///
     /// 本用例的判别力在于「写线程确实启动、确实把队列落到 `log_path()`、
     /// `flush_log` 确实能等到排空」——它抓不住「flush 提前返回」这类竞态
@@ -1342,7 +1341,7 @@ mod tests {
         // 两个都该被删的文件：一个被持有（模拟另一实例的活动日志），一个无人持有
         let held = dir.join("debug_once_4242.log");
         let idle = dir.join("debug_once_4243.log");
-        // 用户的文件：任何策略下都不该被碰（P2-9 在新代码路径上的回归）
+        // 用户的文件：任何策略下都不该被碰（在新代码路径上的回归）
         let user = dir.join("debug_user.log");
 
         let mut holder = std::fs::OpenOptions::new()
@@ -1361,7 +1360,7 @@ mod tests {
         // 而不是停在「计数不对」这种间接信号上。
         assert!(
             held.exists(),
-            "★ 被另一写入者持有的日志不得被删除（修复前此处会红）"
+            "✗ 被另一写入者持有的日志不得被删除（修复前此处会红）"
         );
         assert!(
             !idle.exists(),
@@ -1400,7 +1399,7 @@ mod tests {
             today,
         );
 
-        assert!(held.exists(), "★ 被持有的跨天日志不得被删除");
+        assert!(held.exists(), "✗ 被持有的跨天日志不得被删除");
         assert_eq!(out.in_use, 1, "昨天的活动日志应被探测挡住");
         assert_eq!(out.deleted, 0, "不该删掉任何被持有的文件");
 
@@ -1431,7 +1430,7 @@ mod tests {
 
         assert_eq!(out.deleted, 0, "当前日志不得被删");
         assert!(out.in_use == 0, "它没被占用，不该计入 in_use");
-        assert!(current.exists(), "★ 按文件名排除失效时此处会红");
+        assert!(current.exists(), "✗ 按文件名排除失效时此处会红");
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1440,7 +1439,7 @@ mod tests {
     /// 回填的「基址+偏移」必须还原原地址，模块名必须是本测试可执行文件；
     /// 乱地址必须判 None。
     ///
-    /// ⛔ 这是过滤器取证质量的下限——若此处拿不到本 exe，用户机器上同样
+    /// ✗ 这是过滤器取证质量的下限——若此处拿不到本 exe，用户机器上同样
     ///   拿不到任何出错模块。
     #[cfg(target_os = "windows")]
     #[test]
@@ -1469,7 +1468,7 @@ mod tests {
     /// 活体验证正例（`cargo test native_capture_writes -- --ignored --nocapture`）：
     /// 装上过滤器后触发**真实**原生 AV，进程随之终止，但必须先落盘取证文件。
     ///
-    /// ⛔ 必须独立进程运行（与其它 ignored 测试合跑会因 CRASH_LOG_DIR 已被占用而
+    /// ✗ 必须独立进程运行（与其它 ignored 测试合跑会因 CRASH_LOG_DIR 已被占用而
     ///   跳过）——过滤器是进程级的，无法按测试隔离。
     /// 依据：null 写入 = 0xC0000005，IP 落在本测试 exe 内 ⇒ 模块定位应命中本 exe。
     /// 配套验收脚本：`node tools/local/verify-native-crash-capture.mjs`（负例在此

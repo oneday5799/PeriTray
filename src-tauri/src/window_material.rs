@@ -34,7 +34,7 @@ mod material {
 
     /// SetWindowCompositionAttribute 第二实参是**属性数据**结构：Attrib 必须为
     /// WCA_ACCENT_POLICY，pvData 指向 ACCENT_POLICY，cbData = 策略字节数。
-    /// ⛔ 不得把 ACCENT_POLICY 裸指针直接当第二实参——按属性数据布局解读得
+    /// ✗ 不得把 ACCENT_POLICY 裸指针直接当第二实参——按属性数据布局解读得
     /// Attrib = accent_state（4 ≠ 0x13）、cbData = gradient_color（≈16MB）⇒
     /// 调用静默无效；返回 BOOL，**非零**才是成功（0 = 失败）。
     #[repr(C)]
@@ -62,7 +62,7 @@ mod material {
 
     fn get_set_window_composition() -> Option<SetWindowCompositionAttrFn> {
         *SET_WINDOW_COMPOSITION.get_or_init(|| unsafe {
-            // ⚠️ 用 windows-sys 的 `s!`，不要改成 `c"user32.dll".as_ptr()`：
+            // ⚠ 用 windows-sys 的 `s!`，不要改成 `c"user32.dll".as_ptr()`：
             // `CStr::as_ptr()` 给 `*const i8`，而 `PCSTR` 是 `*const u8` ⇒ 直接传会 `E0308`。
             // `s!` 展开即 `concat!($s, '\0').as_ptr()`，类型天然是 `PCSTR`，NUL 也由编译器保证。
             let user32 = windows_sys::Win32::System::LibraryLoader::LoadLibraryA(windows_sys::s!(
@@ -104,7 +104,7 @@ mod material {
     /// （WebView2）的合成会出条纹/白块伪影（客户区磨砂被不透明白底和乱纹
     /// 打断）；满窗 region 后磨砂铺满客户区。依据：Server 20348 裸宿主
     /// A/B 实测（空 region=通道混叠条纹，满 region=磨砂正确虚化背景）。
-    /// ⭐ 必须在 accent 挂上之前调用（先 region 后 accent 的顺序与探针
+    /// ✓ 必须在 accent 挂上之前调用（先 region 后 accent 的顺序与探针
     /// 一致）。位置：唯一实现点（仅 set_acrylic 调用）。
     unsafe fn set_full_region_blur_behind(hwnd: isize) {
         let mut rect = windows_sys::Win32::Foundation::RECT {
@@ -148,7 +148,7 @@ mod material {
     }
 
     /// DWM 玻璃框全幅延伸进客户区（margins 全 -1）。仅 Win11 背景板路径使用
-    /// （文档要求）。⛔ Win10 SWCA 路径不得用全幅——玻璃片盖住客户区后
+    /// （文档要求）。✗ Win10 SWCA 路径不得用全幅——玻璃片盖住客户区后
     /// WebView2 子窗口的透明 alpha 隔着玻璃片合成，客户区磨砂消失、只剩 NC
     /// 环磨砂（真机实测）；无框窗调它还会在客户区四周描白圈。
     unsafe fn extend_frame_all_glass(hwnd: isize) {
@@ -204,7 +204,7 @@ mod material {
             if hr2 == 0 {
                 return true;
             }
-            // ⛔ mica 在 Win10（build < 22000）两处 DWM 调用必败：到此返回
+            // ✗ mica 在 Win10（build < 22000）两处 DWM 调用必败：到此返回
             // false 会让「推荐」进入未定义态——前端 data-material 已置透明、
             // DWM 层却残留旧值（默认→推荐=透出桌面 / 亚克力→推荐=观感错乱，
             // 真机实测）。「推荐」的语义是本系统最佳可用磨砂 ⇒ fallback 到
@@ -213,7 +213,7 @@ mod material {
         }
 
         if effective == "acrylic" {
-            // ⛔ 两窗均已无框（settings 已废除原生标题栏，网页自绘）：SWCA 路径
+            // ✗ 两窗均已无框（settings 已废除原生标题栏，网页自绘）：SWCA 路径
             // 零 extend-frame——无框窗调任何玻璃片形态，DWM 都会以为存在边框
             // 而描圈/盖磨砂（真机实测）。钉死单测：swca_frameless_paths_skip_extend。
             return set_acrylic(hwnd);
@@ -280,7 +280,7 @@ mod material {
             assert_eq!(std::mem::offset_of!(AccentPolicy, gradient_color), 8);
         }
 
-        /// ⛔⛔ **调用点钉死**：SWCA 实参必须是「属性数据包裹 ACCENT_POLICY」结构
+        /// ✗ **调用点钉死**：SWCA 实参必须是「属性数据包裹 ACCENT_POLICY」结构
         ///   （attrib = WCA_ACCENT_POLICY），返回按 BOOL 判（非零 = 成功）。亚克力
         ///   渲染无单测可看 ⇒ 只能钉调用点文本（判据切片先剔掉本函数自身，防
         ///   「断言字符串自己命中」）。
@@ -307,11 +307,11 @@ mod material {
             );
             assert!(
                 !body.contains("&policy) == 0"),
-                "⛔ 不得退回「裸 AccentPolicy 直传 + `== 0` 反判」的形态"
+                "✗ 不得退回「裸 AccentPolicy 直传 + `== 0` 反判」的形态"
             );
         }
 
-        /// ⛔ **调用点钉死**：两窗均已无框（settings 已废除原生标题栏，网页自绘），
+        /// ✗ **调用点钉死**：两窗均已无框（settings 已废除原生标题栏，网页自绘），
         ///   SWCA 降级路径必须零玻璃片——无框窗调任何 DwmExtendFrameIntoClientArea
         ///   形态，DWM 都会以为存在边框而描圈/盖磨砂（真机实测）。
         /// 可证伪：SWCA 路径重新出现玻璃片调用或 decorated 分流 ⇒ 转红。
@@ -324,11 +324,11 @@ mod material {
             let body = &src[..fn_start];
             assert!(
                 !body.contains("extend_frame_nc_only"),
-                "⛔ NC-only 玻璃片已随有框窗退役，不得复活"
+                "✗ NC-only 玻璃片已随有框窗退役，不得复活"
             );
             assert!(
                 !body.contains("if decorated"),
-                "⛔ decorated 分流已随无框化退役，不得复活"
+                "✗ decorated 分流已随无框化退役，不得复活"
             );
             // extend_frame_all_glass 只许出现在 Win11 背景板路径（hr == 0 分支）：
             // 从 acrylic 分支起（SWCA 降级段）不得再有任何 extend-frame 形态

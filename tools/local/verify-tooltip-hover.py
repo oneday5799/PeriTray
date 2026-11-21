@@ -1,7 +1,7 @@
 """端到端验收：逐个设备注入光标，断言 tooltip 的**索引**与**落位**都对。
 
-⚠️ 本脚本会**真的挪动光标**，开始前记录原位置，结束时交还。
-⚠️ 验收期间请**不要**动鼠标（否则读到的是你的移动，不是脚本的）。
+⚠ 本脚本会**真的挪动光标**，开始前记录原位置，结束时交还。
+⚠ 验收期间请**不要**动鼠标（否则读到的是你的移动，不是脚本的）。
 
 用法：verify-tooltip-hover.py <日志路径>
 """
@@ -55,7 +55,7 @@ def main():
             real = get_pos()
             got = show_for(i)
             if got is None:
-                print("[%d] ❌ 无落位记录（光标实际 %s）" % (i, real))
+                print("[%d] ✗ 无落位记录（光标实际 %s）" % (i, real))
                 ok.append(False)
                 continue
             bw, bh, wx, wy = got
@@ -66,14 +66,14 @@ def main():
             good = abs(act_cx - exp_cx) <= 2
             ok.append(good)
             print("[%d] %s 光标%s 气泡%d×%d 窗=(%d,%d) 中心%d 期望中心%d %s"
-                  % (i, "✅" if good else "❌", real, bw, bh, wx, wy,
+                  % (i, "✓" if good else "✗", real, bw, bh, wx, wy,
                      act_cx, exp_cx, "" if good else "← 落位错位"))
             time.sleep(0.3)
     finally:
         move(*orig)
         print("\n光标已交还 %s" % (get_pos(),))
     print("\n%s  %d/%d 通过"
-          % ("✅ 全部通过" if all(ok) else "❌ 有失败", sum(ok), len(ok)))
+          % ("✓ 全部通过" if all(ok) else "✗ 有失败", sum(ok), len(ok)))
     return 0 if all(ok) else 1
 
 

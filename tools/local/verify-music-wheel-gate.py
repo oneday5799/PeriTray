@@ -80,7 +80,7 @@ def main():
             check("应用启动", False)
             return
         txt = io_read(log)
-        # ⚠️ 取**最后一条**而不是第一条：应用刚启动时 SMTC 会话可能还没就绪
+        # ⚠ 取**最后一条**而不是第一条：应用刚启动时 SMTC 会话可能还没就绪
         # （第一轮显示 Devices），一两秒后才切到 Music。判据若 grep 第一条就会
         # 把「启动瞬间的过渡态」当成「音乐面板没起来」—— 我第一版就踩了这个。
         rows = re.findall(r"面板判据: 显示=(\S+)", txt)

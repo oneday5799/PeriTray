@@ -117,7 +117,7 @@ function initSpatialSoundSettings() {
 }
 
 // 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为设置页 config 单例）
-// ⭐ 「设备名 → 后端算好的 `core_name`」映射的**唯一发布点**。
+// ✓ 「设备名 → 后端算好的 `core_name`」映射的**唯一发布点**。
 //
 // 供 `settings-shortcut.js` 复用：那页的条目只有 `entry.name`（没有设备对象），
 // 而 `simplifyDeviceName` 不剥蓝牙后缀、与后端 `core_name` 不是一回事 ⇒ 直接
@@ -127,7 +127,7 @@ function publishCoreNames(devices) {
   window.__pmDeviceCoreNames = new Map((devices || []).map((d) => [d.name, d.core_name]));
 }
 
-// ⭐ 收**设备对象**：用后端算好的 `core_name` 做别名回退（见 common.js 同名函数注释）。
+// ✓ 收**设备对象**：用后端算好的 `core_name` 做别名回退（见 common.js 同名函数注释）。
 function fmtDevName(dev) {
   return window.formatDeviceName(
     dev.name, config.device_names || {}, config.simplify_device_names !== false, dev.core_name
@@ -159,7 +159,7 @@ function initForceMuteSettings() {
         .filter(dev => !hidden.includes(dev.name))
         .map(dev => ({
           key: dev.name,
-          // ⚠️ 传**原名**即可：`fmtDevName` 内部已做别名查找 + 简化（预解析会重复两次）。
+          // ⚠ 传**原名**即可：`fmtDevName` 内部已做别名查找 + 简化（预解析会重复两次）。
           label: fmtDevName(dev),
         })),
       checked: selected,
@@ -415,7 +415,7 @@ async function loadA2dpDevices({ refreshDevices = false } = {}) {
     if (!status.supported) {
       a2dpDeviceCache = [];
     } else if (refreshDevices || a2dpDeviceCache === null || !a2dpDeviceCache.length) {
-      // ⛔ 空缓存不算数：蓝牙栈就绪时序可能让单次枚举偶发为空，靠 `!length` 让
+      // ✗ 空缓存不算数：蓝牙栈就绪时序可能让单次枚举偶发为空，靠 `!length` 让
       //   后续每次加载都重拉，直到拿到非空列表；显式刷新（含展开/初始化）的
       //   空结果如实覆盖（用户主动要求以真实为准）。
       a2dpDeviceCache = await invoke("a2dp_get_devices");

@@ -68,14 +68,14 @@ def main() -> int:
     try:
         for i, (desc, old, new, test_name) in enumerate(INJECTIONS, 1):
             if original.count(old) != 1:
-                print(f"❌ 注入 {i} 的锚点不唯一（命中 {original.count(old)} 次）: {desc}")
+                print(f"✗ 注入 {i} 的锚点不唯一（命中 {original.count(old)} 次）: {desc}")
                 failures.append(desc)
                 continue
             SRC.write_text(original.replace(old, new), encoding="utf-8")
             out = run_test(test_name)
             # cargo test 失败时返回码非 0 且输出含 "FAILED"
             turned_red = "FAILED" in out or "test result: FAILED" in out
-            marker = "✅ 转红" if turned_red else "❌ 仍绿（用例失去区分力！）"
+            marker = "✓ 转红" if turned_red else "✗ 仍绿（用例失去区分力！）"
             print(f"{marker}  注入 {i}: {desc}\n          期望转红用例 = {test_name}")
             if not turned_red:
                 failures.append(desc)
@@ -89,9 +89,9 @@ def main() -> int:
         print(f"[还原] sha256[:16] = {digest(restored)}  一致={ok}")
 
     if failures:
-        print(f"\n⚠️ {len(failures)} 条注入未能使用例转红")
+        print(f"\n⚠ {len(failures)} 条注入未能使用例转红")
         return 1
-    print(f"\n✅ 全部 {len(INJECTIONS)} 条注入都使对应用例转红（用例有区分力）")
+    print(f"\n✓ 全部 {len(INJECTIONS)} 条注入都使对应用例转红（用例有区分力）")
     return 0
 
 

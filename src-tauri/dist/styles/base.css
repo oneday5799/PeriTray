@@ -214,7 +214,7 @@ html[data-material] .win-nav-left-panel {
 }
 
 html[data-material] .win-nav-top-bar {
-  /* ⛔ 不得透明：DWM 会在窗口**失焦重画**时于窗口顶合成不透明标题 band
+  /* ✗ 不得透明：DWM 会在窗口**失焦重画**时于窗口顶合成不透明标题 band
      （20348 上 NCRP / DWMWA_CAPTION_COLOR / 样式位 patch / accent 类型
      全部无法关闭——真机穷尽实证），透过透明像素露出。恒铺 0.97 不透明
      底衬遮盖是唯一稳定解；「聚焦透明、失焦瞬切底衬」的动态遮盖实测

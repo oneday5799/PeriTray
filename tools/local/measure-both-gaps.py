@@ -61,7 +61,7 @@ def taskbar_top():
 def visible_bottom(x0, x1, top, rows=60, ratio=0.6):
     """从任务栏上缘往上扫，找该水平范围内**最靠下**的「非任务栏」行。
 
-    ⛔⛔ **判据必须是相对的**，不能是「亮度 > 200」这种绝对阈值：
+    ✗ **判据必须是相对的**，不能是「亮度 > 200」这种绝对阈值：
     实测踩了两次假值 ——
       ① 绝对阈值 200：任务栏自身亮度就有 ~200~217（本机浅色任务栏）⇒
          把**任务栏**当窗口，报出「间距 1px」；
@@ -72,7 +72,7 @@ def visible_bottom(x0, x1, top, rows=60, ratio=0.6):
     at = lambda xx, yy: sum(buf[((yy * w + xx) * 4) + k] for k in range(3)) / 3
     rowavg = lambda yy: sum(at(xx, yy) for xx in range(w)) / w
     tb = rowavg(rows - 1)              # 最后一行就是任务栏
-    thr = tb + 25.0                    # ⭐ 相对阈值：明显亮于任务栏
+    thr = tb + 25.0                    # ✓ 相对阈值：明显亮于任务栏
     for yy in range(rows - 1, -1, -1):
         row = [at(xx, yy) for xx in range(w)]
         bright = sum(1 for v in row if v > thr)
@@ -91,7 +91,7 @@ def main():
     print()
     print("请先保证 tooltip 已显示（悬停设备上），且主窗口已打开。\n")
 
-    # tooltip：⛔ 只扫**气泡**的横向范围（窗口 +18px 阴影边距）
+    # tooltip：✗ 只扫**气泡**的横向范围（窗口 +18px 阴影边距）
     #   （扫整个 widget 宽度会命中壁纸，见 `visible_bottom` 的 ratio 说明）
     import re, os, glob
     logs = sorted(glob.glob("D:/Code/PeriTray/src-tauri/target/debug/logs/*.log"),

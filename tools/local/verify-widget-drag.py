@@ -1,6 +1,6 @@
 """任务栏 widget **拖拽**的真机验收（B3-A 里程碑 4）。
 
-⛔⛔ **为什么不用真实鼠标注入**（2026-09-25 本机实测，别再重复探索）：
+✗ **为什么不用真实鼠标注入**（2026-09-25 本机实测，别再重复探索）：
    本机（Win11 26100，session 1、窗口站 `WinSta0`、`SM_MOUSEPRESENT=1`）**无法注入鼠标**：
      · `SetCursorPos`         → 返回 **0**，`GetLastError` = 0，光标纹丝不动
      · `SetPhysicalCursorPos` → 返回 **0**
@@ -13,7 +13,7 @@
 
 判据（每条都可证伪）：
   P. **前提**：窗口存在 **且** 底衬的可观测后果与 `locked` 相符。
-     ⛔ 为什么用**行为**而不是解析日志里的 `locked=`：
+     ✗ 为什么用**行为**而不是解析日志里的 `locked=`：
         · 上一版把 `taskbar_position_locked = false` 追加到 config.toml **末尾**，
           而末尾落在 `[device_shortcuts."..."]` 表里 ⇒ TOML 裸键属于最近一个表头 ⇒
           **静默失效** ⇒ 应用一直用默认 `true` ⇒ 5 条判据假红；
@@ -51,7 +51,7 @@ CDP = r"D:\Code\PeriTray\tools\cdp-eval.mjs"
 
 # ── 临时注入：把「光标 x」的来源换成消息 lParam（带 nonce 隔离真实鼠标）──
 #
-# ⛔⛔ 为什么要 nonce：拖拽期间 `SetCapture` 生效 ⇒ **真实鼠标的任何移动**
+# ✗ 为什么要 nonce：拖拽期间 `SetCapture` 生效 ⇒ **真实鼠标的任何移动**
 #   都会变成投递到 widget 的 `WM_MOUSEMOVE`。本机是**有人在用的活会话**，
 #    实测因此把窗口拽到别处（`拖拽落位 rel_x=784`，而期望 1292）。
 #    ⇒ 测试消息用 `MAKELPARAM(x, 0x7FFF)` 打标（真实消息的客户区 y 不可能是 32767），
@@ -138,7 +138,7 @@ RESULTS = []
 
 def check(name, ok, detail=""):
     RESULTS.append((name, ok, detail))
-    print(f"  {'✅' if ok else '❌'} {name}" + (f"  —— {detail}" if detail else ""))
+    print(f"  {'✓' if ok else '✗'} {name}" + (f"  —— {detail}" if detail else ""))
 
 
 # ── 基础 ──────────────────────────────────────────────────────────
@@ -151,7 +151,7 @@ def log_text():
 def widget_hwnd():
     """直接按**类名**在任务栏下查 widget。
 
-    ⛔ 不解析日志里的 `mount report: hwnd=`：那串只在 `spawn_widget` 路径打，
+    ✗ 不解析日志里的 `mount report: hwnd=`：那串只在 `spawn_widget` 路径打，
        窗口也可能经 `apply_from_config` 挂载 ⇒ 会拿到**上一次实例的失效句柄**
        （实测表现为「日志里明明有 定位: 行，却 IsWindow()==0」）。
     """
@@ -220,7 +220,7 @@ def launch():
 def drop_config_line(key):
     """删掉 `key` 这一项（**必须能处理多行数组**）。
 
-    ⛔⛔ 只删 `key = ...` 那一行是不够的：应用把 `pinned_taskbar_devices` 写成
+    ✗ 只删 `key = ...` 那一行是不够的：应用把 `pinned_taskbar_devices` 写成
        ```
        pinned_taskbar_devices = [
            "c:...",
@@ -259,9 +259,9 @@ def drop_config_line(key):
 def set_config_line(key, line):
     """把 `key` 写成 **config.toml 的顶层键**。
 
-    ⛔⛔ 不能追加到文件末尾：TOML 里裸键属于**最近一个 `[table]` 头**。本仓 config.toml
+    ✗ 不能追加到文件末尾：TOML 里裸键属于**最近一个 `[table]` 头**。本仓 config.toml
        末尾是 `[device_shortcuts."{...}"]`，追加进去就变成那张表里的键 ⇒ **静默失效**。
-    ⛔ 也不能用 `txt.find("[")`：会命中 `hidden_devices = []` 里的方括号，
+    ✗ 也不能用 `txt.find("[")`：会命中 `hidden_devices = []` 里的方括号，
        把键插进一行中间（实测直接把配置写坏）。
     """
     txt = open(CFG, encoding="utf-8", errors="replace").read()
@@ -303,8 +303,8 @@ def post_drag(hwnd, x0, x1, steps=6):
     return ok
 
 
-# ⭐ 幂等勾选：只补**缺的**，绝不因为「已经勾了」而把它取消掉。
-#    ⛔ 上一版直接 toggle，一旦 `drop_config_line` 没删干净（多行数组只删首行 ⇒
+# ✓ 幂等勾选：只补**缺的**，绝不因为「已经勾了」而把它取消掉。
+#    ✗ 上一版直接 toggle，一旦 `drop_config_line` 没删干净（多行数组只删首行 ⇒
 #       TOML 解析失败 ⇒ 应用回落默认），toggle 就变成「取消固定」⇒ 窗口被拆掉。
 PIN = ("(async () => {"
        "  const inv = window.__TAURI__.core.invoke;"
@@ -328,7 +328,7 @@ PIN = ("(async () => {"
 def setup(locked, label, clear_custom=True):
     """写配置 → 启动 → 勾选设备 → **用行为断言前提**。返回 (proc, hwnd)。
 
-    ⚠️ `clear_custom=False`：步骤 F 会再调一次本函数，若那时清掉 `taskbar_custom_x`，
+    ⚠ `clear_custom=False`：步骤 F 会再调一次本函数，若那时清掉 `taskbar_custom_x`，
        步骤 D（重启保持）就无从校验了。
     """
     print(f"\n=== 启动（{label}，locked={locked}）===")
@@ -351,12 +351,12 @@ def setup(locked, label, clear_custom=True):
             time.sleep(0.5)
         if hwnd:
             break
-        print(f"  ⚠️ 第 {attempt + 1} 次仍未出现 widget，重试勾选…")
+        print(f"  ⚠ 第 {attempt + 1} 次仍未出现 widget，重试勾选…")
     time.sleep(2)
     if not hwnd:
         check(f"P 前提成立（{label}）", False, "30s 内未出现 widget 窗口")
         return proc, 0
-    # ⭐ 用**功能自身的可观测后果**断言前提：底衬在不在 = `locked` 有没有生效。
+    # ✓ 用**功能自身的可观测后果**断言前提：底衬在不在 = `locked` 有没有生效。
     hit, total = hittest(widget_rect(hwnd))
     rate = hit / max(1, total)
     if locked:
@@ -377,7 +377,7 @@ print(f"源文件 sha256[:16] = {base}")
 patched = original
 for desc, old, new in INJ:
     if patched.count(old) != 1:
-        print(f"⛔ 注入锚点不唯一/未命中（{patched.count(old)} 处）：{desc}")
+        print(f"✗ 注入锚点不唯一/未命中（{patched.count(old)} 处）：{desc}")
         sys.exit(2)
     patched = patched.replace(old, new, 1)
 SRC.write_text(patched, encoding="utf-8")
@@ -387,7 +387,7 @@ r = subprocess.run([CARGO, "build"], cwd=str(SRC.parent.parent),
 errs = [ln for ln in ((r.stdout or "") + (r.stderr or "")).splitlines()
         if ln.startswith("error") or "error[" in ln]
 if errs:
-    print("⛔ 构建失败：\n" + "\n".join(errs[:15]))
+    print("✗ 构建失败：\n" + "\n".join(errs[:15]))
     SRC.write_text(original, encoding="utf-8")
     sys.exit(2)
 
@@ -395,7 +395,7 @@ if errs:
 def restore():
     SRC.write_text(original, encoding="utf-8")
     now = hashlib.sha256(SRC.read_text(encoding="utf-8").encode()).hexdigest()[:16]
-    print(f"还原后 sha256[:16] = {now}  {'✅ 一致' if now == base else '⛔ 不一致'}")
+    print(f"还原后 sha256[:16] = {now}  {'✓ 一致' if now == base else '✗ 不一致'}")
     print("重新构建以恢复正式产物…")
     subprocess.run([CARGO, "build"], cwd=str(SRC.parent.parent), capture_output=True)
 
@@ -404,9 +404,9 @@ kill()
 shutil.copy2(CFG, CFG_BAK)
 
 proc, hwnd = setup(locked=False, label="解锁：可拖拽")
-mtime_before = os.path.getmtime(CFG)   # ⚠️ 必须在 setup 之后取：setup 自己也会写文件
+mtime_before = os.path.getmtime(CFG)   # ⚠ 必须在 setup 之后取：setup 自己也会写文件
 if not hwnd:
-    print("⛔ 找不到 widget —— 后续判据无法执行")
+    print("✗ 找不到 widget —— 后续判据无法执行")
     proc.terminate(); time.sleep(1); kill()
     shutil.copy2(CFG_BAK, CFG); restore()
     sys.exit(2)
@@ -464,8 +464,8 @@ print(f"  猛拖 -3000 ⇒ widget left = {r3[0]}, 任务栏 left = {tb4[0]}")
 check("E 左缘不越出任务栏（且贴住左缘）",
       r3[0] >= tb4[0] and r3[0] - tb4[0] <= 2, f"{r3[0]} vs {tb4[0]}")
 
-# ⭐ 最后落到一个**有辨识度的中间值**：步骤 D 要拿它证明「重启回到用户放下的地方」。
-#    ⛔ 若落点是 0（= `LAST_X` 的哨兵值）或恰好等于贴靠结果，D 就失去区分力。
+# ✓ 最后落到一个**有辨识度的中间值**：步骤 D 要拿它证明「重启回到用户放下的地方」。
+#    ✗ 若落点是 0（= `LAST_X` 的哨兵值）或恰好等于贴靠结果，D 就失去区分力。
 MID = 700
 post_drag(hwnd, CX0 - 3000, CX0 - 3000 + MID)
 r4 = widget_rect(hwnd)
@@ -479,7 +479,7 @@ print(f"  最终 taskbar_custom_x = {persisted}（实测父窗客户区 x = {mid
 check("E 最后一次落位也落盘了", persisted == str(mid_rel),
       f"配置 {persisted} vs 实测 {mid_rel}")
 
-# ⭐ 日志必须在**本实例还活着**时读：`log_retention = "once"` 会让每个实例新建
+# ✓ 日志必须在**本实例还活着**时读：`log_retention = "once"` 会让每个实例新建
 #    `debug_once_<pid>.log` 并**删掉其它日志** ⇒ 脚本最后再读，前面实例的日志早没了
 #    （上一版就是这样误判成「拖拽日志一条都没有」）。
 print("\n=== [widget] 拖拽日志（本实例）===")
@@ -539,4 +539,4 @@ print(f"结果：{len(RESULTS) - len(bad)}/{len(RESULTS)} 通过")
 if bad:
     print("失败项：" + "、".join(bad))
     sys.exit(1)
-print("✅ 全部通过")
+print("✓ 全部通过")

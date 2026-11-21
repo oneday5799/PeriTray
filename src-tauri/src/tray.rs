@@ -16,10 +16,10 @@ use crate::windows;
 
 static TRAY_ICON: OnceLock<Mutex<Option<TrayIcon<tauri::Wry>>>> = OnceLock::new();
 
-// ── B8：主线程分发 API 的薄包装 ──────────────────────────────────
+// ── 主线程分发 API 的薄包装 ──────────────────────────────────
 //
 // 下面 4 个函数是**唯一**允许直接调用托盘/菜单 setter 的地方。每个包装体内断言
-// 「当前线程未持有配置锁」——理由见 `config.rs` 的 B8 说明：这类 API 会**无超时地
+// 「当前线程未持有配置锁」——理由见 `config.rs` 的说明：这类 API 会**无超时地
 // 同步等主线程**，而主线程自身要取配置锁 ⇒ 持锁调用即构成 AB/BA 永久死锁
 // （整进程冻结，看门狗也救不回）。
 //
@@ -64,10 +64,10 @@ fn apply_menu(tray: &TrayIcon<tauri::Wry>, menu: Menu<tauri::Wry>) {
 
 /// 将查询结果写回设备缓存，返回是否发生变化（新旧列表比较）。
 fn apply_devices_cache(new_devices: Vec<crate::device::Device>) -> bool {
-    // P2-11：中毒时不再静默返回 false —— 那会让调用方认为「设备列表没变」，
+    // 中毒时不再静默返回 false —— 那会让调用方认为「设备列表没变」，
     // 于是 tooltip 与弹窗卡片此后再也不刷新（无日志的哑故障）。
     //
-    // ⭐：写入统一走 `state::store_devices_cache`，因为**只有它会盖时间戳**。
+    // ✓：写入统一走 `state::store_devices_cache`，因为**只有它会盖时间戳**。
     //   在这里直接 `*guard = …` 的话，列表被更新而 `at_ms` 仍是 `None`
     //   ⇒ 任务栏侧的 TTL 判据永远判成「没有可用缓存」⇒ 每轮都全量现查 WMI
     //   （现象与改之前**完全一样**，且更难发现：代码看着是对的）。
@@ -96,7 +96,7 @@ fn build_tooltip_text() -> String {
     config::with_config(|c| {
         for tray_name in &c.tray_devices {
             if let Some(dev) = devices.iter().find(|d| &d.name == tray_name) {
-                // ⭐ 走共享解析（短名优先 + 原名回退）：单键查找在「别名只存在于另一种
+                // ✓ 走共享解析（短名优先 + 原名回退）：单键查找在「别名只存在于另一种
                 //    形态键下」时取不到 ⇒ 托盘 tooltip 与别处显示不同名。
                 let display_name = config::resolve_device_name(&dev.name, c);
                 let dot = if dev.status == crate::wmi_query::BT_STATUS_CONNECTED {
@@ -181,7 +181,7 @@ fn start_device_watcher(app: &tauri::AppHandle) {
                 let _ = handle.emit("devices-changed", ());
             }
 
-            // 低电量通知检查（P2-7）
+            // 低电量通知检查
             //
             // 「锁内只收集、锁外再发通知」这条纪律**不在这里写花括号**：
             // 它由 `notify_low_battery` 的函数体承载（见该函数文档）。
@@ -222,7 +222,7 @@ fn pick_tray_icon() -> Image<'static> {
 
 /// 主题监视线程的循环体：把「注册通知 / 等待 / 读取当前值」编排成一个可测的逻辑单元。
 ///
-/// ⛔ ⛔ 次序必须是「**先注册通知、再读当前值**」。反序（先读后注册）留一个窗口：
+/// ✗ 次序必须是「**先注册通知、再读当前值**」。反序（先读后注册）留一个窗口：
 /// 系统恰好在「读完、注册前」切换主题 ⇒ 那次变更**不触发事件** ⇒ 托盘图标停在
 /// 旧主题，直到用户下次手动切。单次丢失看似无害，但它正是那种「偶发、难复现、
 /// 被归因成『图标有时不刷新』」的缺陷，而修复成本只是把两行换一下位置。
@@ -282,7 +282,7 @@ fn theme_watch_state_now() -> ThemeWatchState {
 ///   `taskbar_criterion_reads_system_theme` 用例转红。
 ///   这与 `ordered_register_then_read` 是同一手法（把契约变成函数，而非注释）。
 ///
-/// ⭐ 返回值语义 = 「系统主题确实变了，任务栏应重绘」。
+/// ✓ 返回值语义 = 「系统主题确实变了，任务栏应重绘」。
 #[cfg(target_os = "windows")]
 fn theme_changed_for_taskbar(state: &mut ThemeWatchState) -> bool {
     state.on_notify(taskbar_theme_reader())
@@ -290,7 +290,7 @@ fn theme_changed_for_taskbar(state: &mut ThemeWatchState) -> bool {
 
 /// 生产路径上「任务栏判据读取的到底是哪个主题」的**可断言投影**。
 ///
-/// ⭐ 把读取器当成返回值暴露出来，测试就能**不碰注册表**地验证
+/// ✓ 把读取器当成返回值暴露出来，测试就能**不碰注册表**地验证
 ///   「这里读的是系统主题，而不是应用主题」——直接断言行为实现不了这一点
 ///   （两个值在默认配置下恰好都是浅色，读哪个都「看起来正常」）。
 #[cfg(target_os = "windows")]
@@ -307,9 +307,9 @@ fn taskbar_theme_reader() -> fn() -> bool {
 /// ⇒ 若共用一个 `last`，切换系统主题时去重判据会读到**未变的应用主题**而返回 `false`，
 ///   任务栏**照样不重绘** —— 等于没修。
 ///
-/// ⚠️ 两者共用同一次注册表通知（同一把 key），不需要第二个 watcher 线程。
+/// ⚠ 两者共用同一次注册表通知（同一把 key），不需要第二个 watcher 线程。
 ///
-/// ⭐ 读取器经由 `taskbar_theme_reader()` 取得 —— **取值来源只有一处**，
+/// ✓ 读取器经由 `taskbar_theme_reader()` 取得 —— **取值来源只有一处**，
 ///   避免「初始状态读 A、判据读 B」这种分叉（分叉后测试仍可能全绿）。
 #[cfg(target_os = "windows")]
 fn system_theme_watch_state_now() -> ThemeWatchState {
@@ -318,7 +318,7 @@ fn system_theme_watch_state_now() -> ThemeWatchState {
 
 /// 主题监视的**启动次序**，抽出来是为了让「先注册、后读取」这件事可被断言。
 ///
-/// ── 为什么不能只靠注释保证（P3-11 验收教训）──────────────────────
+/// ── 为什么不能只靠注释保证（验收教训）──────────────────────
 /// 把次序只写在 `start_theme_watcher` 的字面顺序里，单测就只能断言
 /// 「局部变量的值」——把生产代码的次序**改回「先读后注册」后测试依然全绿**，
 /// 等于没测。真正能证伪的写法是把「调用哪个、按什么顺序」变成函数的返回值，
@@ -372,19 +372,19 @@ fn start_theme_watcher() {
                 return;
             }
 
-            // ── 次序：先注册，再读取（P3-11）──────────────────────────
+            // ── 次序：先注册，再读取──────────────────────────
             // 「注册」与「读取」之间无论发生什么都不会丢：
             //   · 变更在注册之前 → 首次读取拿到的是**新值**
             //   · 变更在注册之后 → 会触发事件，进入下面的循环再读一次
-            // ⛔ 读取**不得**放在注册之前：那样上面第一种情况会**静默丢失**。
+            // ✗ 读取**不得**放在注册之前：那样上面第一种情况会**静默丢失**。
             //
-            // ⚠️ 次序由 `ordered_register_then_read` 承载（单测断言它的调用序列）。
+            // ⚠ 次序由 `ordered_register_then_read` 承载（单测断言它的调用序列）。
             // 这里刻意调它而不是直接写两行 —— 直接写会让「次序」变成没人守的约定，
-            // 改错也没有任何测试会转红（P3-11 验收教训）。
+            // 改错也没有任何测试会转红（验收教训）。
             let mut registered = false;
             let mut state = ThemeWatchState { last: false };
             // ── 系统主题的独立去重状态（任务栏底衬用）─────────────────────
-            // ⛔ 不能复用 `state`：它跟踪的是**应用**主题，见
+            // ✗ 不能复用 `state`：它跟踪的是**应用**主题，见
             //    `system_theme_watch_state_now` 的注释（共用会导致任务栏漏判）。
             let mut sys_state = system_theme_watch_state_now();
             ordered_register_then_read(
@@ -407,7 +407,7 @@ fn start_theme_watcher() {
                     if state.on_notify(crate::windows::system_dark_mode) {
                         std::thread::spawn(update_tray_icon);
                     }
-                    // ⚠️ 系统主题走**独立**判据；任务栏重绘本身是异步投递，
+                    // ⚠ 系统主题走**独立**判据；任务栏重绘本身是异步投递，
                     //    不阻塞这个监听线程（`notify_system_theme_changed` 只置标志 + 投递）。
                     if theme_changed_for_taskbar(&mut sys_state) {
                         crate::taskbar_widget::notify_system_theme_changed();
@@ -421,7 +421,7 @@ fn start_theme_watcher() {
                 if state.on_notify(crate::windows::system_dark_mode) {
                     std::thread::spawn(update_tray_icon);
                 }
-                // 见上：系统主题独立判据 ⇒ 通知任务栏重绘（⛔ 只刷托盘图标是不够的：
+                // 见上：系统主题独立判据 ⇒ 通知任务栏重绘（✗ 只刷托盘图标是不够的：
                 // 任务栏要等到 hover 才会更新）。
                 if theme_changed_for_taskbar(&mut sys_state) {
                     crate::taskbar_widget::notify_system_theme_changed();
@@ -563,7 +563,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     if !device_id.is_empty() {
                         standard_log!("[tray] set_default_device: {}", device_id);
                         std::thread::spawn(move || {
-                            // 失败必须可见（P3-7）：菜单此刻已经关闭，用户会认为
+                            // 失败必须可见：菜单此刻已经关闭，用户会认为
                             // 「切换成功」，而实际默认设备没变 —— 这是「失败后状态与
                             // 用户操作不一致」的典型。本路径没有返回值可上报
                             // （托盘菜单事件没有调用方），只能记标准级日志。
@@ -750,10 +750,10 @@ fn update_tray_icon() {
 /// 注意：与 dedup::core_name 语义不同——本函数不剥协议后缀、返回 &str，两者勿互相替换。
 /// **音量侧**（音频端点）的显示名：**别名优先**，否则按「简化设备名称」开关。
 ///
-/// ⭐ 抽出来是因为这段判据在 `tray.rs`（音频菜单）与 `shortcut.rs`（切默认设备
+/// ✓ 抽出来是因为这段判据在 `tray.rs`（音频菜单）与 `shortcut.rs`（切默认设备
 ///   的热键通知）里是**逐字相同**的两份副本（P2）——副本必然漂移，
 ///   而漂移的后果是「同一个设备在托盘菜单和热键通知里名字不同」。
-/// ⚠️ 只用于**音量侧**：设备信息页/任务栏的默认名是物理设备名，不走简化。
+/// ⚠ 只用于**音量侧**：设备信息页/任务栏的默认名是物理设备名，不走简化。
 pub(crate) fn resolve_audio_display_name(raw_name: &str, c: &crate::config::Config) -> String {
     let aliased = crate::config::resolve_device_name(raw_name, c);
     if aliased != raw_name {
@@ -811,7 +811,7 @@ fn build_audio_devices_menu(
                 .filter(|device| !c.hidden_audio_devices.contains(&device.name))
                 .map(|device| {
                     let check = if device.is_default { " ✓" } else { "" };
-                    // ⭐ 别名优先，否则按「简化设备名称」开关（与音量页/设置页音量区同判据）
+                    // ✓ 别名优先，否则按「简化设备名称」开关（与音量页/设置页音量区同判据）
                     let display = resolve_audio_display_name(&device.name, c);
                     (
                         format!("audio_dev_{}", device.id),
@@ -830,7 +830,7 @@ fn build_audio_devices_menu(
     Ok(submenu)
 }
 
-/// 音频菜单重建的单飞标志 / 合并标志（B3）。
+/// 音频菜单重建的单飞标志 / 合并标志。
 ///
 /// 触发源有三个且都在**各自新开的线程**上：`config-changed`（一次连做
 /// 图标 + 菜单 + 设备缓存 + tooltip）、`tray-devices-changed`、
@@ -950,7 +950,7 @@ mod tests {
             assert!(!state.on_notify(|| false), "仍是浅色，不重复刷新");
         }
 
-        /// 核心回归（P3-11）：**注册发生在读取之前**，因此「注册前已切换的主题」
+        /// 核心回归：**注册发生在读取之前**，因此「注册前已切换的主题」
         /// 必须被首次 load 捕获，而不是被静默丢掉。
         ///
         /// 模拟：注册完成 → 系统在 load 之前切到深色 → load 读到深色。
@@ -988,10 +988,10 @@ mod tests {
         ///   且**不得**等于 `system_dark_mode`。
         ///   把读取器改成应用主题 ⇒ 本用例立刻转红。
         ///
-        /// ⚠️ 函数指针比较绕开了「两个值在默认配置下恰好相同」这个陷阱 ——
+        /// ⚠ 函数指针比较绕开了「两个值在默认配置下恰好相同」这个陷阱 ——
         ///   直接比较返回值在浅色+浅色的机器上永远通过，没有区分力。
         ///
-        /// ⚠️ 比较前先 `as *const ()` 再 `as usize`：裸 `fn as usize` 会触发
+        /// ⚠ 比较前先 `as *const ()` 再 `as usize`：裸 `fn as usize` 会触发
         ///   rustc lint `fn_to_int`（「direct cast of function item into an integer」），
         ///   而本仓警告闸门对 lints 零容忍。多一次中转即可，语义不变。
         #[test]
@@ -1017,8 +1017,8 @@ mod tests {
         ///
         /// 与上一条互补：上一条钉死「读哪个值」，本条钉死「变了要报 true」。
         ///
-        /// ⚠️ 这里直接构造 `ThemeWatchState` 并喂值，**不经 probe 包装函数**——
-        ///   ⛔ 别为此再加一个 `theme_changed_for_taskbar_probe` 之类的**只被测试调用**的包装：
+        /// ⚠ 这里直接构造 `ThemeWatchState` 并喂值，**不经 probe 包装函数**——
+        ///   ✗ 别为此再加一个 `theme_changed_for_taskbar_probe` 之类的**只被测试调用**的包装：
         ///   它会触发 `dead_code`（`#![warn(unused_imports, dead_code)]` 拦提交）。
         ///   而「变化→true」本就是 `ThemeWatchState` 自身的职责，直接用即可。
         #[test]
@@ -1075,7 +1075,7 @@ mod tests {
             );
         }
 
-        /// ★ 核心验收（P3-11）：断言**真实调用序列**是「先注册、后读取」。
+        /// 断言**真实调用序列**是「先注册、后读取」。
         ///
         /// 这是唯一能证伪「次序被改回去」的测试：把
         /// `ordered_register_then_read` 里两行交换，本用例立刻转红。

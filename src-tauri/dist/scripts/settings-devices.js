@@ -16,7 +16,7 @@ async function loadDevicesAsync() {
     deviceGroups = config.device_groups || {};
 
     // 设备列表 / 分组映射 / **别名表** 无变化时跳过 DOM 重建，避免闪烁。
-    // ⛔ 别名表必须算进 key：
+    // ✗ 别名表必须算进 key：
     //   渲染出来的文字来自 `getDisplayName(dev, config.device_names)`，
     //   而 key 里只有设备名与分组 ⇒ 改完名这三个都没变 ⇒ key 相同 ⇒ 直接
     //   `return`，DOM 留着**旧别名**。守卫本身是对的（防闪烁），只是漏了一个输入。
@@ -114,7 +114,7 @@ function renderGroups() {
 
       const nameEl = document.createElement("div");
       nameEl.className = "card-item-name";
-      // ⭐ 必须走 `getDisplayName`（别名两级查找）：此前直接写 `dev.name`，
+      // ✓ 必须走 `getDisplayName`（别名两级查找）：此前直接写 `dev.name`，
       //    导致**在弹出窗口改过名、设置页仍显示原名**——同一台设备两处名字不一致。
       //    `title` 一并给出别名，否则被省略号截断时无从查证。
       const shownName = getDisplayName(dev, config.device_names || {});
@@ -315,7 +315,7 @@ async function renderLowBatteryContent() {
       emptyText: "没有无线设备",
       items: wireless.map(dev => ({
         key: dev.name,
-        // ⚠️ 传**原名**即可：`fmtDevName` 内部已经做了别名查找 + 简化。
+        // ⚠ 传**原名**即可：`fmtDevName` 内部已经做了别名查找 + 简化。
         //    预先 `lookupDeviceAlias` 再传进去等于解析两次，别名里带括号时
         //    还会被 `simplifyDeviceName` 再削一次。
         label: fmtDevName(dev.name),

@@ -8,7 +8,7 @@
 · 阴影          气泡**上方**必须有羽化像素（`DropShadowEffect Direction=270`）
 · 与任务栏间距  = 6~8px
 
-⛔ 两个**量脚本自身**的坑（都曾导致假结论，别再踩）：
+✗ 两个**量脚本自身**的坑（都曾导致假结论，别再踩）：
 1. 必须在**窗口矩形内**取样：桌面壁纸里存在与气泡底色**完全相同**的 #F9F9F9。
 2. `gray()` 已经返回 0..255 的**均值**，阈值必须按 0..255 写。
    初版写成 `sum3 < 560` ⇒ 恒成立 ⇒ 「文本」= 整个气泡（2288 px），
@@ -132,7 +132,7 @@ def main():
               % (len(sh), max(ys) - min(ys) + 1,
                  min(gray(a, b) for a, b in sh), "OK 羽化" if good else "过弱"))
     else:
-        print("[5] 上方阴影    0 px  ❌ 缺失")
+        print("[5] 上方阴影    0 px  ✗ 缺失")
 
     gap = TASKBAR_TOP - (OY + B + 1)
     good = 5 <= gap <= 9
@@ -141,7 +141,7 @@ def main():
           % (gap, "OK" if good else "偏离"))
 
     print("\n%s  %d/%d 项通过"
-          % ("✅ 全部通过" if all(ok) else "❌ 有偏离", sum(ok), len(ok)))
+          % ("✓ 全部通过" if all(ok) else "✗ 有偏离", sum(ok), len(ok)))
 
 
 if __name__ == "__main__":

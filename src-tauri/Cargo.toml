@@ -59,7 +59,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     # HiDpi：widget 的布局标称值按 DIP 定义，需 GetDpiForWindow(任务栏) 换算物理像素。
-    # ⛔ 别删：漏了它 = 布局按 100% 画，125% 缩放下底衬比 FluentFlyout 矮 10px。
+    # ✗ 别删：漏了它 = 布局按 100% 画，125% 缩放下底衬比 FluentFlyout 矮 10px。
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -77,10 +77,10 @@ features = [
     "Data_Xml_Dom",
     "Foundation_Collections",
     # SMTC（音乐控制组件）：GlobalSystemMediaTransportControlsSessionManager。
-    # ⚠️ 少了它 = 整个 taskbar_music 模块编译不过（类型不存在）。
+    # ⚠ 少了它 = 整个 taskbar_music 模块编译不过（类型不存在）。
     "Media_Control",
     # A2DP Sink（蓝牙音频接收）：AudioPlaybackConnection 全套类型。
-    # ⛔ 少了它 = 整个 a2dp_sink 模块编译不过（类型不存在）。
+    # ✗ 少了它 = 整个 a2dp_sink 模块编译不过（类型不存在）。
     "Media_Audio",
     # ApiInformation（Windows.Foundation.Metadata）：A2DP Sink 的系统支持检测
     # （Win10 2004 前无 AudioPlaybackConnection 类型，须运行时探测）。
@@ -100,10 +100,10 @@ features = [
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     # UIA：`taskbar_layout` 的「占用区探针」（自适应位置）要读任务栏上各按钮的
-    # 包围盒。⛔ 少了它 = 该模块编译不过（IUIAutomation 类型不存在）。
+    # 包围盒。✗ 少了它 = 该模块编译不过（IUIAutomation 类型不存在）。
     "Win32_UI_Accessibility",
     # `VARIANT`（构造 UIA 属性条件用）的类型定义被 `Win32_System_Ole` 门控，
-    # ⛔ 少了它 = `VARIANT_0_0.vt` 等字段不存在，属性条件构造不出来。
+    # ✗ 少了它 = `VARIANT_0_0.vt` 等字段不存在，属性条件构造不出来。
     "Win32_System_Ole",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
@@ -112,7 +112,7 @@ features = [
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-# ⛔ 本地 fork 替换（根治 DWM 标题带）：tao 上游给无框顶层窗无条件强制
+# ✗ 本地 fork 替换（根治 DWM 标题带）：tao 上游给无框顶层窗无条件强制
 #   WS_CAPTION|WS_SYSMENU（window_state.rs to_window_styles），DWM 因此在
 #   窗口整个生命周期持有 caption 渲染缓存，失焦重画标题 band 且
 #   NCRP / DWMWA_CAPTION_COLOR（20348 不支持）均无法关闭。fork 改两处：

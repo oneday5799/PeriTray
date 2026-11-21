@@ -41,7 +41,7 @@ pub fn show_toast(title: &str, text: &str, icon: Option<&std::path::Path>) {
 
         // 隐藏旧通知（使用 lock_unpoisoned 防止 mutex 中毒 panic）。
         //
-        // ⚠️ `take()` 的结果必须先落到**独立语句**再进 `if let`。本仓是
+        // ⚠ `take()` 的结果必须先落到**独立语句**再进 `if let`。本仓是
         // edition 2021，`if let` 的临时量存活到整个 `if` 块结束，若写成
         // `if let Some(prev) = lock(..).take() { notifier.Hide(&prev) }`，
         // 则 `notifier.Hide(..)`（WinRT/COM 调用）会在**持锁状态下**执行。

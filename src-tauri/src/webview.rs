@@ -87,9 +87,9 @@ pub fn ensure_webview_bg_transparent(webview: &tauri::Webview) {
 //   系统睡眠时 COM 不活跃，不阻塞事件循环（仅针对**休眠唤醒**这一类）。
 // popup 打开前 / 唤醒后：Resume + IsVisible(TRUE) → 恢复渲染。
 //
-// ⚠️ 范围限定：上面这条**不是**「运行期窗口冻结」的解释。
+// ⚠ 范围限定：上面这条**不是**「运行期窗口冻结」的解释。
 //   实测（`AppHangTransient` / 退出码 `0xcfffffff`）证明那次冻结的根因是
-//   **锁序死锁（P0-4）**——子线程持配置锁调菜单 API（`run_item_main_thread!` =
+//   **锁序死锁**——子线程持配置锁调菜单 API（`run_item_main_thread!` =
 //   无超时 `rx.recv()`）⇄ 主线程等同一把配置锁 ⇒ 永久互等，与 WebView2 挂起态、
 //   DWM、GPU、杀软沙箱**全部无关**。遇到「窗口完全无响应」请**先查锁序**
 //   （登记表见 `state.rs` 模块文档），不要停在「挂起态」这个方向上。
@@ -152,7 +152,7 @@ mod try_suspend_cb {
         out: *mut *mut core::ffi::c_void,
     ) -> i32 {
         // COM 契约：QI 必须让 IID_IUnknown 成功（返回同一对象并 AddRef）。
-        // ⛔ 不得对所有 IID 一律返回 E_NOINTERFACE（连 IUnknown 也不例外）：那是**非合规对象**。
+        // ✗ 不得对所有 IID 一律返回 E_NOINTERFACE（连 IUnknown 也不例外）：那是**非合规对象**。
         unsafe {
             if !iid.is_null() && guid_eq(&*iid, &windows_sys::core::IID_IUnknown) {
                 add_ref(this);
@@ -184,7 +184,7 @@ mod try_suspend_cb {
     }
 
     unsafe extern "system" fn invoke(_this: *mut Obj, error_code: i32, is_successful: i32) -> i32 {
-        // ⛔ 不得在此释放：runtime 可能以借裸指针的方式调用本回调，Invoke 返回后
+        // ✗ 不得在此释放：runtime 可能以借裸指针的方式调用本回调，Invoke 返回后
         //    还会继续使用对象；释放即 UAF。对象与进程同寿命（见模块头注释）。
         standard_log!(
             "[webview] TrySuspend completed: hr=0x{:08X} success={}",
@@ -213,7 +213,7 @@ mod try_suspend_cb {
         Box::into_raw(obj) as *mut core::ffi::c_void
     }
 
-    /// 释放调用方持有的那一份引用。⛔ 仅限「异步操作不存在」的调用点
+    /// 释放调用方持有的那一份引用。✗ 仅限「异步操作不存在」的调用点
     /// （`TrySuspend` 同步返回 Err / `from_raw_borrowed` 失败）：此时 runtime
     /// 必然未接管，调用方那份是唯一引用；成功路径禁止调用（存活期约定见模块头注释）。
     ///

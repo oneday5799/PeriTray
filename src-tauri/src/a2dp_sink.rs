@@ -10,7 +10,7 @@
 //!    TraceLogging provider，二次注册直接 `__fastfail`（AudioPlaybackConnector
 //!    实测）。因此本模块为**单连接模型**——同一时刻至多持有一条连接，
 //!    换设备先释放旧对象。进程内「释放→重建」序列经 BlueAudioSink 生产验证安全。
-//! 3. ⛔ **连接对象复用纪律**（BlueAudioSink 实测结论，违反会形成 2~8s 一次的
+//! 3. ✗ **连接对象复用纪律**（BlueAudioSink 实测结论，违反会形成 2~8s 一次的
 //!    「拆-建」循环，持续搞乱手机侧 A2DP 链路导致每次都立刻失败）：
 //!    - OpenAsync 返回非 Success、稳定观察未达 Opened ⇒ **复用**原对象退避重试；
 //!    - OpenAsync 超时被 Cancel、武装（StartAsync）失败、StateChanged=Closed
@@ -171,7 +171,7 @@ fn set_snapshot(mutate: impl FnOnce(&mut A2dpStatus)) {
 
 /// 语义化设置状态行；内容与快照完全一致时**不**重复推送（step 每秒采样，
 /// 不去重会让弹窗/设置页每秒无意义重渲染一次）。
-/// ⛔ 判重必须挡在 emit **之前**：`set_snapshot` 是「写后必推」语义，把判重
+/// ✗ 判重必须挡在 emit **之前**：`set_snapshot` 是「写后必推」语义，把判重
 /// 塞进 mutate 闭包只会跳过字段写入、拦不住 publish。
 fn set_detail(state: A2dpState, detail: &str, hint: &str) {
     {
@@ -192,7 +192,7 @@ fn supported() -> bool {
 
 // ── 控制器状态机 ────────────────────────────────────────────────────────
 
-/// 控制器线程本有的状态机变量（⛔ 跨线程共享一律经 `SNAPSHOT`，不许加第二份）。
+/// 控制器线程本有的状态机变量（✗ 跨线程共享一律经 `SNAPSHOT`，不许加第二份）。
 #[derive(Default)]
 struct Machine {
     /// 用户意图：连接中/保持连接。false 时 fail/断链一律落 Idle 不再重试
@@ -259,10 +259,10 @@ enum OpOutcome {
 }
 
 /// 等待武装动作完成：以 [`WAIT_POLL`] 步进轮询 helper 结果，间隙查打断——
-/// ⛔ 用户断开必须即时生效，不能等 arm 自然超时（最长 8s 内 UI 已确认断开、
+/// ✗ 用户断开必须即时生效，不能等 arm 自然超时（最长 8s 内 UI 已确认断开、
 /// 后端却还在武装）。超时必须 Cancel：不取消的话后台 join 线程会一直
 /// 持有操作对象，且下一次 Start 会与系统侧未完成的协商相撞。
-/// ⚠️ WinRT 异步类型在 `windows_future` crate，`windows` crate 不 re-export
+/// ⚠ WinRT 异步类型在 `windows_future` crate，`windows` crate 不 re-export
 /// （taskbar_music 同款口径）。
 fn wait_arm(
     m: &mut Machine,
@@ -435,7 +435,7 @@ fn fail(m: &mut Machine, code: &str, msg: &str, keep_conn: bool, fatal: bool) {
     }
 
     // 重试耗尽 / 用户已取消意图 / 关了自动重试 / 致命失败：转待机，
-    // 把发起权交还手机与 Windows（⛔ 不死循环重连，避免留下僵死链路）
+    // 把发起权交还手机与 Windows（✗ 不死循环重连，避免留下僵死链路）
     if keep_conn {
         m.drop_conn(code);
     }
@@ -468,7 +468,7 @@ fn fail(m: &mut Machine, code: &str, msg: &str, keep_conn: bool, fatal: bool) {
 /// 连接流程等待间隙的打断检查，返回「是否已打断」。打断路径经 on_disconnect
 /// 落 Idle，调用方静默返回（状态已落，不得再走 [`fail`]）。
 fn abort_if_disconnected(rx: &Receiver<Msg>, m: &mut Machine) -> bool {
-    // 抽干通道——⛔ 只有 `Disconnect` 立即生效（落 Idle 并拆连接）；其余消息
+    // 抽干通道——✗ 只有 `Disconnect` 立即生效（落 Idle 并拆连接）；其余消息
     // 暂存 `pending_msgs` 由主循环按原序回灌，不能丢（连接中点另一台设备 =
     // 换目标，吞掉就是吞请求）。已打断时 pending 里的积压请求一并作废：
     // 用户最后的动作是断开，回灌更早的 Connect 会覆盖最新意图；打断后的
@@ -533,7 +533,7 @@ fn connect_internal(m: &mut Machine, rx: &Receiver<Msg>) {
     m.reuse_conn = true;
 
     // StateChanged → 只投递消息（回调在任意线程触发，不碰共享状态）。
-    // ⛔ 仅 fresh 时挂一次：复用对象已带订阅，重复挂会导致 LinkClosed 多投。
+    // ✗ 仅 fresh 时挂一次：复用对象已带订阅，重复挂会导致 LinkClosed 多投。
     if fresh {
         if let Some(tx) = A2DP_TX.get().cloned() {
             let handler = windows::Foundation::TypedEventHandler::<
@@ -558,13 +558,13 @@ fn connect_internal(m: &mut Machine, rx: &Receiver<Msg>) {
         }
     }
 
-    // ⛔ 先查打断再武装：武装一旦开始，Cancel 只能在 wait 循环内生效，
+    // ✗ 先查打断再武装：武装一旦开始，Cancel 只能在 wait 循环内生效，
     // 这里有 Disconnect 就别开 Start（免得武装备好后马上拆）
     if abort_if_disconnected(rx, m) {
         return;
     }
 
-    // 2) 武装：⛔ 只在首次创建时 Start，重试不重复武装（模块头注释第 5 条）
+    // 2) 武装：✗ 只在首次创建时 Start，重试不重复武装（模块头注释第 5 条）
     if fresh {
         match conn.StartAsync() {
             Err(e) => {
@@ -616,7 +616,7 @@ fn connect_internal(m: &mut Machine, rx: &Receiver<Msg>) {
             match outcome {
                 OpOutcome::Aborted => return,
                 OpOutcome::Timeout => {
-                    // ⛔ 被 Cancel 的 OpenAsync 会让连接对象进入不可恢复状态，
+                    // ✗ 被 Cancel 的 OpenAsync 会让连接对象进入不可恢复状态，
                     // 复用必然一直失败 ⇒ 丢弃，让下次重试重建并重新武装
                     fail(
                         m,
@@ -645,7 +645,7 @@ fn connect_internal(m: &mut Machine, rx: &Receiver<Msg>) {
                     match result.Status() {
                         Ok(AudioPlaybackConnectionOpenResultStatus::Success) => {}
                         Ok(other) => {
-                            // ⭐ 这类失败不是超时，对象未被 Cancel 污染 ⇒ 保留复用
+                            // ✓ 这类失败不是超时，对象未被 Cancel 污染 ⇒ 保留复用
                             fail(m, "OpenStatus", open_status_text(other), true, false);
                             return;
                         }
@@ -702,7 +702,7 @@ fn on_connect(m: &mut Machine, rx: &Receiver<Msg>, id: String, name_hint: Option
         );
         return;
     }
-    // ⛔ 连接路径不得回查枚举取名（控制器线程会多一次整表 COM 枚举）：
+    // ✗ 连接路径不得回查枚举取名（控制器线程会多一次整表 COM 枚举）：
     // 名字用前端现成 hint，仅启动恢复路径无 hint 时才回查。
     let name = name_hint
         .filter(|s| !s.is_empty())
@@ -753,7 +753,7 @@ fn on_link_closed(m: &mut Machine) {
 
 /// 每 tick 执行：退避到期重试优先，其次链路层采样推进 Armed/LinkReady。
 fn step(m: &mut Machine, rx: &Receiver<Msg>) {
-    // ⛔ 退避检查必须在 `conn.is_none()` 判空**之前**：失败路径已把 conn 清空，
+    // ✗ 退避检查必须在 `conn.is_none()` 判空**之前**：失败路径已把 conn 清空，
     // 判空在前会让重试永不执行、卡死在失败态（BlueAudioSink 同款教训）。
     if !m.want_connected {
         return;
@@ -771,7 +771,7 @@ fn step(m: &mut Machine, rx: &Receiver<Msg>) {
     }
 
     // 链路层判活：转发会话峰值电表（唯一流量信号，判据见
-    // audio::relay_session_flowing）按 tick 逐秒执行。⭐ 见流即闩锁（flow_seen），
+    // audio::relay_session_flowing）按 tick 逐秒执行。✓ 见流即闩锁（flow_seen），
     // drop_conn 才清 —— 换曲间隙 / 静音段电表归零不得闪断。
     let Some((_, armed_name)) = m.armed_device.clone() else {
         return;
@@ -806,7 +806,7 @@ fn step(m: &mut Machine, rx: &Receiver<Msg>) {
         if waiting_long && !m.link_hinted && now_state == A2dpState::Armed {
             m.link_hinted = true;
         }
-        // ⛔ 提示一经触发就持续保留（link_hinted 只在下次武装复位）：判重真正
+        // ✗ 提示一经触发就持续保留（link_hinted 只在下次武装复位）：判重真正
         // 生效后，else 支路若回空 hint，下一 tick 就会把上一 tick 的提示清掉
         let hint = if m.link_hinted && now_state == A2dpState::Armed {
             "若手机正在播放却听不到声音，请检查手机蓝牙输出是否指向本电脑"
@@ -909,14 +909,14 @@ fn ensure_mta() {
 /// 枚举当前系统内「可被本机接收音频」的设备（手机等音频源）。
 /// 命令层经 run_blocking 调用（枚举 + join 阻塞数百毫秒，禁入主线程）。
 pub fn enumerate_devices() -> Result<Vec<A2dpDevice>, String> {
-    // ⛔ 不得在调用线程直接 ensure_mta：命令层经 run_blocking（tokio
+    // ✗ 不得在调用线程直接 ensure_mta：命令层经 run_blocking（tokio
     //   spawn_blocking 共享池）调用，MTA 会**永久污染**池线程，此后复用该
     //   线程的 STA 命令全部 RPC_E_CHANGED_MODE（audio.rs「进程内统一 STA」
     //   契约被破坏，STA-only 组件在该线程上必败）。故收进一次性专用线程，
     //   线程随 join 结束、污染不外溢（taskbar_music 的 MTA 同样限定专用线程）。
     std::thread::spawn(enumerate_devices_mta)
         .join()
-        // ⚠️ panic→Err 映射仅 dev/test 可达：release 为 panic="abort"，
+        // ⚠ panic→Err 映射仅 dev/test 可达：release 为 panic="abort"，
         //    工作线程 panic 直接终止进程（与既有全局语义一致，非回归）
         .unwrap_or_else(|e| Err(format!("枚举线程异常退出：{e:?}")))
 }
@@ -1049,7 +1049,7 @@ pub fn connect_from_popup_device(popup_device_id: &str, popup_name: &str) -> Res
 /// main setup 注入：装配事件句柄并启动控制器线程（对齐 bluetooth.rs 注入模式）。
 pub fn init(app: &tauri::AppHandle) {
     let _ = A2DP_HANDLE.set(app.clone());
-    // ⛔ 支持性探测必须在本函数同步完成、不能等控制器线程：request_connect 与
+    // ✗ 支持性探测必须在本函数同步完成、不能等控制器线程：request_connect 与
     // on_connect 都以 `supported()` 判定，若等控制器异步探测，启动约 1s 内到达的
     // 连接请求会被误报「此系统版本不支持」。IsTypePresent 是纯元数据查询，
     // 任意线程可调、主线程直呼无阻塞。

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """验收（前端接线）：设置页「任务栏」标签页里新增的下拉**真的存在且能落盘**。
 
-⛔ 为什么单独验这一层：`verify-content-scale.py` 走的是 CDP 直接调 `update_config`
+✗ 为什么单独验这一层：`verify-content-scale.py` 走的是 CDP 直接调 `update_config`
    ⇒ 它证明的是**后端**；若 HTML 里 `data-value` 拼错、或 `initTaskbarTab()` 忘了调
    `initTaskbarContentScale()`，后端照样全绿，而**用户在界面上根本选不到那一档**。
    （`tools/check.mjs` 的「前端完整性检查」是静态的，覆盖不到这一层。）
@@ -56,11 +56,11 @@ DOM = ("(async () => {"
 def pick(value):
     """模拟用户在真实下拉里点选某一档，然后读回后端配置。
 
-    ⛔⛔ **flyout 引用必须「第一次就从 `el` 取好」并缓存在 `window` 上**：
+    ✗ **flyout 引用必须「第一次就从 `el` 取好」并缓存在 `window` 上**：
        `initComboBox` 打开 flyout 时会把该节点**移到 `document.body`**，而 `closeFlyout`
        **不移回来** ⇒ 一旦打开过，之后 `el.querySelectorAll` 永远查不到
        （返回空 ⇒ `NO_ITEM`，实测第一次成功后第二次必失败）。
-       ⛔ 也不能退化成 `document.querySelector('.win-combo-item[data-value=…]')` ——
+       ✗ 也不能退化成 `document.querySelector('.win-combo-item[data-value=…]')` ——
        页面里 `default` 这个值在「窗口材质 / 弹窗尺寸 / 主题模式」里**都有**，
        全局查会点到**别的控件**上（假绿）。这是 `initComboBox` 的既有契约。
     """

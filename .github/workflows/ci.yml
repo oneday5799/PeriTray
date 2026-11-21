@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    # ⛔ 写 `["**"]` 而**不是**留空：`on: push:` 两个 ref 过滤器都不写时，
+    # ✗ 写 `["**"]` 而**不是**留空：`on: push:` 两个 ref 过滤器都不写时，
     # tag 推送**也会**触发 ⇒ 每次打 tag 都会让这套闸门（一次完整 Tauri 构建）跑一遍，
     # 与 release.yml 重复且无收益。只写 `branches` 才是「所有分支、排除 tag」。
     branches: ["**"]

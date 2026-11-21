@@ -28,14 +28,14 @@ let trayDevices = [];
 // A2DP 音频接收快照：设备列表（MAC 匹配用）+ 会话状态（标签/按钮文案用）
 let a2dpDevices = [];
 let a2dpStatus = null;
-// ⭐ 右键菜单「钉到任务栏/移出任务栏」的状态源是 **`common.js` 的共用名单**
+// ✓ 右键菜单「钉到任务栏/移出任务栏」的状态源是 **`common.js` 的共用名单**
 //   （`isTaskbarPinnedName` / `refreshTaskbarPinnedNames`）——音量页也要用同一份，
 //   而 `popup-audio.js` 先于本文件加载，故那份状态**必须**在公共层。
-// ⛔ 名单按**显示名**存、只用于**文案**；真正的钉/移一律由后端按身份键裁决。
+// ✗ 名单按**显示名**存、只用于**文案**；真正的钉/移一律由后端按身份键裁决。
 
 // ── 配置派生量 → 本页运行态（单一来源）──────────────────
 //
-// ⭐ 返回「是否真的变了」：**只有变了才需要重渲染**。
+// ✓ 返回「是否真的变了」：**只有变了才需要重渲染**。
 //   `config-changed` 发得很频繁（改音量微调/静音锁/主题…都会发），
 //   无条件 `renderDevices()` 是白做功，还会打断 hover 态。
 function applyDeviceConfig(config) {
@@ -91,7 +91,7 @@ async function hydrateFromSnapshot() {
     const config = await invoke("get_config");
     applyDeviceConfig(config);
     allDevices = snap.devices;
-    // ⭐ 快照水合路径同样要拉已钉名单（无真实请求时的快速首屏）
+    // ✓ 快照水合路径同样要拉已钉名单（无真实请求时的快速首屏）
     window.refreshTaskbarPinnedNames();
     renderDevices();
     feLog(`快照水合完成: ${allDevices.length} 台`);
@@ -152,7 +152,7 @@ async function loadDevices(fresh24g = false, opts = {}) {
     });
     applyDeviceConfig(config);
     renderDevices();
-    // ⭐ 真实数据就绪后拉一次「已钉到任务栏」名单（右键菜单文案读它）。
+    // ✓ 真实数据就绪后拉一次「已钉到任务栏」名单（右键菜单文案读它）。
     //    不 await：菜单在用户右键时才用，届时早已拿到；不阻塞首屏渲染。
     window.refreshTaskbarPinnedNames();
     saveDevicesSnapshot();
@@ -181,7 +181,7 @@ function getDeviceGroup(dev) {
 
 // ── A2DP 音频接收（可接收设备的接入层）────────────────────
 
-// 拉取 A2DP 快照。设备列表缓存规则：⛔ 空结果不覆盖非空缓存——蓝牙栈就绪
+// 拉取 A2DP 快照。设备列表缓存规则：✗ 空结果不覆盖非空缓存——蓝牙栈就绪
 // 时序会让单次枚举偶发为空，覆盖住就永远匹配不上了（与设置页同一判据）。
 async function loadA2dpSnapshot({ refreshDevices = false } = {}) {
   const invoke = getInvoke();
@@ -212,7 +212,7 @@ function a2dpDeviceFor(dev) {
 }
 
 // 返回该设备当前的 Sink 会话状态（无会话/目标不是本设备 → null）。
-// ⭐ 目标匹配只认快照 device_mac：设备枚举缓存可能为空（枚举失败窗口），
+// ✓ 目标匹配只认快照 device_mac：设备枚举缓存可能为空（枚举失败窗口），
 // 经缓存找目标再比 MAC 会让「已连接」标签失明。
 function a2dpSessionStateFor(dev) {
   if (!a2dpStatus || !a2dpStatus.device_mac) return null;
@@ -241,9 +241,9 @@ function fillStatusRow(row, dev) {
   if (dev.is_bluetooth || dev.is_wireless_24g) {
     const statusEl = document.createElement("div");
     statusEl.className = "card-tag status";
-    // ⭐ 后端设备查询不感知 PC 侧 Sink 会话（只报蓝牙配置文件状态）：会话
+    // ✓ 后端设备查询不感知 PC 侧 Sink 会话（只报蓝牙配置文件状态）：会话
     // link_ready（后端见转发会话流量）即音频链路已通，状态标签必须改判
-    // 「已连接」。⛔ armed 只是武装等待——手机离场也停在这（后端 detail「等待手机播放」），
+    // 「已连接」。✗ armed 只是武装等待——手机离场也停在这（后端 detail「等待手机播放」），
     // 不得改判「已连接」（离场误报）；connecting/backoff 同样保持后端原值。
     const session = a2dpSessionStateFor(dev);
     const effective = session === "link_ready" ? "已连接" : dev.status;
@@ -258,7 +258,7 @@ function fillStatusRow(row, dev) {
 
   // 连接标签：「修改信息」的覆盖（按身份键）优先于 is_bluetooth / is_wireless_24g
   // 自动标志 —— 覆盖存在即显示覆盖值，连「无标签」也能被覆盖成有标签（反之亦然）。
-  // ⛔ 键取后端下发的 device_key，前端不自己推身份键。
+  // ✗ 键取后端下发的 device_key，前端不自己推身份键。
   const connOverride = CONN_TAG_OVERRIDES[deviceConnKinds[dev.device_key]];
   if (connOverride) {
     const tagEl = document.createElement("div");
@@ -318,11 +318,11 @@ function buildActionsEl(card) {
       return;
     }
 
-    // A2DP 音频接收设备：连接/断开改走 Sink 会话。⛔ 不走 Win32
+    // A2DP 音频接收设备：连接/断开改走 Sink 会话。✗ 不走 Win32
     // connect_bluetooth_device（对手机的服务开关无效——原按钮「一直无效」的原因），
     // 也不轮询 check_bt_connection（它查 ACL 链路，不反映 A2DP 会话）；
     // 状态由 a2dp-changed 事件驱动更新。
-    // ⭐ 路由判据 = 枚举命中（a2dpDeviceFor）或会话占用中（a2dpSessionActiveFor）：
+    // ✓ 路由判据 = 枚举命中（a2dpDeviceFor）或会话占用中（a2dpSessionActiveFor）：
     //   枚举缓存为空的窗口里，占用中的设备若不按会话路由，按钮会回落成系统蓝牙「连接」。
     if (a2dpDeviceFor(dev) || a2dpSessionActiveFor(dev)) {
       connectBtn.disabled = true;
@@ -462,7 +462,7 @@ function syncActionsEl(card) {
   // 路由判据与 buildActionsEl 同款（枚举命中或会话占用中，防枚举空窗口回落）
   if (a2dpDeviceFor(dev) || a2dpSessionActiveFor(dev)) {
     const active = a2dpSessionActiveFor(dev);
-    // ⭐ 按钮措辞与设置窗设备信息卡片（settings-audio.js appendA2dpDeviceRow）
+    // ✓ 按钮措辞与设置窗设备信息卡片（settings-audio.js appendA2dpDeviceRow）
     //   统一为「开启/关闭」，两处必须一致；动作是拉起/关闭 Sink 会话（Win32
     //   连接对手机无效，见点击路由注释）。链路已通 ∧ 会话空闲的旧特例「接收
     //   音频」随统一取消——它起因于「连接」会与状态标签「已连接」打脸，
@@ -586,7 +586,7 @@ function renderDevices() {
 
   // 组内卡片对账 + 按目标顺序归位（appendChild 移动既有节点，
   // 连接状态变化引发的排序调整不触发重建）
-  // ⛔ 归位只在现有顺序与目标不一致时才移动节点：appendChild 即使落点不变也
+  // ✗ 归位只在现有顺序与目标不一致时才移动节点：appendChild 即使落点不变也
   // 是「摘下再插回」，Chromium 会清空子树 :hover 且鼠标不动不重算——顺序没变
   // 时无条件移动 = 每次 render 打断一次 hover（连接后逐秒渲染即持续闪烁）
   for (const g of layout) {
@@ -637,7 +637,7 @@ function scheduleSilentRefresh() {
   }, 500);
 }
 
-// 后端推送（电量变更/设备增删）统一经 common.js 的 onTauriEvent()（P2-3）
+// 后端推送（电量变更/设备增删）统一经 common.js 的 onTauriEvent()
 onTauriEvent("24g-battery-updated", scheduleSilentRefresh);
 onTauriEvent("bt-battery-updated", scheduleSilentRefresh);
 onTauriEvent("devices-changed", scheduleSilentRefresh);
@@ -647,13 +647,13 @@ onTauriEvent("a2dp-changed", async () => {
   renderDevices();
 });
 
-// ⛔ 本页原先**完全没有** `config-changed` 订阅 ⇒ `deviceNames` 只在
+// ✗ 本页原先**完全没有** `config-changed` 订阅 ⇒ `deviceNames` 只在
 //   `loadDevices` / 快照水合时刷新。而「在音量控制页改名/恢复默认」走的是
 //   `set_device_info` 命令，它只**发事件**、不回调本页 ⇒ 本页标题停留在旧名，
 //   要等下次整表重拉（重开弹窗/手动刷新/设备增删推送）才更新。
-//   ⛔ 这正是「只有设备页 → 音量页能同步，反过来不行」的原因：音量页订阅了
+//   ✗ 这正是「只有设备页 → 音量页能同步，反过来不行」的原因：音量页订阅了
 //   `audio-devices-changed`，本页没有对应订阅。
-// ⚠️ 兜底：无 payload 时**只取 config**（不整表重拉设备）——设备枚举要几百毫秒，
+// ⚠ 兜底：无 payload 时**只取 config**（不整表重拉设备）——设备枚举要几百毫秒，
 //   而这类事件要的仅仅是名字/分组/隐藏这几项派生量。
 onTauriEvent("config-changed", async (event) => {
   let cfg = event && event.payload ? event.payload : null;
@@ -680,7 +680,7 @@ function showContextMenu(x, y, dev) {
     hideAllContextMenus();
     showDeviceInfoDialog({
       deviceName: dev.name,
-      // ☽ “”恢复默认”按钮的可见性走两级查找：别名可能只落在长形态键上
+      // 「恢复默认」按钮的可见性走两级查找：别名可能只落在长形态键上
       //    （从音量页改名的情形），否则按钮不出现、
       //    用户没法清掉出别名。
       displayName: getDisplayName(dev, deviceNames),
@@ -763,10 +763,10 @@ function showContextMenu(x, y, dev) {
   menu.appendChild(trayItem);
   menu.appendChild(trayItem);
 
-  // ⭐ 「钉到任务栏」——与上面「添加到托盘」同一范式。
+  // ✓ 「钉到任务栏」——与上面「添加到托盘」同一范式。
   //    语义是**切换**（已钉则显示「移出任务栏」）；后端 `toggle_taskbar_device_pin`
   //    返回切换**之后**的状态 ⇒ 直接用它更新本地 Set，不必再查一次。
-  // ⛔ 后端按 `name` 自行解析 `key`/`fallback`（`core_name` 在 JS 侧无法等价复现），
+  // ✗ 后端按 `name` 自行解析 `key`/`fallback`（`core_name` 在 JS 侧无法等价复现），
   //    前端只管传名字与显示文案。
   const isPinned = window.isTaskbarPinnedName(dev.name);
   const pinItem = document.createElement("div");
@@ -781,12 +781,12 @@ function showContextMenu(x, y, dev) {
     }
     hideAllContextMenus();
   });
-  // ⛔ **只在「显示设备信息组件」开启时才追加这一项**。
+  // ✗ **只在「显示设备信息组件」开启时才追加这一项**。
   //   组件关着时，钉过去也不会显示 ⇒ 入口没有意义。
-  // ⚠️ 判据来自 `common.js` 的共用开关，与音量页**同一个函数**
+  // ⚠ 判据来自 `common.js` 的共用开关，与音量页**同一个函数**
   //   （`isTaskbarWidgetEnabled`）⇒ 两页不会分叉。
-  // ⛔ fail-closed：开关取不到时初值为 false ⇒ 宁可不显示，不显示一个点不动的项。
-  // 📌 即便组件关闭时仍有已钉设备，**取消入口也没丢**：设置页「任务栏组件」
+  // ✗ fail-closed：开关取不到时初值为 false ⇒ 宁可不显示，不显示一个点不动的项。
+  // 即便组件关闭时仍有已钉设备，**取消入口也没丢**：设置页「任务栏组件」
   //   那张卡可以查看与移除（见 settings.html 的设备来源说明）。
   if (window.isTaskbarWidgetEnabled()) {
     menu.appendChild(pinItem);

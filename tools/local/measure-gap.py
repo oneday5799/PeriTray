@@ -1,6 +1,6 @@
 """量「可见底边到任务栏上缘」的间距 —— 同一口径下比较主窗口与任务栏 tooltip。
 
-⛔ 为什么不看 `GetWindowRect`：主窗口是 `transparent(true)` 的无边框窗，
+✗ 为什么不看 `GetWindowRect`：主窗口是 `transparent(true)` 的无边框窗，
    其窗口矩形**可能含 DWM 阴影边距**（实测窗口高 660px，而 `popup_h` 只请求 520
    ⇒ 多出的 8 逻辑 px 正好把 `POPUP_TASKBAR_GAP=13` 啃到 ~5）。
    ⇒ 用户看到的「视觉间距」必须从**像素**量。

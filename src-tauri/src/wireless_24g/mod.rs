@@ -10,7 +10,7 @@
 // - 成功值经 persist 落盘（data/24g_battery_cache.json），进程重启后以
 //   「已过期」种子载入——SWR 延伸至跨重启，首启即显上次电量。
 //
-// ⚠️ 缓存键是**设备身份键**（`device_key`），**不是 `VID:PID`**。
+// ⚠ 缓存键是**设备身份键**（`device_key`），**不是 `VID:PID`**。
 // 历史版本按 `VID:PID`（型号级）缓存 ⇒ 两个同款 2.4G 接收器共用一条、
 // 只有一台能显示电量且值可能来自另一台。详见 `persist` 模块头与
 // `wmi_query::fill_24g_battery`。
@@ -276,7 +276,7 @@ fn query_and_cache(link: Option<&HidLink>, target: &BatteryTarget) -> QueryOutco
 
     // XInput 设备走独立路径（XInputDriver 的 read_battery 是空桩）
     //
-    // ⚠️ **已知局限**：经典 XInput API 只按槽位（0..3）寻址，
+    // ⚠ **已知局限**：经典 XInput API 只按槽位（0..3）寻址，
     // **不暴露设备路径或任何稳定身份** ⇒ 无法把某个槽位的电量归属到具体某个 PnP 设备。
     // 故本分支按「型号」取电量（`scan_battery` 返回首个应答槽位），
     // 接了两个 `045E:*` 手柄时它们会显示同一个值。
@@ -480,7 +480,7 @@ mod tests {
     /// 两台同款接收器只可能有一条值，其中一台永远显示不出电量。
     /// 可证伪：把缓存键改回型号（如 `format!("m:{}:{}", vid, pid)`）即转红。
     ///
-    /// ⚠️ 键必须**每个用例各不相同**：`seed` 写的是进程级全局 `CACHE`，
+    /// ⚠ 键必须**每个用例各不相同**：`seed` 写的是进程级全局 `CACHE`，
     /// 用例并行执行，共用键会互相覆盖（首版就因此转红）。
     #[test]
     fn same_model_devices_keep_independent_battery_values() {

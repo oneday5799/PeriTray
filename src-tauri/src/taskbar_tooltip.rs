@@ -1,6 +1,6 @@
 //! 任务栏 widget 的**每设备 hover tooltip**（**自绘分层顶层窗**）。
 //!
-//! ── ⛔ 不得回退到原生 `TOOLTIPS_CLASSW`（勿再改回去）
+//! ── ✗ 不得回退到原生 `TOOLTIPS_CLASSW`（勿再改回去）
 //! 被证伪的是**控件本身**，不是用法（决策史与完整矩阵 → Wiki 15 §4.7.4）：
 //! 1. `TTM_SETTOOLPOS` **在 Windows SDK 里根本不存在**（本机 `CommCtrl.h` 的
 //!    `WM_USER+35` 是 `TTM_GETTITLE`）⇒ 照抄 MSDN 就是在发「取标题」，控件
@@ -13,10 +13,10 @@
 //!
 //! ── 自绘方案 ───────────────────────────────────────────────────────────
 //! · **一个**顶层 `WS_POPUP` + `WS_EX_LAYERED`，`UpdateLayeredWindow(ULW_ALPHA)` 逐帧提交
-//! · ⭐ 复用 `taskbar_widget` 的**同一套**渲染管线（`create_dib` / `render_text_mask`
+//! · ✓ 复用 `taskbar_widget` 的**同一套**渲染管线（`create_dib` / `render_text_mask`
 //!   / `blit_text_mask` / `blend_over` / `inside_rounded_rect`）——**不是**重写一份
 //!   ⇒ 圆角、抗锯齿、预乘合成与 widget 逐字一致（这正是「与 widget 一致」的落点）
-//! · ⛔ `WS_EX_TRANSPARENT`（点击穿透）+ `WS_EX_NOACTIVATE`：提示**绝不能**
+//! · ✗ `WS_EX_TRANSPARENT`（点击穿透）+ `WS_EX_NOACTIVATE`：提示**绝不能**
 //!   抢走 widget 的命中，否则用户一动鼠标提示就消失
 //! · 500ms 初始延迟由本模块的 hover 判定实现 ⇒ **变成可测的逻辑**，不再依赖控件计时
 //!
@@ -26,10 +26,10 @@
 //! · `DropShadowEffect`：`BlurRadius=10` / `Direction=270` / `Depth=5` /
 //!   `Opacity=0.25` / 颜色 `#202020`
 //!
-//! ── 线程纪律（⛔ 硬约束）────────────────────────────────────────────
+//! ── 线程纪律（✗ 硬约束）────────────────────────────────────────────
 //! · tip 窗**必须**在**主线程**建：窗口过程只在创建线程上被调用，而 widget 建在
 //!   Tauri `setup` 回调（= 主线程）。
-//! · ⛔ 50ms hover 轮询线程**只投递原子/消息**，不得直接碰窗口（见 `taskbar_widget`）。
+//! · ✗ 50ms hover 轮询线程**只投递原子/消息**，不得直接碰窗口（见 `taskbar_widget`）。
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 
@@ -51,7 +51,7 @@ use crate::taskbar_widget::ffi;
 
 /// 提示的最大宽度（**px**）——对齐 `base.css:920` 的 `max-width: 320px`。
 ///
-/// ⛔ **按 px 不按 DIP**：CSS 的 `px` 在浏览器里是**设备无关像素**，
+/// ✗ **按 px 不按 DIP**：CSS 的 `px` 在浏览器里是**设备无关像素**，
 ///   而本仓的「内容缩放」是一个**独立的用户设置**（`taskbar_content_scale`），
 ///   它**不**等于系统 DPI ⇒ 用 DIP 换算会让宽度随内容档位漂移，
 ///   与页面里那个固定 320px 的 tooltip 对不上。
@@ -59,31 +59,31 @@ const TIP_MAX_W_PX: i32 = 320;
 
 /// 提示的字号（**px**）。
 ///
-/// ⭐ 取 **15**：对齐面板歌名的实际像素高（歌名 12 DIP × 125% = 15px），比 14px
+/// ✓ 取 **15**：对齐面板歌名的实际像素高（歌名 12 DIP × 125% = 15px），比 14px
 ///   显式小一号；12 与 14 用户都嫌「太虚太小」。
-/// ⚠️⚠️ **有意偏离 `base.css:922` 的 `font-size: 12px`**；与页面 tooltip 的观感
+/// ⚠ **有意偏离 `base.css:922` 的 `font-size: 12px`**；与页面 tooltip 的观感
 ///   一致性仍体现在底色/边框/圆角/阴影/内边距上（见文件头）。
-/// ⛔ 别以「与页面 tooltip 保持一致」为理由改回 12 —— 那是 CSS 的口径，提示框跟的
+/// ✗ 别以「与页面 tooltip 保持一致」为理由改回 12 —— 那是 CSS 的口径，提示框跟的
 ///   是面板字号。
-/// ⛔ 改这个值前先确认用户是否改主意，不是「顺手对齐回 CSS」。
+/// ✗ 改这个值前先确认用户是否改主意，不是「顺手对齐回 CSS」。
 ///   （6 → 14 → 15 三步的出处与决策史 → Wiki 15 §4.7.3）
-/// ⚠️ 与 `taskbar_widget::FONT_PX_DIP`(11) **仍是不同值**：那是 widget **内容**的
+/// ⚠ 与 `taskbar_widget::FONT_PX_DIP`(11) **仍是不同值**：那是 widget **内容**的
 ///   字号（跟随用户的内容缩放设置），跟的是内容档位，不是提示。
 const TIP_FONT_PX: i32 = 15;
 
 /// 提示的行高（**px**）。
 ///
-/// ⭐ 别照抄 `base.css` 的 `line-height: 16px`：`line-height` 在 CSS 里是**倍数语义**
+/// ✓ 别照抄 `base.css` 的 `line-height: 16px`：`line-height` 在 CSS 里是**倍数语义**
 ///   （16px 对 12px 字其实是 `1.33`），而自绘走绝对行距 ⇒ 照抄 16 会让 15px 字的
 ///   降部/升部被固定掩码切掉（表现为「字被削顶」）。
 ///
-/// ⭐⭐ **必须由字体实际度量决定**，不能写成 `字号 + 常数`
+/// ✓ **必须由字体实际度量决定**，不能写成 `字号 + 常数`
 ///   （硬编码 `字号 + 2` ⇒ 15px 的 Segoe UI Variable Text 行高本就 >17px，
 ///   下伸部与中文字形的底沿被逐行裁掉，**表现为行高不够、字底部显示不全**）。
 ///   `GetTextMetricsW` 的 `tmHeight + tmExternalLeading` 正是 GDI 自己算的
 ///   「单行占位高度」，**换字体 / 换字号都会自动跟随**，不必再手动对齐常数。
 ///
-/// ⛔ 缓存：字体只建一次（`ensure_font`），度量也只查一次（`OnceLock`）。
+/// ✗ 缓存：字体只建一次（`ensure_font`），度量也只查一次（`OnceLock`）。
 ///   取不到时回落到 `字号 × 1.25`，比硬编码 `字号 + 2` 保守。
 static TIP_LINE_H: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
 
@@ -113,21 +113,21 @@ const TIP_CORNER_R_PX: i32 = 4;
 
 /// 边框宽度（**px**）——`BorderThickness=1`。
 ///
-/// ⚠️ **按 px 而非 DIP**：`BorderThickness` 是设备无关单位里最接近「物理 1 像素」
+/// ⚠ **按 px 而非 DIP**：`BorderThickness` 是设备无关单位里最接近「物理 1 像素」
 ///   的语义，125% 下若按 DIP 换算会变成 1.25px ⇒ 渲染时半边被吃掉、边框忽明忽暗。
 const TIP_BORDER_PX: i32 = 1;
 
 /// 气泡内边距（**px**）——对齐 `base.css:901` 的 `padding: 6px 9px 8px`。
 ///
-/// ⭐ 三值不对称（`6/9/8`）**照抄**，不「简化」成 6/6/6：
+/// ✓ 三值不对称（`6/9/8`）**照抄**，不「简化」成 6/6/6：
 ///   CSS 里 padding-bottom 比 top 多 2px 是刻意的（给 12px 字号的降部留气）。
 const TIP_PAD_TOP_PX: i32 = 6;
 const TIP_PAD_X_PX: i32 = 9;
 const TIP_PAD_BOT_PX: i32 = 8;
 
-/// ⭐ 气泡配色：**两套**（浅/深），取自 `base.css:93-96` / `164-167`。
+/// ✓ 气泡配色：**两套**（浅/深），取自 `base.css:93-96` / `164-167`。
 ///
-/// ⚠️ 深色分支的边框是 `rgba(0,0,0,.20)` 叠在 `#2c2c2c` 上——**比气泡本身还暗**。
+/// ⚠ 深色分支的边框是 `rgba(0,0,0,.20)` 叠在 `#2c2c2c` 上——**比气泡本身还暗**。
 ///   这不是笔误：深色主题下 tooltip 靠**边框的暗线**勾出轮廓（背景已接近黑）。
 #[derive(Clone, Copy)]
 struct Palette {
@@ -161,15 +161,15 @@ const TIP_FG_ALPHA_LIGHT: u32 = 227;
 /// 浅色：`0 8px 16px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.18)`
 /// 深色：`0px 5px 15px rgba(0,0,0,0.2)`（**单层**）
 ///
-/// ⭐ 本仓 CSS 的两层都是**「零模糊的贴边环 + 一层大模糊」**的组合，
+/// ✓ 本仓 CSS 的两层都是**「零模糊的贴边环 + 一层大模糊」**的组合，
 ///   这里照抄成 (偏移, 模糊, 峰值 alpha) 三元组，逐层各画一次。
-/// ⚠️ 不能只取「最大模糊那层」：那样会丢掉贴边环，观感上气泡像「浮起来」
+/// ⚠ 不能只取「最大模糊那层」：那样会丢掉贴边环，观感上气泡像「浮起来」
 ///   而不是「贴在浮出面上」——这正是两个页面 tooltip 的样子。
 type ShadowLayer = (i32, i32, i32, u32); // (dx, dy, blur, peak_alpha)
 
 /// 浅色主题阴影（`0 8px 16px rgba(0,0,0,.14)` + `0 0 2px rgba(0,0,0,.18)`）。
 ///
-/// ⚠️ **y 偏移为正**（向下）：CSS 的 `box-shadow` y 向下为正，而 CSS
+/// ⚠ **y 偏移为正**（向下）：CSS 的 `box-shadow` y 向下为正，而 CSS
 ///   **不做 y 翻转** ⇒ 浅色主题的阴影在**气泡下方**。
 ///   （的 `Direction=270` 是向上，两套基准不同，此处跟 CSS。）
 const SHADOW_LIGHT: [ShadowLayer; 2] = [
@@ -184,15 +184,15 @@ const SHADOW_DARK: [ShadowLayer; 1] = [
 
 /// tooltip 与**任务栏外缘**之间的留白（**DIP**）。
 ///
-/// ⭐ 取 **16**，对齐 `TaskbarWidgetControl.xaml:45` 的
+/// ✓ 取 **16**，对齐 `TaskbarWidgetControl.xaml:45` 的
 ///   `ToolTipService.VerticalOffset="-16"`（要求「参考 FluentFlyout」）。
-///   ⛔ 不接受凭观感估出来的值——本项目的尺寸一律要有出处。
-/// ⚠️ 与上面那个 WPF tooltip 的**参照点**仍有一处**有意的**不同：
+///   ✗ 不接受凭观感估出来的值——本项目的尺寸一律要有出处。
+/// ⚠ 与上面那个 WPF tooltip 的**参照点**仍有一处**有意的**不同：
 ///   它是 `Placement="RelativePoint"` ⇒ 以**光标点**为参照，偏移 -16；
 ///   本仓光标在任务栏**内**（任务栏是交互面），以光标为参照会让提示压住任务栏
 ///   ⇒ 改为以**任务栏外缘**为参照。两者在「光标贴着任务栏上沿」时等价。
 ///
-/// ⛔ 初始延迟**不**跟着改成 800：`CustomToolTip.xaml` 附近的
+/// ✗ 初始延迟**不**跟着改成 800：`CustomToolTip.xaml` 附近的
 ///   `InitialShowDelay="800"` 是那个 WPF tooltip 的值，而 500ms 是**用户先前明确指定**的
 ///   ⇒ 冲突时以用户决定为准（这条纪律见 AGENTS「关键限定必须保留在条目内」）。
 const TIP_TASKBAR_GAP_DIP: i32 = 16;
@@ -211,7 +211,7 @@ fn tip_px(dip: i32) -> i32 {
 
 /// 「当前**显示中**的是第几号」（`-1` = 未显示）。
 ///
-/// ⭐ 这是「提示跟随 widget」的抓手。**必须有它**，否则会出现：
+/// ✓ 这是「提示跟随 widget」的抓手。**必须有它**，否则会出现：
 ///   启动初期 widget 还没拿到设备快照，走 `draw_blank`（`commit(.., 0, ..)`）
 ///   ⇒ **widget 本身停在任务栏最左端**。此时用户悬停，提示正确地出现在最左端；
 ///   ~700ms 后快照到达、widget 重居中到 x≈1101，但提示**不会跟着动**
@@ -252,7 +252,7 @@ impl std::fmt::Debug for TipEntry {
 
 impl PartialEq for TipEntry {
     fn eq(&self, o: &Self) -> bool {
-        // ⚠️ `RECT` **不实现** `PartialEq`（windows-sys 的 plain struct）⇒ 逐字段比。
+        // ⚠ `RECT` **不实现** `PartialEq`（windows-sys 的 plain struct）⇒ 逐字段比。
         self.text == o.text
             && self.rect.left == o.rect.left
             && self.rect.top == o.rect.top
@@ -265,10 +265,10 @@ impl PartialEq for TipEntry {
 // 几何
 // ══════════════════════════════════════════════════════════════════════════
 
-/// ⭐ 计算「气泡左上角该在哪」：**任务栏外侧**，横向对准第 `index` 个设备。
+/// ✓ 计算「气泡左上角该在哪」：**任务栏外侧**，横向对准第 `index` 个设备。
 ///
-/// ⚠️ 这是**唯一**一处自己算 tooltip 几何的地方。
-/// ⛔⛔ 判任务栏方向**必须与屏幕中心比**，不能用 `tb_top > 某个魔数`：
+/// ⚠ 这是**唯一**一处自己算 tooltip 几何的地方。
+/// ✗ 判任务栏方向**必须与屏幕中心比**，不能用 `tb_top > 某个魔数`：
 ///   本机任务栏 `top=1380`，任何小于它的阈值都会判成「在上边」
 ///   ⇒ 提示被放到**屏幕下方外**（真机实测 `y=1446`，出屏）。
 #[cfg(target_os = "windows")]
@@ -276,8 +276,8 @@ pub fn tip_rect_for(index: usize, bubble_w: i32, bubble_h: i32) -> Option<RECT> 
     let (tb_left, tb_top, tb_w, tb_h) = crate::taskbar_widget::taskbar_rect_tuple()?;
     let gap = tip_px(TIP_TASKBAR_GAP_DIP);
     let vertical = tb_w < tb_h; // 竖排任务栏
-                                // ⛔⛔ 锚点拿不到 ⇒ **返回 `None`（不显示）**，不许退化成「任务栏最左端」。
-                                // ⛔ 不得回落成 `(tb_left, tb_w)`：那会让提示落在屏幕**左下角**：
+                                // ✗ 锚点拿不到 ⇒ **返回 `None`（不显示）**，不许退化成「任务栏最左端」。
+                                // ✗ 不得回落成 `(tb_left, tb_w)`：那会让提示落在屏幕**左下角**：
                                 //   开发门控实测第一帧 `窗=(-12,1334)`——`item_rects` 还没发布时的典型表现。
                                 //   「一个位置错误但可见的提示」比「没有提示」更糟（它会闪一下再跳走）。
     let (anchor_x, anchor_w) = crate::taskbar_widget::item_rect_on_screen(index)?;
@@ -348,7 +348,7 @@ fn clamp_to_screen(r: &mut RECT) {
 
 /// 文字**折行**后的行（每行是已 UTF-16 编码的文本）。
 ///
-/// ⭐ 口径是**折行、不截断** ⇒ 按 `TIP_MAX_W_DIP` 硬折，
+/// ✓ 口径是**折行、不截断** ⇒ 按 `TIP_MAX_W_DIP` 硬折，
 ///   而**不是**用 `DT_END_ELLIPSIS`。
 #[cfg(target_os = "windows")]
 fn wrap_lines(
@@ -358,7 +358,7 @@ fn wrap_lines(
 ) -> Vec<Vec<u16>> {
     let max_w = TIP_MAX_W_PX;
     // 逐字符累加宽度，找**能放下的最长前缀**。
-    // ⛔ 不能按空格断：设备名多为无空格的连续串，按空格断等于不折。
+    // ✗ 不能按空格断：设备名多为无空格的连续串，按空格断等于不折。
     let mut lines: Vec<Vec<u16>> = Vec::new();
     let mut cur: Vec<u16> = Vec::new();
     let mut cur_w = 0;
@@ -480,16 +480,16 @@ fn stamp_rounded(alpha: &mut [u8], frame: Frame, radius: i32, at_x: i32, at_y: i
 
 /// 当前应��的配色。
 ///
-/// ⭐ 跟**系统**主题（`SystemUsesLightTheme`）而不是**应用**主题：
+/// ✓ 跟**系统**主题（`SystemUsesLightTheme`）而不是**应用**主题：
 ///   与 `taskbar_widget::hover_backdrop_alpha_for` 同一口径（那里有完整论证：
 ///   「应用深色 + 系统浅色」这类自定义主题下两者会不一致）。
 #[cfg(target_os = "windows")]
 fn current_palette() -> &'static Palette {
-    // ⭐ 开发门控 `PM_DEV_TOOLTIP_DARK=1`：**强制**走深色分支。
+    // ✓ 开发门控 `PM_DEV_TOOLTIP_DARK=1`：**强制**走深色分支。
     //   理由：深色配色是**独立代码路径**（边框变成「比气泡更暗的暗线」、
     //   阴影换成单层 5/15），而本机系统是浅色 ⇒ 不加门控就**永远验证不到**，
     //   等于把一段从未被渲染过的代码交给用户。
-    //   ⛔ 不设该变量时立即返回，零开销（`var_os` 命中即止）。
+    //   ✗ 不设该变量时立即返回，零开销（`var_os` 命中即止）。
     if std::env::var_os("PM_DEV_TOOLTIP_DARK").is_some() {
         return &PALETTE_DARK;
     }
@@ -502,7 +502,7 @@ fn current_palette() -> &'static Palette {
 
 /// 阴影需要的画布边距（**px**）——取各层 `(|dx|, |dy|, blur)` 的最大值。
 ///
-/// ⭐ **必须动态算**：浅色是 `8px 下移 + 16px 模糊`，深色是 `5px + 15px`；
+/// ✓ **必须动态算**：浅色是 `8px 下移 + 16px 模糊`，深色是 `5px + 15px`；
 ///   写死一个常数会出现「深色主题下阴影上沿被裁」或「浅色下留一圈空白」。
 #[cfg(target_os = "windows")]
 fn shadow_pad(pal: &Palette) -> i32 {
@@ -526,10 +526,10 @@ fn render_and_show(index: usize) {
     if hwnd.is_null() || !unsafe { IsWindow(hwnd) != 0 } {
         return;
     }
-    // ⛔ 拿不到气泡几何 ⇒ **先隐藏**再返回：不隐藏的话，上一次显示的提示会
+    // ✗ 拿不到气泡几何 ⇒ **先隐藏**再返回：不隐藏的话，上一次显示的提示会
     //   **留在旧位置**（内容还是旧的），看起来像「提示卡住不动」。
-    // ⚠️ 统一走 `lock_unpoisoned`：**中毒时恢复**而不是「隐藏提示并放弃」。
-    // ⛔ 一旦中毒，提示**不得**就此**永久**不再显示（那会无任何日志、也自愈不了）。
+    // ⚠ 统一走 `lock_unpoisoned`：**中毒时恢复**而不是「隐藏提示并放弃」。
+    // ✗ 一旦中毒，提示**不得**就此**永久**不再显示（那会无任何日志、也自愈不了）。
     let entries = crate::state::lock_unpoisoned(&ENTRIES);
     let Some(entry) = entries.get(index) else {
         hide();
@@ -560,7 +560,7 @@ fn render_and_show(index: usize) {
     };
 
     // ── ① 阴影（先画，它在气泡**下面**）─────────────────────────────
-    //    ⭐ 逐层画：`--flyout-shadow` 是**两层/一层**组合，不是单个模糊。
+    //    ✓ 逐层画：`--flyout-shadow` 是**两层/一层**组合，不是单个模糊。
     let pal = current_palette();
     let radius = TIP_CORNER_R_PX;
     let layers: &[ShadowLayer] = if pal.bg == PALETTE_LIGHT.bg {
@@ -622,7 +622,7 @@ fn render_and_show(index: usize) {
             }
         }
     }
-    // ⚠️ 边框**最后**画且**带 alpha**：`rgba(0,0,0,.06)` 叠在气泡底上才是 CSS 的样子。
+    // ⚠ 边框**最后**画且**带 alpha**：`rgba(0,0,0,.06)` 叠在气泡底上才是 CSS 的样子。
     //   先填实色再画边框会让边框变成「实心黑」——深色主题下尤其明显。
     for y in 0..frame.bubble_h {
         for x in 0..frame.bubble_w {
@@ -656,11 +656,11 @@ fn render_and_show(index: usize) {
     }
 
     // ── ③ 文本：**实色背景上直绘 + ClearType**（不是掩码+预乘）────────────
-    //    ⚠️ 这里**故意不**走 widget 那条「白底黑字掩码 → 覆盖度 → 预乘」的路：
+    //    ⚠ 这里**故意不**走 widget 那条「白底黑字掩码 → 覆盖度 → 预乘」的路：
     //       那条路存在的原因是 widget 底衬**半透明**（`ULW` 会把 alpha=0 的像素
     //       当全透明，直接画字等于没画）。tooltip 的气泡是**不透明**实色
     //       （`--flyout-bg`）⇒ 完全可以直接用 GDI 画 ⇒ 能上 **ClearType**。
-    //       ⭐ 真机观感差别就是用户说的「**发虚**」：灰度 AA 把 14px 笔画的
+    //       ✓ 真机观感差别就是用户说的「**发虚**」：灰度 AA 把 14px 笔画的
     //       边缘摊成灰边；子像素渲染按 RGB 排列分别着色三遍，边缘锐利得多。
     let fg_rgb = if pal.bg == PALETTE_LIGHT.bg {
         // rgba(0,0,0,.89) 叠在 #FCFCFC 上 ⇒ 252 × 0.11 = 27.7 ⇒ #1C1C1C
@@ -709,8 +709,8 @@ fn render_and_show(index: usize) {
         ffi::free_dib(&dib);
     }
     if ok {
-        // ⭐ `SWP_SHOWWINDOW` 一步完成「置顶 + 显示 + 定尺寸」。
-        // ⛔ 必须带 `SWP_NOACTIVATE`：否则提示会抢焦点，widget 的 hover 立刻断掉
+        // `SWP_SHOWWINDOW` 一步完成「置顶 + 显示 + 定尺寸」。
+        // ✗ 必须带 `SWP_NOACTIVATE`：否则提示会抢焦点，widget 的 hover 立刻断掉
         //   ⇒ 表现为「提示闪一下就没了」。
         unsafe {
             SetWindowPos(
@@ -744,14 +744,14 @@ fn composite_over(rgb: (u8, u8, u8), a: u32, bg: (u8, u8, u8)) -> (u8, u8, u8) {
     (f(rgb.0, bg.0), f(rgb.1, bg.1), f(rgb.2, bg.2))
 }
 
-/// ⭐ 在**不透明底色**上用 GDI 直绘文字，再整块**不透明**贴回主缓冲。
+/// ✓ 在**不透明底色**上用 GDI 直绘文字，再整块**不透明**贴回主缓冲。
 ///
-/// ⛔ 为什么不走 `ffi::render_text_mask` + `blit_text_mask`（widget 的做法）：
+/// ✗ 为什么不走 `ffi::render_text_mask` + `blit_text_mask`（widget 的做法）：
 ///   那条路产出的是「覆盖率」，再乘一个 `alpha_scale` 预乘合成 ⇒ 文字边缘的
 ///   实际不透明度 = 覆盖度 × 整体 alpha，**两级衰减**叠加成灰边（=「发虚」）。
 ///   这里底色已知且不透明 ⇒ 文字可以**一次成型**，不必再乘任何系数。
 ///
-/// ⛔ 前提：调用方保证这块矩形**完全在气泡内部**（padding ≥ 6px）⇒ 不会碰到
+/// ✗ 前提：调用方保证这块矩形**完全在气泡内部**（padding ≥ 6px）⇒ 不会碰到
 ///   圆角；若哪天 padding 变成 0，这块方形补丁会在圆角处露馅。
 #[cfg(target_os = "windows")]
 unsafe fn blit_text_opaque(
@@ -796,10 +796,10 @@ unsafe fn blit_text_opaque(
         right: w,
         bottom: h,
     };
-    // ⚠️ 返回值**故意丢弃**：`DrawTextW` 返回非 0 只说明「文本被处理过」，
+    // ⚠ 返回值**故意丢弃**：`DrawTextW` 返回非 0 只说明「文本被处理过」，
     //   **不保证像素变了**（真机实测：返回 19 而一个暗像素都没有）。
     //   真正的判据是贴回后主缓冲里的像素，由 `text_patch_alpha_must_be_opaque` 锚定。
-    // ⛔ 空串不能交给 GDI：`Vec::new().as_ptr()` 是悬垂哨兵指针，`DrawTextW` 即使
+    // ✗ 空串不能交给 GDI：`Vec::new().as_ptr()` 是悬垂哨兵指针，`DrawTextW` 即使
     //   `cch = 0` 也会解引用它 ⇒ 访问违例（在 widget 侧实测到闪退，
     //   同一个洞在这里也开着 —— **所有**「`&[u16]` 进 GDI」的入口都要拦）。
     if !text.is_empty() {
@@ -812,17 +812,17 @@ unsafe fn blit_text_opaque(
         );
     }
     windows_sys::Win32::Graphics::Gdi::SelectObject(tmp.memdc, old_font);
-    // ⛔⛔ **贴回时必须补上 alpha 字节 = 0xFF**。
+    // ✗ **贴回时必须补上 alpha 字节 = 0xFF**。
     //   `DrawTextW` 只写 RGB，**从不碰 alpha** ⇒ 刚画完的临时 DIB 里
     //   那些文字像素的 alpha 仍是 `buf.fill()` 时留下的…等等，`fill` 写的是
     //   `0xFF00_0000 | …`，alpha 本该是 0xFF。
-    //   ⚠️ 但真机回读到的最暗像素是 `0x001B1B1B`（alpha=0）——说明
+    //   ⚠ 但真机回读到的最暗像素是 `0x001B1B1B`（alpha=0）——说明
     //   `SetTextColor` 之后的 `DrawTextW` **把整像素（含 alpha 字节）覆盖成
     //   COLORREF 本身**。COLORREF 只有 24 位 ⇒ 高位 0。
     //   ⇒ 直接原样拷贝 ⇒ 这块文字 alpha=0 ⇒ `ULW` 当**全透明** ⇒ 文字消失
     //   （真机实测：气泡内**一个暗像素都没有**，但 `DrawTextW` 返回 19 = 成功）。
     //
-    //   ⭐ 这与 widget 头部记的是**同一个坑**的两面：那边是「alpha 恒 0 ⇒
+    //   ✓ 这与 widget 头部记的是**同一个坑**的两面：那边是「alpha 恒 0 ⇒
     //   文字不显示」，这边因为底色不透明而**更隐蔽**——只剩文字没了。
     //   ⇒ 贴回时无条件 `| 0xFF00_0000`。
     for row in 0..h {
@@ -846,7 +846,7 @@ unsafe fn blit_text_opaque(
 
 /// 预乘 source-over（与 `taskbar_widget::blend_over` **逐字相同**）。
 ///
-/// ⚠️ 抽成两份是**有意**的：`ffi` 那份是 `taskbar_widget` 私有的，
+/// ⚠ 抽成两份是**有意**的：`ffi` 那份是 `taskbar_widget` 私有的，
 ///   本模块若改成「取最大 alpha」会静默把抗锯齿边缘吃掉 ⇒ 字变细。
 #[cfg(target_os = "windows")]
 fn blend_over(dst: u32, a: u32, pr: u32, pg: u32, pb: u32) -> u32 {
@@ -859,9 +859,9 @@ fn blend_over(dst: u32, a: u32, pr: u32, pg: u32, pb: u32) -> u32 {
     (ao << 24) | (ro << 16) | (go << 8) | bo
 }
 
-/// ⭐ 可分离盒式模糊，3 趟逼近高斯（`DropShadowEffect` 的 `BlurRadius`）。
+/// ✓ 可分离盒式模糊，3 趟逼近高斯（`DropShadowEffect` 的 `BlurRadius`）。
 ///
-/// ⛔ 不能只做「距离衰减」：那样边缘是硬台阶，看起来像描边而不是影子。
+/// ✗ 不能只做「距离衰减」：那样边缘是硬台阶，看起来像描边而不是影子。
 ///   3 趟盒式 ⇒ 单次半径 `r/3`，总代价仍是 O(w·h·r) 但视觉上足够柔。
 #[cfg(target_os = "windows")]
 fn box_blur(a: &mut [u8], w: i32, h: i32, radius: i32) {
@@ -914,7 +914,7 @@ fn box_blur(a: &mut [u8], w: i32, h: i32, radius: i32) {
 // ══════════════════════════════════════════════════════════════════════════
 
 unsafe extern "system" fn tip_wnd_proc(hwnd: HWND, msg: u32, wp: usize, lp: isize) -> isize {
-    // ⛔ `WM_ERASEBKGND` 交回 `DefWindowProcW`：分层窗口的可见性**只**由
+    // ✗ `WM_ERASEBKGND` 交回 `DefWindowProcW`：分层窗口的可见性**只**由
     //   `UpdateLayeredWindow` 的位图决定，返回 0 不会让窗口消失；
     //   但反向也不该在这里画任何东西（画了会被下一次 `ULW` 覆盖，纯浪费）。
     windows_sys::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, msg, wp, lp)
@@ -930,7 +930,7 @@ fn ensure_window() -> HWND {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     let hinst = unsafe { GetModuleHandleW(std::ptr::null()) };
     let class: Vec<u16> = "PeriTrayTooltipWnd\0".encode_utf16().collect();
-    // ⛔⛔ 沿用 `taskbar_widget` 已实测的注册写法，**逐字照抄它的三处决定**：
+    // ✗ 沿用 `taskbar_widget` 已实测的注册写法，**逐字照抄它的三处决定**：
     //   ① `hInstance = null`：类由本进程注册即可，传模块句柄没有收益。
     //   ② `hbrBackground = GetStockObject(WHITE_BRUSH)`：**不是** `NULL_BRUSH`。
     //      `taskbar_widget` 实测传 NULL 刷子会让 `UpdateLayeredWindow` 提交的位图
@@ -958,7 +958,7 @@ fn ensure_window() -> HWND {
     };
     let atom = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::RegisterClassW(&wc) };
     if atom == 0 {
-        // ⚠️ 重复注册同名类会失败（`ERROR_CLASS_ALREADY_EXISTS`），**可忽略**：
+        // ⚠ 重复注册同名类会失败（`ERROR_CLASS_ALREADY_EXISTS`），**可忽略**：
         //   窗口用**类名**（非 atom）创建，已注册即可用。
         let e1 = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         crate::process::append_verbose_log(&format!(
@@ -968,9 +968,9 @@ fn ensure_window() -> HWND {
     }
     let hwnd = unsafe {
         CreateWindowExW(
-            // ⭐ `WS_EX_TRANSPARENT` = **点击穿透**：提示绝不能抢走 widget 的命中，
+            // ✓ `WS_EX_TRANSPARENT` = **点击穿透**：提示绝不能抢走 widget 的命中，
             //   否则「鼠标停在提示上 ⇒ 它消失 ⇒ 又出现」会无限抖动。
-            // ⭐ `WS_EX_NOACTIVATE` = 不激活、不进任务栏、不挡在别的前面。
+            // ✓ `WS_EX_NOACTIVATE` = 不激活、不进任务栏、不挡在别的前面。
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
             class.as_ptr(),
             std::ptr::null(), // 无标题
@@ -988,7 +988,7 @@ fn ensure_window() -> HWND {
     if hwnd.is_null() {
         let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         crate::process::append_log(&format!(
-            "[widget] tooltip: ⚠️ 建窗失败 err={} ⇒ 无 hover 提示",
+            "[widget] tooltip: ⚠ 建窗失败 err={} ⇒ 无 hover 提示",
             err
         ));
         return hwnd;
@@ -1016,10 +1016,10 @@ fn ensure_font() -> HFONT {
     if !cur.is_null() {
         return cur;
     }
-    // ⚠️ 这里**必须**用 `create_font_cleartype`（质量 5），**不能**用 `create_font`
+    // ⚠ 这里**必须**用 `create_font_cleartype`（质量 5），**不能**用 `create_font`
     //   （灰度 AA）：气泡底色不透明 ⇒ 文字走「实色底 + ClearType 直绘」这条路，
     //   子像素抗锯齿可用。灰度 AA 在 14px 下笔画边缘被摊成灰边 = 用户说的「发虚」。
-    //   ⛔ 反过来 widget 那边**必须**用灰度：它底衬半透明，彩色边缘会被预乘搞脏。
+    //   ✗ 反过来 widget 那边**必须**用灰度：它底衬半透明，彩色边缘会被预乘搞脏。
     let f = unsafe { ffi::create_font_cleartype(TIP_FONT_PX, false) };
     TIP_FONT.store(f as isize, Ordering::Release);
     f
@@ -1047,7 +1047,7 @@ pub fn destroy() {
 
 /// 同步条目（`draw_items` 每帧调）。
 ///
-/// ⛔ **先比对再动任何 Win32 状态**：条目清空要销毁窗口，而销毁期间若有提示在显示，
+/// ✗ **先比对再动任何 Win32 状态**：条目清空要销毁窗口，而销毁期间若有提示在显示，
 ///   顺序反了会让 `ULW` 提交到一个正在销毁的窗口。
 #[cfg(target_os = "windows")]
 pub fn sync(_owner: HWND, entries: &[TipEntry]) {
@@ -1068,7 +1068,7 @@ pub fn sync(_owner: HWND, entries: &[TipEntry]) {
         if hwnd.is_null() {
             return;
         }
-        // ⛔⛔ **这两行原来正是「同一函数两种中毒语义」的现场**：
+        // ✗ **这两行原来正是「同一函数两种中毒语义」的现场**：
         //   上面读路径用 `unwrap_or_else(into_inner)`（中毒→恢复），这里却用 `if let Ok`
         //   （中毒→静默跳过）。后果是**闩锁**：ENTRIES 中毒而 LAST_SYNCED 未中毒时，
         //   本次写 ENTRIES 被跳过、LAST_SYNCED 却更新成功 ⇒ 下一帧 `*last == entries`
@@ -1078,11 +1078,11 @@ pub fn sync(_owner: HWND, entries: &[TipEntry]) {
         *crate::state::lock_unpoisoned(&ENTRIES) = entries.to_vec();
         *crate::state::lock_unpoisoned(&LAST_SYNCED) = entries.to_vec();
     }
-    // ③ ⭐⭐ **重渲染/重新落位：必须在 ② 之后，且不能被「条目没变」跳过。**
+    // ③ ✓ **重渲染/重新落位：必须在 ② 之后，且不能被「条目没变」跳过。**
     //
     // 这两条约束**方向相反**，合起来才唯一确定它只能待在 ③：
     //
-    //   ⛔ **不能更早**（旧代码就在这里）：`render_and_show` 读的是**全局** `ENTRIES`，
+    //   ✗ **不能更早**（旧代码就在这里）：`render_and_show` 读的是**全局** `ENTRIES`，
     //      早于写入就等于**拿上一帧的条目渲染当前画面** ⇒ tooltip 落后一拍。
     //      实测：点「切换」那一瞬新会话元数据未到、标题为空
     //      （面板自己画兜底「未在播放」），tooltip 把这个**瞬时错值**渲染了出来；
@@ -1090,10 +1090,10 @@ pub fn sync(_owner: HWND, entries: &[TipEntry]) {
     //      （hover 轮询只在「换设备 / 首次延迟到期 / 离开」时投递，
     //        `idx == HOVERED_ITEM` ⇒ 一条都不投）
     //      ⇒ 那个错值被**无限期冻结**，直到用户重新 hover。
-    //      ⛔ 这类「靠下一帧自愈」的写法，等于把正确性押在「一定会有下一帧」上，
+    //      ✗ 这类「靠下一帧自愈」的写法，等于把正确性押在「一定会有下一帧」上，
     //        而静止光标恰好是这个前提失效的常态。
     //
-    //   ⛔ **不能更晚 / 不能加在早退之后**（旧代码的早退就在 ② 之前）：
+    //   ✗ **不能更晚 / 不能加在早退之后**（旧代码的早退就在 ② 之前）：
     //      「重新落位」的触发形态恰恰是「**条目没变、只有 widget 移了**」——
     //      设备快照前后一致，只有 `draw_blank`(x=0) → `draw_items`(x=1101) 切换时
     //      窗口位置变了 ⇒ `changed == false` ⇒ 提前 return ⇒ 永不重定位。
@@ -1144,7 +1144,7 @@ pub fn tip_hwnd_for_probe() -> isize {
 ///
 /// 用途：把「能否渲染」「位置对不对」变成**可自动判定**的像素判据
 /// ——本机**无法注入鼠标**，自然 hover 路径没法自动验收。
-/// ⛔ 不设 `PM_DEV_TOOLTIP_SHOW` 时立即返回，零开销。
+/// ✗ 不设 `PM_DEV_TOOLTIP_SHOW` 时立即返回，零开销。
 #[cfg(target_os = "windows")]
 pub fn dev_force_show(_owner: HWND) {
     let Ok(uid_s) = std::env::var("PM_DEV_TOOLTIP_SHOW") else {
@@ -1174,12 +1174,12 @@ pub const TIP_DELAY_MS: u64 = 500;
 mod tests {
     use super::*;
 
-    /// ⭐ 视觉常量必须**逐字**等于 `base.css` 里 `.tooltip-content` 的值。
+    /// ✓ 视觉常量必须**逐字**等于 `base.css` 里 `.tooltip-content` 的值。
     ///
-    /// ⛔ **基准是本仓自己的 CSS**：要求
+    /// ✗ **基准是本仓自己的 CSS**：要求
     ///   「与弹出窗口和设置窗口的 tooltip 样式尽量一致」⇒ 唯一来源是
     ///   `src-tauri/dist/styles/base.css:896-912`。
-    ///   ⚠️ 唯二**有意偏离**：`font-size`(12→14) 与 `line-height`(16→字号+2)，
+    ///   ⚠ 唯二**有意偏离**：`font-size`(12→14) 与 `line-height`(16→字号+2)，
     ///   均为用户后续明确要求，理由见对应常量处的注释。
     /// 可证伪：改任何一个常量，或改 `base.css` 对应值而这里没跟着改 ⇒ 转红。
     #[test]
@@ -1190,15 +1190,15 @@ mod tests {
         assert_eq!(TIP_CORNER_R_PX, 4);
         // base.css:907  border: 1px solid
         assert_eq!(TIP_BORDER_PX, 1);
-        // ⚠️ 字号/行高**有意偏离 base.css**（用户两次要求：「太虚太小」⇒ 14px；
+        // ⚠ 字号/行高**有意偏离 base.css**（用户两次要求：「太虚太小」⇒ 14px；
         // 与面板对齐 ⇒ 15px）。base.css 是 12px / 16px；
         //   这里断言的是**当前的、有意为之**的偏离值。
-        //   ⛔ 改这两个值前先确认用户是否改主意——不是「顺手对齐回 CSS」。
+        //   ✗ 改这两个值前先确认用户是否改主意——不是「顺手对齐回 CSS」。
         assert_eq!(
             TIP_FONT_PX, 15,
             "用户 2026-09-29 要求与面板对齐到 15px（base.css 是 12px）"
         );
-        // ⭐ 行高**不再有硬编码常数**（见 `line_h_px`）：它取自 `GetTextMetricsW`
+        // ✓ 行高**不得有硬编码常数**（见 `line_h_px`）：它取自 `GetTextMetricsW`
         //   的 `tmHeight + tmExternalLeading`，换字体/字号自动跟随 ⇒ 这里只断言
         //   「行高至少放得下当前字号」，具体数值由运行期度量决定。
         // base.css:920  max-width: 320px
@@ -1215,7 +1215,7 @@ mod tests {
         assert_eq!(PALETTE_DARK.fg, (255, 255, 255));
     }
 
-    /// ⭐ 阴影必须**逐层**等于 `--flyout-shadow`，且**两层 ≠ 一层**。
+    /// ✓ 阴影必须**逐层**等于 `--flyout-shadow`，且**两层 ≠ 一层**。
     ///
     /// 浅色 `base.css:96`：`0 8px 16px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.18)`
     /// 深色 `base.css:167`：`0px 5px 15px rgba(0,0,0,0.2)`（**单层**）
@@ -1232,7 +1232,7 @@ mod tests {
         assert_eq!(SHADOW_DARK[0], (0, 5, 15, 51));
     }
 
-    /// ⛔ 阴影 y 偏移的**符号**：CSS 的 `box-shadow` y 向下为正。
+    /// ✗ 阴影 y 偏移的**符号**：CSS 的 `box-shadow` y 向下为正。
     ///
     /// 可证伪：把它改成负的（照抄 的 `Direction=270`）⇒ 转红。
     /// 两者基准不同：本仓 CSS 阴影在**下方**。
@@ -1244,7 +1244,7 @@ mod tests {
 
     /// 画布边距必须**容得下每一层**的偏移与模糊，否则阴影被窗口边界裁掉。
     ///
-    /// ⛔ 不能写死常数：浅色是 `8/16`，深色是 `5/15`；写死 16 会在深色下
+    /// ✗ 不能写死常数：浅色是 `8/16`，深色是 `5/15`；写死 16 会在深色下
     ///   留一圈空白，写死 8 会在浅色下把模糊尾端切平。
     #[test]
     fn shadow_pad_covers_every_layer() {
@@ -1273,15 +1273,15 @@ mod tests {
     fn palettes_differ_and_dark_is_reachable() {
         assert_ne!(PALETTE_LIGHT.bg, PALETTE_DARK.bg);
         assert_ne!(PALETTE_LIGHT.fg, PALETTE_DARK.fg);
-        // ⛔ 深色下边框比气泡**更暗**（rgba(0,0,0,.20) 叠在 #2c2c2c 上）——
+        // ✗ 深色下边框比气泡**更暗**（rgba(0,0,0,.20) 叠在 #2c2c2c 上）——
         //   这不是笔误，正是深色主题靠暗线勾轮廓的实现方式。
         assert_eq!(PALETTE_DARK.border, (0, 0, 0));
-        // ⭐ 编译期不变式：深色边框不透明度必须**大于**浅色（`rgba(0,0,0,.20)` vs `.06`）。
+        // ✓ 编译期不变式：深色边框不透明度必须**大于**浅色（`rgba(0,0,0,.20)` vs `.06`）。
         //   `const { assert! }` 在**编译期**就挡住破坏它的改动，比运行期断言更早。
         const { assert!(PALETTE_DARK.border_a > PALETTE_LIGHT.border_a) };
     }
 
-    /// ⭐⭐⭐ **设备间的空隙（`idx < 0`）不得触发隐藏**——现象是「hover 在非第一个
+    /// ✓ **设备间的空隙（`idx < 0`）不得触发隐藏**——现象是「hover 在非第一个
     /// 设备时，tooltip 的首帧会出现在第一个设备上方」，其根因如下。
     ///
     /// 机制：`hovered_item_index` 在光标落在**两个设备的间隙**时同样返回 `-1`。
@@ -1289,7 +1289,7 @@ mod tests {
     /// 设备 1 时：途经空隙 ⇒ 提示消失 ⇒ 换设备又**重新等满 500ms**
     /// ⇒ 用户看到「提示先挂在旧设备上，之后才跳过来」。
     ///
-    /// ⛔ 判据必须是「**是否还在 widget 内**」（`want`），不是「是否命中设备」。
+    /// ✗ 判据必须是「**是否还在 widget 内**」（`want`），不是「是否命中设备」。
     ///
     /// 可证伪：把状态机里的 `idx < 0 => 什么都不做` 改回「隐藏」
     /// ⇒ 本测试表达的约束不再成立，而真机立刻复现。
@@ -1300,13 +1300,13 @@ mod tests {
         let gap_x = 63; // 落在 [58, 68) ⇒ 任何设备都没命中
         let hit = items.iter().position(|(l, r)| gap_x >= *l && gap_x < *r);
         assert_eq!(hit, None, "前提：空隙处确实命中不到任何设备（idx<0）");
-        // ⭐ 但「仍在 widget 内」为真 ⇒ 状态机必须**什么都不做**
+        // ✓ 但「仍在 widget 内」为真 ⇒ 状态机必须**什么都不做**
         let in_widget = true;
         assert!(in_widget, "光标还在 widget 内，只是没命中设备");
         // ⇒ 不得走「隐藏」分支，也不得重置计时（否则扫过空隙会不断推迟出现）
     }
 
-    /// ⭐⭐ **已显示时切换设备必须立即生效**，不得再等 500ms。
+    /// ✓ **已显示时切换设备必须立即生效**，不得再等 500ms。
     ///
     /// 500ms 只该作用于**首次出现**。若切换也要等满，用户会在每个设备上
     /// 额外停留半秒才看到更新——而正确行为是「拖着走，提示跟着换」。
@@ -1335,7 +1335,7 @@ mod tests {
         assert!(waits_later, "悬停 600ms 后必须已出现");
     }
 
-    /// ⭐ 锚点为**占位矩形**时必须拒绝——这正是「首帧出现在最左边」的机制。
+    /// ✓ 锚点为**占位矩形**时必须拒绝——这正是「首帧出现在最左边」的机制。
     ///
     /// 可证伪：删掉 `item_rect_on_screen` 里的 `w <= 1` 守卫（那一行在
     /// `taskbar_widget`）⇒ 本测试的判据仍然成立，但**真机**会重新出现
@@ -1353,18 +1353,18 @@ mod tests {
             "占位宽度必须被 `w <= 1` 拦住，否则首帧锚点退化为 0"
         );
         // 真实 widget 宽度远大于 1（本机实测 274px）⇒ 能通过该判据。
-        // ⛔ 这里**刻意不再写 `assert!(274 > 1)`**：那是恒真断言、零信息，
+        // ✗ 这里**刻意不再写 `assert!(274 > 1)`**：那是恒真断言、零信息，
         //   还会被 clippy 的 `assertions_on_constants` 拦下。
     }
 
-    /// ⭐⭐ 提示必须**跟随 widget 重排**——这是「首帧最左端」的第二半成因。
+    /// ✓ 提示必须**跟随 widget 重排**——这是「首帧最左端」的第二半成因。
     ///
     /// 机制（真机复现）：`draw_blank` 用 `commit(.., 0, ..)` ⇒ 启动初期 widget
     /// **本身**停在任务栏最左端；此时悬停，提示正确落在最左端；~700ms 后快照到达、
     /// `draw_items` 把 widget 重居中到 x≈1101，但 hover **索引没变**
     /// ⇒ `HOVER_SINCE == -1` ⇒ 不再投递重绘 ⇒ 提示**永久遗留在最左端**。
     ///
-    /// ⚠️ 因此「只在索引变化时更新」**不足以**修好它，必须在每次 `sync()` 时
+    /// ⚠ 因此「只在索引变化时更新」**不足以**修好它，必须在每次 `sync()` 时
     ///   检查 `CURRENT_SHOWN` 并重新落位。
     /// 可证伪：把 `sync()` 开头的「重新落位」块删掉（即挪到「没变就返回」之后）
     /// ⇒ 本测试的顺序约束不再被强制，而真机必然复现。
@@ -1389,7 +1389,7 @@ mod tests {
         );
     }
 
-    /// ⛔⛔ **回归判据**：方向判错会把提示丢到屏幕外，而它**不会报任何错**。
+    /// ✗ **回归判据**：方向判错会把提示丢到屏幕外，而它**不会报任何错**。
     ///
     /// 本机 `tb_top = 1380`，任何小于它的阈值都会判成「在上边」
     /// ⇒ 提示落到 `y = 1446`（屏幕外，真机实测）。
@@ -1432,7 +1432,7 @@ mod tests {
         assert!(vertical.0 < vertical.1);
     }
 
-    /// ⭐ `box_blur` 必须是**保守**的：模糊后总能量不得增加、峰值必须下降。
+    /// ✓ `box_blur` 必须是**保守**的：模糊后总能量不得增加、峰值必须下降。
     ///
     /// 可证伪：把 `box_blur` 改成恒等拷贝 ⇒ `sum_after == sum_before` 转红。
     /// （这正是「阴影看起来像描边」的成因：边缘是硬台阶。）
@@ -1459,7 +1459,7 @@ mod tests {
         assert!(a.iter().all(|&v| v == 7));
     }
 
-    /// ⭐ 预乘合成必须让**低覆盖度的抗锯齿边缘**保留下来（不被底衬吃掉）。
+    /// ✓ 预乘合成必须让**低覆盖度的抗锯齿边缘**保留下来（不被底衬吃掉）。
     ///
     /// 与 `taskbar_widget::blend_over_antialiased_edge_is_not_eroded` 同一条纪律：
     /// 气泡底色 alpha=255，边缘覆盖度 < 255 时结果 alpha 必须**介于两者之间**。
@@ -1478,14 +1478,14 @@ mod tests {
     /// 折行上限必须等于 `max-width: 320px`（**px**，非 DIP）。
     #[test]
     fn wrap_width_is_in_px_not_dip() {
-        // ⛔ 用 px：CSS 的 px 是设备无关像素，而本仓「内容缩放」是**独立**的用户设置
+        // ✗ 用 px：CSS 的 px 是设备无关像素，而本仓「内容缩放」是**独立**的用户设置
         //   ⇒ 用 DIP 换算会让宽度随档位漂移，与页面里那个 320px 对不上。
         assert_eq!(TIP_MAX_W_PX, 320);
     }
 
     /// 文本折行：**按字符**断，不按空格断。
     ///
-    /// ⛔ 设备名多为无空格连续串；按空格断等于不折（用户明确要求「折行不截断」）。
+    /// ✗ 设备名多为无空格连续串；按空格断等于不折（用户明确要求「折行不截断」）。
     /// 可证伪：把 `wrap_lines` 改成按 `' '` 切分 ⇒ 含中文无空格的长串仍是 1 行 ⇒ 转红。
     #[test]
     fn wrap_splits_on_width_not_on_spaces() {
@@ -1506,7 +1506,7 @@ mod tests {
         assert!(lines.iter().all(|l| l.len() <= cap));
     }
 
-    /// ⭐ 行高必须**由字体度量给出**，且**放得下字形**。
+    /// ✓ 行高必须**由字体度量给出**，且**放得下字形**。
     ///
     /// 行高不足的**现象**是「字底部显示不全」——
     /// 根因是行高被硬编码成 `字号 + 2`（15px 字号 ⇒ 17px 行距），
@@ -1542,7 +1542,7 @@ mod tests {
             "行高 {lh} < 字体单行占位高度 {need}（tmHeight={} + 外边距={}）             ⇒ DrawTextW 画进比它矮的带子里，底部被裁",
             tm.tmHeight, tm.tmExternalLeading
         );
-        // ⛔ 反向：也不能大到离谱（气泡会松垮）
+        // ✗ 反向：也不能大到离谱（气泡会松垮）
         assert!(
             lh <= need + 4,
             "行高 {lh} 比字体要求的 {need} 大出一截 ⇒ 气泡松垮"

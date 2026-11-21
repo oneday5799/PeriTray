@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """定位：设置页两个 tab 在**运行时**被外部改名后是否自动同步。
 
-⚠️ 与 `probe-settings-names.py` 的区别：那个是**启动前**把别名写进 config.toml
+⚠ 与 `probe-settings-names.py` 的区别：那个是**启动前**把别名写进 config.toml
    （应用启动时读入）⇒ 只证明「加载路径正确」。这个是**运行时**改名
    （模拟用户在弹出窗口改完名后切到设置窗口），走的是
    `rename_device` → `config-changed` → 设置页各 tab 的刷新链路。
 
-⚠️ 改名动作**故意从 settings.html 发起**：设置窗口可见时，隐藏的弹出窗口页面
+⚠ 改名动作**故意从 settings.html 发起**：设置窗口可见时，隐藏的弹出窗口页面
    发起的 `invoke` 不返回（实测，见本文件末尾备注），所以只能用可见的那页驱动。
    事件（`config-changed` / `audio-devices-changed`）由后端统一发出，
    与发起方无关 ⇒ 测的是同一条链路。
@@ -64,7 +64,7 @@ def port_alive():
 
 
 def kill_all():
-    # ⚠️ 必须**先无条件杀一次**：上一次的实例可能是**不带调试端口**启动的
+    # ⚠ 必须**先无条件杀一次**：上一次的实例可能是**不带调试端口**启动的
     #    ⇒ port_alive() 为 False ⇒ 「等端口空出来」的写法会直接返回、根本没杀
     #    ⇒ 新实例撞上单实例守卫立刻退出（本文件第一次跑就是这样失败的）。
     subprocess.run(["taskkill", "/F", "/IM", "PeriTray.exe"], capture_output=True)

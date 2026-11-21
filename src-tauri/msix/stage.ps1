@@ -63,12 +63,12 @@ if (-not $PublisherDN) {
 }
 $manifest = Get-Content $ManifestTemplate -Raw
 
-# ⚠️ 必须按**结构**替换 Identity 里的 Version，不能匹配某个写死的版本号字面量。
+# ⚠ 必须按**结构**替换 Identity 里的 Version，不能匹配某个写死的版本号字面量。
 # 旧写法是 `-replace 'Version="1\.3\.5\.0"', ...` —— 与模板里的字面量硬耦合：
 # 一旦有人「顺手」把模板的字面量对齐到当前版本，`-replace` **不匹配也不报错**，
 # 产出的包就会带着模板里的那个版本号 ⇒ 包身份与 tag 脱钩。
 # 而 MSIX 的版本号必须**严格递增**，Store 上传会被拒 —— 且这一步全程静默。
-# ⛔ 用 Regex **实例**的 Replace(.., count) 而非静态 `[regex]::Replace(s,p,r,1)`：
+# ✗ 用 Regex **实例**的 Replace(.., count) 而非静态 `[regex]::Replace(s,p,r,1)`：
 # 后者的第 4 个参数是 **RegexOptions**（1 = IgnoreCase），**不是替换次数**，
 # 会替换掉**全部**匹配（本仓实测踩过）。
 $identityVersionRe = [regex]'(?s)(<Identity\b[^>]*?\bVersion=")[^"]*(")'

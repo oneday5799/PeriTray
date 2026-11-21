@@ -5,7 +5,7 @@
 // 迁移注记：由 verify-batch-1.sh 迁为 .mjs（工具脚本语言收敛）；判据集合与 PASS/FAIL
 //   输出口径不变，迁移对账 diff 为空。语言分工 → Wiki 08 §1.1。
 //
-// ⚠️ 硬约定：`grep -c` 零匹配时退出码为 1 ⇒ 一律赋值后比较（sh 时代的坑；
+// ⚠ 硬约定：`grep -c` 零匹配时退出码为 1 ⇒ 一律赋值后比较（sh 时代的坑；
 //   .mjs 自实现计数命中 0 是合法值，不抛异常），不用 `set -e` / `&&`。
 
 import { readFileSync } from "node:fs";
@@ -36,7 +36,7 @@ console.log("== 第一批（P0-1 / P0-2 / P3-13）验收 ==");
 chkEq("P0-1：bluetooth.rs 的 let Some(_guard) 已清零", grepCount("let Some(_guard)", "src-tauri/src/bluetooth.rs"), 0);
 
 // P3-13：SingleFlightGuard 的**定义**已上移到 state.rs，wireless_24g/mod.rs 只剩 use + 调用。
-// ⚠️ 判据必须落在 `struct`（定义）上，不能写成 `grep -c "SingleFlightGuard"`——
+// ⚠ 判据必须落在 `struct`（定义）上，不能写成 `grep -c "SingleFlightGuard"`——
 //    改法是「改为 use crate::state::SingleFlightGuard; 复用」，加了 use 之后
 //    该文件至少仍有 3 处命中，**永远不可能为 0**（主方案 §6.3 第二十二轮已修正）。
 chkEq(
@@ -46,7 +46,7 @@ chkEq(
 );
 chkEq("P3-13：定义已落在 state.rs（正控）", grepCount("struct SingleFlightGuard", "src-tauri/src/state.rs"), 1);
 
-// ── ⚠️ 已按实测订正的判据 ──────────────────────────────────────────
+// ── ⚠ 已按实测订正的判据 ──────────────────────────────────────────
 // 主方案 §6.3 原写：`grep -c "let Some(_guard)" src-tauri/src/{bluetooth.rs,wireless_24g/mod.rs}`
 // **应为 0**（当时 1+2=3）。
 // 2026-09-18 实测：bluetooth.rs = 0（合规），但 **wireless_24g/mod.rs = 1**。
@@ -80,9 +80,9 @@ console.log(`INFO  let Some(_guard) 合计 ${total} 处，其中带说明 ${docu
 console.log(`MANUAL  以下两条按主方案 §6.3 只能靠**注入**验证，脚本不做（会误报）：
   · P0-1：在 \`enqueue_bt_refresh\` 的**线程体内**插 \`sleep(2s)\` 撑开窗口，**并发调用两次**，
     断言第二次被拒（只跑 1 个 worker）。
-    ⚠️ 注入点必须在**线程体内**——插在回调入口等于插在「没被移动的那部分」，
+    ⚠ 注入点必须在**线程体内**——插在回调入口等于插在「没被移动的那部分」，
        修复前后都会「卡」，测试不可证伪（主方案 §6.3 第二十二/二十三轮已修正）。
-    ⚠️ 不能改成「把 CAS 改为恒失败」——那样 \`SingleFlightGuard::new\` 返回 None、
+    ⚠ 不能改成「把 CAS 改为恒失败」——那样 \`SingleFlightGuard::new\` 返回 None、
        直接 return，**未修复的代码同样不会启动线程**，同样不可证伪。
   · P0-2：同族（失败路径回滚），按 §3.2 的「验证」块执行。`);
 

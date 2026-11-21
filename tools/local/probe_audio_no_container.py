@@ -74,10 +74,10 @@ def build_reverse_index():
     idx = defaultdict(list)
     for c in subkeys(DC):
         guid = c.strip("{}").lower()
-        # ⚠️ BaseContainers 下的子键名是**小写**花括号 GUID，与顶层大写键名不同 ——
+        # ⚠ BaseContainers 下的子键名是**小写**花括号 GUID，与顶层大写键名不同 ——
         # 直接拿顶层键名去拼路径会**静默返回空表**（本探针第一版就踩了）。
         child = f"{DC}\\{c}\\BaseContainers\\" + "{" + guid + "}"
-        # ⛔ 成员实例路径是**值名**（数据一律 REG_NONE），**不是子键** ——
+        # ✗ 成员实例路径是**值名**（数据一律 REG_NONE），**不是子键** ——
         # 用 subkeys() 会得到空表且不报错（本探针第二版就栽在这）。
         for member in values(child):
             idx[member.upper()].append(guid)
@@ -103,9 +103,9 @@ def main():
         cid = None
         if "ContainerID" in v:
             cid = as_str(v["ContainerID"][1]).strip("{}").lower()
-        kind = "⛔占位" if cid in NULL_CONTAINERS else ("✅真实" if cid else "无属性")
+        kind = "✗占位" if cid in NULL_CONTAINERS else ("✓真实" if cid else "无属性")
         print(f"      {kind}  {cid}   <- SWD\\MMDEVAPI\\{e}")
-    print("    ⚠️ 注意：这里**没有**靠 ConfigFlags 判在场 —— 对 SWD\\MMDEVAPI 它恒为 0x0，"
+    print("    ⚠ 注意：这里**没有**靠 ConfigFlags 判在场 —— 对 SWD\\MMDEVAPI 它恒为 0x0，"
           "判不出来。在场与否必须靠运行时 CM_Get_Device_ID_ListW。")
 
     # ── 3. 与 Rust 侧实测的 6 个逐一对照 ────────────────────
@@ -125,7 +125,7 @@ def main():
             print("          反向索引里**查不到** ⇒ 未归属任何容器")
             continue
         for c in cids:
-            kind = "⛔ 占位容器（应被过滤）" if c in NULL_CONTAINERS else "✅ 真实容器"
+            kind = "✗ 占位容器（应被过滤）" if c in NULL_CONTAINERS else "✓ 真实容器"
             print(f"      {inst}")
             print(f"          → {c}  {kind}")
 

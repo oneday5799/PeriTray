@@ -2,16 +2,16 @@
 """验收：hover 底衬（白色半透明 / 口径与 FluentFlyout 一致 / **仅 hover 时出现**）。
 
 为什么这样设计：
-  ⛔ 本机**无法注入鼠标输入**（SetCursorPos / SendInput / mouse_event 全无效，见 PLAYBOOK §E11.7）
+  ✗ 本机**无法注入鼠标输入**（SetCursorPos / SendInput / mouse_event 全无效，见 PLAYBOOK §E11.7）
      ⇒ 不能让光标去就窗口。
-  ⛔ 也**不能**用 `SetWindowPos` 伪造：`draw_items` 每次重绘都按配置重新定位，挪过去的
+  ✗ 也**不能**用 `SetWindowPos` 伪造：`draw_items` 每次重绘都按配置重新定位，挪过去的
      窗口会被立刻搬回原位。
-  ✅ 反过来做 —— **让窗口来就光标**：`taskbar_custom_x` 是**合法配置**（拖拽落盘用的就是它），
+  ✓ 反过来做 —— **让窗口来就光标**：`taskbar_custom_x` 是**合法配置**（拖拽落盘用的就是它），
      写进去后重启应用，窗口就定位到光标处 ⇒ hover 自然成立。全程不碰窗口 API。
 
 判据为什么用「窗口内 vs 窗口外」的相对亮度：
-  ⛔ 分层窗的 alpha 在屏幕合成后就没了 ⇒ 抓屏只能拿到**合成结果**，读不到 alpha。
-  ⭐ 定量式：白色 alpha=153 叠加 ⇒ 结果 ≈ 0.4 × 背景 + 153（可精确核对，不是「变亮了」这种模糊话）。
+  ✗ 分层窗的 alpha 在屏幕合成后就没了 ⇒ 抓屏只能拿到**合成结果**，读不到 alpha。
+  ✓ 定量式：白色 alpha=153 叠加 ⇒ 结果 ≈ 0.4 × 背景 + 153（可精确核对，不是「变亮了」这种模糊话）。
 """
 
 import ctypes
@@ -35,8 +35,8 @@ WM_APP_REFRESH = 0x8000 + 1
 WAIT_CURSOR_S = 240        # 等光标进入任务栏（多数时候它本来就在）
 WAIT_LEAVE_S = 300         # 等光标离开 widget（本机无法注入鼠标 ⇒ 只能等用户移开）
 ALPHA_LIGHT = 153          # FluentFlyout 浅色分支：255 × 0.6
-# ⭐ 高度口径 = FluentFlyout 的 **40 DIP**（XAML `Height="40"`）按任务栏 DPI 换算。
-#    ⛔ 别再硬编码 40：那是**物理像素**，125% 缩放下比 FluentFlyout 矮 10px。
+# ✓ 高度口径 = FluentFlyout 的 **40 DIP**（XAML `Height="40"`）按任务栏 DPI 换算。
+#    ✗ 别再硬编码 40：那是**物理像素**，125% 缩放下比 FluentFlyout 矮 10px。
 DIP_WIDGET_H = 40
 
 # ── DPI：必须在任何窗口/DC 操作之前设（本机 125%，否则拿到虚拟化坐标）──
@@ -65,12 +65,12 @@ u.ClientToScreen.argtypes = [ctypes.c_void_p, ctypes.POINTER(wt.POINT)]
 u.ClientToScreen.restype = wt.BOOL
 u.PostMessageW.argtypes = [ctypes.c_void_p, wt.UINT, ctypes.c_size_t, ctypes.c_ssize_t]
 u.PostMessageW.restype = wt.BOOL
-# ⚠️ GetDC / ReleaseDC 在 **user32**（不是 gdi32）
+# ⚠ GetDC / ReleaseDC 在 **user32**（不是 gdi32）
 u.GetDC.argtypes = [ctypes.c_void_p]
 u.GetDC.restype = ctypes.c_void_p
 u.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 u.ReleaseDC.restype = ctypes.c_int
-# ⭐ GetDpiForWindow 在 **user32**；用**任务栏**的 DPI（widget 是它的子窗）
+# ✓ GetDpiForWindow 在 **user32**；用**任务栏**的 DPI（widget 是它的子窗）
 u.GetDpiForWindow.argtypes = [ctypes.c_void_p]
 u.GetDpiForWindow.restype = wt.UINT
 
@@ -92,7 +92,7 @@ gdi.GetDIBits.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wt.UINT, wt.UINT, ct
 gdi.GetDIBits.restype = ctypes.c_int
 
 SRCCOPY = 0x00CC0020
-CAPTUREBLT = 0x40000000     # ⛔ 抓分层窗必须加
+CAPTUREBLT = 0x40000000     # ✗ 抓分层窗必须加
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -139,7 +139,7 @@ def grab(left, top, w, h):
     gdi.DeleteObject(bmp)
     gdi.DeleteDC(mem)
     u.ReleaseDC(None, hdc)
-    # ⛔ 必须取 `.raw`：`create_string_buffer` 的**下标**返回的是长度 1 的 bytes，
+    # ✗ 必须取 `.raw`：`create_string_buffer` 的**下标**返回的是长度 1 的 bytes，
     #    不是 int ⇒ `0.299 * b'\x12'` 会报 can't multiply sequence by non-int。
     return buf.raw
 
@@ -203,7 +203,7 @@ def client_left(hwnd):
     return pt.x
 
 
-# ── 配置读写（⛔ 必须是顶层键：裸键会落进最近一个 [table]）──────────
+# ── 配置读写（✗ 必须是顶层键：裸键会落进最近一个 [table]）──────────
 
 def drop_config_line(key):
     txt = open(CFG, encoding="utf-8", errors="replace").read()
@@ -241,7 +241,7 @@ def set_config_line(key, line):
 def drop_pins():
     """清空 pin 列表（TOML **数组表**）。
 
-    ⛔⛔ `pinned_taskbar_devices` 在 config.toml 里是 `[[pinned_taskbar_devices]]` **数组表**，
+    ✗ `pinned_taskbar_devices` 在 config.toml 里是 `[[pinned_taskbar_devices]]` **数组表**，
        `drop_config_line()` 只认 `key = [...]`（内联数组）与 `key = ...`（标量）两种形态
        ⇒ 对数组表**匹配不到、静默无效**（pin 一个不少，widget 只是更宽）。
        必须按 TOML 语义「表头切换上下文」删：从该表头起，到下一个 `[`/`[[` 表头之前的
@@ -329,7 +329,7 @@ def start_and_find(pin=False, wait=9):
 def row_lift(data, bw, out, y, x_in):
     """同一行上「窗口内 vs 窗口外」的亮度与差值。
 
-    ⛔ 两个约束缺一不可（各自踩过一次坑，见 `sample` 的文档）：
+    ✗ 两个约束缺一不可（各自踩过一次坑，见 `sample` 的文档）：
        ① **同行**（`y` 相同）—— 任务栏的搜索框高亮区只占 y≈11~45，跨行比较会把它算进来；
        ② **横向相邻**（`x_in` 必须小到落在左侧内边距列）—— 相距 141px 时两点背景本就差 21.5。
     """
@@ -341,7 +341,7 @@ def row_lift(data, bw, out, y, x_in):
 def wait_content(hwnd, min_w=40, timeout=25):
     """等 widget **真的画出内容**（宽度 > `min_w`），返回最新 rect。
 
-    ⛔⛔ 刚勾选设备时，设备列表（WMI，600ms+）还没回来 ⇒ widget 会先以**极小宽度**出现
+    ✗ 刚勾选设备时，设备列表（WMI，600ms+）还没回来 ⇒ widget 会先以**极小宽度**出现
        （实测 **16px**）⇒ 此时采样必然假红。修好「清 pin」后 pin 真的是从 0 开始，
        这条时序才暴露出来（此前配置里留着旧 pin，widget 一建出来就有内容，掩盖了它）。
     """
@@ -357,7 +357,7 @@ def wait_content(hwnd, min_w=40, timeout=25):
 def sample(rect):
     """返回 (mid, up, dn, corner)，每项 = (内, 外, 差值)。
 
-    ⛔⛔ 采样点**必须落在窗口的左侧内边距列**（local x = 2；`PAD_X = 6` ⇒ 该列恒为空白），
+    ✗ 采样点**必须落在窗口的左侧内边距列**（local x = 2；`PAD_X = 6` ⇒ 该列恒为空白），
        且「内 / 外」两点**横向只隔 6px**。踩过的两个坑：
          · 第一版拿「顶行/底行**中部**」当纯底衬区 ⇒ 撞上**窗口内容**（图标自 y=4 起，
            文字在 y=4~36）⇒ 未 hover 也读出 247.4（内容本身就很亮）。
@@ -413,7 +413,7 @@ def main():
 
         # ── 阶段 1：基线（未 hover ⇒ 不该有底衬）────────────────────
         print("\n=== 阶段 1：基线（未 hover）===")
-        # ⛔ 两种情况都必须挪窗：
+        # ✗ 两种情况都必须挪窗：
         #    ① 光标就在 widget 上（会触发 hover）；
         #    ② widget 贴到 x < 8 —— 采样要取「窗口左外侧 4px」当背景，
         #       贴到 x=0 会采到**屏幕外**（实测 外=0.0 ⇒ A1/A2 假红，纯脚本自伤）。
@@ -422,9 +422,9 @@ def main():
                    else f"widget 贴到 x={rect[0]}，左侧没有采样余量")
             note(f"{why} ⇒ 先把窗口挪开（写 custom_x + 重启）")
             pt = cursor()
-            # ⛔ 留 20px 余量：采样要取「窗口左外侧 4px」当背景，贴到 x=0 会采到屏幕外
+            # ✗ 留 20px 余量：采样要取「窗口左外侧 4px」当背景，贴到 x=0 会采到屏幕外
             #    （实测外=0.0 ⇒ 判据假红，纯属脚本自伤）。
-            # ⭐ **优先放最左端**：实测 x=0~40 全高都是平坦的任务栏底色（~225.9），
+            # ✓ **优先放最左端**：实测 x=0~40 全高都是平坦的任务栏底色（~225.9），
             #    是采样最可靠的位置；只有光标本身就待在这一带时才退到最右端。
             if not (tb[0] <= pt[0] < tb[0] + rect[2] + 20):
                 far = tb[0] + 20
@@ -453,7 +453,7 @@ def main():
         attempt = 0
         while time.time() - t0 < WAIT_CURSOR_S:
             pt = cursor()
-            # ⛔ tb 是 (left, top, W, H) —— y 的右界必须写 tb[1] + tb[3]，
+            # ✗ tb 是 (left, top, W, H) —— y 的右界必须写 tb[1] + tb[3]，
             #    写成 tb[3] 会让判据恒假（实测：脚本空转到超时，日志一句不输出）。
             if pt and tb[0] <= pt[0] < tb[0] + tb[2] and tb[1] <= pt[1] < tb[1] + tb[3]:
                 attempt += 1
@@ -485,16 +485,16 @@ def main():
         err = abs(mid[0] - expect)
         check("C 底衬出现且**定量**吻合 白 alpha=153 合成式", err <= 8.0,
               f"外={mid[1]:.1f} 内={mid[0]:.1f} 期望={expect:.1f} 误差={err:.1f}（阈值 8）")
-        # ⚠️ 阈值 8 而不是 20：本机**浅色任务栏**（背景亮度 ~232）下，白 alpha=153 叠加
+        # ⚠ 阈值 8 而不是 20：本机**浅色任务栏**（背景亮度 ~232）下，白 alpha=153 叠加
         #    只把亮度抬到 ~246（0.4×232+153）⇒ 实际抬升约 14。这是 FluentFlyout 的
         #    原生行为（浅色主题下 60% 白在浅色底上本就不明显），不是缺陷。
         check("C2 底衬是**提亮**而非压暗", mid[0] > mid[1] + 8, f"抬升 {mid[0] - mid[1]:+.1f}")
-        # ⭐ 用**抬升量**比较三行（而不是比较绝对亮度）：抬升量把「背景本身横向/纵向不均」
+        # ✓ 用**抬升量**比较三行（而不是比较绝对亮度）：抬升量把「背景本身横向/纵向不均」
         #    约掉了，判据才与任务栏内容无关。
         check("D 底衬覆盖窗口**全高**（上/中/下三行同为底衬）",
               up[2] > 8 and dn[2] > 8 and abs(up[2] - mid[2]) < 8 and abs(dn[2] - mid[2]) < 8,
               f"抬升 上={up[2]:+.1f} 中={mid[2]:+.1f} 下={dn[2]:+.1f}")
-        # ⚠️ 阈值 8：本机**浅色任务栏**（背景 ~230）下白 alpha=153 只把亮度抬到 ~245
+        # ⚠ 阈值 8：本机**浅色任务栏**（背景 ~230）下白 alpha=153 只把亮度抬到 ~245
         #    （0.4×230+153=245）⇒ 角落与中心的实际差只有 ~15。这是 FluentFlyout 的原生
         #    行为（浅色主题下 60% 白在浅色底上本就不明显），不是缺陷 —— 阈值必须按实测定。
         check("E 左上角在圆角之外（不是底衬）", corner[2] < 8.0,
@@ -510,9 +510,9 @@ def main():
                 break
             time.sleep(0.3)
         if not left_ok:
-            # ⛔ 本机**无法注入鼠标**（SetCursorPos / SendInput / mouse_event 全无效，
+            # ✗ 本机**无法注入鼠标**（SetCursorPos / SendInput / mouse_event 全无效，
             #    见 PLAYBOOK §E11.7）⇒ 这条只能靠用户把鼠标移开。
-            #    ⛔ 不要用「挪窗」来伪造：那会重启进程 ⇒ 新日志里**不会**出现
+            #    ✗ 不要用「挪窗」来伪造：那会重启进程 ⇒ 新日志里**不会**出现
             #    「hover: 离开」（新进程的 `HOVERED` 本来就是 false，`want == HOVERED`
             #    ⇒ 不产生日志）⇒ G2 会变成误导性的 FAIL。
             note(f"{WAIT_LEAVE_S}s 内光标未离开 ⇒ F / F2 / G2 **未验证**（非失败）")
@@ -520,7 +520,7 @@ def main():
             ok = sum(1 for _, o, _ in RESULTS if o)
             for n, o, d in RESULTS:
                 if not o:
-                    print(f"  ❌ {n}  —— {d}")
+                    print(f"  ✗ {n}  —— {d}")
             print(f"{ok}/{len(RESULTS)} 通过（F/F2/G2 未验证）")
             return 0 if ok == len(RESULTS) else 1
 
@@ -535,7 +535,7 @@ def main():
         ok = sum(1 for _, o, _ in RESULTS if o)
         for n, o, d in RESULTS:
             if not o:
-                print(f"  ❌ {n}  —— {d}")
+                print(f"  ✗ {n}  —— {d}")
         print(f"{ok}/{len(RESULTS)} 通过")
         return 0 if ok == len(RESULTS) else 1
     finally:

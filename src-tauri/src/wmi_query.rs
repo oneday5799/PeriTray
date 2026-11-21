@@ -161,9 +161,9 @@ pub fn query_devices_with(con: &WMIConnection, fresh: bool) -> Result<Vec<Device
 /// `device_identity::phone_service_containers`，它是唯一判定来源）。
 ///
 /// 判据：只写 `is_phone` 图标标记，且只写**蓝牙行** ∧ 容器键（`c:` 前缀）——
-/// ⛔ 不得扩散到非蓝牙行或 `n:`/`i:` 降级键的行：它们没有容器证据，
+/// ✗ 不得扩散到非蓝牙行或 `n:`/`i:` 降级键的行：它们没有容器证据，
 ///   命中集合里根本不会有其 GUID，这里再挡一层是防「键前缀口径变化」后误写。
-/// ⛔ **不得在此推断连接态**：服务行 devnode 不随链路断开移除（真机实测手机
+/// ✗ **不得在此推断连接态**：服务行 devnode 不随链路断开移除（真机实测手机
 ///   关蓝牙后仍全部 Present / OK），「服务行在场 ⇒ 在线」会把离场手机永久误报
 ///   已连接；手机在线只能由链路证据合成（`bind_relay_sessions` 绑定转发会话）。
 fn mark_phone_rows(devices: &mut [Device], live: &BTreeSet<String>) {
@@ -280,7 +280,7 @@ fn query_pnp_devices(
             .then(|| crate::device::Wireless24gKind::from_device_type(&device_type))
             .flatten();
         // 收集 2.4G 设备的电量查询目标（身份键 + 驱动分派用的 VID/PID）。
-        // ⚠️ 键必须是**设备身份**，不是型号：同款两台接收器共用型号键会导致
+        // ⚠ 键必须是**设备身份**，不是型号：同款两台接收器共用型号键会导致
         // 只有一台显示得出电量、且显示的值可能来自另一台。
         // 极少数情况下拿不到身份键（名称与实例路径都为空）时退回型号键 `m:`，
         // 语义等同历史行为 —— 宁可退化为旧行为，也不要凭空丢掉电量。
@@ -456,7 +456,7 @@ fn query_battery_devices(
 /// 默认只读缓存即时返回，实际 HID 查询由 wireless_24g 后台线程完成；
 /// fresh=true 时同步现查（手动刷新按钮，耗时约 0.5~2 秒）。
 ///
-/// ⚠️ 电量按**设备身份键**对回条目，不按型号名 —— 同型号两台接收器
+/// ⚠ 电量按**设备身份键**对回条目，不按型号名 —— 同型号两台接收器
 /// 共用型号键时，会出现「只有一台显示电量、且值可能来自另一台」。
 fn fill_24g_battery(all: &mut [Device], targets: Vec<wireless_24g::BatteryTarget>, fresh: bool) {
     // 入口可见性：列出本次发现的全部 2.4G 实体与驱动支持判定——
@@ -595,7 +595,7 @@ mod tests {
     }
 
     /// 判据边界：非蓝牙行、无容器键（`i:` / `n:` / None）、容器不在命中集合 ——
-    /// 四者都**不得**被改写（⛔ 标记不得扩散到没有容器证据的行）。
+    /// 四者都**不得**被改写（✗ 标记不得扩散到没有容器证据的行）。
     #[test]
     fn mark_phone_rows_never_touches_rows_without_container_evidence() {
         let mut all = vec![

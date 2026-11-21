@@ -486,7 +486,7 @@ pub fn find_paired_bluetooth_devices(
     let btc_selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
     let btc_devices_info = DeviceInformation::FindAllAsyncAqsFilter(&btc_selector)?.join()?;
     // 先把经典蓝牙设备收齐，再**一次性**读电量：
-    // ⛔ 不得在循环里逐台调用：每次都会重建「系统类设备信息集」并全量枚举。
+    // ✗ 不得在循环里逐台调用：每次都会重建「系统类设备信息集」并全量枚举。
     let mut btc_entries: Vec<(String, bool, String)> = Vec::new();
     for device_info in btc_devices_info.into_iter() {
         if let Some((name, connected, device_id)) = classic_device_from_info(&device_info) {
@@ -706,9 +706,9 @@ fn read_btc_battery_from_device_id(device_id: &str) -> Option<u8> {
     read_btc_batteries(&[device_id]).remove(device_id)
 }
 
-/// 批量读取经典蓝牙电量：**设备信息集只建一次**（P1-9）。
+/// 批量读取经典蓝牙电量：**设备信息集只建一次**。
 ///
-/// ⛔ **不得**按设备逐个调用单设备版本：每次调用都会
+/// ✗ **不得**按设备逐个调用单设备版本：每次调用都会
 /// `SetupDiGetClassDevsW(GUID_DEVCLASS_SYSTEM)` 重建一遍「系统类设备信息集」
 /// 再全量 `SetupDiEnumDeviceInfo` 枚举（并对每个实例调 2 次
 /// `SetupDiGetDeviceInstanceIdW` 取 ID）⇒ **N 台设备就全量扫描 N 遍**。

@@ -101,7 +101,7 @@ def collect():
             raw = v.get("ContainerID")
             cid = None
             if raw:
-                # ⚠️ Enum\USB 下 ContainerID 是 REG_SZ（带花括号字符串），
+                # ⚠ Enum\USB 下 ContainerID 是 REG_SZ（带花括号字符串），
                 # 不是 REG_BINARY —— 同名键在不同位置存储类型不同，别想当然。
                 cid = as_str(raw[1]).strip().strip("{}").lower() if raw[0] == winreg.REG_SZ \
                     else guid_from_reg_binary(raw[1])

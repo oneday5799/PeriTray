@@ -61,6 +61,6 @@ while time.time() - t0 < 15:
     time.sleep(0.03)
 print(f"写入+快照更新耗时: {wrote * 1000:.0f}ms" if wrote else "!! 15s 内没出现写入日志")
 
-# ⚠️ 必须收尾杀掉应用：否则它会一直持有本脚本的输出管道，
+# ⚠ 必须收尾杀掉应用：否则它会一直持有本脚本的输出管道，
 #    外层命令的清理步骤会一直等它退出（表现为工具报 ChildProcess.kill）。
 subprocess.run(["taskkill", "/F", "/IM", "PeriTray.exe"], capture_output=True)

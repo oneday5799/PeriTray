@@ -4,7 +4,7 @@
 //    （证明正例的文件确实来自过滤器，而非 WER 或其他机制）
 // ② 正例：装了过滤器的进程触发原生 AV ⇒ 必须产生 native_crash_*.txt 与 .dmp
 // 用法：node tools/local/verify-native-crash-capture.mjs
-// ⚠️ 两个用例都会让各自测试进程崩溃退出，属预期；脚本报「验证通过/失败」。
+// ⚠ 两个用例都会让各自测试进程崩溃退出，属预期；脚本报「验证通过/失败」。
 
 import { execSync, execFileSync } from "node:child_process";
 import { rmSync, readdirSync, readFileSync, existsSync } from "node:fs";
@@ -30,11 +30,11 @@ try {
 }
 const afterNegative = existsSync(DIR) ? readdirSync(DIR).filter((n) => n.startsWith("native_crash_")) : [];
 if (afterNegative.length !== 0) {
-  console.error(`★ 负例失败：未装过滤器却产生了取证文件：${afterNegative.join(", ")}`);
+  console.error(`✗ 负例失败：未装过滤器却产生了取证文件：${afterNegative.join(", ")}`);
   process.exit(1);
 }
 if (!negativeCrashed) {
-  console.error("★ 负例异常：AV 没有让测试进程崩溃——注入未生效，本次验证无效");
+  console.error("✗ 负例异常：AV 没有让测试进程崩溃——注入未生效，本次验证无效");
   process.exit(1);
 }
 console.log("① 负例通过：未装过滤器 ⇒ 无取证文件（进程确实崩了）");
@@ -53,7 +53,7 @@ const files = existsSync(DIR) ? readdirSync(DIR).filter((n) => n.startsWith("nat
 const txt = files.find((n) => n.endsWith(".txt"));
 const dmp = files.find((n) => n.endsWith(".dmp"));
 if (!txt || !dmp) {
-  console.error(`★ 正例失败：AV 后未落盘取证文件（目录内容：${files.join(", ") || "空"}）`);
+  console.error(`✗ 正例失败：AV 后未落盘取证文件（目录内容：${files.join(", ") || "空"}）`);
   process.exit(1);
 }
 console.log(`② 正例通过：已落盘 ${txt} + ${dmp}`);

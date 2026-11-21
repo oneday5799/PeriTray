@@ -3,20 +3,20 @@
 //! 加载序 N/N · 提供：`ensure_probe()` / `auto_slot()` / `find_free_interval()`
 //! 依赖：`crate::audio::ensure_com_initialized`（全仓 COM 初始化唯一入口）
 //!
-//! ⭐⭐ **它问的是「控件自己的矩形」，不是「哪里看起来空」**——这是它与本仓
-//!   已退役的「避让」方案的**根本区别**（退役机理 → Wiki 15 §8）：
+//! ✓ **它问的是「控件自己的矩形」，不是「哪里看起来空」**——这是它与本仓
+//!   已退役的「避让」方案的**根本区别**（退役机理 → Wiki 15 §13）：
 //!   旧方案逐列扫描像素**推断**空白，得到的坐标系与用户所见无关（裁边距 ⇒
 //!   靠左/右各差 100px）；本模块改为向 **UI Automation** 要交互元素的
 //!   **包围盒**（开始按钮 / 已固定应用 / 运行中任务按钮 / 托盘 / 时钟），
 //!   坐标来源就是用户看到的那些按钮本身 ⇒ 不存在「推断」这一步。
-//! ⚠️ 思路与判据参照 `EchoMusic` 的 `native/taskbar-layout/TaskbarLayout.cs`
+//! ⚠ 思路与判据参照 `EchoMusic` 的 `native/taskbar-layout/TaskbarLayout.cs`
 //!   （同一套做法：UIA 交互元素包围盒 + 经典子窗类名兜底 + `reliable` 闸门）。
 //!
-//! ⛔ **探针绝不在主线程跑**：UIA 是跨进程调用，提供方卡死时**不会自己返回**
+//! ✗ **探针绝不在主线程跑**：UIA 是跨进程调用，提供方卡死时**不会自己返回**
 //!   ——`EchoMusic` 为此把探针放进独立 `.exe` 并加 2.5s 超时杀掉。本模块改用
 //!   「独立后台线程 + 结果缓存」达到同样的隔离效果：主线程只做一次纯内存读
 //!   （`auto_slot`），读不到就退回整条任务栏（= 今天的行为）。
-//! ⛔ **任何不确定都退回整条任务栏**，绝不猜：探针失败 / 超时 / 元素数为 0
+//! ✗ **任何不确定都退回整条任务栏**，绝不猜：探针失败 / 超时 / 元素数为 0
 //!   / 枚举被截断（>512）⇒ `reliable = false` ⇒ `auto_slot` 返回 `None`。
 //!   依据：UIA 返回 0 个元素**不能**证明任务栏是空的（提供方缺失同样返回 0）。
 
@@ -42,7 +42,7 @@ use windows::Win32::UI::Accessibility::{
 
 type UIAEl = windows::Win32::UI::Accessibility::IUIAutomationElement;
 
-/// ⭐ 一块占用：**矩形 + 它的 UIA 元素**。`None` = 无 UIA 节点（经典子窗那三块）。
+/// 一块占用：**矩形 + 它的 UIA 元素**。`None` = 无 UIA 节点（经典子窗那三块）。
 type Block = (Rect, Option<UIAEl>);
 
 /// 屏幕坐标下的一个矩形（物理像素，与 `taskbar_rect()` 同口径）。
@@ -56,10 +56,10 @@ pub struct Rect {
 
 /// 占用区里的一块。
 ///
-/// ⭐ `element` 是**判定「真没了」的唯一凭据**：本次枚举里没出现时，拿它单独问
+/// ✓ `element` 是**判定「真没了」的唯一凭据**：本次枚举里没出现时，拿它单独问
 ///   一次（`CurrentBoundingRectangle`）—— 返回有效矩形 = 只是这次没枚举到（真还在），
 ///   报错/空矩形 = 真的消失了。⇒ **不再需要靠时间猜**。
-/// ⚠️ `None` = 这块来自 `collect_classic_children`（无 UIA 节点）⇒ 只能退回
+/// ⚠ `None` = 这块来自 `collect_classic_children`（无 UIA 节点）⇒ 只能退回
 ///   按时间兜（见 `MERGE_FALLBACK_GRACE_MS`）。
 #[derive(Clone)]
 pub struct Entry {
@@ -71,12 +71,12 @@ pub struct Entry {
 
 /// 探针结果。
 struct Probe {
-    /// ⭐ **只有矩形、没有 COM 元素** —— 这样 `CACHE` 才是 `Send`，主线程才能
-    ///   无锁读它（⛔ `IUIAutomationElement` 非 `Send`，放进 `static Mutex`
+    /// ✓ **只有矩形、没有 COM 元素** —— 这样 `CACHE` 才是 `Send`，主线程才能
+    ///   无锁读它（✗ `IUIAutomationElement` 非 `Send`，放进 `static Mutex`
     ///   直接编译不过；元素只活在探针线程的局部 `tracked` 里）。
-    /// ⚠️ 语义 = 「经 [`merge_observed`] 判活后的占用集合」（判据见其文档）。
+    /// ⚠ 语义 = 「经 [`merge_observed`] 判活后的占用集合」（判据见其文档）。
     rects: Vec<Rect>,
-    /// ⭐ **只有它为 `true` 才允许用这份数据避让**（判据见模块文档）。
+    /// ✓ **只有它为 `true` 才允许用这份数据避让**（判据见模块文档）。
     reliable: bool,
     stamp: Instant,
 }
@@ -85,44 +85,44 @@ static CACHE: Mutex<Option<Probe>> = Mutex::new(None);
 static STARTED: AtomicBool = AtomicBool::new(false);
 /// 自动开着时的探针间隔（毫秒）。
 ///
-/// ⚠️ 2s 与 `EchoMusic` 的轮询节奏同量级，且与本模块窗口的 2s 维护 tick 对齐
+/// ⚠ 2s 与 `EchoMusic` 的轮询节奏同量级，且与本模块窗口的 2s 维护 tick 对齐
 ///   ——再快只是白烧 UIA 的跨进程调用。
 const PROBE_INTERVAL_MS: u64 = 2000;
 /// 自动关着时的空转间隔（毫秒）。只为「打开开关后 1 秒内就能生效」。
 const IDLE_INTERVAL_MS: u64 = 1000;
-/// 结果保质期（毫秒）。⛔ 过期一律当不可用：探针线程若因 UIA 卡死而停摆，
+/// 结果保质期（毫秒）。✗ 过期一律当不可用：探针线程若因 UIA 卡死而停摆，
 /// 指望旧数据会让窗口**卡在一个早已不存在的空隙里**（而任务栏可能已排满）。
 const TTL_MS: u64 = 6000;
 /// 无 UIA 元素可问时（经典子窗类名那三块）按时间兜住的时长（毫秒）。
 ///
-/// ⛔ **只对「没有 UIA 节点」的块生效**，⛔ 不再是全局迟滞：绝大多数块都有
+/// ✗ **只对「没有 UIA 节点」的块生效**，✗ 不再是全局迟滞：绝大多数块都有
 ///   `IUIAutomationElement`，走的是**按证据判定**（见 [`Entry`]）⇒ 关闭图标后
 ///   **一个探针周期内就回位**（实测 ~0.4s），不再是 6s。
-/// ⚠️ 取 2s = 兜底周期本身：连一个完整兜底周期都没出现，才认定它真没了。
+/// ⚠ 取 2s = 兜底周期本身：连一个完整兜底周期都没出现，才认定它真没了。
 const MERGE_FALLBACK_GRACE_MS: u64 = 2000;
 
 /// 判「同一块」的容差（像素）。
 ///
-/// ⚠️ 2px：任务栏按钮的矩形是像素对齐的，稳态下**不抖**；而 UIA 在 DPI 换算
-///   边界上可能差 1px。⚠️ 这个值**必须远小于一个按钮的宽度**（实测 55px），
+/// ⚠ 2px：任务栏按钮的矩形是像素对齐的，稳态下**不抖**；而 UIA 在 DPI 换算
+///   边界上可能差 1px。⚠ 这个值**必须远小于一个按钮的宽度**（实测 55px），
 ///   否则相邻两块会被认成同一块、其中一块就此永久丢失。
 const RECT_MATCH_TOL_PX: i32 = 2;
-/// 元素数上限。⛔ 超过即判不可靠：真实任务栏的交互元素是几十个量级，
+/// 元素数上限。✗ 超过即判不可靠：真实任务栏的交互元素是几十个量级，
 ///   达到数百说明枚举失控（或走进了某个子树的深层），此时结果不可信。
 const MAX_ELEMENTS: i32 = 512;
 
 /// 把本次采样并进历史占用区，得到**迟滞并集**。**纯函数**，可单测。
 ///
-/// ⛔⛔ **核心判据：多一块立即生效，少一块要等宽限期。**
+/// ✗ **核心判据：多一块立即生效，少一块要等宽限期。**
 ///   · **多一块**（新图标出现）⇒ 立刻并入 ⇒ 组件**马上**让开。这是用户要的。
 ///   · **少一块** ⇒ **保留**到宽限期结束才真正移除。依据：UIA 会间歇性漏报
 ///     单个元素（实测丢失率 ~40%，见 [`OCCUPIED_GRACE_MS`]），若「漏一次就当
 ///     它没了」，组件就会在「让开 / 压上去」之间来回抖 —— 那正是用户报的
 ///     「有新图标时不会自动避让」。
-/// ⛔ 方向**不可反过来**：把宽限期用在「新增」上会让避让变慢（用户更在意这个），
+/// ✗ 方向**不可反过来**：把宽限期用在「新增」上会让避让变慢（用户更在意这个），
 ///   用在「移除」上只是多避让几秒（安全方向，且无人抱怨）。
 ///
-/// ⚠️ 已知代价：任务栏重排（开关应用）会让所有按钮平移约一个按钮宽（实测 55px）
+/// ⚠ 已知代价：任务栏重排（开关应用）会让所有按钮平移约一个按钮宽（实测 55px）
 ///   ⇒ 旧位置的矩形在宽限期内仍在并集里 ⇒ 组件**晚 6s** 才移到新位置。
 ///   只影响观感，不产生重叠，故接受。
 pub fn merge_observed<F>(
@@ -192,12 +192,12 @@ pub fn probe_started() -> bool {
 }
 
 fn probe_loop() {
-    // ⭐ UIA 会话**跨探针复用**：`CoCreateInstance` + 构造 Or 条件（4 个属性条件）
+    // ✓ UIA 会话**跨探针复用**：`CoCreateInstance` + 构造 Or 条件（4 个属性条件）
     //   每次重做一遍是纯浪费 —— 它们与任务栏内容无关，只有 COM 失联才需要重建。
-    // ⭐ 上一轮**被事件唤醒**的时刻（`None` = 走兜底周期唤醒）。
+    // 上一轮**被事件唤醒**的时刻（`None` = 走兜底周期唤醒）。
     let mut woken_by_event: Option<Instant> = None;
     let mut session: Option<UiaSession> = None;
-    // ⛔ `tracked` 是**线程局部**的：它带 COM 元素（非 `Send`），不进 `CACHE`。
+    // ✗ `tracked` 是**线程局部**的：它带 COM 元素（非 `Send`），不进 `CACHE`。
     let mut tracked: Vec<Entry> = Vec::new();
     loop {
         let wanted = crate::config::with_config(|c| {
@@ -213,7 +213,7 @@ fn probe_loop() {
             let started = Instant::now();
             let outcome = probe_once(session.as_ref());
             let cost = started.elapsed();
-            // ⭐ 「事件→探针完成」= 用户真正感知的避让延迟（不含应用自身启动耗时）
+            // ✓ 「事件→探针完成」= 用户真正感知的避让延迟（不含应用自身启动耗时）
             let latency = match woken_by_event {
                 Some(at) => format!("{}ms", at.elapsed().as_millis()),
                 None => "无(走兜底周期)".to_string(),
@@ -226,7 +226,7 @@ fn probe_loop() {
                     tracked = merge_observed(&tracked, &fresh, now, |e| recheck_entry(e, now));
                     let merged: Vec<Rect> = tracked.iter().map(|e| e.rect).collect();
                     let changed = before.as_deref() != Some(merged.as_slice());
-                    // ⭐ **每次探针**都记一行 verbose：这是「自动开销」唯一可归因的
+                    // ✓ **每次探针**都记一行 verbose：这是「自动开销」唯一可归因的
                     //   数据源（standard 那行只在集合**变化**时记，数不出探了几次）。
                     crate::process::append_verbose_log(&format!(
                         "[layout] 探针: 全量={}ms 事件累计={} 事件→探针完成={}",
@@ -245,11 +245,11 @@ fn probe_loop() {
                     });
                 }
                 None => {
-                    // ⛔ 探针失败**必须清空**（而不是留着旧值）：调用方据此退回
+                    // ✗ 探针失败**必须清空**（而不是留着旧值）：调用方据此退回
                     //    整条任务栏，与「探针从来没成功过」走同一条降级路径。
                     *guard = None;
                     tracked.clear();
-                    // ⛔ 会话一并丢弃：探针失败多半就是 COM 失联，下次重建。
+                    // ✗ 会话一并丢弃：探针失败多半就是 COM 失联，下次重建。
                     session = None;
                 }
             }
@@ -259,7 +259,7 @@ fn probe_loop() {
             std::thread::sleep(Duration::from_millis(IDLE_INTERVAL_MS));
             continue;
         }
-        // ⭐⭐ 等「事件」或「兜底周期」，二者谁先到算谁。
+        // ✓ 等「事件」或「兜底周期」，二者谁先到算谁。
         //   事件到位 ⇒ 立刻探针（实测延迟 ~10ms + 探针 80ms）；
         //   周期到   ⇒ 兜底全量（覆盖事件覆盖不到的变化，见 `wait_for_change_or_timeout`）。
         let timeout = if session.as_ref().is_some_and(|s| s.watched) {
@@ -273,9 +273,9 @@ fn probe_loop() {
 
 /// 占用区有变化时才打日志（逐次打会把日志刷爆——这是每 2s 一次的轮询）。
 ///
-/// ⭐ `fresh_len` 与 `merged.len` 的差 = **「本次没枚举到、但单独问过、确认还活着」**
+/// ✓ `fresh_len` 与 `merged.len` 的差 = **「本次没枚举到、但单独问过、确认还活着」**
 ///   的块数（判据见 [`merge_observed`]）。它长期 > 0 说明 UIA 的枚举确实会漏，
-///   此时正是「按证据判活」在替我们兜底 —— ⛔ 若去掉判活直接信枚举，这些块
+///   此时正是「按证据判活」在替我们兜底 —— ✗ 若去掉判活直接信枚举，这些块
 ///   就会让出空间、组件压上去。
 fn verbose_log_counted(
     prev: &Option<Probe>,
@@ -296,7 +296,7 @@ fn verbose_log_counted(
             merged.len().saturating_sub(fresh_len),
             cost.as_millis()
         ));
-        // ⚠️ 起止 x 也进 verbose：排查「空隙放不下」时必须能看到邻居在哪 ——
+        // ⚠ 起止 x 也进 verbose：排查「空隙放不下」时必须能看到邻居在哪 ——
         //   只报个数的话，「为什么没避让」永远只能靠猜（实测踩到）。
         let spans: Vec<String> = merged
             .iter()
@@ -311,7 +311,7 @@ fn verbose_log_counted(
 /// 返回 `(可用区左端屏幕 x, 可用区宽)`；`None` = 调用方应退回整条任务栏。
 /// `prefer_right`：靠右档取**最右**的放得下的空隙（靠左档取最左，见
 /// [`find_free_interval`] 的判据）。
-/// ⛔ 只做纯内存读：**主线程会调它**，任何跨进程调用都不许出现在这里。
+/// ✗ 只做纯内存读：**主线程会调它**，任何跨进程调用都不许出现在这里。
 pub fn auto_slot(
     bar_left: i32,
     bar_w: i32,
@@ -334,14 +334,14 @@ pub fn auto_slot(
 /// 在任务栏上找一个「放得下 `want_w` 的空隙」。**纯函数**，可单测。
 /// 本体实现**靠左档**（取最左）；靠右档走 [`find_free_interval_from_right`]（同一套扫描的镜像）。
 ///
-/// ⭐ 判据（与 `EchoMusic` 的 `findHorizontalSpace` 同源）：
+/// ✓ 判据（与 `EchoMusic` 的 `findHorizontalSpace` 同源）：
 ///   ① 每个占用矩形**向两侧各扩 `margin`** ⇒ 与邻居之间留出视觉间距；
 ///   ② 扫掠合并重叠区间，收集空隙；
 ///   ③ 取**最左**的、**放得下完整 `want_w`** 的那个。
-/// ⛔ **不缩进窄空隙**（`EchoMusic` 那一版允许缩到 `minimumWidth`）：
+/// ✗ **不缩进窄空隙**（`EchoMusic` 那一版允许缩到 `minimumWidth`）：
 ///   本仓曾因「53px 窄槽」把内容截断而被用户否掉（见 `draw_items` 的宽度注释）
 ///   ⇒ 放不下就**不避让**，退回整条任务栏，由日志说明原因。
-/// ⛔ 取最左而不是最宽：让落点**稳定**（任务栏上开关应用不会让它左右跳），
+/// ✗ 取最左而不是最宽：让落点**稳定**（任务栏上开关应用不会让它左右跳），
 ///   也更可预测 —— 与 `EchoMusic` 的 `gaps.find(..)` 同款。
 pub fn find_free_interval(
     bar_left: i32,
@@ -376,15 +376,15 @@ pub fn find_free_interval(
 
 /// 靠右档求空隙：取**最右**的、放得下 `want_w` 的那个。**纯函数**，可单测。
 ///
-/// ⭐ 实现 = 同一套从左扫的 [`find_free_interval`] 在**镜像坐标系**里跑
-/// （`x ↦ bar_w − x`），再把结果镜像回来 —— ⛔ 不另写一套从右往左的扫描：
+/// ✓ 实现 = 同一套从左扫的 [`find_free_interval`] 在**镜像坐标系**里跑
+/// （`x ↦ bar_w − x`），再把结果镜像回来 —— ✗ 不另写一套从右往左的扫描：
 ///   那是第二份扫掠逻辑，靠左/靠右一旦各改各的就会只改一半
 ///   （间距、窄空隙禁令这些判据都在本体里，镜像天然继承）。
 ///
-/// ⭐ 镜像的性质：把占用矩形 `(l, r)` 沿任务栏中线反射成 `(A − r, A − l)`
+/// ✓ 镜像的性质：把占用矩形 `(l, r)` 沿任务栏中线反射成 `(A − r, A − l)`
 ///   （`A = 2·bar_left + bar_w`），「镜像里最左的空隙」恰是「真实里最右的空隙」，
 ///   宽度不变；真实左端 = `A − g0 − gw`（`g0`/`gw` 是镜像空隙的左端/宽）。
-/// ⛔ 反射轴必须是任务栏中线、**不得以 0 为轴**：占用矩形是屏幕坐标，
+/// ✗ 反射轴必须是任务栏中线、**不得以 0 为轴**：占用矩形是屏幕坐标，
 ///   副屏任务栏整体为负，以 0 为轴会把矩形映到任务栏框外（镜像后扫描必空）。
 pub fn find_free_interval_from_right(
     bar_left: i32,
@@ -408,15 +408,15 @@ pub fn find_free_interval_from_right(
 
 // ── 探针本体 ──────────────────────────────────────────────
 
-/// ⭐ 可跨探针复用的 UIA 会话（自动化对象 + 那条 Or 条件）。
+/// ✓ 可跨探针复用的 UIA 会话（自动化对象 + 那条 Or 条件）。
 ///
-/// ⚠️ 二者都**与任务栏内容无关**（一个是 coclass 实例，一个是四个属性条件的组合），
-///   所以反复重建是纯浪费。⚠️ 生命周期**只属于探针线程**（COM 接口非 `Send`），
-///   ⛔ 不得挪进 `static`。
+/// ⚠ 二者都**与任务栏内容无关**（一个是 coclass 实例，一个是四个属性条件的组合），
+///   所以反复重建是纯浪费。⚠ 生命周期**只属于探针线程**（COM 接口非 `Send`），
+///   ✗ 不得挪进 `static`。
 struct UiaSession {
     uia: IUIAutomation,
     cond: IUIAutomationCondition,
-    /// ⭐ 监听是否挂上了。`false` ⇒ **只能靠 `PROBE_INTERVAL_MS` 兜底**
+    /// ✓ 监听是否挂上了。`false` ⇒ **只能靠 `PROBE_INTERVAL_MS` 兜底**
     ///   （事件驱动这条路在本机不可用时不会静默失效，只表现为延迟）。
     watched: bool,
 }
@@ -424,7 +424,7 @@ struct UiaSession {
 /// 建一次 UIA 会话。`None` = COM 不可用（调用方按探针失败处理）。
 fn build_session(bar: HWND) -> Option<UiaSession> {
     unsafe {
-        // ⚠️ 复用全仓 COM 初始化唯一入口（幂等，且已处理 MTA 冲突的日志）。
+        // ⚠ 复用全仓 COM 初始化唯一入口（幂等，且已处理 MTA 冲突的日志）。
         crate::audio::ensure_com_initialized();
         let uia = CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
             .ok()?;
@@ -452,13 +452,13 @@ static DIRTY: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     /// 上一轮**被事件唤醒**的时刻（`None` = 走兜底周期唤醒）。
-    /// ⛔ 只在本探针线程读写：`thread_local!` 天然免掉 `static` 的 `Sync` 约束。
+    /// ✗ 只在本探针线程读写：`thread_local!` 天然免掉 `static` 的 `Sync` 约束。
     static EVENT_WAITED_AT: std::cell::RefCell<Option<Instant>> = const { std::cell::RefCell::new(None) };
 }
 
 /// 收到过几次结构变更事件（**只读观察口**）。
 ///
-/// ⭐ 存在的理由：`AddStructureChangedEventHandler` **在 XAML 任务栏上到底会不会
+/// ✓ 存在的理由：`AddStructureChangedEventHandler` **在 XAML 任务栏上到底会不会
 ///   触发，事先无法确定**（应用按钮不是 HWND，是 `MSTaskListWClass` 里 XAML 画的）。
 ///   ⇒ 必须留一个能直接回答「事件到底有没有在响」的计数，否则线上只能靠
 ///   「用户说没及时避让」反推。
@@ -469,9 +469,9 @@ pub fn event_hits() -> u64 {
     EVENT_HITS.load(Ordering::Acquire)
 }
 
-/// ⭐ UIA「结构变更」监听器：任务栏上**增删/重排子元素**时立刻唤醒探针。
+/// ✓ UIA「结构变更」监听器：任务栏上**增删/重排子元素**时立刻唤醒探针。
 ///
-/// ⛔⛔ **为什么必须走事件、不能靠轮询**（本机实测，两组数）：
+/// ✗ **为什么必须走事件、不能靠轮询**（本机实测，两组数）：
 ///   · 一次**全量**探针 **79~161ms**（23 元素 × 3 属性 = 69 次跨进程调用）；
 ///   · 连「只枚举 + 取长度」也要 **34ms**（占全量 43%）—— 枚举本身就贵。
 ///   ⇒ 想更快就只能更频繁地烧 CPU：500ms 一次 = 12~34% 的一个核。
@@ -486,7 +486,7 @@ impl IUIAutomationStructureChangedEventHandler_Impl for StructureChangeListener_
         change_type: windows::Win32::UI::Accessibility::StructureChangeType,
         _runtime_id: *const windows::Win32::System::Com::SAFEARRAY,
     ) -> windows::core::Result<()> {
-        // ⛔ **只认「子元素增删 / 重排」**：`ChildrenInvalidated`（= 2）在 XAML 上
+        // ✗ **只认「子元素增删 / 重排」**：`ChildrenInvalidated`（= 2）在 XAML 上
         //   触发极频繁且几乎不代表布局变化，认它等于把探针变成全程满负荷。
         if is_layout_change(change_type) {
             DIRTY.store(true, Ordering::Release);
@@ -496,9 +496,9 @@ impl IUIAutomationStructureChangedEventHandler_Impl for StructureChangeListener_
     }
 }
 
-/// ⭐ 这个结构变更**值不值得唤醒探针**（纯函数，可单测）。
+/// ✓ 这个结构变更**值不值得唤醒探针**（纯函数，可单测）。
 ///
-/// ⛔⛔ **`ChildrenInvalidated`（= 2）必须排除** —— 这是本函数唯一承重的判断：
+/// ✗ **`ChildrenInvalidated`（= 2）必须排除** —— 这是本函数唯一承重的判断：
 ///   本机实测任务栏 XAML 在**空闲时也持续**发事件（15s 内 +59 次），而其中
 ///   绝大多数是它。认它 ⇒ 探针被事件灌满（本机实测 0.8 次/秒、每次 30~95ms）
 ///   ⇒ 纯烧 CPU，且**不带来任何更快的避让**。
@@ -506,7 +506,7 @@ impl IUIAutomationStructureChangedEventHandler_Impl for StructureChangeListener_
 ///   `ChildrenBulkAdded` / `ChildrenBulkRemoved`，以及布局重排
 ///   `ChildrenReordered`（开关应用会把后面的按钮整体推右，必须算）。
 ///
-/// ⚠️ 用 `.0` 比较而不是 `matches!`：这些是 windows crate 生成的
+/// ⚠ 用 `.0` 比较而不是 `matches!`：这些是 windows crate 生成的
 ///   `StructureChangeType_*`（**小写名**的常量），写在**模式位置**会触发
 ///   `non_upper_case_globals`（仓库按零警告要求拒绝）。
 fn is_layout_change(change_type: windows::Win32::UI::Accessibility::StructureChangeType) -> bool {
@@ -528,10 +528,10 @@ fn watch_structure_changes(sess: &UiaSession, bar: HWND) -> windows::core::Resul
     }
 }
 
-/// ⭐ 抽干消息队列（**事件回调靠它送达**）。
+/// ✓ 抽干消息队列（**事件回调靠它送达**）。
 ///
-/// ⚠️ ⛔ **不抽 = 事件永远不回调**：UIA 的跨线程事件是通过消息队列投递的，
-///   没有消息泵就等于没挂监听。⚠️ 因此本函数取代了原来的 `thread::sleep`
+/// ⚠ ✗ **不抽 = 事件永远不回调**：UIA 的跨线程事件是通过消息队列投递的，
+///   没有消息泵就等于没挂监听。⚠ 因此本函数取代了原来的 `thread::sleep`
 ///   ——`thread::sleep` 期间消息不会被处理。
 /// 返回是否收到了 `WM_QUIT`（收到就该退出线程）。
 fn pump_messages() -> bool {
@@ -556,9 +556,9 @@ fn pump_messages() -> bool {
     }
 }
 
-/// ⭐ 等到「有事件」或「到兜底周期」。返回是否应立刻探针。
+/// ✓ 等到「有事件」或「到兜底周期」。返回是否应立刻探针。
 ///
-/// ⛔ **必须有兜底周期**：结构变更事件覆盖不到「元素数量没变、只是整体平移」
+/// ✗ **必须有兜底周期**：结构变更事件覆盖不到「元素数量没变、只是整体平移」
 ///   这类变化（实测开关应用会把它后面的按钮整体推右）⇒ 没有兜底就会漏避让。
 const PUMP_SLICE_MS: u64 = 10;
 
@@ -570,7 +570,7 @@ fn wait_for_change_or_timeout(timeout: Duration) -> Option<Instant> {
             return None;
         }
         if DIRTY.swap(false, Ordering::AcqRel) {
-            // ⭐ 记下**被事件唤醒**的时刻：与探针完成时刻一减，就得到
+            // ✓ 记下**被事件唤醒**的时刻：与探针完成时刻一减，就得到
             //   「事件驱动本身的响应」—— 这段才是用户感知的避让延迟。
             return Some(Instant::now());
         }
@@ -581,17 +581,17 @@ fn wait_for_change_or_timeout(timeout: Duration) -> Option<Instant> {
     }
 }
 
-/// ⭐ 问一条「本次没枚举到」的条目：它**到底还在不在**？返回它**现在**的矩形。
+/// ✓ 问一条「本次没枚举到」的条目：它**到底还在不在**？返回它**现在**的矩形。
 ///
-/// ⛔⛔ 这是把「关闭方向 6s」压到一个探针周期的全部依据 —— **按证据判活，
+/// ✗ 这是把「关闭方向 6s」压到一个探针周期的全部依据 —— **按证据判活，
 ///   不按时间猜**。返回 `None` = 真没了。
 ///
-/// ⭐ 顺带治好了「按钮动画平移留一堆中间位置」：返回的是它**当前**的矩形，
+/// ✓ 顺带治好了「按钮动画平移留一堆中间位置」：返回的是它**当前**的矩形，
 ///   于是调用方直接更新位置，而不是把每个中间位置都当成新块攒起来
 ///   （实测那些「漏报」多半是动画中间态：`336..376 → 336..377`、`365..405`）。
 ///
-/// ⚠️ 空矩形（宽或高 ≤ 0）判为「真没了」：UIA 对已移除的元素会返回空矩形或报错，
-///   两者都视为不在。⚠️ 无 UIA 元素可问时（经典子窗那三块）退回按时间兜。
+/// ⚠ 空矩形（宽或高 ≤ 0）判为「真没了」：UIA 对已移除的元素会返回空矩形或报错，
+///   两者都视为不在。⚠ 无 UIA 元素可问时（经典子窗那三块）退回按时间兜。
 fn recheck_entry(e: &Entry, now: Instant) -> Option<Rect> {
     if let Some(el) = &e.element {
         let r = unsafe { el.CurrentBoundingRectangle() }.ok()?;
@@ -628,10 +628,10 @@ fn probe_once(session: Option<&UiaSession>) -> Option<(Vec<Block>, bool)> {
     let (uia_rects, uia_complete) = collect_uia(session?, bar, bar_box);
     rects.extend(uia_rects);
     rects.retain(|(r, _)| r.right > r.left && r.bottom > r.top);
-    // ⛔ 必须在算空隙**之前**做（判据见 `keep_innermost`）。
+    // ✗ 必须在算空隙**之前**做（判据见 `keep_innermost`）。
     keep_innermost(&mut rects);
     rects.sort_unstable_by_key(|(r, _)| (r.left, r.right));
-    // ⭐ 判据：**既要有结果、又要枚举完整**。UIA 返回 0 个元素不能证明任务栏
+    // ✓ 判据：**既要有结果、又要枚举完整**。UIA 返回 0 个元素不能证明任务栏
     //   是空的（提供方缺失同样返回 0）⇒ 此时宁可不用避让。
     let reliable = uia_complete && !rects.is_empty();
     Some((rects, reliable))
@@ -666,7 +666,7 @@ fn collect_classic_children(
         if !CLASSES.contains(&name.as_str()) {
             return 1;
         }
-        // ⛔ **排除自己**：widget 是任务栏的**子窗口**，不排除就会被算成「已占用」
+        // ✗ **排除自己**：widget 是任务栏的**子窗口**，不排除就会被算成「已占用」
         //   ⇒ 窗口会围着上次的位置躲自己（`EchoMusic` 无此问题：它的窗是顶层窗）。
         let mut pid = 0u32;
         GetWindowThreadProcessId(child, &mut pid);
@@ -706,8 +706,8 @@ fn collect_uia(sess: &UiaSession, bar: HWND, bar_box: Rect) -> (Vec<Block>, bool
     let mut out: Vec<Block> = Vec::new();
     let our_pid = std::process::id() as i32;
     unsafe {
-        // ⚠️ 复用全仓 COM 初始化唯一入口（它幂等，且已处理 MTA 冲突的日志）。
-        //   ⛔ 不新开一条初始化路径：两处各初始化一次会在同一线程上互相干扰。
+        // ⚠ 复用全仓 COM 初始化唯一入口（它幂等，且已处理 MTA 冲突的日志）。
+        //   ✗ 不新开一条初始化路径：两处各初始化一次会在同一线程上互相干扰。
         let uia = &sess.uia;
         let Ok(root) = uia.ElementFromHandle(bar) else {
             return (out, false);
@@ -718,7 +718,7 @@ fn collect_uia(sess: &UiaSession, bar: HWND, bar_box: Rect) -> (Vec<Block>, bool
         let Ok(count) = found.Length() else {
             return (out, false);
         };
-        // ⛔ 见 `MAX_ELEMENTS`：截断 ⇒ 判不可靠（宁可不用避让，也不按残缺数据避让）。
+        // ✗ 见 `MAX_ELEMENTS`：截断 ⇒ 判不可靠（宁可不用避让，也不按残缺数据避让）。
         let complete = count <= MAX_ELEMENTS;
         let mut seen = 0i32;
         while seen < count.min(MAX_ELEMENTS) {
@@ -726,7 +726,7 @@ fn collect_uia(sess: &UiaSession, bar: HWND, bar_box: Rect) -> (Vec<Block>, bool
                 return (out, false);
             };
             seen += 1;
-            // ⛔ 排除自己（同上；UIA 侧按 pid 判，比类名可靠）。
+            // ✗ 排除自己（同上；UIA 侧按 pid 判，比类名可靠）。
             if el.CurrentProcessId().map(|p| p == our_pid).unwrap_or(true) {
                 continue;
             }
@@ -751,7 +751,7 @@ fn collect_uia(sess: &UiaSession, bar: HWND, bar_box: Rect) -> (Vec<Block>, bool
 }
 
 /// `EchoMusic` 的四条 Or 条件（可聚焦 ∨ 按钮 ∨ 列表项 ∨ 选项卡项）。
-/// ⛔ 少了任何一条都会漏掉一类任务栏控件（例如开始按钮是 Button、
+/// ✗ 少了任何一条都会漏掉一类任务栏控件（例如开始按钮是 Button、
 ///   Win11 应用按钮是 ListItem、小组件是 TabItem）。
 unsafe fn interactive_condition(uia: &IUIAutomation) -> Option<IUIAutomationCondition> {
     let focusable = uia
@@ -773,9 +773,9 @@ unsafe fn interactive_condition(uia: &IUIAutomation) -> Option<IUIAutomationCond
     .ok()
 }
 
-/// ⚠️ `windows` crate 0.62 **没有** `VARIANT` 的 `From<bool>` / `From<i32>`
+/// ⚠ `windows` crate 0.62 **没有** `VARIANT` 的 `From<bool>` / `From<i32>`
 ///   （实测：`variant.rs` 里零 `impl From`）⇒ 只能按 `VT_*` 手工构造。
-/// ⛔ `VARIANT_0.Anonymous` 是 `ManuallyDrop<VARIANT_0_0>` ⇒ 必须用
+/// ✗ `VARIANT_0.Anonymous` 是 `ManuallyDrop<VARIANT_0_0>` ⇒ 必须用
 ///   `ManuallyDrop::new(..)` 赋值（Rust 不会对 union 里的 `ManuallyDrop`
 ///   自动 `DerefMut`，直接改字段是编译错误）。
 unsafe fn var_bool(v: bool) -> VARIANT {
@@ -812,20 +812,20 @@ fn intersects(a: &Rect, b: &Rect) -> bool {
     a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
 }
 
-/// ⛔⛔ **只留最内层矩形**（容器过滤）—— 少了它，避让**永远不会生效**。
+/// ✗ **只留最内层矩形**（容器过滤）—— 少了它，避让**永远不会生效**。
 ///
 /// 依据（本机实测）：UIA 的平铺 `Descendants` 查询除了真按钮，还会返回**容器**
 ///   —— 实测抓到 `789..2124`（任务栏中段容器）与 `2085..2560`（托盘容器）两块
 ///   大矩形。容器一进占用列表，`find_free_interval` 就认为「到处都被占」⇒
 ///   每次都退回整条任务栏，而**日志里只说「空隙放不下」**，看不出真因。
-/// ⚠️ `EchoMusic` 用的是同一套条件（可聚焦 ∨ Button ∨ ListItem ∨ TabItem），
+/// ⚠ `EchoMusic` 用的是同一套条件（可聚焦 ∨ Button ∨ ListItem ∨ TabItem），
 ///   因此它同样会抓到容器；本仓按下面的判据多走一步。
 ///
 /// 判据：一个矩形若**包含**了另一个矩形，它就是外层容器 ⇒ 删掉它，
 ///   保留被它包含的真元素。
-/// ⛔ 必须用「完整包含」而不是「相交」：相邻按钮在边界上会相交 1~2px
+/// ✗ 必须用「完整包含」而不是「相交」：相邻按钮在边界上会相交 1~2px
 ///   （实测 `404..459` 与 `459..514` 相接），按相交删会把真按钮删光。
-/// ⚠️ 相等的两个矩形**不算包含**（`o != inner` 拦住）：否则互为外层、
+/// ⚠ 相等的两个矩形**不算包含**（`o != inner` 拦住）：否则互为外层、
 ///   成对消失（重复元素应当保留，最多让空隙略窄）。
 fn keep_innermost(rects: &mut Vec<Block>) {
     let all = rects.clone();
@@ -853,7 +853,7 @@ mod tests {
         }
     }
 
-    /// ⭐ 基本盘：任务栏左右两端各自留出 `margin`，占用块向两侧各扩 `margin`。
+    /// ✓ 基本盘：任务栏左右两端各自留出 `margin`，占用块向两侧各扩 `margin`。
     ///
     /// 依据：`EchoMusic` 的 `findHorizontalSpace` 同款口径 —— 区间是
     /// `[r.x - margin, right(r) + margin]`，故 100..200 的按钮在 `margin=8`
@@ -877,7 +877,7 @@ mod tests {
         );
     }
 
-    /// ⛔⛔ **放不下就不避让**（返回 `None`）—— 不许缩进窄空隙。
+    /// ✗ **放不下就不避让**（返回 `None`）—— 不许缩进窄空隙。
     ///
     /// 依据：本仓曾因「避让后只剩 53px 的窄槽」把内容截断而被用户否掉
     /// （见 `fit_width` 的注释）。`EchoMusic` 那一版允许缩到 `minimumWidth`，
@@ -894,7 +894,7 @@ mod tests {
         );
     }
 
-    /// ⭐ 相邻/重叠的占用块必须先合并再算空隙，否则会把「块与块之间的细缝」
+    /// ✓ 相邻/重叠的占用块必须先合并再算空隙，否则会把「块与块之间的细缝」
     /// 误当成可用空隙（真机表现：窗口插进两个按钮中间、把两个都压住）。
     #[test]
     fn free_interval_merges_overlapping_occupied_blocks() {
@@ -909,12 +909,12 @@ mod tests {
         // 就能把「没合并」的实现筛出来。
     }
 
-    /// ⛔⛔ **容器过滤**：少了它避让永远不生效（真机实测的真因）。
+    /// ✗ **容器过滤**：少了它避让永远不生效（真机实测的真因）。
     ///
     /// 样本直接取本机实测的占用列表（`789..2124` 是中段容器、`2085..2560` 是
     /// 托盘容器，两者都完整包含别的矩形）。
     /// 判别力：去掉过滤 ⇒ `789..2124` 会占满中段 ⇒ 后面那条
-    /// ⛔⛔ **容器过滤**：少了它避让永远不生效（真机实测的真因）。
+    /// ✗ **容器过滤**：少了它避让永远不生效（真机实测的真因）。
     ///
     /// 样本直接取本机实测的占用列表（`789..2124` 是中段容器、`2085..2560` 是
     /// 托盘容器，两者都完整包含别的矩形）。
@@ -930,7 +930,7 @@ mod tests {
             (r(2124, 2164), None), // 容器内的真元素
             (r(2545, 2560), None),
             (r(0, 69), None),    // 开始按钮（谁都不包含）
-            (r(404, 459), None), // 相邻按钮：边界相接，⛔ 不得被当成容器
+            (r(404, 459), None), // 相邻按钮：边界相接，✗ 不得被当成容器
             (r(459, 514), None),
         ];
         keep_innermost(&mut rects);
@@ -945,8 +945,7 @@ mod tests {
         }
     }
 
-    /// ⭐ 容器过滤后，真机上那段「中段 789..1899」必须能被认成空隙。
-    /// ⭐ 容器过滤后，真机上那段「中段 789..1899」必须能被认成空隙。
+    /// ✓ 容器过滤后，真机上那段「中段 789..1899」必须能被认成空隙。
     /// （过滤前它被容器 `789..2124` 盖住 ⇒ 永远找不到空隙。）
     #[test]
     fn container_filter_reveals_the_real_gap_sample() {
@@ -968,14 +967,14 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ 间距必须让组件底衬到邻居**图标**的距离 = 原生**图标↔图标**的距离。
+    /// ✓ 间距必须让组件底衬到邻居**图标**的距离 = 原生**图标↔图标**的距离。
     ///
     /// 依据（本机 125% DPI 逐像素实测，可复核）：槽位节距 **55px**（= 44 DIP）、
     ///   图标宽度 **30px**（= 24 DIP）⇒ 图标每侧内缩 **13px**、图标间距 **25px**。
     ///   调用点传的 `margin` = `20 DIP − 10 DIP` ⇒ 12.5px ⇒ 组件离邻居图标
     ///   `12.5 + 13 = 25.5px` ≈ 原生 25px。
     ///
-    /// ⛔⛔ **两个值被用户当场判过，⛔ 不得回退**：
+    /// ✗ **两个值被用户当场判过，✗ 不得回退**：
     ///   · `margin = 0` ⇒ 组件离邻居图标只有 **13px** —— 用户原话「间距不可能为0」；
     ///   · `margin = 20` ⇒ **33px** —— 用户原话「间距还是有点大」。
     /// ⇒ 改这个值之前先看这三个数，别再拿「槽位相接所以贴齐」推理：
@@ -1004,7 +1003,7 @@ mod tests {
         );
     }
 
-    /// ⛔⛔ `ChildrenInvalidated` 必须被排除 —— 判别力全在这一条上。
+    /// ✗ `ChildrenInvalidated` 必须被排除 —— 判别力全在这一条上。
     ///
     /// 依据（本机实测）：空闲 15s 内任务栏 XAML 发了 **59 次**结构变更事件，
     ///   绝大多数是它。认它 ⇒ 探针被灌满（实测 0.8 次/秒 × 30~95ms，纯烧 CPU）
@@ -1027,7 +1026,7 @@ mod tests {
         ] {
             assert!(is_layout_change(t), "{:?} 必须唤醒探针", t);
         }
-        // ⛔ 排除「整棵子树失效」：XAML 空闲时也刷这个
+        // ✗ 排除「整棵子树失效」：XAML 空闲时也刷这个
         assert!(
             !is_layout_change(StructureChangeType_ChildrenInvalidated),
             "ChildrenInvalidated 必须排除，否则空闲时被事件灌满（实测 15s 内 59 次）"
@@ -1039,7 +1038,7 @@ mod tests {
         );
     }
 
-    /// ⛔ 退化输入不得 panic、不得返回负数宽度。
+    /// ✗ 退化输入不得 panic、不得返回负数宽度。
     #[test]
     fn free_interval_handles_degenerate_inputs() {
         assert_eq!(
@@ -1057,7 +1056,7 @@ mod tests {
         assert_eq!(find_free_interval(0, 1000, &[], 100, 8), Some((8, 984)));
     }
 
-    /// ⭐ 屏幕坐标：任务栏不在 0 起点（副屏/负坐标）时同样成立。
+    /// ✓ 屏幕坐标：任务栏不在 0 起点（副屏/负坐标）时同样成立。
     /// 依据：`taskbar_rect()` 给的是屏幕物理坐标，副屏可能为负。
     #[test]
     fn free_interval_works_in_negative_screen_coordinates() {
@@ -1068,7 +1067,7 @@ mod tests {
             Some((-992, 84)),
             "负坐标下同样按「最左且放得下」取"
         );
-        // ⚠️ 要 100（左空隙放不下）⇒ 应跳到右侧 784 宽那个，而不是返回左空隙
+        // ⚠ 要 100（左空隙放不下）⇒ 应跳到右侧 784 宽那个，而不是返回左空隙
         assert_eq!(
             find_free_interval(-1000, 1000, &[r(-900, -800)], 100, 8),
             Some((-792, 784)),
@@ -1076,7 +1075,7 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ 靠右档 = 同一套扫描的镜像：取**最右**的放得下的空隙，两个空隙都放得下时
+    /// ✓ 靠右档 = 同一套扫描的镜像：取**最右**的放得下的空隙，两个空隙都放得下时
     /// 与靠左档取**不同**的那个（判别力所在）。
     #[test]
     fn free_interval_from_right_takes_the_rightmost_gap() {
@@ -1115,10 +1114,10 @@ mod tests {
         );
     }
 
-    /// ⛔ `reliable` 闸门：探针没数据 / 不可信 / 过期时**一律退回整条任务栏**。
+    /// ✗ `reliable` 闸门：探针没数据 / 不可信 / 过期时**一律退回整条任务栏**。
     ///
     /// 判别力：`auto_slot` 是唯一入口，这三条任一成立都必须返回 `None`
-    /// （调用方据此退回）。⛔ 若把它写成「忽略 reliable 直接用」，
+    /// （调用方据此退回）。✗ 若把它写成「忽略 reliable 直接用」，
     /// 「占用区为空 ⇒ 整条任务栏都算空隙」就会让窗口压住所有图标。
     #[test]
     fn auto_slot_requires_a_reliable_fresh_probe() {
@@ -1154,16 +1153,16 @@ mod tests {
             Some((208, 784)),
             "靠右档走同一道 reliable/新鲜闸门"
         );
-        // ⛔ 收尾：不留状态给别的用例（用例间共享同一份静态缓存）
+        // ✗ 收尾：不留状态给别的用例（用例间共享同一份静态缓存）
         *crate::state::lock_unpoisoned(&CACHE) = None;
     }
 
     // ── 迟滞并集（`merge_observed`）────────────────────────────────────
-    // ⛔⛔ 这组是「组件不会自动避让」的**判别力所在**：本机实测 UIA 对同一块
+    // ✗ 这组是「组件不会自动避让」的**判别力所在**：本机实测 UIA 对同一块
     //   `789..844` **10 次采样丢 4 次**。若「漏一次就当它没了」，组件就在
     //   「让开 / 压上去」之间抖动 —— 用户报的正是这个。
 
-    /// ⛔⛔ **方向不对称，但不再靠时间**：多一块立即生效；少一块**问过它**再弃。
+    /// ✗ **方向不对称，但不再靠时间**：多一块立即生效；少一块**问过它**再弃。
     ///
     /// 依据（本机实测，两组）：
     ///   · 「本次没枚举到」的块**多数不是丢了，而是按钮在动画里平移**：明细里能看到
@@ -1228,7 +1227,7 @@ mod tests {
         );
     }
 
-    /// ⛔ 新出现的块必须**立即**生效（不许因为在核对旧块而延后一轮）。
+    /// ✗ 新出现的块必须**立即**生效（不许因为在核对旧块而延后一轮）。
     #[test]
     fn merge_observed_takes_new_blocks_immediately() {
         let t0 = Instant::now();
@@ -1243,7 +1242,7 @@ mod tests {
         assert!(out.iter().any(|e| e.rect == r(789, 844)));
     }
 
-    /// ⭐ 判「同一块」按**容差**配对：1px 抖动必须刷新原条目、不得新增。
+    /// ✓ 判「同一块」按**容差**配对：1px 抖动必须刷新原条目、不得新增。
     /// （否则每次抖动都在占用集里堆一份新块 ⇒ 空隙越来越窄 ⇒ 过度避让。）
     #[test]
     fn merge_observed_refreshes_matched_rect_instead_of_duplicating() {
@@ -1259,7 +1258,7 @@ mod tests {
         assert_eq!(out[0].rect, r(405, 460), "并采用本次的位置");
     }
 
-    /// ⛔ 容差**必须远小于一个按钮宽**，否则相邻两块会被认成同一块、其中一块
+    /// ✗ 容差**必须远小于一个按钮宽**，否则相邻两块会被认成同一块、其中一块
     /// 永久丢失。依据：本机实测应用按钮宽 **55px**（`404..459`、`459..514`…）。
     #[test]
     fn merge_observed_tolerance_never_merges_adjacent_buttons() {

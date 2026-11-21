@@ -109,7 +109,7 @@ pub struct Device {
     pub is_ble: bool,
     /// 该蓝牙设备的容器启用了**手机专属**服务（AudioSource，`{0000110A}`）⇒
     /// 手机类型标记（任务栏图标判定用）。由 `device_identity::phone_service_containers`
-    /// 扫描判定。⛔ 只证「配过对 ∧ 服务启用」，**不证在线**——服务行不随链路断开
+    /// 扫描判定。✗ 只证「配过对 ∧ 服务启用」，**不证在线**——服务行不随链路断开
     /// 消失（真机实测），在线判据见 `bind_relay_sessions`。
     #[serde(default)]
     pub is_phone: bool,

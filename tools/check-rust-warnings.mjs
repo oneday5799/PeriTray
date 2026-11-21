@@ -1,7 +1,7 @@
 /**
  * Rust 警告闸门 —— 「零源码警告」判据在 **pre-commit 路径上的唯一入口**
  *
- * ⚠️ ** 订正**：本文件头原写「CI 与 pre-commit 共用」，**与实际不符**——
+ * ⚠ ** 订正**：本文件头原写「CI 与 pre-commit 共用」，**与实际不符**——
  *    `.github/workflows/ci.yml` 走的是 `cargo check` + `RUSTFLAGS: -D warnings`
  *    （rustc 侧硬失败）。两者**不共用**这条命令，但**结论一致且 CI 更严**：
  *    本脚本要费心区分的那类噪音（Cargo 自己的产物 I/O 诊断）**不经 rustc**，
@@ -55,7 +55,7 @@
  * 本脚本用 `--message-format=json` 达到同等语义（只认 rustc 的 lint 诊断）
  * 且**不需要全量重编**。
  *
- * ⚠️ 本脚本的判据**必须与 CI 能达成的结论一致**：CI 上若出现真警告，
+ * ⚠ 本脚本的判据**必须与 CI 能达成的结论一致**：CI 上若出现真警告，
  * `-D warnings` 会直接编译失败（exit != 0）；本脚本则报出警告列表并非零退出。
  * 两侧都拦得住，只是通道不同。
  */
@@ -86,8 +86,8 @@ function main() {
     cwd: CARGO_DIR,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    // ⚠️ Windows 上 cargo 是 .cmd，必须 shell:true 才能被找到。
-    // ⛔⛔ **stdin 必须 `ignore`**：本机（2026-09 实测，与 `tools/check.mjs:291`
+    // ⚠ Windows 上 cargo 是 .cmd，必须 shell:true 才能被找到。
+    // ✗ **stdin 必须 `ignore`**：本机（2026-09 实测，与 `tools/check.mjs:291`
     //    同一根因）子进程 stdin 走 pipe 时 node 恒抛 `EBUSY`（`spawnSync cmd.exe EBUSY`）
     //    ⇒ 判据会对**所有**输入假红。切勿删这个 `ignore` 改回默认 pipe。
     stdio: ["ignore", "pipe", "pipe"],

@@ -38,12 +38,12 @@ impl<'de> Deserialize<'de> for LogRetention {
             "three_days" | "threedays" => Ok(Self::ThreeDays),
             "one_week" | "oneweek" => Ok(Self::OneWeek),
             "one_month" | "onemonth" => Ok(Self::OneMonth),
-            // 未知取值降级为默认，而不是让整份 Config 反序列化失败（P3-9）。
+            // 未知取值降级为默认，而不是让整份 Config 反序列化失败。
             //
             // 为什么不能返回 Err：`#[serde(default)]` **只在字段缺失时生效**，
             // 字段存在但值非法时错误会一路上抛 ⇒ 整份 `Config` 解析失败 ⇒
             // `init_config` 回退 `Config::default()`，用户全部个性化配置被一次性
-            // 抹掉（P1-7 修的就是这条不可逆路径）。配置是用户数据，一个字段的
+            // 抹掉（修的就是这条不可逆路径）。配置是用户数据，一个字段的
             // 取值无法识别不应牵连其余字段。
             //
             // 降级后由 `normalize_config` 在写盘前把该字段稳定成 `one_day`，
@@ -55,18 +55,18 @@ impl<'de> Deserialize<'de> for LogRetention {
 
 /// 任务栏信息窗的**内容缩放档位**。
 ///
-/// ⛔ **作用域边界（用户明确要求，实现时不得越界）**：本档位**只改内容**——
+/// ✗ **作用域边界（用户明确要求，实现时不得越界）**：本档位**只改内容**——
 ///   图标边长 / 信息文字字号 / 随内容一起缩放的间距与项宽上限；
 ///   **底衬（窗口高度、圆角）仍按系统 DPI 缩放，不随本项改变**。
 ///   ⇒ 125% 系统缩放下选 `Default`：图标 32px、字号 11px，而底衬仍是 50px 高 / 圆角 8。
 ///
-/// ⚠️ 落点在 `taskbar_widget::Metrics` 的 `content_dpi`（见该结构文档）；
+/// ⚠ 落点在 `taskbar_widget::Metrics` 的 `content_dpi`（见该结构文档）；
 ///   底衬量（`h` / `radius`）恒走 `Metrics::dpi`，两者**分开**换算。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TaskbarContentScale {
     /// **默认档**：内容按**系统（任务栏）DPI** 布局，即与底衬同口径。
     ///
-    /// ⛔ 这一档在 之前叫 `follow_system`（文案「跟随系统」）——
+    /// ✗ 这一档在 之前叫 `follow_system`（文案「跟随系统」）——
     ///   改名时**语义不变**，只是文案贴合实际（它本来就是本设置引入前的行为）。
     #[default]
     Default,
@@ -96,7 +96,7 @@ impl<'de> Deserialize<'de> for TaskbarContentScale {
             // 未知取值降级为默认，而不是让整份 Config 反序列化失败 —— 理由与
             // `LogRetention` 完全同源：`#[serde(default)]` 只在**字段缺失**时生效，
             // 返回 `Err` 会让 `init_config` 回退 `Config::default()`，
-            // 用户全部个性化配置被一次性抹掉（P1-7 那条不可逆路径）。
+            // 用户全部个性化配置被一次性抹掉（那条不可逆路径）。
             _ => Ok(Self::default()),
         }
     }
@@ -104,7 +104,7 @@ impl<'de> Deserialize<'de> for TaskbarContentScale {
 
 /// 任务栏组件当前显示**哪一块内容**（用户选择，重启后保留）。
 ///
-/// ⚠️ 本字段记的是**用户的选择**，**不是**「实际显示什么」：音乐面板在没有媒体会话时
+/// ⚠ 本字段记的是**用户的选择**，**不是**「实际显示什么」：音乐面板在没有媒体会话时
 ///   不可用，此时会**回落**到设备面板（见 [`taskbar_panel_for`]）。
 ///   ⇒ 这两件事必须分开：若把它们合成一个字段，「无会话时该显示什么」就没地方表达了。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -152,7 +152,7 @@ pub struct DeviceShortcut {
 ///   · `fallback` —— key 失效时的兜底（换机、重装驱动会改容器；重装系统会改实例路径）
 ///   · `alias`    —— 用户自定义显示名，随 key 一起存，避免改名后失联
 ///
-/// ⚠️ **不要存 MAC**：既是隐私，也因为 BTHENUM 实例路径里 MAC 的位置很脆。
+/// ⚠ **不要存 MAC**：既是隐私，也因为 BTHENUM 实例路径里 MAC 的位置很脆。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PinnedDevice {
     pub key: String,
@@ -199,7 +199,7 @@ pub fn matches_pinned_taskbar(pinned: &[PinnedDevice], key: &str, fallback: Opti
 }
 /// 设备信息组件**此刻是否可用**（配置口径，纯函数，可单测）。
 ///
-/// ⭐ 判据 = **总开关开** 且 **已钉设备非空**，两个条件都要：
+/// ✓ 判据 = **总开关开** 且 **已钉设备非空**，两个条件都要：
 /// · 只看开关 ⇒ 开了但一台没钉，会在任务栏上出现一个**空窗**；
 /// · 只看列表 ⇒ 没法「关掉但保留设备」，这正是该开关存在的原因。
 pub fn taskbar_devices_available(c: &Config) -> bool {
@@ -208,14 +208,14 @@ pub fn taskbar_devices_available(c: &Config) -> bool {
 
 /// 两个组件此刻各**是不是候选**（`(设备, 音乐)`）——面板判据的**唯一实现点**。
 ///
-/// ⭐ 「候选」= **开关开着 ∧ 自己有内容**：
+/// ✓ 「候选」= **开关开着 ∧ 自己有内容**：
 /// · 设备候选 = [`taskbar_devices_available`]（总开关开 ∧ 已钉设备非空）
 /// · 音乐候选 = 音乐开关开 ∧ `music_available`（有会话）
 ///
-/// ⛔ **音乐候选必须含开关**：若只看有没有会话，则关掉音乐开关后、只要
+/// ✗ **音乐候选必须含开关**：若只看有没有会话，则关掉音乐开关后、只要
 ///   记住值是音乐，任务栏就**继续显示音乐**；而「切换」按钮在音乐开关关着
 ///   时不显示 ⇒ **既看不到开关的效果，也回不去设备面板**。
-///   ⚠️ 这与「回落只改显示、不改写选择」不冲突：那条讲的是**别改写配置**，
+///   ⚠ 这与「回落只改显示、不改写选择」不冲突：那条讲的是**别改写配置**，
 ///   而这里是**别显示**；「关掉就必须关掉」是更强的要求。
 pub fn taskbar_panel_candidates(c: &Config, music_available: bool) -> (bool, bool) {
     (
@@ -226,24 +226,24 @@ pub fn taskbar_panel_candidates(c: &Config, music_available: bool) -> (bool, boo
 
 /// 任务栏组件**此刻该显示哪一块**（`None` = 整个组件不显示）。
 ///
-/// ⭐ **候选集口径**：
+/// ✓ **候选集口径**：
 /// ```text
 /// 两个候选都有   → 记忆说了算（**只有这一种情形下记忆才生效**）
 /// 只有一个候选   → 就显示它（记忆无关：没得选）
 /// 零个候选       → None（组件整体不存在）
 /// ```
 ///
-/// ⛔ **回落只改显示、不改写选择**：本函数是纯函数，绝不碰 `c.taskbar_panel`。
+/// ✗ **回落只改显示、不改写选择**：本函数是纯函数，绝不碰 `c.taskbar_panel`。
 ///   「临时没播歌 ⇒ 这次显示设备面板」不该把用户的选择抹掉。
 ///
-/// ⛔⛔ **⛔ 不得把本函数写成「一层」**——写错时的症状与决策史 → **Wiki 15 §8.6.3**：
+/// ✗ **不得把本函数写成「一层」**——写错时的症状与决策史 → **Wiki 15 §10.5**：
 /// ```text
-/// ⛔ if music_available && (music_enabled || panel == Music) { return Music }   ← 恒真
+/// ✗ if music_available && (music_enabled || panel == Music) { return Music }   ← 恒真
 /// ```
-/// ⛔ 上行在**音乐开关开着**时恒为真 ⇒ `taskbar_panel` **从头到尾没被读到**：
+/// ✗ 上行在**音乐开关开着**时恒为真 ⇒ `taskbar_panel` **从头到尾没被读到**：
 ///   点切换把字段写成 `Devices`、日志照打「切换组件 → Devices`，显示层下一帧
 ///   又判回 `Music` ⇒ **屏幕上纹丝不动，且日志完全正常**。
-///   ⛔ 两个 bug（开关压过记住的选择 / 组件存在性被面板盖住）都源于**维度被合并**。
+///   ✗ 两个 bug（开关压过记住的选择 / 组件存在性被面板盖住）都源于**维度被合并**。
 pub fn taskbar_panel_for(c: &Config, music_available: bool) -> Option<TaskbarPanel> {
     let (dev, music) = taskbar_panel_candidates(c, music_available);
     match (dev, music) {
@@ -252,19 +252,19 @@ pub fn taskbar_panel_for(c: &Config, music_available: bool) -> Option<TaskbarPan
         // 只有一个候选 ⇒ 就它，记忆无关（「关掉就必须关掉」在这里是结构性的）
         (true, false) => Some(TaskbarPanel::Devices),
         (false, true) => Some(TaskbarPanel::Music),
-        // ⭐ 两个候选都有 ⇒ 记忆生效（唯一需要读 `taskbar_panel` 的分支）
+        // ✓ 两个候选都有 ⇒ 记忆生效（唯一需要读 `taskbar_panel` 的分支）
         (true, true) => Some(c.taskbar_panel),
     }
 }
 
-/// ⭐ 升级兼容：老配置**没有** `taskbar_widget_enabled` 键（读出来是 `false`），
+/// ✓ 升级兼容：老配置**没有** `taskbar_widget_enabled` 键（读出来是 `false`），
 /// 但它可能**已经钉了设备**——那正是「升级前窗口可见」的状态。
 /// ⇒ 读入归一化时把这种情况翻成 `true`，**一次性**改变配置。
 ///
-/// ⚛️ 判据必须是「该键在**文件里**出现过」，**不能**只看 `== false`：
+/// ✗ 判据必须是「该键在**文件里**出现过」，**不能**只看 `== false`：
 ///   用户**主动**关掉开关后值同样是 `false`，若被无脑翻成 `true`，
 ///   「关闭」就永远关不掉——那是比「升级后消失」更严重的功能失效。
-/// ⚠️ `contains` 是**子串**匹配：正文任意位置出现过该字符串即算「出现过」，
+/// ⚠ `contains` 是**子串**匹配：正文任意位置出现过该字符串即算「出现过」，
 ///   偏保守（宁可漏迁移、也不误把「用户关过的」翻回开），方向是安全的。
 pub fn migrate_taskbar_switch(text: &str, c: &mut Config) -> bool {
     if text.contains("taskbar_widget_enabled") || c.pinned_taskbar_devices.is_empty() {
@@ -276,7 +276,7 @@ pub fn migrate_taskbar_switch(text: &str, c: &mut Config) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
-    // ── 字段级 serde 默认值（P1-7）─────────────────────────────
+    // ── 字段级 serde 默认值─────────────────────────────
     // 每个字段都必须有默认值：任何一个字段缺失或类型不符，都会让**整份**
     // `Config` 反序列化失败，进而回退到 `Config::default()`——用户全部个性化
     // 配置一次性丢失（唯一不可逆项）。补默认值时**逐字段比对
@@ -286,7 +286,7 @@ pub struct Config {
     pub auto_start: bool,
     #[serde(default)]
     pub hidden_devices: Vec<String>,
-    /// ⚠️ 具名 helper：真实默认是隐藏 `Battery` / `Monitor` 两组，
+    /// ⚠ 具名 helper：真实默认是隐藏 `Battery` / `Monitor` 两组，
     /// 裸 `#[serde(default)]` 会得到空数组 ⇒ 升级后默认隐藏的分组突然出现。
     #[serde(default = "default_hidden_groups")]
     pub hidden_groups: Vec<String>,
@@ -295,7 +295,7 @@ pub struct Config {
     /// 用户指定的设备类型（覆盖自动探测）：身份键（`DeviceKey::encode`，`c:`/`i:`/`n:`
     /// 前缀）→ 类型枚举串（[`DEVICE_TYPES`]）。空表 = 全部走自动探测。
     ///
-    /// ⛔ 键必须是**身份键**而非名字形态：名字会随改名漂移（别名、端点形态），
+    /// ✗ 键必须是**身份键**而非名字形态：名字会随改名漂移（别名、端点形态），
     ///   身份键跨改名稳定；popup 设备页（`Device.device_key`）、音量页
     ///   （`AudioDevice.device_key`，由 container_id 构）、任务栏（`PhysicalDevice.key`）
     ///   三处下发的是**同一个编码** ⇒ 读写两侧天然对齐，无需任何形态归并。
@@ -309,7 +309,7 @@ pub struct Config {
     pub device_groups: std::collections::HashMap<String, String>,
     #[serde(default = "default_true")]
     pub filter_enabled: bool,
-    /// ⚠️ 具名 helper：真实默认是内置过滤正则，
+    /// ⚠ 具名 helper：真实默认是内置过滤正则，
     /// 裸 `#[serde(default)]` 会得到空串 ⇒ 设备过滤被静默整体关闭。
     #[serde(default = "default_filter_regex")]
     pub filter_regex: String,
@@ -329,7 +329,7 @@ pub struct Config {
     pub pinned_taskbar_devices: Vec<PinnedDevice>,
     /// 任务栏信息窗的**总开关**（要求，默认关闭）。
     ///
-    /// ⛔ **与 `pinned_taskbar_devices` 是两个独立维度，缺一不可**：
+    /// ✗ **与 `pinned_taskbar_devices` 是两个独立维度，缺一不可**：
     /// · 本字段 = 「要不要**显示**这个窗」；
     /// · `pinned_taskbar_devices` = 「这个窗里**显示谁**」。
     /// 关掉本字段**不碰** `pinned_taskbar_devices` ⇒ 用户重新打开时设备列表原样回来，
@@ -337,33 +337,33 @@ pub struct Config {
     /// ⇒ 旧版把「列表非空」当显示开关的做法**必须退役**：那样「关掉」就等于
     /// 「清空列表」，与「关闭只隐藏」这条要求直接冲突。
     ///
-    /// ⭐ 用裸 `bool` 而**不是** `Option<bool>`（`Option` 路线已试过并否决）：
+    /// ✓ 用裸 `bool` 而**不是** `Option<bool>`（`Option` 路线已试过并否决）：
     ///   serde 对 `None` **跳过序列化** ⇒ 新装用户配置里永远没这个键
     ///   ⇒ 用户在设置页拨了开关、一保存就丢；而想「始终落盘」又会给老配置
     ///   凭空塞进一个 `false`，反而把「升级前可见」的状态写死成关闭。
     ///   ⇒ 升级兼容改由 [`migrate_taskbar_switch`] 在**读入归一化**时一次性处理。
     ///
-    /// ⚠️ 裸 `#[serde(default)]`（= false）本身**不是**问题：老用户加载后为 `false`，
+    /// ⚠ 裸 `#[serde(default)]`（= false）本身**不是**问题：老用户加载后为 `false`，
     ///   迁移按「键不存在 且 列表非空」把它翻成 `true` 再落盘。
     #[serde(default)]
     pub taskbar_widget_enabled: bool,
     /// 任务栏信息窗的**横向位置**：`"auto_left"` / `"auto_right"` /
     /// `"fixed_left"` / `"fixed_center"` / `"fixed_right"` / `"drag"`。
     ///
-    /// ⭐ 三个 `fixed_*` 档的可用区 = **整条任务栏**（见 `taskbar_widget::find_widget_slot`）：
+    /// ✓ 三个 `fixed_*` 档的可用区 = **整条任务栏**（见 `taskbar_widget::find_widget_slot`）：
     ///   `fixed_left`/`fixed_right` 各留 `EDGE_MARGIN_DIP`，`fixed_center` 是**任务栏正中**
     ///   （不是屏幕正中）。与第三方 widget 重叠是允许的。
-    /// ⭐ `auto_left` / `auto_right`（自动）= **避开任务栏上已有的按钮**，落进一个真实空隙；
+    /// ✓ `auto_left` / `auto_right`（自动）= **避开任务栏上已有的按钮**，落进一个真实空隙；
     ///   靠左档取**最左**的放得下的空隙并贴其左缘，靠右档取**最右**的并贴其右缘
     ///   （两档互为镜像，同一套扫描）。取不到可信的占用区时**退回整条任务栏**
     ///   （等效 `fixed_center`）并记日志
-    ///   —— 探针失败绝不猜（判据 → `taskbar_layout` 模块文档、Wiki 15 §8.6.11）。
-    /// ⭐ `drag`（手动拖拽）= 位置由用户拖着走（落点在 [`Config::taskbar_custom_x`]），
+    ///   —— 探针失败绝不猜（判据 → `taskbar_layout` 模块文档、Wiki 15 §10.13）。
+    /// ✓ `drag`（手动拖拽）= 位置由用户拖着走（落点在 [`Config::taskbar_custom_x`]），
     ///   不再按任何贴靠规则重算 —— 即「我自己摆，别动它」。
     ///
-    /// ⭐ 默认 = `auto_right`；旧值迁移见 [`migrate_taskbar_position_value`]（旧四档改名）
+    /// ✓ 默认 = `auto_right`；旧值迁移见 [`migrate_taskbar_position_value`]
     ///   与 [`migrate_taskbar_drag`]（旧「不固定位置」开关收编为本档）。
-    /// ⚠️ 具名 helper：真实默认是 `auto_right`，裸 `#[serde(default)]` 会得到空串
+    /// ⚠ 具名 helper：真实默认是 `auto_right`，裸 `#[serde(default)]` 会得到空串
     ///   （空串不在 `VALID_TASKBAR_POSITIONS` 里 ⇒ 加载时被归一化回默认档，
     ///   但中间那一瞬的非法值是多余的，故仍用具名默认）。
     #[serde(default = "default_taskbar_position")]
@@ -373,31 +373,31 @@ pub struct Config {
     /// - `Some(x)`：用户拖过 ⇒ `taskbar_position = "drag"` 时应回到这个位置；
     /// - `None`：用户从没拖过 ⇒ 沿用上次绘制的位置。
     ///
-    /// ⚠️ 只在 `taskbar_position == "drag"` 时生效。其他档**忽略但不清除**
+    /// ⚠ 只在 `taskbar_position == "drag"` 时生效。其他档**忽略但不清除**
     ///   —— 用户切回「手动拖拽」，就能回到自己放下的地方。
-    /// ⚠️ 存的是物理像素，换分辨率/改缩放后可能与预期位置有偏差（读取时会按任务栏
+    /// ⚠ 存的是物理像素，换分辨率/改缩放后可能与预期位置有偏差（读取时会按任务栏
     ///   宽度**钳制**，不会跑出任务栏）。
     #[serde(default)]
     pub taskbar_custom_x: Option<i32>,
     /// 任务栏信息窗的**内容缩放档位**（`"default"` / `"smaller"`）。
     ///
-    /// ⛔ 作用域（明确要求）：**只改内容**（图标 / 文字 / 随内容缩放的
+    /// ✗ 作用域（明确要求）：**只改内容**（图标 / 文字 / 随内容缩放的
     ///   间距与项宽上限），**底衬仍按系统 DPI 缩放**（窗口高度、圆角不受本项影响）。
     ///   落地见 `taskbar_widget::Metrics` 的 `content_dpi`。
-    /// ⚠️ 是 enum 而非 `String`：取值集合固定且只有两档，用 `String + VALID_*` 归一化
+    /// ⚠ 是 enum 而非 `String`：取值集合固定且只有两档，用 `String + VALID_*` 归一化
     ///   反而多一处可能漂移的清单（`taskbar_position` 那套是历史写法）。
     #[serde(default)]
     pub taskbar_content_scale: TaskbarContentScale,
     /// 「显示音乐控制组件」开关（**默认关闭**）。
     ///
-    /// ⛔ 与 [`Config::taskbar_widget_enabled`] **是两个独立开关**：
+    /// ✗ 与 [`Config::taskbar_widget_enabled`] **是两个独立开关**：
     ///   设备信息组件的开关**不控制**音乐组件，反之亦然。
     ///   两者都开时，组件最右侧出现「切换」按钮（见 `taskbar_widget`）。
     #[serde(default)]
     pub taskbar_music_enabled: bool,
     /// 任务栏组件当前显示哪一块内容（用户选择，重启后保留）。
     ///
-    /// ⚠️ 记的是**选择**而非「实际显示什么」：音乐面板无会话时不可用，会回落设备面板，
+    /// ⚠ 记的是**选择**而非「实际显示什么」：音乐面板无会话时不可用，会回落设备面板，
     ///   回落**不改写**本字段（否则一次「临时没播歌」就把用户的选择抹了）。
     #[serde(default)]
     pub taskbar_panel: TaskbarPanel,
@@ -407,7 +407,7 @@ pub struct Config {
     ///   `a2dp-changed` 事件驱动刷新自动出现；全未连接时整窗为透明帧（不可见、不命中）。
     /// · 开：与旧行为一致——钉住设备**常驻**，离线占位条目置灰（`should_dim_item`）。
     ///
-    /// ⛔ 「全未连接 ⇒ 拆窗」不可行：`refresh_async_with` 在未挂载时早退，而取数是
+    /// ✗ 「全未连接 ⇒ 拆窗」不可行：`refresh_async_with` 在未挂载时早退，而取数是
     ///   快照的**唯一**生产者 ⇒ 拆窗后快照永不更新、永远重挂不回来。
     ///   显隐只能落在**过滤层**（取数时不入选）+ 空列表走既有透明帧路径
     ///   （实现点：`build_items_with_opt_labels` 的过滤与 `draw_blank`）。
@@ -442,7 +442,7 @@ pub struct Config {
     pub enable_spatial_sound: bool,
     #[serde(default)]
     pub a2dp_reconnect_on_start: bool,
-    /// ⚠️ 具名 helper：真实默认是**开**（连接断开/失败自动重试是本功能的预期行为），
+    /// ⚠ 具名 helper：真实默认是**开**（连接断开/失败自动重试是本功能的预期行为），
     /// 裸 `#[serde(default)]` 会得到 false ⇒ 升级后重试被静默关闭。
     #[serde(default = "default_true")]
     pub a2dp_reconnect_on_drop: bool,
@@ -497,7 +497,7 @@ fn default_true() -> bool {
     true
 }
 /// `hidden_groups` 的 serde 默认值。与 `Config::default()` 共用同一份定义，
-/// 避免「字段缺失」与「整体默认」两条路径给出不同的默认隐藏分组（P1-7）。
+/// 避免「字段缺失」与「整体默认」两条路径给出不同的默认隐藏分组。
 fn default_hidden_groups() -> Vec<String> {
     vec!["Battery".to_string(), "Monitor".to_string()]
 }
@@ -535,7 +535,7 @@ const VALID_LOG_LEVELS: &[&str] = &["off", "standard", "verbose"];
 const VALID_POPUP_TABS: &[&str] = &["devices", "volume"];
 const VALID_POPUP_SIZES: &[&str] = &["small", "default", "large"];
 const VALID_THEME_MODES: &[&str] = &["follow_system", "light", "dark"];
-// ⛔ 必须覆盖前端材质下拉的全部 `data-value`（settings.html win-combo-item 四项）；
+// ✗ 必须覆盖前端材质下拉的全部 `data-value`（settings.html win-combo-item 四项）；
 //   漏项不会报错，而是每次写入都被归一化静默回退成 default ⇒ 该档位永远存不住。
 const VALID_WINDOW_MATERIALS: &[&str] = &["default", "recommended", "acrylic", "mica"];
 const VALID_TASKBAR_POSITIONS: &[&str] = &[
@@ -582,7 +582,7 @@ fn battery_thresholds_valid(thresholds: &[i32]) -> bool {
 
 /// 把 `device_names` 里「带括号原串」的条目**归并**一条 `core_name` 短名键（原地、纯内存）。
 ///
-/// **为什么需要它**（方案 D 的读取侧前提）：
+/// **为什么需要它**（读取侧前提）：
 /// `set_device_info` 从今以后**同时**写「原名」与「`core_name` 短名」两条键（归并双写），
 /// 因此新产生的改名天然三处一致。少了这一步归并，只有「原名」一条键的条目在
 /// 设备页 / 任务栏（按短名查）**查不到**，用户会看到「改了名的地方没变」。
@@ -621,7 +621,7 @@ fn backfill_device_name_keys(config: &mut Config) -> bool {
 
 /// 把 `PinnedDevice.alias`（**只有**任务栏 tooltip 认它）折进全局 `device_names`。
 ///
-/// ⛔ **为什么需要它**：`resolved_display_name` 的第 1 级是「固定项自带的 alias」，
+/// ✗ **为什么需要它**：`resolved_display_name` 的第 1 级是「固定项自带的 alias」，
 ///   其余所有表面（设备信息页、音量页、托盘、设置页）都只认 `device_names`
 ///   ⇒ 旧配置里带 alias 的固定项会出现**「任务栏一个名、别处另一个名」**。
 ///   `alias` 字段**没有任何 UI 入口**（只剩 `try_toggle_pinned_taskbar_device`
@@ -637,17 +637,17 @@ fn backfill_device_name_keys(config: &mut Config) -> bool {
 fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
     // 先收集再改：`device_names` 的插入与 `alias` 的清空都会改变被遍历的结构。
     //
-    // ⭐⭐ **折叠后必须清掉 `alias` 本身**（P0，用户 评审定案）：
+    // ✓ **折叠后必须清掉 `alias` 本身**（P0，用户 评审定案）：
     //   `resolved_display_name` 的第 1 级是 `pin.alias`、**优先于** `device_names`。
     //   若只折进全局表却留着 alias，用户日后全局改名为 Y 时：
     //   任务栏仍显示 alias「X」、其余各处显示 Y ⇒ **刚修掉的不一致原样复发**，
     //   而且只在旧配置（带 alias）上出现，极难联想到是这里。
     //   ⇒ 这一级历史层级就此退休：值已进全局表，别名不再有独立含义。
     //
-    // ⚠️ `device_names` 已有同键条目时**不覆盖**（用户后来在别处改过名，以那个为准），
+    // ⚠ `device_names` 已有同键条目时**不覆盖**（用户后来在别处改过名，以那个为准），
     //   但 alias **照样清**——否则又变成「任务栏一个名、别处另一个名」。
     //
-    // ⚠️ 算不出短名（既无 `n:` 兜底键、`key` 也不是 `n:` 形态）时**保留 alias**：
+    // ⚠ 算不出短名（既无 `n:` 兜底键、`key` 也不是 `n:` 形态）时**保留 alias**：
     //   宁可留着不一致，也不能把用户当初起的名丢掉。
     let mut additions: Vec<(String, String)> = Vec::new();
     let mut to_clear: Vec<usize> = Vec::new();
@@ -656,7 +656,7 @@ fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
             continue;
         };
         // `fallback` 本身就是 `n:<短名>`；退化时从 `key` 的 `n:` 形态再取一次。
-        // ⛔ 一律取** owned** `String`：`core_name` 返回 `String`，与 `&str` 混用会
+        // ✗ 一律取** owned** `String`：`core_name` 返回 `String`，与 `&str` 混用会
         //    逼出借用技巧（`Box::leak` ⇒ 直接内存泄漏，禁）。
         let short: Option<String> = p
             .fallback
@@ -687,7 +687,7 @@ fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
     true
 }
 
-/// 应用一次设备改名：**归并写入 / 归并删除**（方案 D 的写入侧，纯函数，便于单测）。
+/// 应用一次设备改名：**归并写入 / 归并删除**（写入侧，纯函数，便于单测）。
 ///
 /// `original` 是前端传来的**名字**（音量页 = 带括号原串 `扬声器 (DUNU DTC100pro)`；
 /// 设备页 = `core_name` 短名 `DUNU DTC100pro`），**不带身份键** ——
@@ -696,18 +696,18 @@ fn fold_pinned_alias_into_device_names(config: &mut Config) -> bool {
 /// ⇒ 于是「同一台设备在两个页面名字形态不同」这件事，只能靠**把两种形态都写上**来抹平：
 /// 读取侧 `resolve_device_name` 三级回退，两处都能命中。
 ///
-/// ⛔ **若只写 `device_names[original]`**（旧实现），从音量页改名后设备页/任务栏
+/// ✗ **若只写 `device_names[original]`**（旧实现），从音量页改名后设备页/任务栏
 /// **仍显示原名** —— 既不报错也不告警的**静默失效**（已由单测钉住）。
 ///
 /// 语义与旧实现完全兼容：
 /// · `new_name` 为空、或与原名相同 ⇒ 视为「恢复默认」，**两种形态都删净**；
 /// · 否则两种形态都写入同一个自定义名。
 ///
-/// ⛔ **必须抽成独立纯函数**：`set_device_info` 是 `#[tauri::command]`、需要 `AppHandle`
+/// ✗ **必须抽成独立纯函数**：`set_device_info` 是 `#[tauri::command]`、需要 `AppHandle`
 /// 才能 `emit`，直接单测代价高；而这段归并逻辑恰恰**必须**被单测钉住（它是静默失效的来源）。
 /// 抽成纯函数后既可直接测，也与本仓 `normalize_config` 的既有风格一致。
 pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) -> bool {
-    // ⭐ **后端也要 trim**（P4）：前端 `showDeviceInfoDialog` 虽有 `input.value.trim()`，
+    // ✓ **后端也要 trim**（P4）：前端 `showDeviceInfoDialog` 虽有 `input.value.trim()`，
     //   但命令是公开入口，直接调用可存进 `"  "` ⇒ 各表面的 `if (custom)` 判空
     //   失败、静默回落原名，表现为「改名没生效」且无处可查。
     let new_name = new_name.trim();
@@ -715,7 +715,7 @@ pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) 
     if new_name.is_empty() || new_name == original {
         // 恢复默认：**删净所有指向同一台设备的键**，不能只删入口传来的那一个形态。
         //
-        // ⛔ 这里有个非对称陷阱：**写入**是「一对多」（原名 + 短名都写），
+        // ✗ 这里有个非对称陷阱：**写入**是「一对多」（原名 + 短名都写），
         //   而**删除**若只知道入口形态，就会留下另一个形态的键 ⇒
         //   用户从设备页（短名入口）点「恢复默认」后，音量页那条键还在 ⇒
         //   **名字没变回去**（静默、且只在一半的页面里可见）。
@@ -728,16 +728,16 @@ pub fn apply_device_rename(config: &mut Config, original: &str, new_name: &str) 
             .retain(|k, _| k != original && core_name(k) != target);
         return config.device_names.len() != before;
     }
-    // ⭐ 归并集 = {入口键, 短名键} ∪ {**已存在的**同 `core_name` 键}（C）。
+    // ✓ 归并集 = {入口键, 短名键} ∪ {**已存在的**同 `core_name` 键}（C）。
     //
-    // ⛔ 为什么必须扫已存在的键：只写前两条时，若配置里还留着**另一种**长形态的
+    // ✗ 为什么必须扫已存在的键：只写前两条时，若配置里还留着**另一种**长形态的
     //   键（历史条目、或同一台设备有两个不同端点名如 `扬声器 (X)` 与 `耳机 (X)`），
     //   它会保持旧值 ⇒ 配置里长期存在**互相矛盾的两条别名**。显示上暂时无害
     //   （读取永远短名键优先，加载时 `backfill_device_name_keys` 也保证短名键存在），
     //   但这依赖一条**隐式不变量**；哪天有人调整读取顺序，它立刻变成显示 bug。
     //   ⇒ 与删除侧（按 `core_name` 全删）保持对称：写也按 `core_name` 全写。
     //
-    // ⚠️ 先收集再插入：`HashMap` 迭代期间不得写入。
+    // ⚠ 先收集再插入：`HashMap` 迭代期间不得写入。
     let mut keys: Vec<String> = Vec::new();
     for k in [original.to_string(), short.clone()] {
         if !keys.contains(&k) {
@@ -785,9 +785,9 @@ fn is_known_kind(v: &str, table: &[&str]) -> bool {
 
 /// 写入/清除一条**设备类型**覆盖（判据同 [`apply_device_rename`] 的恢复默认分支）。
 ///
-/// ⛔ 键是**身份键**（`DeviceKey::encode`），非空即唯一形态 ⇒ 不需要 rename 那套
+/// ✗ 键是**身份键**（`DeviceKey::encode`），非空即唯一形态 ⇒ 不需要 rename 那套
 ///   「入口键 + 短名键 + 同源键」归并——那是名字形态漂移的产物，身份键天然单键。
-/// ⛔ `value` 空白或不在 [`DEVICE_TYPES`] 内 = **清除**该键：命令入口只收白名单值，
+/// ✗ `value` 空白或不在 [`DEVICE_TYPES`] 内 = **清除**该键：命令入口只收白名单值，
 ///   这里再拦一道是为了让「手改配置写进脏值」也能被一次覆盖修复。
 /// 返回是否发生变更（供单测钉住幂等）。
 pub fn apply_device_type(config: &mut Config, device_key: &str, value: &str) -> bool {
@@ -822,7 +822,7 @@ fn apply_kind_entry(
 
 /// 读取一条**设备类型**覆盖：命中且合法返回枚举串，否则 `None`（走自动探测）。
 ///
-/// ⛔ 读侧也过滤白名单：脏值（手改配置）必须等价于「未指定」，不能让它把
+/// ✗ 读侧也过滤白名单：脏值（手改配置）必须等价于「未指定」，不能让它把
 ///   `audio_kind_from_user_type` 的映射带偏。
 /// 只提供吃**表本身**的 `_in` 形态（与 [`resolve_device_name_in`] 同款拆分）：
 /// 生产消费者（`apply_user_overrides`）都在持锁区外拿单表，不存在吃整个
@@ -856,10 +856,10 @@ fn resolve_kind_entry(
 
 /// 显示名长度上限（**只管显示，不管数据**）。
 ///
-/// ⭐ 为什么需要：任务栏窗口是**原生分层窗**，宽度由文字估算撑开（`current_content()`
+/// ✓ 为什么需要：任务栏窗口是**原生分层窗**，宽度由文字估算撑开（`current_content()`
 ///   的估宽按「宁可高估、不可低估」），一个几百字的别名会把窗口撑到超出屏幕。
 ///   而四个网页表面靠 CSS `text-overflow: ellipsis` 天然截断，不需要这个上限。
-/// ⚠️ **只加在渲染前的最后一步**（`resolved_display_name` / `resolve_audio_display_name`），
+/// ⚠ **只加在渲染前的最后一步**（`resolved_display_name` / `resolve_audio_display_name`），
 ///   **不能**加在 `resolve_device_name` 上——重命名对话框的输入框预填也走那条路，
 ///   一旦截断，用户编辑长名字时会看到被削过的初值，保存就把别名毁了。
 ///   配置文件里始终保留用户原意。
@@ -875,7 +875,7 @@ pub fn clamp_display_name(name: &str) -> String {
     out
 }
 
-/// 按「短名优先、原名回退」解析设备展示名（方案 D 的读取侧，三级回退）。
+/// 按「短名优先、原名回退」解析设备展示名（读取侧，三级回退）。
 ///
 /// ```
 /// 1) device_names[core_name(raw_name)]   → 命中即用   ← 音量页与设备页靠这条统一
@@ -884,18 +884,18 @@ pub fn clamp_display_name(name: &str) -> String {
 /// 4) raw_name                            → 原名
 /// ```
 ///
-/// ⛔ 各级都必须跳过**空白**值：JS 侧 `if (custom)` 把 `""` 判假并回落原名，
+/// ✗ 各级都必须跳过**空白**值：JS 侧 `if (custom)` 把 `""` 判假并回落原名，
 ///   Rust 侧若照收就会在任务栏/托盘/通知里显示空白 ⇒ 两侧口径必须一致。
-/// ⚠️ 本函数与前端 `common.js` 的 `lookupDeviceAlias` 是**同一个判据的两份实现**，
+/// ⚠ 本函数与前端 `common.js` 的 `lookupDeviceAlias` 是**同一个判据的两份实现**，
 ///   改一侧必须同步另一侧，否则又变成「同一个设备两套名字」。
 ///
-/// ⚠️ **为什么必须有第 1 级**：音量页用的 `AudioDevice.name` 是**未归一化原串**
+/// ⚠ **为什么必须有第 1 级**：音量页用的 `AudioDevice.name` 是**未归一化原串**
 /// （`扬声器 (DUNU DTC100pro)`），而设备页用的 `Device.name` 是 `core_name` **短名**
 /// （`DUNU DTC100pro`）。改名入口**只传名字字符串、不传身份键**
 /// （`common.js showDeviceInfoDialog`）⇒ 后端无法知道这个名字属于哪台设备。
 /// 归并双写 + 三级回退是**唯一能零改前端**把两侧统一起来的路径。
 ///
-/// ⛔ **不要用 `Device.name` 反推身份**（见 `device_identity.rs` 同名纪律）——
+/// ✗ **不要用 `Device.name` 反推身份**（见 `device_identity.rs` 同名纪律）——
 /// 本函数只做**显示名解析**，不参与身份判定。
 pub fn resolve_device_name(raw_name: &str, config: &Config) -> String {
     resolve_device_name_in(raw_name, &config.device_names)
@@ -903,7 +903,7 @@ pub fn resolve_device_name(raw_name: &str, config: &Config) -> String {
 
 /// 同 [`resolve_device_name`]，但只吃**改名表本身**。
 ///
-/// ⭐ 存在的理由：`battery_notify` 为避免在通知循环里持配置锁，只克隆了
+/// ✓ 存在的理由：`battery_notify` 为避免在通知循环里持配置锁，只克隆了
 /// `device_names` 这一张表（`Config` 其余字段都很沉）。**判据必须与上面那个
 /// 函数逐字一致**（AGENTS.md「复用同一判据 = 同一函数」），故这里只做转发，
 /// 不复制 `core_name` 查找逻辑。
@@ -911,7 +911,7 @@ pub fn resolve_device_name_in(
     raw_name: &str,
     device_names: &std::collections::HashMap<String, String>,
 ) -> String {
-    // ⚠️⚠️ **空白值必须当「无别名」**（A）：`get()` 命中空串会 `return ""`，
+    // ⚠ **空白值必须当「无别名」**（A）：`get()` 命中空串会 `return ""`，
     //   而 JS 侧 `formatDeviceName` 的 `if (custom)` 把 `""` 判假、回落原名
     //   ⇒ 同一个设备在**任务栏 tooltip / 托盘菜单 / 低电量通知**显示空白，
     //   四个页面却正常。只有手改配置才可能写进空值，但「两处实现同一判据」
@@ -925,14 +925,14 @@ pub fn resolve_device_name_in(
     if let Some(v) = device_names.get(raw_name).filter(|v| !v.trim().is_empty()) {
         return v.clone();
     }
-    // ⭐ 第 4 级：**任一形态**的同源键有有效别名就用它。
+    // ✓ 第 4 级：**任一形态**的同源键有有效别名就用它。
     //
-    // ⛔ 为什么必须有：前两级只看 `core_name(raw)` 与 `raw` 两个**确定的**键。
+    // ✗ 为什么必须有：前两级只看 `core_name(raw)` 与 `raw` 两个**确定的**键。
     //   当「短名键是空白、长形态键有值」时（手改配置 / 历史条目），
     //   音量页走长形态能取到别名、设备页走短名却只能回落原名
     //   ⇒ **同一设备两套名字**，正是本轮一直在消灭的那类不一致。
     //
-    // ⚠️ 多个同源键同时有效时按**键名排序**取第一个：`HashMap` 迭代顺序不确定，
+    // ⚠ 多个同源键同时有效时按**键名排序**取第一个：`HashMap` 迭代顺序不确定，
     //   不排序就会「同一个配置每次启动显示的名字可能不同」。
     if let Some(v) = device_names
         .iter()
@@ -945,7 +945,7 @@ pub fn resolve_device_name_in(
     raw_name.to_string()
 }
 
-/// ⭐ `taskbar_position` 的**旧四档值迁移**（改值必须同时做读取期迁移，
+/// ✓ `taskbar_position` 的**旧四档值迁移**（改值必须同时做读取期迁移，
 /// 否则老用户的存量值会先被归一化冲回默认档 ⇒ 静默丢设置）。
 ///
 /// 映射：`left`/`center`/`right` → `fixed_left`/`fixed_center`/`fixed_right`（只是改名），
@@ -964,15 +964,15 @@ fn migrate_taskbar_position_value(value: &mut String) -> bool {
     true
 }
 
-/// ⭐ 「手动拖拽」档的升级兼容：旧版「不固定位置」是**独立开关**
+/// ✓ 「手动拖拽」档的升级兼容：旧版「不固定位置」是**独立开关**
 /// （`taskbar_position_locked = false`），新版收编为位置下拉的一档 `drag`。
 ///
-/// ⚛️ 判据必须是「该键在**文件里**出现过且值为 `false`」：新版配置不再写这个键
+/// ✗ 判据必须是「该键在**文件里**出现过且值为 `false`」：新版配置不再写这个键
 ///   （字段已删除，TOML 解析时未知键被忽略）⇒ 子串匹配天然只命中老配置；
 ///   缺键或 `true` = 旧「固定」语义，位置值照常用。
-///   ⚠️ 应用自写的 TOML 键值间**恒有空格**；手写无空格形态（`key=false`）单列一条
+///   ⚠ 应用自写的 TOML 键值间**恒有空格**；手写无空格形态（`key=false`）单列一条
 ///   兼容——漏迁移的代价是老「手动摆位」用户被静默钉回默认档，宁可贵一点。
-/// ⚠️ 旧「固定时忽略但不清除」的记忆语义不再保留：迁移为 `drag` 后原存的
+/// ⚠ 旧「固定时忽略但不清除」的记忆语义不再保留：迁移为 `drag` 后原存的
 ///   位置档被覆盖（要回到固定档需重新选一次）—— 单值下拉没有「隐藏的第二选择」
 ///   的容身处，这是收编的固有代价；拖过的落点仍由 `taskbar_custom_x` 保留。
 pub fn migrate_taskbar_drag(text: &str, c: &mut Config) -> bool {
@@ -995,7 +995,7 @@ pub fn migrate_taskbar_drag(text: &str, c: &mut Config) -> bool {
 /// 这里把校验收敛成单一来源。
 ///
 /// **为什么是「归一化」而不是「报错」**：这些值来自用户可直接编辑的 `config.toml`。
-/// 报错会让一个字段牵连整份配置（P1-7 那条不可逆路径），归一化则只影响该字段本身。
+/// 报错会让一个字段牵连整份配置（那条不可逆路径），归一化则只影响该字段本身。
 ///
 /// 纯函数：不读全局状态、不持锁、不做 I/O ⇒ 可被加载路径与写入路径复用，也便于单测。
 /// 返回 `true` 表示至少有一个字段被替换。
@@ -1030,11 +1030,11 @@ fn normalize_config(config: &mut Config) -> bool {
         changed = true;
     }
 
-    // ⭐ 历史改名回填（方案 D）：给「带括号原串」条目补一条 `core_name` 短名键。
+    // ✓ 历史改名回填：给「带括号原串」条目补一条 `core_name` 短名键。
     // 纯内存归并 ⇒ 符合本函数的「不持锁、不做 I/O」契约。
     changed |= backfill_device_name_keys(config);
 
-    // ⭐ 固定项自带别名折进全局改名表：让「只有任务栏认 alias」的历史数据
+    // ✓ 固定项自带别名折进全局改名表：让「只有任务栏认 alias」的历史数据
     // 对所有表面可见（详见该函数注释）。放在回填之后 ⇒ alias 不会抢已有短名键。
     changed |= fold_pinned_alias_into_device_names(config);
 
@@ -1165,7 +1165,7 @@ fn sync_log_cache(config: &Config) {
 
 /// 配置文件路径（`<可写根目录>/config.toml`）。
 ///
-/// ⛔ 根目录走 [`crate::process::writable_root`] 而非 `exe_dir()`：
+/// ✗ 根目录走 [`crate::process::writable_root`] 而非 `exe_dir()`：
 /// **MSIX 的包安装目录只读且不在重定向表内**，往里写是静默失败
 /// （失败提示本身也写不进日志）。
 /// 非 MSIX 环境下 `writable_root()` 与 `exe_dir()` 同值，故老用户路径不变。
@@ -1205,7 +1205,7 @@ fn backup_broken_config(path: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
-/// 从磁盘原文构造进程内配置：**解析 → 归一化**（P3-9）。
+/// 从磁盘原文构造进程内配置：**解析 → 归一化**。
 ///
 /// 抽成独立函数是为了让单测能用**任意文本**验证「一个坏字段不会牵连整份配置」，
 /// 而不必去碰真实的 `config.toml`。返回的 `bool` 表示是否发生了归一化替换。
@@ -1215,12 +1215,12 @@ fn backup_broken_config(path: &std::path::Path) -> Option<std::path::PathBuf> {
 fn parse_config_text(text: &str) -> Result<(Config, bool), toml::de::Error> {
     let mut config: Config = toml::from_str(text)?;
     let mut normalized = normalize_config(&mut config);
-    // ⭐ 升级兼容走这里：老配置没有 `taskbar_widget_enabled` 键，
+    // ✓ 升级兼容走这里：老配置没有 `taskbar_widget_enabled` 键，
     //   但可能已钉了设备 ⇒ 那正是「升级前窗口可见」的状态，翻成 `true`。
-    //   ⚠️ 必须在 `normalize_config` **之后**跑：它才刚把非法值修干净，
+    //   ⚠ 必须在 `normalize_config` **之后**跑：它才刚把非法值修干净，
     //   此时 `pinned_taskbar_devices` 才是可信的最终值。
     normalized |= migrate_taskbar_switch(text, &mut config);
-    // ⭐ 「手动拖拽」收编迁移：旧版「不固定位置」独立开关 → `taskbar_position = "drag"`。
+    // ✓ 「手动拖拽」收编迁移：旧版「不固定位置」独立开关 → `taskbar_position = "drag"`。
     normalized |= migrate_taskbar_drag(text, &mut config);
     Ok((config, normalized))
 }
@@ -1239,7 +1239,7 @@ pub fn init_config() {
                 }
                 Err(e) => {
                     // 解析失败：**先备份磁盘原文，再回退默认值**——默认值一旦被后续
-                    // 写入落盘，原始配置就永久消失（P1-7 的唯一不可逆路径）。
+                    // 写入落盘，原始配置就永久消失（唯一不可逆路径）。
                     let bak = backup_broken_config(&path);
                     let hint = match &bak {
                         Some(p) => format!("原配置已备份为 {}，可据此手工恢复", p.display()),
@@ -1264,9 +1264,9 @@ pub fn init_config() {
         *guard = config;
         sync_log_cache(&guard);
     }
-    // ⭐ 任务栏开关的升级迁移**必须立刻落盘**（与上面的「归一化不写盘」相反）。
+    // ✓ 任务栏开关的升级迁移**必须立刻落盘**（与上面的「归一化不写盘」相反）。
     //
-    // ⚠️ 为什么这一条要破例：`migrate_taskbar_switch` 是**一次性**改写
+    // ⚠ 为什么这一条要破例：`migrate_taskbar_switch` 是**一次性**改写
     // （老配置 ⇒ 补出 `taskbar_widget_enabled = true`）。不落盘的后果是
     // **每次启动都重跑一遍**，而期间用户只要在设置页把开关关掉，
     // 下一启动又会被翻回 true ⇒ 「**关不掉**」——一个不可自行恢复的功能性失效。
@@ -1279,7 +1279,7 @@ pub fn init_config() {
             .taskbar_widget_enabled
             && !already_on_disk;
         if need_persist {
-            // ⛔ 走 `write_config_atomically`（**同步**）而**不是** `enqueue_persist`：
+            // ✗ 走 `write_config_atomically`（**同步**）而**不是** `enqueue_persist`：
             //   后者要调用方先把配置**序列化好**传进来，而在 `init_config` 这个位置
             //   持锁读配置再序列化会与写盘线程抢锁；且迁移本就该「启动时一次定局」。
             let snapshot = crate::state::lock_unpoisoned(CONFIG.get().unwrap()).clone();
@@ -1320,7 +1320,7 @@ pub fn init_config() {
     // 初始化脏检查缓存：读取磁盘文件内容作为基准
     if let Ok(content) = std::fs::read_to_string(config_path()) {
         if let Some(last) = LAST_CONFIG_CONTENT.get() {
-            // P2-11：改用统一入口，中毒时不再静默丢弃基准值
+            // 改用统一入口，中毒时不再静默丢弃基准值
             *crate::state::lock_unpoisoned(last) = Some(content);
         } else {
             let _ = LAST_CONFIG_CONTENT.set(Mutex::new(Some(content)));
@@ -1347,7 +1347,7 @@ pub fn init_config() {
 /// 测试专用：确保全局 `CONFIG` 已初始化，**不读磁盘**。
 ///
 /// `OnceLock` 幂等，多个用例重复调用无妨。给那些「会经由 `with_config` 读配置、
-/// 但不想依赖真实 `config.toml`」的用例用（如 `battery_notify` 的 P2-7 探针用例）。
+/// 但不想依赖真实 `config.toml`」的用例用（如 `battery_notify` 的探针用例）。
 /// 取 `Config::default()`：其中 `low_battery_devices` 为空 ⇒ 通知路径会提前返回，
 /// 用例不会真的弹系统通知。
 #[cfg(test)]
@@ -1373,10 +1373,10 @@ struct PersistJob {
     content: String,
 }
 
-/// 落盘队列：`with_config_mut` 只把快照交给写线程，调用线程立即返回（B11）。
+/// 落盘队列：`with_config_mut` 只把快照交给写线程，调用线程立即返回。
 ///
-/// ⛔ **为什么要有它**：落盘**不得**留在**调用线程**上（`File::create` +
-/// `write_all` + `sync_all` + `rename`）。P1-3 已把落盘移出**配置锁**（那一步是对的），
+/// ✗ **为什么要有它**：落盘**不得**留在**调用线程**上（`File::create` +
+/// `write_all` + `sync_all` + `rename`）。落盘已移出**配置锁**，
 /// 但没移出**调用线程** —— 而 11 个调用点里有 10 个就在**主线程**上：
 /// 9 个同步命令（`update_config` / `toggle_device_hidden` / `set_device_info` /
 /// `change_device_group` / `toggle_group_hidden` / `toggle_audio_device_hidden` /
@@ -1387,7 +1387,7 @@ struct PersistJob {
 ///
 /// 队列满时**退回同步落盘**而不是丢弃：配置是用户数据，丢一次设置比卡一下更糟。
 ///
-/// ⚠️ **代价（知情，已评估）**：进程**异常终止**（崩溃 / 被强杀）时，最后一次设置
+/// ⚠ **代价（知情，已评估）**：进程**异常终止**（崩溃 / 被强杀）时，最后一次设置
 /// 可能尚未落盘。正常退出路径全部会 [`flush_persist`]（`RunEvent::Exit`、
 /// 看门狗自重启前、`builder.build()` 失败后），故该窗口只存在于异常终止，
 /// 通常 < 10ms。取舍理由：留在调用线程是「**每次**改设置都卡 UI」（必然、高频），
@@ -1447,7 +1447,7 @@ fn enqueue_persist(content: String) {
 }
 
 /// 等待落盘队列排空（上限 2s）。**正常退出路径必须调用**，
-/// 否则关停前最后一次设置会留在队列里——这正是 B11 的已知代价，
+/// 否则关停前最后一次设置会留在队列里——这正是已知代价，
 /// 调用它把窗口收窄到「异常终止」这一种情况。
 ///
 /// 上限是必需的：写线程可能正卡在一次极慢的 `sync_all()` 上，
@@ -1484,7 +1484,7 @@ fn persist_now(job: &PersistJob) {
     // 串行锁**故意**跨 I/O 持有：保证两次落盘不交错（各写一半 = 半个文件）。
     // 且本函数已只在写线程上执行（`enqueue_persist` 的兜底分支除外），长时间持锁不影响 UI。
     //
-    // 锁序（P3-10，集中登记见 `state.rs` 模块文档）：本函数在持 `PERSIST_LOCK` 时
+    // 锁序（集中登记见 `state.rs` 模块文档）：本函数在持 `PERSIST_LOCK` 时
     // 取 `LAST_CONFIG_CONTENT`（下面两处），即白名单第 2 条
     // `PERSIST_LOCK → LAST_CONFIG_CONTENT`。**反向边不存在**——没有任何路径在持
     // `LAST_CONFIG_CONTENT` 时取 `PERSIST_LOCK`，故不构成 AB/BA。
@@ -1497,7 +1497,7 @@ fn persist_now(job: &PersistJob) {
 
     // #23 脏检查：内容未变化时跳过写盘（减少高频配置操作的 I/O）
     //
-    // ⚠️ 守卫必须收在块内，不能提升到函数作用域：本函数末尾（写盘成功后）
+    // ⚠ 守卫必须收在块内，不能提升到函数作用域：本函数末尾（写盘成功后）
     // 还要**再取一次同一把锁**，Mutex 不可重入 ⇒ 同线程重复加锁 = 直接死锁。
     let last = LAST_CONFIG_CONTENT.get_or_init(|| Mutex::new(None));
     let unchanged = {
@@ -1537,7 +1537,7 @@ fn write_config_atomically(content: &str, cfg_path: &std::path::Path) -> std::io
 /// `Config` 的字段清单（**单一来源**）：`merge_config` 与其覆盖性单测都由它生成，
 /// 新增字段时**只需**在这里加一个标识符，两处自动同步。
 ///
-/// ⚠️ 漏加字段的后果：该字段在设置页**永远改不动**（前端发来的整份配置里，
+/// ⚠ 漏加字段的后果：该字段在设置页**永远改不动**（前端发来的整份配置里，
 /// 它的差异不会被套用）。这是「可见的功能缺失」而非「静默丢数据」，
 /// 且覆盖性单测（`merge_field_list_covers_every_serialized_field`）会直接转红。
 macro_rules! for_each_config_field {
@@ -1604,7 +1604,7 @@ macro_rules! for_each_config_field {
 
 macro_rules! merge_config_impl {
     ($($field:ident),* $(,)?) => {
-        /// 把「`patch` 相对 `base` 的差异」套用到 `current` 上，返回被套用的字段数（P1-11）。
+        /// 把「`patch` 相对 `base` 的差异」套用到 `current` 上，返回被套用的字段数。
         ///
         /// **为什么需要它**：设置页的 `saveConfig()` 发送**整份**配置并整体覆盖，
         /// 而弹窗侧的改名/隐藏/分组/托盘固定等操作走的是**字段级**命令
@@ -1644,7 +1644,7 @@ macro_rules! config_field_names_impl {
 }
 for_each_config_field!(config_field_names_impl);
 
-// ── B8：P0-4 类死锁的机械防线（debug-only）──────────────────────
+// ── 配置锁死锁的机械防线（debug-only）──────────────────────
 //
 // 为什么需要它：托盘/菜单 API（`set_menu` / `set_icon` / `set_tooltip` / `set_text`
 // 及 `MenuItem::with_id` 等构造 API）内部经 `run_item_main_thread!` 展开为
@@ -1653,11 +1653,11 @@ for_each_config_field!(config_field_names_impl);
 // 构成 **AB/BA 永久死锁**：整进程冻结，看门狗也救不回（其探活同样要主线程）。
 //
 // 这条纪律需要**机械防线**：`tools/check.mjs` 不扫 Rust，编译器也看不见。
-// B8 把「持锁深度」记下来，
+// 把「持锁深度」记下来，
 // 由 `tray.rs` 的薄包装在调用 API 前 `debug_assert!` —— 复发时开发期立刻 panic，
 // 而不是线上冻结 40 秒后被系统按「无响应」杀掉。
 //
-// ⚠️ 深度必须记在**线程局部**里，不能用全局原子量：锁是线程级资源，
+// ⚠ 深度必须记在**线程局部**里，不能用全局原子量：锁是线程级资源，
 // 全局计数会让「A 线程持锁、B 线程调菜单」这种完全无害的组合误报。
 #[cfg(debug_assertions)]
 thread_local! {
@@ -1677,7 +1677,7 @@ pub fn config_lock_held() -> bool {
     false
 }
 
-/// 进出配置锁的深度守卫（B8）。用 RAII 而不是「进 +1 / 出 -1 两句」：
+/// 进出配置锁的深度守卫。用 RAII 而不是「进 +1 / 出 -1 两句」：
 /// 闭包 `f` panic 时也能正确回退，否则一次 panic 会让计数永久偏高，
 /// 此后**所有**断言都变成误报（比没有防线更糟）。
 #[cfg(debug_assertions)]
@@ -1725,7 +1725,7 @@ where
     f(&guard)
 }
 
-/// 写入路径的「归一化 → 同步日志缓存 → 序列化」三步（P3-9）。
+/// 写入路径的「归一化 → 同步日志缓存 → 序列化」三步。
 ///
 /// 抽成独立函数是为了让**接线顺序**成为结构性保证而不是注释约定，并可被单测直接调用
 /// （无需初始化全局 `CONFIG`）：
@@ -1751,14 +1751,14 @@ where
 {
     // 配置锁只覆盖「改内存 + 归一化 + 同步日志缓存 + 序列化」，四者都是纯内存操作。
     // 落盘走两级外移，两级都是必需的：
-    // ① **移出配置锁**（P1-3）：否则这段时间内所有 `with_config` 读取者——托盘 tooltip、
+    // ① **移出配置锁**：否则这段时间内所有 `with_config` 读取者——托盘 tooltip、
     //    设备查询、电量通知、快捷键分发、看门狗探活——都会阻塞在配置锁上；
-    // ② **移出调用线程**（B11）：落盘交给 `peritray-config` 写线程，
+    // ② **移出调用线程**：落盘交给 `peritray-config` 写线程，
     //    否则主线程上的 9 个同步命令与托盘菜单事件会各自卡一次 `sync_all()`。
     let (result, normalized, snapshot) = {
         let mut guard =
             crate::state::lock_unpoisoned(CONFIG.get().expect("Config not initialized"));
-        // B8：debug 下登记「本线程正持配置锁」，供 `tray.rs` 的薄包装断言
+        // debug 下登记「本线程正持配置锁」，供 `tray.rs` 的薄包装断言
         #[cfg(debug_assertions)]
         let _depth = ConfigLockDepthGuard::enter();
         let result = f(&mut guard);
@@ -1766,7 +1766,7 @@ where
         (result, normalized, snapshot)
     }; // ← 配置锁在此释放
     if normalized {
-        // 放在锁外：日志虽已异步化（B5），也没必要让它落在配置锁的临界区内。
+        // 放在锁外：日志虽已异步化，也没必要让它落在配置锁的临界区内。
         // 走到这里说明**前端送来了应用不支持的取值**（本应在前端就被拦住），
         // 属契约被破坏，故用标准级而非详细级记录。
         standard_log!("[config] 写入时归一化：存在非法字段，已回退为默认值");
@@ -1792,13 +1792,13 @@ mod tests {
     };
     use std::sync::atomic::Ordering;
 
-    // ── B8：P0-4 防复发断言的判据 ────────────────────────────
+    // ── 防复发断言的判据 ────────────────────────────
 
     // 测试用的「确保 CONFIG 已初始化」已提升为 `super::ensure_config_ready()`
-    // （`battery_notify` 的 P2-7 探针用例也要用同一份实现，避免两处各写一遍）。
+    // （`battery_notify` 的探针用例也要用同一份实现，避免两处各写一遍）。
     use super::ensure_config_ready;
 
-    /// B8 的核心判据：`config_lock_held()` 必须精确反映「**本线程**是否正持有配置锁」。
+    /// 核心判据：`config_lock_held()` 必须精确反映「**本线程**是否正持有配置锁」。
     ///
     /// 可证伪性：把 `with_config` 里的 `ConfigLockDepthGuard::enter()` 删掉，
     /// 锁内的断言会立刻转红（`config_lock_held()` 恒为 false）；把守卫改成
@@ -1870,7 +1870,7 @@ mod tests {
         );
     }
 
-    /// B8 端到端等价验证：`tray.rs` 薄包装里的断言形态，在配置锁内必须 panic。
+    /// 端到端等价验证：`tray.rs` 薄包装里的断言形态，在配置锁内必须 panic。
     ///
     /// 这里复现的是**同一判据**（`config_lock_held()` 是两处唯一的公共依赖），
     /// 不是复制实现：包装体里也只有 `debug_assert!(!config_lock_held(), …)`。
@@ -1889,7 +1889,7 @@ mod tests {
 
     /// 落盘版本号判据：**先取号者永远不得落盘**（当已有更新者取过号时）。
     ///
-    /// 这正是 P1-3「落盘移出配置锁」后防乱序覆盖的核心：
+    /// 这正是「落盘移出配置锁」后防乱序覆盖的核心：
     /// 落盘已不在配置锁内，两次写入的完成顺序与取号顺序可以相反，
     /// 若不比对版本号，先取到内容（较旧）的那次会最后落盘、把新内容盖掉。
     ///
@@ -1910,7 +1910,7 @@ mod tests {
         );
     }
 
-    /// P1-7 回归：**字段缺失时必须补成 `Config::default()` 的逐字段默认值，而不是零值**。
+    /// 回归：**字段缺失时必须补成 `Config::default()` 的逐字段默认值，而不是零值**。
     ///
     /// 失效模式（本条要防的）：升级后旧 config.toml 里没有新字段 → 若该字段没写
     /// `#[serde(default)]`，**整份** `Config` 反序列化失败 → 全部个性化配置丢失；
@@ -1985,7 +1985,7 @@ mod tests {
         assert!(reread.auto_start, "写回后已写出的字段仍必须保留");
     }
 
-    /// P1-7 回归：默认配置必须能**原样往返**（序列化 → 反序列化 → 序列化）。
+    /// 回归：默认配置必须能**原样往返**（序列化 → 反序列化 → 序列化）。
     ///
     /// 这条是「逐字段补默认值」的兜底检查：任何字段的 serde 属性写错
     /// （拼错 helper 名、漏了 `skip_serializing_if`、枚举字符串不匹配），
@@ -2002,14 +2002,14 @@ mod tests {
         );
     }
 
-    // ── P3-9：单个非法字段不得牵连整份配置 + 集中归一化 ────────────
+    // ── 单个非法字段不得牵连整份配置 + 集中归一化 ────────────
 
-    /// P3-9 回归：**单个字段值非法时不得让整份配置失效**（与字段缺失区分开）。
+    /// 回归：**单个字段值非法时不得让整份配置失效**（与字段缺失区分开）。
     ///
     /// 失效模式（本条要防的）：`LogRetention` 的 `Deserialize` 曾对未知值直接返回 `Err`，
     /// 而 `#[serde(default)]` **只在字段缺失时生效** ⇒ 一个非法枚举值就会让**整份**
     /// `Config` 反序列化失败 ⇒ `init_config` 回退 `Config::default()`，
-    /// 用户全部个性化配置一次性丢失（P1-7 修掉的那条不可逆路径被重新打开）。
+    /// 用户全部个性化配置一次性丢失。
     #[test]
     fn invalid_enum_value_does_not_kill_whole_config() {
         let text = "auto_start = true\n\
@@ -2041,7 +2041,7 @@ mod tests {
         );
     }
 
-    /// P3-9：**加载路径**必须把非法字段归一化掉（而不只是「让反序列化别失败」）。
+    /// **加载路径**必须把非法字段归一化掉（而不只是「让反序列化别失败」）。
     ///
     /// 这条覆盖 `parse_config_text` 里「解析 → 归一化」这一步的真实接线：
     /// 若把归一化从加载路径删掉，非法值会原样进入进程内存并被 `get_config`
@@ -2061,7 +2061,7 @@ mod tests {
         assert!(cfg.auto_start, "合法字段不得被改动");
     }
 
-    /// P3-9：**写入路径**必须「先归一化、后序列化」。
+    /// **写入路径**必须「先归一化、后序列化」。
     ///
     /// 覆盖 `finalize_before_persist` 的接线顺序：若把归一化挪到序列化之后（或删掉），
     /// 非法值会被原样写进 `config.toml`，本用例即转红。
@@ -2093,7 +2093,7 @@ mod tests {
         }
     }
 
-    /// P3-9：非法值被归一化到默认值，且**只影响自身**、不触碰无关字段。
+    /// 非法值被归一化到默认值，且**只影响自身**、不触碰无关字段。
     #[test]
     fn normalize_config_replaces_invalid_values_field_by_field() {
         let mut cfg = Config {
@@ -2103,7 +2103,7 @@ mod tests {
             popup_size: "huge".to_string(),
             theme_mode: "sepia".to_string(),
             window_material: "blur".to_string(),
-            // ⭐ 任务栏贴靠位置：只认五档值（前端下拉也仅这五项）。
+            // ✓ 任务栏贴靠位置：只认六档值（前端下拉也仅这六项）。
             //    非法值若不归一化，后端会把它当作 `_` 分支（退化成居中）而**前端下拉
             //    找不到对应项 ⇒ 按钮文案停在旧值**，界面上看着「选好了」实际是错的。
             taskbar_position: "middle".to_string(),
@@ -2133,7 +2133,7 @@ mod tests {
         );
     }
 
-    /// P3-9：**合法值必须原样保留**（含各区间的边界值）。
+    /// **合法值必须原样保留**（含各区间的边界值）。
     ///
     /// 与上一条构成对照：只做上一条的话，「把所有值都改成默认值」的错误实现也能通过，
     /// 必须靠这一条把「合法值不被触碰」钉住。
@@ -2173,7 +2173,7 @@ mod tests {
 
     /// `window_material` 的四个合法值**逐个**钉住。
     ///
-    /// ⭐ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是默认档 `default`，
+    /// ✓ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是默认档 `default`，
     ///   白名单漏项对 default 自身永远测不出来；漏掉的档位每次写入都会被
     ///   静默回退成 default ⇒ 该选项在界面上永远存不住。本条用
     ///   `assert!(!changed)` 把「四个前端可发值不被改写」钉住，漏一个即转红。
@@ -2194,7 +2194,7 @@ mod tests {
 
     /// `taskbar_position` 的六个合法值**逐个**钉住。
     ///
-    /// ⭐ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是默认档 `auto_right`，
+    /// ✓ 为什么单列一条：`normalize_choice` 的 fallback 恰好就是默认档 `auto_right`，
     ///   所以 `VALID_TASKBAR_POSITIONS` 里把 `"auto_right"` 拼错**测不出来**（错值也会
     ///   被改回 auto_right）；但把其余五档拼错就会**静默退化**成默认档 ——
     ///   界面照常显示、不报错，只是那一档永远无效。本条用 `assert!(!changed)`
@@ -2235,11 +2235,11 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **旧四档值必须被迁移，且映射不改行为**（改值必须同时做读取期迁移）。
+    /// ✓ **旧四档值必须被迁移，且映射不改行为**（改值必须同时做读取期迁移）。
     ///
-    /// ⛔ 旧值不在合法集合里，没有这条迁移就会先被归一化冲回默认档
+    /// ✗ 旧值不在合法集合里，没有这条迁移就会先被归一化冲回默认档
     ///   ⇒ 老用户「我明明选的是靠左/自动，怎么变了」无从排查。
-    /// ⭐ `auto → auto_left` 是**行为保持**映射：旧「自动」= 找空隙贴左缘，
+    /// ✓ `auto → auto_left` 是**行为保持**映射：旧「自动」= 找空隙贴左缘，
     ///   即今天靠左档的全部语义（判据 → `taskbar_layout::find_free_interval`）。
     #[test]
     fn legacy_taskbar_position_values_map_to_new_names() {
@@ -2249,7 +2249,7 @@ mod tests {
             ("right", "fixed_right"),
             ("auto", "auto_left"),
         ] {
-            // ⚠️ 必须走 `normalize_config` 全路径：迁移若被挪到 `normalize_choice`
+            // ⚠ 必须走 `normalize_config` 全路径：迁移若被挪到 `normalize_choice`
             //   **之后**，旧值会先被冲回默认档、迁移永远看不到它 —— 只直调迁移函数
             //   是测不出这个顺序错误的。
             let mut cfg = Config {
@@ -2280,7 +2280,7 @@ mod tests {
         assert_eq!(cfg.taskbar_position, "auto_right", "缺键时必须取新默认档");
     }
 
-    /// ⭐⭐ 旧「不固定位置」独立开关必须收编为 `drag` 档（删字段必须同时做读取期迁移）。
+    /// ✓ 旧「不固定位置」独立开关必须收编为 `drag` 档（删字段必须同时做读取期迁移）。
     ///
     /// 判别力：迁移若漏接，「我之前开了手动摆位」的老用户升级后会被钉回贴靠档
     /// —— 拖过的落点还在 `taskbar_custom_x`，但不再生效，用户直接感知「设置丢了」。
@@ -2312,7 +2312,7 @@ mod tests {
             assert_eq!(c.taskbar_position, "auto_right", "未触发迁移时不得改写");
         }
 
-        // ⭐ 全路径（`parse_config_text`）：旧四档改名与 drag 收编**先后都要走到**，
+        // ✓ 全路径（`parse_config_text`）：旧四档改名与 drag 收编**先后都要走到**，
         //   且迁移结果 `drag` 必须在合法集合里（不被归一化冲掉）。
         let (cfg, changed) =
             parse_config_text("taskbar_position = \"left\"\ntaskbar_position_locked = false\n")
@@ -2323,7 +2323,7 @@ mod tests {
 
     /// `taskbar_content_scale` 的两个合法值**逐个**钉住（逐字保留）。
     ///
-    /// ⭐ 为什么单列一条：这两个字面量必须与设置页下拉的 `data-value`
+    /// ✓ 为什么单列一条：这两个字面量必须与设置页下拉的 `data-value`
     ///   （`settings.html` 的 `win-combo-item`）**逐字一致** —— 任一侧拼错都会让
     ///   该档永远选不出来（后端降级回 `default`、前端找不到对应项而停在旧文案），
     ///   且不报错、不 panic。
@@ -2339,8 +2339,8 @@ mod tests {
         }
     }
 
-    /// ⛔ 未知取值必须**降级为默认**，且不得牵连同一份文件里的其它字段
-    /// （返回 `Err` ⇒ 整份配置回退 `Config::default()` ⇒ 用户全部配置被抹掉，P1-7）。
+    /// ✗ 未知取值必须**降级为默认**，且不得牵连同一份文件里的其它字段
+    /// （返回 `Err` ⇒ 整份配置回退 `Config::default()` ⇒ 用户全部配置被抹掉）。
     #[test]
     fn taskbar_content_scale_unknown_falls_back_to_default() {
         let text = "auto_start = true\n\
@@ -2356,7 +2356,7 @@ mod tests {
 
     /// 默认档必须是「不跟随系统缩放」（用户指定），且**缺键时也取它**。
     ///
-    /// ⭐ 两条断言缺一不可：`Default` 的 derive 实现与 `Deserialize` 的缺键路径是
+    /// ✓ 两条断言缺一不可：`Default` 的 derive 实现与 `Deserialize` 的缺键路径是
     ///   **两处独立代码**，只测一处的话另一处反转（`#[default]` 标错变体、
     ///   或把 `#[serde(default)]` 换成具名 helper）测不出来。
     #[test]
@@ -2374,9 +2374,9 @@ mod tests {
         );
     }
 
-    /// ⭐⭐ **旧档位 `follow_system` 必须被接受，且映射到 `Default`**（改档）。
+    /// ✓ **旧档位 `follow_system` 必须被接受，且映射到 `Default`**（改档）。
     ///
-    /// ⛔ 那一档只是**改名**（「跟随系统」→「默认」），语义没变 ⇒ 升级后不能把用户
+    /// ✗ 那一档只是**改名**（「跟随系统」→「默认」），语义没变 ⇒ 升级后不能把用户
     ///   静默改档，否则「我明明选的是跟随系统，怎么变了」无从排查。
     #[test]
     fn legacy_follow_system_value_maps_to_default() {
@@ -2391,7 +2391,7 @@ mod tests {
         }
     }
 
-    /// P3-9：低电量阈值的四条约束逐条钉住（与前端 blur 校验一一对应）。
+    /// 低电量阈值的四条约束逐条钉住（与前端 blur 校验一一对应）。
     #[test]
     fn normalize_config_battery_threshold_rules_match_frontend() {
         // ① 空数组非法（前端文案：「请输入至少一个阈值」）
@@ -2448,9 +2448,9 @@ mod tests {
         assert_eq!(ok.low_battery_thresholds, vec![0, 25, 50, 75, 100]);
     }
 
-    // ── P1-11：整份覆盖 ⇒ 按差异合并 ────────────────────────────
+    // ── 整份覆盖 ⇒ 按差异合并 ────────────────────────────
 
-    /// **P1-11 的原始症状**：设置页手里的快照早于弹窗的改名，
+    /// **原始症状**：设置页手里的快照早于弹窗的改名，
     /// 用户只切了一个开关，改名不能被抹掉。
     #[test]
     fn merge_preserves_concurrent_field_changes() {
@@ -2536,14 +2536,14 @@ mod tests {
     /// 结果里（`legacy_log_enabled` + 5 个 `shortcut_*` + `taskbar_custom_x`）。数个数就得硬编码偏移量，
     /// 而偏移量本身也会漂。
     ///
-    /// ⚠️ **新增可选（`Option`）字段时**：请同时在下面的 `probe` 里把它设为 `Some`，
+    /// ⚠ **新增可选（`Option`）字段时**：请同时在下面的 `probe` 里把它设为 `Some`，
     /// 否则它默认不出现在序列化结果里，本用例覆盖不到它。
     /// （`taskbar_custom_x` 就是这样被本用例抓出来的 —— 见下方 `probe`。）
     #[test]
     fn merge_field_list_covers_every_serialized_field() {
         use std::collections::BTreeSet;
 
-        // 把默认 `None` 的可选字段填上，使它们进入序列化结果（见上方 ⚠️）
+        // 把默认 `None` 的可选字段填上，使它们进入序列化结果（见上方 ⚠）
         let probe = Config {
             legacy_log_enabled: Some(true),
             shortcut_devices: Some("A".to_string()),
@@ -2592,7 +2592,7 @@ mod tests {
         }
     }
 
-    /// ⭐ 老配置（**没有**这个键）+ 已钉设备 ⇒ 迁移成「开」，维持升级前可见性。
+    /// ✓ 老配置（**没有**这个键）+ 已钉设备 ⇒ 迁移成「开」，维持升级前可见性。
     ///
     /// 可证伪：把 `migrate_taskbar_switch` 改成恒 `false` ⇒ 本条转红，
     /// 而真机上表现为「老用户升级后任务栏窗口凭空消失」。
@@ -2614,11 +2614,11 @@ mod tests {
         assert_eq!(
             c.pinned_taskbar_devices.len(),
             1,
-            "⭐ 迁移**不得**动设备列表"
+            "✓ 迁移**不得**动设备列表"
         );
     }
 
-    /// ⛔ 用户**主动关过**的开关**不得**被翻回开——否则「关闭」永远关不掉。
+    /// ✗ 用户**主动关过**的开关**不得**被翻回开——否则「关闭」永远关不掉。
     ///
     /// 这是本迁移最危险的失败模式：它是**不可逆的数据改写**，
     /// 一次误判就让用户永久失去关闭能力（只能手改配置文件）。
@@ -2648,7 +2648,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    /// ⭐ 迁移只在**键不存在**时发生；显式 `true` 同样不得被改。
+    /// ✓ 迁移只在**键不存在**时发生；显式 `true` 同样不得被改。
     #[test]
     fn migration_preserves_explicit_true() {
         let txt = "taskbar_widget_enabled = true
@@ -2675,7 +2675,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(c.taskbar_position, before_pos, "位置设置不得被改");
     }
 
-    /// ⭐ 端到端：老配置文本经 `parse_config_text` 后，窗口仍应可见。
+    /// ✓ 端到端：老配置文本经 `parse_config_text` 后，窗口仍应可见。
     #[test]
     fn parse_config_text_migrates_legacy_text() {
         let legacy = "pinned_taskbar_devices = [{ key = \"c:abc\" }]
@@ -2688,7 +2688,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    // ── B11：落盘写线程化 ────────────────────────────────────────
+    // ── 落盘写线程化 ────────────────────────────────────────
 
     /// 临时目录（按 pid 命名，避免并行用例互相踩）
     fn b11_temp_dir() -> std::path::PathBuf {
@@ -2725,14 +2725,14 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    /// 落盘队列的两条契约（B11）：
+    /// 落盘队列的两条契约：
     /// ① **入队数 == 处理数**（不丢任务，含「队列满 ⇒ 同步兜底」那一支；
     ///    被判为过期而跳过的也算处理过，见 `PERSIST_DONE` 的说明）；
     /// ② `flush_persist()` 之后内容真的在盘上。
     ///
     /// 连发 200 条（队列容量 64）必然触发若干次 `Full` 兜底分支。
     /// 注：会写到测试二进制同目录的 `config.toml`（`target/debug/deps/`，已 gitignore），
-    /// 与 B5 的日志队列用例同构。
+    /// 与日志队列用例同构。
     #[test]
     fn persist_queue_contract_never_loses_a_job() {
         let marker = format!("# B11 队列契约 {}\n", std::process::id());
@@ -2753,12 +2753,12 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    // ── 第 2 层（方案 D）：回填 + 三级回退解析 ──────────────────────
+    // ── 回填 + 三级回退解析 ──────────────────────
 
-    /// ⭐ **T2-5 回填**：植入一条**历史形态**条目（只有带括号原串的键）⇒
+    /// ✓ **回填**：植入一条**历史形态**条目（只有带括号原串的键）⇒
     /// 归一化后必须**同时**存在原串键与 `core_name` 短名键，且短名键指向同一个自定义名。
     ///
-    /// ⚠️ **本机 `[device_names]` 为空 ⇒ 真机无法验证**（回填在本机是空操作）
+    /// ⚠ **本机 `[device_names]` 为空 ⇒ 真机无法验证**（回填在本机是空操作）
     /// ⇒ 只能靠本单测，**不得**声称「真机验证通过」。
     #[test]
     fn normalize_config_backfills_core_name_key_for_legacy_entry() {
@@ -2787,7 +2787,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(cfg.device_names.len(), 2, "恰好补一条，实际 {cfg:?}");
     }
 
-    /// ⭐ **回填幂等性**：连跑两次 ⇒ 第二次返回 `false`、内容**逐字不变**。
+    /// ✓ **回填幂等性**：连跑两次 ⇒ 第二次返回 `false`、内容**逐字不变**。
     ///
     /// 幂等是关键 —— `normalize_config` 在**每次写入**（`finalize_before_persist`）都会跑，
     /// 若它每次都「报告 changed」，`merge_config` / 落盘层会误判为「配置有变化」而反复写盘。
@@ -2808,7 +2808,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(cfg.device_names.len(), 2);
     }
 
-    /// ⛔ **回填不覆盖已存在的短名键**（先到者为准）。
+    /// ✗ **回填不覆盖已存在的短名键**（先到者为准）。
     ///
     /// 场景：用户先后对「带括号原串」与「短名」**分别**改过名（历史数据里可能出现，
     /// 因为两个页面的入口喂的就是不同形态的名字）。此时**不猜哪个对**，保留既有的短名值。
@@ -2850,9 +2850,9 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(cfg.device_names.len(), 2, "不得新增键，实际 {cfg:?}");
     }
 
-    /// ⭐ **T2-2 三级回退**：`resolve_device_name` 的四种情形。
+    /// ✓ **三级回退**：`resolve_device_name` 的四种情形。
     ///
-    /// 这是方案 D 的**读取侧核心** —— 音量页喂带括号原串、设备页喂短名，
+    /// 这是**读取侧核心** —— 音量页喂带括号原串、设备页喂短名，
     /// 两种形态都必须解析到**同一个**自定义名（否则就是「改名后某处没变」的静默失效）。
     #[test]
     fn resolve_device_name_falls_back_in_three_levels() {
@@ -2887,9 +2887,9 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(resolve_device_name("", &cfg), "", "空名不得 panic");
     }
 
-    /// ⭐ 短名入口在**只有长形态键**时也必须解析到自定义名。
+    /// ✓ 短名入口在**只有长形态键**时也必须解析到自定义名。
     ///
-    /// ⚠️ 本用例覆盖的是「只有长形态键」这一支：`resolve_device_name_in` 的
+    /// ⚠ 本用例覆盖的是「只有长形态键」这一支：`resolve_device_name_in` 的
     ///   **第 3 级**（任一同 `core_name` 键）已经能解析到，**回填与否都能解析**。
     ///   回填的价值在于让「短名键」存在，使绝大多数查询走 O(1) 的前两级、
     ///   不必每次扫全表 —— 它是**性能前提**，不是「能不能解析到」的前提。
@@ -2920,11 +2920,11 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    // ── T2-3：`apply_device_rename` 归并写入 / 归并删除 ──────────────
+    // ── `apply_device_rename` 归并写入 / 归并删除 ──────────────
 
-    /// ⭐ **从音量页改名（原名 = 带括号原串）⇒ 两种形态都落入配置**。
+    /// ✓ **从音量页改名（原名 = 带括号原串）⇒ 两种形态都落入配置**。
     ///
-    /// ⛔ 这是**必须靠单测**钉住的核心：它的失效方式是「设备页仍显示原名」，
+    /// ✗ 这是**必须靠单测**钉住的核心：它的失效方式是「设备页仍显示原名」，
     /// 既不报错也不告警 —— 手测很容易漏（用户只改一处、看起来"生效了"）。
     #[test]
     fn apply_device_rename_from_volume_page_writes_both_forms() {
@@ -2957,7 +2957,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(resolve_device_name("DUNU DTC100pro", &cfg), "我的DAC");
     }
 
-    /// ⭐ **从设备页改名（原名 = 短名）⇒ 同样两种形态都落入配置**（对称性）。
+    /// ✓ **从设备页改名（原名 = 短名）⇒ 同样两种形态都落入配置**（对称性）。
     #[test]
     fn apply_device_rename_from_device_page_writes_both_forms() {
         let mut cfg = Config::default();
@@ -2984,7 +2984,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
     }
 
     /// **恢复默认（`new_name` 为空）⇒ 两种形态都删净**。
-    /// ⛔ 若只删 `original`，短名键会残留 ⇒ 用户点「恢复默认」后发现名字**没变回去**。
+    /// ✗ 若只删 `original`，短名键会残留 ⇒ 用户点「恢复默认」后发现名字**没变回去**。
     #[test]
     fn apply_device_rename_clears_both_forms_on_reset() {
         let mut cfg = Config::default();
@@ -3070,11 +3070,11 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
 
     // ── 固定项自带别名（`PinnedDevice.alias`）折进全局改名表 ──────────
 
-    /// ⭐ 旧配置里带 alias 的固定项 ⇒ 别名必须对**所有表面**可见，
+    /// ✓ 旧配置里带 alias 的固定项 ⇒ 别名必须对**所有表面**可见，
     /// 否则任务栏 tooltip 一个名、别处另一个名（这正是要修的不一致）。
     #[test]
     fn fold_pinned_alias_becomes_a_global_device_name() {
-        // ⚠️ 用结构体字面量而非「`default()` 之后再赋字段」——
+        // ⚠ 用结构体字面量而非「`default()` 之后再赋字段」——
         //    后者会命中 clippy::field_reassign_with_default（闸门按 -D warnings 拦截）。
         let mut cfg = Config {
             pinned_taskbar_devices: vec![PinnedDevice {
@@ -3092,7 +3092,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
             cfg.device_names.get("DUNU DTC100pro").map(String::as_str),
             Some("我的DAC")
         );
-        // ⛔ 折叠后**任何表面**都必须解析到同一个名字（此处以共享判据为准）
+        // ✗ 折叠后**任何表面**都必须解析到同一个名字（此处以共享判据为准）
         assert_eq!(resolve_device_name("DUNU DTC100pro", &cfg), "我的DAC");
         assert_eq!(
             resolve_device_name("扬声器 (DUNU DTC100pro)", &cfg),
@@ -3101,7 +3101,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    /// ⛔ **不得覆盖**已有的 `device_names` 条目：用户后来在别处改过名就以那个为准；
+    /// ✗ **不得覆盖**已有的 `device_names` 条目：用户后来在别处改过名就以那个为准；
     /// 空 alias / 无 `n:` 兜底键 / 非空白的兜底键都不折叠。
     #[test]
     fn fold_pinned_alias_respects_existing_and_ignores_garbage() {
@@ -3171,9 +3171,9 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    /// ⭐⭐ P0 的核心防线：`pin.alias` 折叠后必须清空。
+    /// ✓ P0 的核心防线：`pin.alias` 折叠后必须清空。
     ///
-    /// ⛔ 可证伪：去掉 `to_clear` 那段（只折进 `device_names`、保留 alias），
+    /// ✗ 可证伪：去掉 `to_clear` 那段（只折进 `device_names`、保留 alias），
     ///   本测试转红 —— 届时用户全局改名后任务栏显示旧 alias、别处显示新名。
     #[test]
     fn fold_pinned_alias_retires_the_alias_level() {
@@ -3227,7 +3227,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
 
     // ── A：空白别名必须当「无别名」 ──────────────────────────
 
-    /// ⛔ A 的可证伪判据：`get()` 命中空串/纯空白时必须**回落原名**。
+    /// ✗ A 的可证伪判据：`get()` 命中空串/纯空白时必须**回落原名**。
     ///   修复前 `resolve_device_name_in` 会 `return ""` ⇒ 任务栏 tooltip /
     ///   托盘菜单 / 低电量通知显示**空白**，而四个页面（JS 的 `if (custom)`
     ///   判假）正常显示原名 ⇒ 同一设备两套名字。
@@ -3275,7 +3275,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
 
     // ── B：显示名长度上限 ────────────────────────────────────
 
-    /// ⭐ 超长显示名必须被截断并补省略号，且**按字符而非字节**——
+    /// ✓ 超长显示名必须被截断并补省略号，且**按字符而非字节**——
     ///   按字节砍会把汉字劈开（`chars().count()` 才是「几个字」）。
     #[test]
     fn clamp_display_name_counts_chars_not_bytes() {
@@ -3295,7 +3295,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         );
     }
 
-    /// ⭐ 截断只发生在**渲染前**，重命名对话框的初值（走 `resolve_device_name`）
+    /// ✓ 截断只发生在**渲染前**，重命名对话框的初值（走 `resolve_device_name`）
     ///   必须仍是完整别名 —— 否则用户编辑长名字会存回一个被削过的值。
     #[test]
     fn resolve_device_name_never_truncates() {
@@ -3320,7 +3320,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
 
     // ── C：写入时归并**所有**已存在的同 core_name 键 ──────────
 
-    /// ⛔ C 的可证伪判据：从**短名**入口改名时，配置里已存在的**长形态**键
+    /// ✗ C 的可证伪判据：从**短名**入口改名时，配置里已存在的**长形态**键
     ///   也必须被更新。修复前它保持旧值 ⇒ 配置里长期躺着互相矛盾的两条别名。
     #[test]
     fn rename_heals_every_existing_form_of_the_same_device() {
@@ -3346,7 +3346,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         }
     }
 
-    /// ⛔ 归并**不得**波及其他设备：不同 `core_name` 的键必须原样保留。
+    /// ✗ 归并**不得**波及其他设备：不同 `core_name` 的键必须原样保留。
     #[test]
     fn rename_heal_does_not_touch_other_devices() {
         let mut cfg = Config::default();
@@ -3377,7 +3377,7 @@ pinned_taskbar_devices = [{ key = \"c:abc\" }]
         assert_eq!(cfg.device_names.len(), 2);
     }
 
-    /// ⛔ **反向注入靶子**：把归并删除/写入任一半拆掉 ⇒ 上面几条必须转红。
+    /// ✗ **反向注入靶子**：把归并删除/写入任一半拆掉 ⇒ 上面几条必须转红。
     /// 本用例额外钉住「两半都不能少」这一点（用一个非对称场景）。
     #[test]
     fn apply_device_rename_covers_both_directions_asymmetrically() {

@@ -28,7 +28,7 @@ orig_text = orig_bytes.decode("utf-8")
 orig_hash = digest(SRC)
 shutil.copy2(SRC, BAK)
 
-# ⚠️ 本仓的 .rs 是 **CRLF** 行尾（rustfmt 的 newline_style = Auto 会原样保留）。
+# ⚠ 本仓的 .rs 是 **CRLF** 行尾（rustfmt 的 newline_style = Auto 会原样保留）。
 # 多行锚点若按 LF 写，count() 恒为 0 —— 表现为「锚点命中 0 次 ⇒ 跳过」，
 # 看着像脚本问题、实则是「整个注入根本没生效」，是最容易蒙混过关的假验收形态。
 NL = "\r\n" if "\r\n" in orig_text else "\n"
@@ -125,7 +125,7 @@ def run_tests():
     )
     out = (r.stdout or "") + (r.stderr or "")
     if "error[" in out or "error: could not compile" in out:
-        return None, "编译失败 ❌"
+        return None, "编译失败 ✗"
     failed = re.findall(r"^test (\S+) \.\.\. FAILED", out, re.M)
     m = re.search(r"test result: .*", out)
     return [f.split("::")[-1] for f in failed], (
@@ -137,11 +137,11 @@ def expected_verdict(tag, desc, expected, short, result_line):
     exp = set(expected)
     got = set(short)
     if exp == got:
-        print("    判定：✅ 该红的都红了，且未波及无关用例")
+        print("    判定：✓ 该红的都红了，且未波及无关用例")
     elif not got:
-        print("    判定：❌ 该红的**没红** ⇒ 对应用例是假绿")
+        print("    判定：✗ 该红的**没红** ⇒ 对应用例是假绿")
     else:
-        print(f"    判定：⚠️ 该红的没全红 / 多红了：期望 {sorted(exp)}，实得 {sorted(got)}")
+        print(f"    判定：⚠ 该红的没全红 / 多红了：期望 {sorted(exp)}，实得 {sorted(got)}")
 
 
 try:
@@ -156,7 +156,7 @@ try:
         short, result_line = run_tests()
         print(f"    {result_line}")
         if short is None:
-            print("    判定：❌ 注入未编译通过，本次注入无效\n")
+            print("    判定：✗ 注入未编译通过，本次注入无效\n")
             continue
         print(f"    转红 {len(short)} 条：" + (", ".join(sorted(short)) if short else "（无）"))
         expected_verdict(tag, desc, expected, short, result_line)
@@ -164,7 +164,7 @@ try:
 finally:
     open(SRC, "wb").write(orig_bytes)
     same = digest(SRC) == orig_hash
-    print(f"### 还原校验：sha256 {'一致 ✅' if same else '不一致 ❌'}")
+    print(f"### 还原校验：sha256 {'一致 ✓' if same else '不一致 ✗'}")
     if not same:
         shutil.copy2(BAK, SRC)
         print("    已从备份强制还原")

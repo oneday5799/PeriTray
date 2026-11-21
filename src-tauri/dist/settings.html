@@ -772,7 +772,7 @@
         </div>
         <div class="card-actions">
           <label class="toggle">
-            <!-- ⛔ **不写 `checked`**：默认关闭，
+            <!-- ✗ **不写 `checked`**：默认关闭，
                  真实初值一律由 `bindToggle` 从 config 同步进来。 -->
             <input type="checkbox" id="toggle-taskbar-widget">
             <span class="slider"></span>
@@ -782,7 +782,7 @@
           </div>
         </div>
         <div class="card-items" id="taskbar-widget-items">
-          <!-- ⭐ 展开区 = **已添加设备清单**（含已断开）+ 每行一个「移除」按钮。
+          <!-- ✓ 展开区 = **已添加设备清单**（含已断开）+ 每行一个「移除」按钮。
                设备来源改为弹出窗口右键菜单「钉到任务栏」，此处只负责**查看与移除**。 -->
           <div class="card-item" id="taskbar-widget-empty" style="display: none;">
             <div class="card-item-name" id="taskbar-widget-empty-text">尚未添加设备</div>
@@ -793,7 +793,7 @@
 
       <!-- 「显示音乐控制组件」与上面的「显示设备信息组件」是**两个独立开关**：
            关掉其中一个**不会**影响另一个（用户 2026-09-28 明确要求）。
-           ⛔ 本卡是**单开关卡、无展开区**——音乐没有「已添加设备清单」那类内容。 -->
+           ✗ 本卡是**单开关卡、无展开区**——音乐没有「已添加设备清单」那类内容。 -->
       <div class="card" id="taskbar-music-card">
         <div class="card-left">
           <div class="card-title">显示音乐控制组件</div>
@@ -809,7 +809,7 @@
 
       <!-- 「常驻显示未连接的设备」单开关卡（默认关）：关 = 任务栏只显示已连接的设备，
            设备连上后自动出现；开 = 已添加设备以置灰形式常驻（旧行为）。
-           ⛔ 与「显示音乐控制组件」同理：单开关卡、无展开区。 -->
+           ✗ 与「显示音乐控制组件」同理：单开关卡、无展开区。 -->
       <div class="card" id="taskbar-show-disconnected-card">
         <div class="card-left">
           <div class="card-title">常驻显示未连接的设备</div>
@@ -817,7 +817,7 @@
         </div>
         <div class="card-actions">
           <label class="toggle">
-            <!-- ⛔ **不写 `checked`**：默认关闭，真实初值由 bindToggle 从 config 同步进来。 -->
+            <!-- ✗ **不写 `checked`**：默认关闭，真实初值由 bindToggle 从 config 同步进来。 -->
             <input type="checkbox" id="toggle-taskbar-show-disconnected">
             <span class="slider"></span>
           </label>
@@ -829,12 +829,12 @@
           <div class="card-title">任务栏窗口位置</div>
           <div class="card-desc">自动档避开任务栏上已有的按钮；「手动拖拽」档可直接拖动窗口摆放</div>
         </div>
-        <!-- ⭐ 六档 `data-value` 必须与后端 `VALID_TASKBAR_POSITIONS` 逐字一致
+        <!-- ✓ 六档 `data-value` 必须与后端 `VALID_TASKBAR_POSITIONS` 逐字一致
              （`config.rs`），否则该档永远选不出来且不报错（判据在 config.rs 的单测里）。
-             ⛔ 改档位值必须同时改读取期迁移（`migrate_taskbar_position_value` /
+             ✗ 改档位值必须同时改读取期迁移（`migrate_taskbar_position_value` /
              `migrate_taskbar_drag`）—— 老用户配置里存的是旧字面量，只改值不迁移
              会被归一化冲回默认档 ⇒ 用户**静默丢失设置**（无报错、无提示）。
-             ⭐ 顺序对齐 EchoMusicNext 的位置下拉：自动两档在前，拖拽收尾。 -->
+             ✓ 顺序对齐 EchoMusicNext 的位置下拉：自动两档在前，拖拽收尾。 -->
         <div class="win-combo-box" id="combo-taskbar-position">
           <button class="win-combo-btn" role="combobox" aria-expanded="false">
             <span class="win-combo-content">自动靠右</span>
@@ -892,7 +892,7 @@
           <div class="card-title">任务栏内容缩放大小</div>
           <div class="card-desc">设置任务栏信息窗口中图标和信息文字的大小</div>
         </div>
-        <!-- ⛔ `data-value` 必须与后端 `TaskbarContentScale` 的序列化字面逐字一致
+        <!-- ✗ `data-value` 必须与后端 `TaskbarContentScale` 的序列化字面逐字一致
              （`config.rs`：`"default"` / `"smaller"`）——
              拼错任一侧都会让该档永远选不出来，且不报错。 -->
         <div class="win-combo-box" id="combo-taskbar-content-scale">

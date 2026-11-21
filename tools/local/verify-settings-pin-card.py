@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """验收：设置页「任务栏组件」折叠卡片（开关 / 展开 / 已添加清单 / 移除）。
 
-⛔ 为什么必须单独验：`cargo test` 覆盖的是后端判据，CDP 直调 `update_config`
+✗ 为什么必须单独验：`cargo test` 覆盖的是后端判据，CDP 直调 `update_config`
    覆盖的是**后端**；而本轮真正新增的是**前端接线**——`bindToggle` 绑没绑对键、
    `refreshList` 有没有渲染行、「移除」按钮点了会不会真删。若这三处漏了，
    后端与静态闸门全绿，用户打开设置页却什么都点不动。
@@ -37,7 +37,7 @@ def check(name, ok, detail=""):
 
 
 def cdp(expr, timeout=90):
-    # ⚠️ 必须显式给 encoding="utf-8"：`text=True` 在本机会用 locale 的 GBK 解码，
+    # ⚠ 必须显式给 encoding="utf-8"：`text=True` 在本机会用 locale 的 GBK 解码，
     # 而 CDP 回显里含中文设备名（小爱音箱…）⇒ 直接 UnicodeDecodeError 崩在 subprocess 里。
     r = subprocess.run([NODE, CDP, "settings.html", expr],
                        capture_output=True, text=True, encoding="utf-8",
@@ -154,7 +154,7 @@ def main():
         t1 = json.loads(cdp(TOGGLE))
         print("  toggle(off):", json.dumps(t1, ensure_ascii=False))
         check("点开关后落盘为 false", t1.get("after") is False, f"{t1.get('before')} → {t1.get('after')}")
-        check("⛔ 关闭后已添加设备**未被清空**",
+        check("✗ 关闭后已添加设备**未被清空**",
               t1.get("afterN") == t1.get("beforeN") and t1.get("beforeN", 0) >= 1,
               f"{t1.get('beforeN')} → {t1.get('afterN')}")
         check("关闭时展开区收起（联动）", t1.get("domExpanded") is False)

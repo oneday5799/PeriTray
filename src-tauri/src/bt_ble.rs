@@ -25,12 +25,12 @@ static BLE_CONN: OnceLock<Mutex<HashMap<String, BLEConnection>>> = OnceLock::new
 
 /// 取 BLE 连接表的加锁入口。
 ///
-/// 一律经 `state::lock_unpoisoned`（P2-11 的统一入口）：`BLE_CONN` 是**纯缓存**
+/// 一律经 `state::lock_unpoisoned`（统一入口）：`BLE_CONN` 是**纯缓存**
 /// （临界区内只有 `contains_key` / `remove` / `insert`），没有可被 panic 破坏的
 /// 不变式，故中毒时接管内部数据继续用是安全的——这正是项目对静态量的既定策略
 /// （「panic 后仅需可用，而非严格一致」）。
 ///
-/// **为什么不用 `.lock().map_err(..)?` 把中毒上报给调用方**（P2-11 / P3-10 裁决）：
+/// **为什么不用 `.lock().map_err(..)?` 把中毒上报给调用方**（裁决）：
 /// ① Mutex 中毒是**永久性**的，上报的实际效果是「一次 panic 之后，蓝牙连接与断开
 ///    在本进程余下生命周期内彻底失效」（两个入口都在第一个加锁点就 Err），
 ///    而用户只会看到一句无意义的 poisoned lock；
@@ -154,8 +154,8 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
     // 5. 缓存连接（覆盖旧连接并释放其 WinRT 资源）
     let conn = BLEConnection { device, session };
     // 锁内只做「换表」这一件事：Close 是 WinRT 调用、日志是文件 I/O，都不能持锁做
-    // （P3-10 锁序登记表 §四）。旧连接在锁内**摘出**（`remove` 交出所有权），
-    // 锁外再释放——与 P2-7 的低电量通知同款：锁内取数据，锁外做 I/O。
+    // （锁序登记表 §四）。旧连接在锁内**摘出**（`remove` 交出所有权），
+    // 锁外再释放——与低电量通知同款：锁内取数据，锁外做 I/O。
     let old = {
         let mut guard = crate::state::lock_unpoisoned(ble_conn());
         let old = guard.remove(device_id);
@@ -178,7 +178,7 @@ fn ble_connect(device_id: &str) -> Result<String, String> {
 fn ble_disconnect(device_id: &str) -> Result<String, String> {
     standard_log!("[bt] BLE disconnect: {}", device_id);
     // 锁内只做「摘表」：Close 是 WinRT 调用、日志是文件 I/O，都不能持锁做
-    // （P3-10 锁序登记表 §四）。
+    // （锁序登记表 §四）。
     let conn = {
         let mut guard = crate::state::lock_unpoisoned(ble_conn());
         guard.remove(device_id)
@@ -238,7 +238,7 @@ mod tests {
     /// 因此中毒后仍可被 `lock_unpoisoned` 接管继续使用——这正是本轮取消
     /// 「中毒上报」这个唯一例外时所依据的前提。
     ///
-    /// ⚠️ **本用例的可证伪性边界（必须说清，否则就是假验收）**：
+    /// ⚠ **本用例的可证伪性边界（必须说清，否则就是假验收）**：
     /// 它调用的是 `lock_unpoisoned` 自身，**看不见 `bt_ble` 的调用点**——
     /// 若有人把 `ble_connect` / `ble_disconnect` 的加锁改回
     /// `.lock().map_err(..)?`，本用例**仍然通过**。

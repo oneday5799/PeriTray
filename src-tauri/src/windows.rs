@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 pub(crate) fn browser_args() -> String {
     let mut args = String::from("--renderer-process-limit=1 --disable-breakpad --disable-features=AudioServiceOutOfProcess,TranslateUI,msWebOOUI,msPdfOOUI,msSmartScreenProtection");
     // 调试开关：`PM_DEV_CDP_PORT` 存在时开启 WebView2 远程调试（tools/cdp-eval.mjs
-    // 的前置）。⛔ 不用 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 环境变量：应用
+    // 的前置）。✗ 不用 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 环境变量：应用
     // 显式设置 additional_browser_args 时该变量不参与 WebView2 命令行（实测无效）
     if std::env::var_os("PM_DEV_CDP_PORT").is_some() {
         args.push_str(" --remote-debugging-port=9222");
@@ -46,7 +46,7 @@ pub fn open_settings_tab(app: &tauri::AppHandle, tab: &str) {
     open_settings_inner(app, Some(tab));
 }
 
-/// 设置窗口创建后的「DPI 稳定等待」（P2-10）。
+/// 设置窗口创建后的「DPI 稳定等待」。
 ///
 /// 必须是 **异步** sleep：调用点在 `tauri::async_runtime::spawn` 的 async 块里，
 /// 运行于 tokio 工作线程；`std::thread::sleep` 会占死一个执行器线程
@@ -66,8 +66,8 @@ async fn wait_for_dpi_settle() {
 /// SWCA 路径无法让原生 NC 区参与磨砂、描边环无开关（判据见 settings.html
 /// 头注释与 Wiki 07 §17.1），无框形态 min/max/restore 为瞬时切换（动画不补，
 /// 判据见 FramelessProfile）。
-/// ⭐ `PM_DEV_FORCE_FRAMELESS=1` 在 Win11 本机强制走无框路径：装机分布上
-/// Win10 不可复测，用它在 Win11 上做无框路径回归。⛔ 只决定「设置窗」形态；
+/// ✓ `PM_DEV_FORCE_FRAMELESS=1` 在 Win11 本机强制走无框路径：装机分布上
+/// Win10 不可复测，用它在 Win11 上做无框路径回归。✗ 只决定「设置窗」形态；
 /// popup 恒无框自绘（悬浮面板设计，且无 min/max 需求）。位置：本函数唯一实现。
 #[cfg(target_os = "windows")]
 pub fn native_titlebar_mode() -> bool {
@@ -97,7 +97,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             let _ = win.unminimize();
             let _ = win.show();
             let _ = win.set_focus();
-            // ⛔ 无框专属工具链只许在无框形态重装（判据同创建路径；原生形态
+            // ✗ 无框专属工具链只许在无框形态重装（判据同创建路径；原生形态
             // strip 会摘掉系统三键、子窗对齐会顶进原生 NC 区）
             // 无框修剪跟在 show/set_focus 之后：tao 在边界事件重写 GWL_STYLE
             // （与 popup.rs show 路径同款时序），FRAMECHANGED 重算经 strip 统一获得
@@ -105,7 +105,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             if let Ok(hwnd) = win.hwnd() {
                 if !native_titlebar_mode() {
                     strip_sysmenu_style(hwnd.0 as isize, FramelessProfile::Settings);
-                    // 子类必须装在窗口所属线程（主线程），见 ensure 的 ⛔ 注
+                    // 子类必须装在窗口所属线程（主线程），见 ensure 的 ✗ 注
                     let h = hwnd.0 as isize;
                     let _ = app.run_on_main_thread(move || {
                         ensure_maximize_workarea_subclass(h);
@@ -139,7 +139,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
                 .title("设置 - 外设监控")
                 .inner_size(960.0, 720.0)
                 // Win11：原生标题栏 + 原生缩放边框 + 原生阴影（系统动画/贴靠/
-                // 窗口菜单白拿）；Win10：无框自绘。⛔ 无框分支的判据：
+                // 窗口菜单白拿）；Win10：无框自绘。✗ 无框分支的判据：
                 // 标题带根治依赖 tao 本地 patch（Cargo.toml [patch.crates-io]：
                 // 无框窗不产 WS_CAPTION|WS_SYSMENU ⇒ DWM 无 caption 渲染缓存，
                 // title 无任何消费点）；resizable(true)+decorations(false) 会让
@@ -182,7 +182,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             clamp_window_to_work_area(&win);
             let _ = win.show();
             let _ = win.set_focus();
-            // ⛔ 无框专属工具链（修剪/子类/healer）只许在无框形态安装——它们
+            // ✗ 无框专属工具链（修剪/子类/healer）只许在无框形态安装——它们
             // 为「client=window」的无框形态而设：strip 会摘掉原生三键、子窗对
             // 齐按全窗矩形推 webview 会顶进原生 NC 区、zoomed 矫正按无框钳制
             // 语义工作。原生形态（Win11）的系统动画/贴靠/圆角全部原生接管。
@@ -192,7 +192,7 @@ fn open_settings_inner(app: &tauri::AppHandle, tab: Option<&str>) {
             if let Ok(hwnd) = win.hwnd() {
                 if !native {
                     strip_sysmenu_style(hwnd.0 as isize, FramelessProfile::Settings);
-                    // 子类必须装在窗口所属线程（主线程），见 ensure 的 ⛔ 注
+                    // 子类必须装在窗口所属线程（主线程），见 ensure 的 ✗ 注
                     let h = hwnd.0 as isize;
                     let _ = app.run_on_main_thread(move || {
                         ensure_maximize_workarea_subclass(h);
@@ -436,12 +436,12 @@ pub fn system_dark_mode() -> bool {
 
 /// 读 `SystemUsesLightTheme`（**系统**主题，区别于**应用**主题）。
 ///
-/// ⭐ 为什么单开一个函数而不复用 `system_dark_mode()`：那个读的是 `AppsUseLightTheme`
+/// ✓ 为什么单开一个函数而不复用 `system_dark_mode()`：那个读的是 `AppsUseLightTheme`
 ///   （**应用**主题），用于决定 widget **内容**的明暗；而底衬配色按**系统主题**取值
 ///   （`SystemUsesLightTheme`，见
 ///   `WindowsThemeDetector.GetWindowsTheme(out appTheme, out systemTheme)`）。
 ///   两者在「应用深色 + 系统浅色」这类自定义主题下**会不一致**，故分开读。
-/// ⚠️ 读失败按 `WindowsThemeDetector` 的约定**回落 light**（其源码注释：on error, default to light）。
+/// ⚠ 读失败按 `WindowsThemeDetector` 的约定**回落 light**（其源码注释：on error, default to light）。
 #[cfg(target_os = "windows")]
 pub fn system_uses_light_theme() -> bool {
     use windows_sys::core::w;
@@ -537,9 +537,9 @@ pub enum SysmenuHealOutcome {
 }
 
 /// 无框窗口的修剪画像：两窗均已无框（原生标题栏废除，网页自绘），脏位掩码
-/// 相同（SYSMENU|CAPTION|THICKFRAME 全摘）。⚠️ settings 仅 Win10 处于本画像
+/// 相同（SYSMENU|CAPTION|THICKFRAME 全摘）。⚠ settings 仅 Win10 处于本画像
 /// （Win11 走原生标题栏 = decorated，本画像工具链对其整体停用，判据见
-/// native_titlebar_mode）；popup 恒无框。⛔ settings 不得为「边缘缩放」
+/// native_titlebar_mode）；popup 恒无框。✗ settings 不得为「边缘缩放」
 /// 保留 THICKFRAME——保留它 DWM 会在激活切换/帧重算时绘制 NC 框架带（浅色
 /// 主题白色，叠在 webview 外沿 = 左/右/下白框；NCRP_DISABLED 只在部分合成
 /// 趟生效、激活切换与样式重算会无视它，真机实测）。缩放改由前端边缘热区经
@@ -547,7 +547,7 @@ pub enum SysmenuHealOutcome {
 /// core:window:allow-start-resize-dragging），且 builder 必须
 /// resizable(false)：resizable(true)+decorations(false) 会让 tauri-runtime-wry
 /// 创建 TAURI_DRAG_RESIZE_BORDERS 子窗口盖住边缘吃掉点击（真机实测）。
-/// ⛔ 不得为「系统最小化/最大化动画」保留 CAPTION 位：位一旦出现 DWM 即画
+/// ✗ 不得为「系统最小化/最大化动画」保留 CAPTION 位：位一旦出现 DWM 即画
 /// 系统标题 band + 三键且**事后摘位不消**（创建期缓存 + 事后补位单向上锁，
 /// NCRP_DISABLED 在 26300 已移除返回 E_INVALIDARG，2026-11 实测否决，
 /// → Wiki 07 §17.10）。动画不做补齐：Win10 无框态 min/max/restore 为瞬时
@@ -566,7 +566,7 @@ impl FramelessProfile {
         const WS_CAPTION: i32 = 0x00C0_0000;
         const WS_THICKFRAME: i32 = 0x0004_0000;
         match self {
-            // ⛔ Popup 不设脏位：Win11 fork 为 topmost 无框窗**有意保留**
+            // ✗ Popup 不设脏位：Win11 fork 为 topmost 无框窗**有意保留**
             // CAPTION|SYSMENU（SystemBackdrop 只认创建期样式，→ Wiki 07 §17.6），
             // Win10 fork 才不产位——掩码含位 ⇒ healer 每 250ms 摘位与 fork 拉锯：
             // 样式位中途翻转诱发 DWM 重绘系统三键 + FRAMECHANGED 边框抖动
@@ -581,7 +581,7 @@ impl FramelessProfile {
 /// 退出）；画像脏位任一被 tao 的样式重写写回（show/always_on_top/set_focus/
 /// DPI 等边界事件触发；Win10 DWM 在 accent 背景板下会为它们绘制原生三键并
 /// 压平 WebView2 子视觉 alpha）则修剪并返回 Repaired；可见且干净返回 Clean。
-/// ⛔ 只许对无框窗口调用。位置：spawn_frameless_healer 调用，本函数唯一实现。
+/// ✗ 只许对无框窗口调用。位置：spawn_frameless_healer 调用，本函数唯一实现。
 #[cfg(target_os = "windows")]
 pub fn sysmenu_heal_step(hwnd: isize, profile: FramelessProfile) -> SysmenuHealOutcome {
     unsafe {
@@ -646,7 +646,7 @@ pub fn strip_sysmenu_style(hwnd: isize, profile: FramelessProfile) {
 /// 拉锯会让客户区矩形在「全窗」与「内缩」两态间翻转，子窗口停留在旧位置
 /// ⇒ 窗口边缘露出白边、webview 内容错位成左右两条。返回是否真的修了东西
 /// （客户区被强制重算或子窗口被挪动），healer 据此决定是否抖动回正。
-/// ⭐ SWP_FRAMECHANGED 强制重算**只许在客户区实测 stale 时执行**（原点/尺寸
+/// ✓ SWP_FRAMECHANGED 强制重算**只许在客户区实测 stale 时执行**（原点/尺寸
 /// 与全窗不符）：样式位回滚后的帧重算由 strip_sysmenu_style 自带 poke 负责，
 /// 不在本函数重复。两条件皆否时零 poke——无条件 poke + 无条件抖动 = 每
 /// 250ms 一次的 1px 边框抖动（真机实测肉眼可见）。位置：popup.rs 自愈线程
@@ -674,7 +674,7 @@ pub fn fix_webview_child_bounds(top: isize) -> bool {
             bottom: 0,
         };
         let _ = GetWindowRect(top_h, &mut wr);
-        // ⛔ 最大化态必须以「最近显示器工作区」为唯一目标矩形：tao set_maximized
+        // ✗ 最大化态必须以「最近显示器工作区」为唯一目标矩形：tao set_maximized
         // 落到工作区后 ~7ms 内有一次样式重写（CAPTION|SYSMENU 写入 + FRAMECHANGED），
         // Windows 对带边框样式的 zoomed 窗内部重排出「原生过扫描最大化矩形」
         // （真机 toggleMaximize 探针：2578x1398@-9,-9，四周 ~9px 出屏；DWM 帧边界
@@ -724,7 +724,7 @@ pub fn fix_webview_child_bounds(top: isize) -> bool {
         // 相等）。样式位拉锯会把客户区滞留在「内缩」态（框架 7px 未被 tao 的
         // NCCALCSIZE 处理摘掉）⇒ wry 每次按客户区推子窗口 bounds，与全窗目标
         // 永久错位。SWP_FRAMECHANGED 让 tao 的处理器重跑，客户区恢复全窗。
-        // ⛔ 最大化态跳过本探测：幽灵矩形下 client 与全窗「一致地」错（探测判假
+        // ✗ 最大化态跳过本探测：幽灵矩形下 client 与全窗「一致地」错（探测判假
         // 恒不触发），而样式中间态下 client 瞬时内缩、poke 反而给重排添乱——
         // 目标已由工作区接管，探测无意义。
         let client_stale = !zoomed
@@ -769,7 +769,7 @@ pub fn fix_webview_child_bounds(top: isize) -> bool {
             };
             let _ = GetWindowRect(h, &mut r);
             // GetWindowRect 是屏幕坐标，目标 TX/TY 是客户坐标：必须先换算再比较，
-            // ⛔ 直接比较会在「窗口不在屏幕原点」时恒判错位 ⇒ 每 tick 白挪一次
+            // ✗ 直接比较会在「窗口不在屏幕原点」时恒判错位 ⇒ 每 tick 白挪一次
             // 子窗口 + healer 抖动自持（真机实测：popup 恒在屏幕 (1150,291)）
             let cl = r.left - OX.load(Ordering::Relaxed);
             let ct = r.top - OY.load(Ordering::Relaxed);
@@ -878,7 +878,7 @@ unsafe extern "system" fn maximize_workarea_proc(
     const WM_WINDOWPOSCHANGED: u32 = 0x0047;
     const SWP_NOZORDER: u32 = 4;
     if umsg == WM_WINDOWPOSCHANGING {
-        // ⛔ 最大化态的几何落点必须在最后闸口钳回工作区：MINMAXINFO 只拦
+        // ✗ 最大化态的几何落点必须在最后闸口钳回工作区：MINMAXINFO 只拦
         // 「查询式」最大化（窗口尚无 WS_MAXIMIZE 位的首次 ShowWindow），tao
         // set_maximized 是先写 WS_MAXIMIZE 样式位再 ShowWindow——位已置 ⇒
         // 系统不再按 MINMAXINFO 查询 ⇒ 落点=原生过扫描矩形（真机
@@ -903,7 +903,7 @@ unsafe extern "system" fn maximize_workarea_proc(
         }
     }
     if umsg == WM_WINDOWPOSCHANGED {
-        // ⛔ 幽灵矩形必须在本条消息内即刻纠正：样式重写（CAPTION|SYSMENU +
+        // ✗ 幽灵矩形必须在本条消息内即刻纠正：样式重写（CAPTION|SYSMENU +
         // FRAMECHANGED）触发的内部重排把 zoomed 窗推到过扫描矩形，且不经过
         // 带实值的 WINDOWPOSCHANGING / MINMAXINFO（钳制层拦不到）——healer
         // 下一轮（≤250ms）才纠正 ⇒ 十几帧可见跳变。WM_WINDOWPOSCHANGED 在
@@ -953,7 +953,7 @@ unsafe extern "system" fn maximize_workarea_proc(
         return result;
     }
     if umsg == WM_SIZE {
-        // ⛔ 最大化态必须摘圆角（DONOTROUND），还原恢复 ROUND：最大化矩形被
+        // ✗ 最大化态必须摘圆角（DONOTROUND），还原恢复 ROUND：最大化矩形被
         // 钳到工作区（不满整屏），DWM 不认定最大化 ⇒ 按浮动窗绘制圆角 +
         // 边框圈——弧线裁掉页面四角、暗圈压住四边（真机实测：pref=ROUND
         // 时四角 ~9px 弧外露背景，DONOTROUND 后直角到位、暗圈消失）。
@@ -966,7 +966,7 @@ unsafe extern "system" fn maximize_workarea_proc(
 }
 
 /// 给窗口安装最大化钳制子类（见 maximize_workarea_proc 的判据）。
-/// ⛔ SetWindowSubclass 与窗口子类链按线程绑定，必须经 run_on_main_thread
+/// ✗ SetWindowSubclass 与窗口子类链按线程绑定，必须经 run_on_main_thread
 /// 在窗口所属线程安装；同 hwnd 幂等（重开路径不重复装）。
 #[cfg(target_os = "windows")]
 pub fn ensure_maximize_workarea_subclass(hwnd: isize) {
@@ -1012,14 +1012,14 @@ fn healer_generation(profile: FramelessProfile) -> &'static core::sync::atomic::
 /// 窗口隐藏（WS_VISIBLE 清零）线程退出，show / 重开路径重新拉起（换代计数
 /// 保证同画像同时只有一个值守线程）。
 ///
-/// ⭐ 尾部的「+1px 抖动回正」只许在**本步真的修过东西**（样式位被回滚或
+/// ✓ 尾部的「+1px 抖动回正」只许在**本步真的修过东西**（样式位被回滚或
 /// 子窗口被挪正）时执行：同尺寸的 SetWindowPos 不触发 WM_SIZE，wry 就不会
 /// 重推 WebView2 控制器 bounds——样式位翻转后控制器 bounds 停在旧客户区
 /// 原点，视觉整体错位（洋红覆盖层只出现在窗口右侧一段），+1px 触发一次
-/// 真实 WM_SIZE 让 wry 重推，60ms 后回正。⛔ 干净时零 poke——无条件抖动 =
+/// 真实 WM_SIZE 让 wry 重推，60ms 后回正。✗ 干净时零 poke——无条件抖动 =
 /// 每 250ms 一次的 1px 边框抖动，真机实测肉眼可见。
 /// 基线尺寸动态读 `outer_size()`（物理像素）：settings 可缩放，固定值会与
-/// 用户拉锯；⛔ 最大化态跳过抖动——对最大化窗口 set_size 会破坏最大化形态。
+/// 用户拉锯；✗ 最大化态跳过抖动——对最大化窗口 set_size 会破坏最大化形态。
 #[cfg(target_os = "windows")]
 pub fn spawn_frameless_healer(window: tauri::WebviewWindow, profile: FramelessProfile) {
     let gen = healer_generation(profile).fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
@@ -1030,7 +1030,7 @@ pub fn spawn_frameless_healer(window: tauri::WebviewWindow, profile: FramelessPr
                 return;
             }
             let Ok(hwnd) = window.hwnd() else { return };
-            // ⛔ 最小化态整轮跳过（含 heal step 与子窗对齐）：最小化窗口的
+            // ✗ 最小化态整轮跳过（含 heal step 与子窗对齐）：最小化窗口的
             // GetWindowRect / outer_size 塌缩成图标矩形（Win11 实测 199x34），
             // 客户端 stale 探测恒真 ⇒ poke + 「宽 +1px 抖动回正」在图标态执行，
             // base 取到图标尺寸 ⇒ 窗口被永久缩成一条三键窄条（真机实测：
@@ -1077,7 +1077,7 @@ static TOAST_ICON_PNG: &[u8] = include_bytes!("../dist/icon.png");
 
 /// 已写入临时目录的图标路径缓存（进程内只写一次）。
 ///
-/// ⚠️ 必须保留 `#[cfg(target_os = "windows")]`：非 Windows 下只有下面那个返回 `None`
+/// ⚠ 必须保留 `#[cfg(target_os = "windows")]`：非 Windows 下只有下面那个返回 `None`
 /// 的桩函数，缓存本体不存在。
 #[cfg(target_os = "windows")]
 static TOAST_ICON_PATH: std::sync::OnceLock<Option<std::path::PathBuf>> =
@@ -1089,7 +1089,7 @@ static TOAST_ICON_PATH: std::sync::OnceLock<Option<std::path::PathBuf>> =
 /// 因此每次写入固定文件名而非使用 `canonicalize`。
 /// 写入临时目录而非 exe 目录（MSIX 包目录只读）。
 ///
-/// 结果用 `OnceLock` 缓存（P2-6）：图标内容编译期就已固定，重复写盘既无意义，又会让
+/// 结果用 `OnceLock` 缓存：图标内容编译期就已固定，重复写盘既无意义，又会让
 /// `%TEMP%\PeriTray_toast_icon.png` 的 mtime 每次弹通知都变（不利于排查「图标为何
 /// 不更新」这类问题）。**失败结果同样缓存**：临时目录不可写属于环境问题、不会自愈，
 /// 没必要每次弹通知都重试一遍磁盘 I/O。
@@ -1351,7 +1351,7 @@ pub fn register_aumid() {}
 mod tests {
     use super::*;
 
-    /// P2-6：`resolve_toast_icon` 必须**只写一次盘**，其后走 `OnceLock` 缓存。
+    /// `resolve_toast_icon` 必须**只写一次盘**，其后走 `OnceLock` 缓存。
     ///
     /// 判据用 mtime：若每次调用都重写，第二次的 mtime 必然前进。
     /// 两次调用之间 sleep 一下以越过文件系统的 mtime 精度。
@@ -1372,7 +1372,7 @@ mod tests {
         assert_eq!(mtime_first, mtime_second, "第二次调用不应重写文件");
     }
 
-    /// P2-10：`wait_for_dpi_settle` 必须**让出执行器**，而不是阻塞它。
+    /// `wait_for_dpi_settle` 必须**让出执行器**，而不是阻塞它。
     ///
     /// 判据用「多次等待的总耗时」：在 **current_thread** 运行时上并发跑 3 次等待，
     /// - 异步 sleep ⇒ 三个定时器重叠，总耗时 ≈ 1×（200ms）；

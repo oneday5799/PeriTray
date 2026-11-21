@@ -5,7 +5,7 @@
 // 迁移注记：由 verify-batch-2.sh 迁为 .mjs（工具脚本语言收敛）；判据集合与 PASS/FAIL
 //   输出口径不变，迁移对账 diff 为空。语言分工 → Wiki 08 §1.1。
 //
-// ⚠️ 硬约定：`grep -c` 零匹配时退出码为 1 ⇒ 一律赋值后比较（sh 时代的坑；
+// ⚠ 硬约定：`grep -c` 零匹配时退出码为 1 ⇒ 一律赋值后比较（sh 时代的坑；
 //   .mjs 自实现计数命中 0 是合法值），不用 `set -e` / `&&`。
 
 import { readFileSync } from "node:fs";
@@ -44,7 +44,7 @@ console.log("== 第二批（P0-3 / P1-1~P1-5 / P1-10 / P3-12 / P3-4）验收 =="
 // 可注入版本 `request_sync_callbacks_with(hwnd, post)`（主方案 §4.7 的「三选一」之③）。
 // 故**行为判据直接跑那个单测**——它注入必然失败的投递桩，断言失败后标志回到 false，
 // 并带**正控**（注入成功的桩，断言标志保持 true）。
-// ⚠️ sh 原版把 cargo 输出整条接进 grep（成功失败都**不回显**），FAIL 提示里
+// ⚠ sh 原版把 cargo 输出整条接进 grep（成功失败都**不回显**），FAIL 提示里
 //    让人自己跑一遍看——迁移后保持同一口径：输出吞掉，不打印。
 console.log("-- P3-12 行为判据（单测，含正控）--");
 {
@@ -65,7 +65,7 @@ console.log("-- P3-12 行为判据（单测，含正控）--");
 // 结构判据①：**WM_SYNC_CALLBACKS 的投递点**已收敛为 1 处（即 `post_sync_callbacks` 这一层），
 // 且它**没有被 `let _ =` 吞掉**——这是 P3-12 的失效模式本身。
 //
-// ⚠️ 判据必须锚在 **WM_SYNC_CALLBACKS** 上。第一版写成 `grep -c "let _ = PostMessageW("`
+// ⚠ 判据必须锚在 **WM_SYNC_CALLBACKS** 上。第一版写成 `grep -c "let _ = PostMessageW("`
 //    （不带消息名）**实测得 3**，全是**假阳性**：
 //      · `:37` / `:680` 是**文档注释**里引用旧写法（说明缺陷用的），不是代码；
 //      · `:602` 是 `request_shutdown()` 投递 **WM_CLOSE**，其上方注释明写
@@ -95,7 +95,7 @@ chkGe(
   2
 );
 
-// ⚠️ **主方案 §6.3 的 P3-12 结构命令①已失效，此处显式登记**（不执行，只记录）：
+// ⚠ **主方案 §6.3 的 P3-12 结构命令①已失效，此处显式登记**（不执行，只记录）：
 //   原命令：grep -A3 "PostMessageW(Some(self.hwnd), WM_SYNC_CALLBACKS" src-tauri/src/audio_notify.rs
 //             | grep -c "SYNC_CALLBACKS_PENDING.store(false"     期望输出 4
 //   2026-09-18 实测：**输出 0**。原因不是修复退步，而是**实施把 4 个调用点收敛成了
@@ -116,7 +116,7 @@ for (const f of ["src-tauri/dist/popup.html", "src-tauri/dist/settings.html"]) {
 console.log(`MANUAL  以下按主方案 §6.3 只能靠**注入**验证，脚本不做（会误报）：
   · P1-1：在 \`std::thread::spawn\` 的**闭包体内**（或 \`update_audio_devices_menu()\` 开头）
     插 \`sleep(500ms)\`，断言 UI 不卡。
-    ⚠️ 注入点必须在**被移动的那段工作内部**——§4.2 的改法只把重操作 spawn 到子线程，
+    ⚠ 注入点必须在**被移动的那段工作内部**——§4.2 的改法只把重操作 spawn 到子线程，
        轻量部分（config::with_config / AUTO_START.store / update_auto_text）**有意留在
        回调里**（该回调由 tao 主循环在主线程上执行，见 AGENTS.md）；插在「回调入口」等于插在
        留下的那部分，**修复前后都会卡**，不可证伪

@@ -5,13 +5,13 @@
  * 上一批任务栏组件图标（`tools/generate-widget-icons.mjs`）入库时立的纪律是
  * 「**生成脚本必须与产物一起入库**」—— 脚本不入库 ⇒ 没人能重新生成、
  * 也没人知道它统一过一次 ⇒ 线宽不一致才能长期残留。
- * ⛔ 本脚本原先是根目录下**被 .gitignore 忽略**的一次性脚本，
+ * ✗ 本脚本原先是根目录下**被 .gitignore 忽略**的一次性脚本，
  *    违反同一条纪律 ⇒ 本次一并补上。
  *
- * ── 覆盖范围（⛔ 与 `tools/generate-widget-icons.mjs` 不重叠）─────────
+ * ── 覆盖范围（✗ 与 `tools/generate-widget-icons.mjs` 不重叠）─────────
  * 本脚本产出**应用 / 托盘**图标：`tray-icon.png`、`32x32.png`、`128x128.png`、
  * `128x128@2x.png`、`icon.ico`。
- * ⛔ `tray-icon-dark.png` / `tray-volume-icon{,-dark}.png` 是**手工维护**的，
+ * ✗ `tray-icon-dark.png` / `tray-volume-icon{,-dark}.png` 是**手工维护**的，
  *    **不在本脚本范围** —— 别以为重跑本脚本能再生它们。
  * 任务栏组件图标（鼠标 / 键盘 / 手柄 / 扬声器 / 耳机 / 播放 / 暂停 / 上下一首 / 切换）
  * 由 `tools/generate-widget-icons.mjs` 负责，两个脚本**互不覆盖**。

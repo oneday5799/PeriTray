@@ -8,7 +8,7 @@ import time
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-MOVE = "D:/Code/PeriTray/tools/local/move-cursor.py"
+MOVE = "D:/Code/PeriTray/tools/local/move_cursor.py"
 
 
 def main():

@@ -8,7 +8,7 @@
   4. 断言：① 日志出现「滚轮调音量」；② 该端点音量**恰好**变化 N×步进；
      ③ 步进随「音量精细调节」开关变化；④ 音量显示是一位小数。
 
-⚠️ 注入前必须 `SetProcessDpiAwarenessContext(-4)`，否则物理坐标全错
+⚠ 注入前必须 `SetProcessDpiAwarenessContext(-4)`，否则物理坐标全错
    （本机 150% 缩放，不设的话光标会落到别的位置）。
 """
 import json
@@ -65,7 +65,7 @@ def kill_all():
 def seed(fine):
     s = io_read(CFG)
     s = re.sub(r'^log_level = .*$', 'log_level = "verbose"', s, flags=re.M)
-    # ⚠️ TOML 布尔必须**小写**：Python 的 str(True) 写出 `True` ⇒ **整份配置解析失败**
+    # ⚠ TOML 布尔必须**小写**：Python 的 str(True) 写出 `True` ⇒ **整份配置解析失败**
     #    ⇒ 应用回落默认值、widget 走的是默认档（踩过一次，日志里直接报 parse error）。
     lit = "true" if fine else "false"
     if re.search(r"^volume_fine_adjust = ", s, flags=re.M):
@@ -106,7 +106,7 @@ def inject_wheel(x, y, notches):
 
     user32 = ctypes.windll.user32
     try:
-        # ⛔ 必需：150% 缩放下不设 Per-Monitor DPI 感知，物理坐标全错
+        # ✗ 必需：150% 缩放下不设 Per-Monitor DPI 感知，物理坐标全错
         user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
     except Exception:  # noqa: BLE001
         try:
@@ -126,7 +126,7 @@ def inject_wheel(x, y, notches):
 def device_volumes():
     """读各端点当前音量；**读不到就返回 None**（不要抛）。
 
-    ⛔ 2026-09-28 实测：**popup 隐藏时 `invoke` 会挂死**（同机时灵时不灵，20~60s
+    ✗ 2026-09-28 实测：**popup 隐藏时 `invoke` 会挂死**（同机时灵时不灵，20~60s
     超时）⇒ 旧版在这里 `raise`，整轮验收在**读基线**那步就崩，够不到滚轮那步。
     现在降级为「基线不可用」：依赖基线的两条判据改判 SKIP，**日志判据仍然照跑**
     （`滚轮音量 id=… 前 -> 后` 是应用自己的记录，权威且不需要 IPC）。
@@ -194,7 +194,7 @@ def run_case(fine, notches, label):
         return
     print("  命中行:", rows_raw[:160])
     # 取第一项的屏幕矩形中心
-    # ⛔⛔ **必须挑「有音频端点」的那一项，不能盲选 #0**（2026-09-28 实测踩到）：
+    # ✗ **必须挑「有音频端点」的那一项，不能盲选 #0**（2026-09-28 实测踩到）：
     #   快照按 `it.battery.is_none() && !it.has_audio` 排序 ⇒ **有电量的设备排在前面**
     #   ⇒ #0 常常是键鼠这类「有电量、无音频端点」的设备。在它上面滚滚轮**本来就
     #   不该有反应**（键鼠也能 hover 出 tooltip，但不是音量设备）。
@@ -211,7 +211,7 @@ def run_case(fine, notches, label):
         return
     z = audio_zones[0]
     l, t, r, b = int(z[1]), int(z[2]), int(z[3]), int(z[4])
-    # ⭐ 注入点取**图标区**（项矩形左侧 1/4、上半），不是音量文本 ——
+    # ✓ 注入点取**图标区**（项矩形左侧 1/4、上半），不是音量文本 ——
     #   这正是用户报「hover 在设备图标上滚轮没反应」的位置。
     cx, cy = l + max(2, (r - l) // 4), t + max(2, (b - t) // 4)
     log = newest_log()
@@ -246,7 +246,7 @@ def run_case(fine, notches, label):
         print(f"  SKIP {label}：恰好一个端点被调（缺音量基线）")
     if changed:
         name, v0, v1, d = changed[0]
-        # ⛔ 判据用**标称**变化量，不是原始浮点差：页面滑块初值先取整到步进网格
+        # ✗ 判据用**标称**变化量，不是原始浮点差：页面滑块初值先取整到步进网格
     #   （popup-audio.js:181），所以 53.7% 向上滚 3 格 ⇒ 标称 54→57，
     #   实际浮点是 +3.3%。断言原始差会把**与页面一致的行为**判成失败。
     if changed:

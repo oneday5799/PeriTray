@@ -58,7 +58,7 @@ def grab(x, y, w, h):
 def content_bottom(x0, x1, top, rows=30, plateau=None):
     """用**相邻行亮度跳变**找可见内容底边。返回 (y, 说明)。
 
-    ⚠️ tooltip 侧不能用「最大负跳变」：它**紧邻**任务栏，而本机任务栏是**浅色**
+    ⚠ tooltip 侧不能用「最大负跳变」：它**紧邻**任务栏，而本机任务栏是**浅色**
     （亮度 ~250，与气泡的 252 几乎相同）⇒ 断崖被淹没（实测最大负跳变仅 -36）。
     ⇒ 加 `plateau` 模式：找「恒定亮区」的最后一行（连续 ≥3 行亮度方差 <1.5），
        即内容区结束处。适合「下方还有其它亮色物体」的场景。
@@ -118,14 +118,14 @@ def main():
     print("任务栏上缘 = %d\n" % top)
     rc = popup_wait()
     if not rc:
-        print("❌ 主窗口未打开或未静止")
+        print("✗ 主窗口未打开或未静止")
         return 1
     print("主窗口 rect = (%d,%d)-(%d,%d)" % (rc.l, rc.t, rc.r, rc.b))
     cx0 = rc.l + int((rc.r - rc.l) * 0.2)
     cx1 = rc.r - int((rc.r - rc.l) * 0.2)
     pb, pinfo = content_bottom(cx0, cx1, top)
     if pb is None:
-        print("❌ 主窗口可见底边定位失败：%s" % pinfo)
+        print("✗ 主窗口可见底边定位失败：%s" % pinfo)
         return 1
     print("主窗口可见底边 = %d（%s）⇒ 间距 = %d px\n" % (pb, pinfo, top - pb))
 
@@ -134,13 +134,13 @@ def main():
     txt = open(logs[-1], encoding="utf-8", errors="replace").read()
     m = re.findall(r"气泡=(\d+)×(\d+) 窗=\((-?\d+),(-?\d+)\)", txt)
     if not m:
-        print("❌ 日志里没有 tooltip 落位（先悬停到设备上）")
+        print("✗ 日志里没有 tooltip 落位（先悬停到设备上）")
         return 1
     bw, bh, wx, wy = (int(v) for v in m[-1])
-    # ⚠️ tooltip 用 plateau 模式：下方紧邻**浅色**任务栏，断崖会被淹没
+    # ⚠ tooltip 用 plateau 模式：下方紧邻**浅色**任务栏，断崖会被淹没
     tb, tinfo = content_bottom(wx + 25, wx + bw - 7, top, rows=24, plateau=True)
     if tb is None:
-        print("❌ tooltip 可见底边定位失败：%s" % tinfo)
+        print("✗ tooltip 可见底边定位失败：%s" % tinfo)
         return 1
     print("tooltip 可见底边 = %d（%s）⇒ 间距 = %d px" % (tb, tinfo, top - tb))
 
@@ -148,7 +148,7 @@ def main():
     print()
     print("主窗口间距 = %d px ; tooltip 间距 = %d px ; 差 = %d px" % (gp, gt, abs(gp - gt)))
     ok = abs(gp - gt) <= 2
-    print("\n%s  两者间距%s" % ("✅ 一致" if ok else "❌ 不一致",
+    print("\n%s  两者间距%s" % ("✓ 一致" if ok else "✗ 不一致",
                                 "（差 ≤2px 视为圆整误差）" if ok else ""))
     return 0 if ok else 1
 

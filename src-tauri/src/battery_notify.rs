@@ -9,7 +9,7 @@ use crate::{standard_log, verbose_log};
 // 每个 (设备名, 阈值) 组合只通知一次；重启后清空重新检测
 static NOTIFIED: OnceLock<Mutex<HashSet<(String, i32)>>> = OnceLock::new();
 
-// ── P2-7 验收探针（仅测试构建存在，release 下零代码）────────────────
+// ── 验收探针（仅测试构建存在，release 下零代码）────────────────
 //
 // 「发送阶段设备缓存锁已释放」这条性质**没有返回值可断言**，只能观测调用时刻的
 // 锁状态，故在两个真实函数的入口各放一个探针，由
@@ -22,7 +22,7 @@ static EMIT_LOCK_PROBE: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI
 
 /// 记录「此刻设备缓存锁是否可获取」到指定探针（仅测试构建存在）。
 ///
-/// ⚠️ 判据必须用 `try_lock` 而不是「再 `lock()` 一次」：后者在同线程重入时**挂死**，
+/// ⚠ 判据必须用 `try_lock` 而不是「再 `lock()` 一次」：后者在同线程重入时**挂死**，
 /// 会把「缺陷」表现成「测试卡住」而不是「断言失败」（本仓既有教训）。
 #[cfg(test)]
 fn record_devices_cache_lock_state(probe: &std::sync::atomic::AtomicI8) {
@@ -33,7 +33,7 @@ fn record_devices_cache_lock_state(probe: &std::sync::atomic::AtomicI8) {
 
 /// 回差（hysteresis）：电量必须比阈值高出这么多，才把「已通知」标记清掉。
 ///
-/// ── 为什么需要回差（P3-3）────────────────────────────────────────
+/// ── 为什么需要回差────────────────────────────────────────
 /// 修复前 `notified` 只会**插入**、从不移除 ⇒ 一台设备掉到 20% 弹过一次提醒后，
 /// 即便用户插上电源充到 100%、拔掉再一路掉回 20%，也**永远不会再提醒**。
 /// 这个标记只有在进程重启（`NOTIFIED` 是 `OnceLock`，随进程清零）后才失效，
@@ -69,7 +69,7 @@ pub struct PendingBatteryNotice {
 }
 /// 判定哪些设备该弹通知（**纯函数**，不读全局配置、不碰锁、不做 I/O）。
 ///
-/// 抽出来的理由与项目既有范式一致（见 P2-4 的 `should_restart` / `is_time_jump`）：
+/// 抽出来的理由与项目既有范式一致（见 `should_restart` / `is_time_jump`）：
 /// 判定语义可以在单测里钉死，不必依赖真实配置与真实通知器。
 ///
 /// `notified` 是「已通知过」的集合，本函数会**就地更新**它：
@@ -110,12 +110,12 @@ fn select_pending_notices(
         }
 
         // 取用户自定义显示名，无则用原始名
-        // ⭐ 走共享解析（与托盘/任务栏/两页同一判据）：单键查找会漏掉
+        // ✓ 走共享解析（与托盘/任务栏/两页同一判据）：单键查找会漏掉
         //    「别名只写在另一种形态键下」的情况 ⇒ 通知里的名字与界面不一致。
         let display_name = config::resolve_device_name_in(d.name.as_str(), device_names);
 
         for &threshold in thresholds {
-            // 先处理「重新武装」：电量明确回升时清掉去重标记（P3-3）。
+            // 先处理「重新武装」：电量明确回升时清掉去重标记。
             // 必须**早于**命中判定 —— 否则同一轮里水位刚好跨过回差线时，
             // 「先判命中（清标记前已插入过）→ 再清标记」的次序会让标记
             // 被清掉却又在同一轮弹了一次，下一轮再弹一次。
@@ -154,8 +154,8 @@ fn select_pending_notices(
 
 /// 检查设备电量是否达到配置的阈值，**收集**待通知条目并返回。
 ///
-/// ── 为什么要与「显示」拆开（P2-7）────────────────────────────────
-/// ⛔ 「取配置 → 判定 → `show_toast`」**不得**塞进同一个函数：那会让调用点写成——
+/// ── 为什么要与「显示」拆开────────────────────────────────
+/// ✗ 「取配置 → 判定 → `show_toast`」**不得**塞进同一个函数：那会让调用点写成——
 ///
 /// ```ignore
 /// crate::battery_notify::check_battery_notify(&crate::state::lock_unpoisoned(cache));
@@ -217,9 +217,9 @@ pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> 
     )
 }
 
-/// 设备缓存锁的**两段式**执行器：锁内收集、**锁外**发送（P2-7 的唯一承载点）。
+/// 设备缓存锁的**两段式**执行器：锁内收集、**锁外**发送（唯一承载点）。
 ///
-/// ── 为什么要有这一层（P2-7）────────────────────────────────────────
+/// ── 为什么要有这一层────────────────────────────────────────
 /// 「锁内只收集、锁外再发通知」这条纪律**只由调用方的花括号承载**，故固化成示例：
 ///
 /// ```ignore
@@ -239,7 +239,7 @@ pub fn collect_pending_notices(devices: &[Device]) -> Vec<PendingBatteryNotice> 
 pub fn notify_low_battery(cache: &Mutex<crate::state::DeviceCache>) {
     let pending = {
         let guard = crate::state::lock_unpoisoned(cache);
-        // ⚠️ 只取 `devices` 字段：`at_ms` 与本函数无关，锁的持有范围不变
+        // ⚠ 只取 `devices` 字段：`at_ms` 与本函数无关，锁的持有范围不变
         //   （判据 `cache_lock_is_released_before_emit` 依赖这个花括号的位置）
         collect_pending_notices(&guard.devices)
     }; // ← 设备缓存锁在此释放，下面一行不得挪进上面的花括号
@@ -250,9 +250,9 @@ pub fn notify_low_battery(cache: &Mutex<crate::state::DeviceCache>) {
 ///
 /// 图标解析放在这里而不是 `collect_*`：`resolve_toast_icon()` 会碰文件系统
 /// （首次写入 `%TEMP%`），属于「锁内不得做的 I/O」。它本身有 `OnceLock` 缓存，
-/// 循环内重复调用只读一次内存（P2-6）。
+/// 循环内重复调用只读一次内存。
 ///
-/// ⚠️ **刻意不 `pub`**（P2-7）：本函数必须在锁外调用，而「锁外」无法用类型表达。
+/// ⚠ **刻意不 `pub`**：本函数必须在锁外调用，而「锁外」无法用类型表达。
 /// 保持私有 ⇒ 全仓只有 [`notify_low_battery`] 能调到它，而那一处的花括号
 /// 已经把 guard 落域，于是「持锁发送」在结构上不可达。
 fn emit_notifications(notices: &[PendingBatteryNotice]) {
@@ -288,7 +288,7 @@ mod tests {
     use crate::device::{DevType, Device};
     use std::collections::{HashMap, HashSet};
 
-    /// ★ 核心验收（P2-7）：**发送阶段设备缓存锁必须已释放**。
+    /// ✗ 发送阶段设备缓存锁必须已释放。
     ///
     /// 这条性质没有返回值可断言，只能观测调用时刻的锁状态，故由两个真实函数
     /// 入口处的探针（`COLLECT_LOCK_PROBE` / `EMIT_LOCK_PROBE`）读回。
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(pending[0].display_name, "耳机");
     }
 
-    // ── P3-3：回差（重新武装）──────────────────────────────────────
+    // ── 回差（重新武装）──────────────────────────────────────
 
     /// 回差判据边界**两侧都断言**：`threshold + 5` 不武装、`threshold + 6` 武装。
     #[test]

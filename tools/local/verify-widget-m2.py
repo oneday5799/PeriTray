@@ -6,7 +6,7 @@
   · 内容区**宽度 > 里程碑 1 的 120px**（真实文本比 8x8 方块宽）；
   · 冒烟：`[widget] mount report` 的 `drawn=true` 且日志里有「快照更新」。
 
-⛔ 三个必须遵守的观测条件（踩过的坑，见 PLAYBOOK §E.3）：
+✗ 三个必须遵守的观测条件（踩过的坑，见 PLAYBOOK §E.3）：
   ① BitBlt 抓**分层窗口**必须 `CAPTUREBLT`；
   ② 观测进程必须 **DPI 感知**（否则截图整体错位）；
   ③ 启动 → 读日志 → 截图 → 分析 必须在**同一个脚本**里（子进程随命令结束被回收）。
@@ -24,7 +24,7 @@ SRCCOPY = 0x00CC0020
 u = ctypes.windll.user32
 g = ctypes.windll.gdi32
 
-# ⛔ DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4 （见 verify-widget.py 注释）
+# ✗ DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4 （见 verify-widget.py 注释）
 try:
     ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 except Exception:
@@ -42,7 +42,7 @@ def launch(wait=12):
     subprocess.run(['taskkill', '/F', '/IM', 'PeriTray.exe'], capture_output=True)
     time.sleep(1)
     p = subprocess.Popen([EXE], cwd=WD, env=env)
-    # ⚠️ 首次刷新有 3s 延迟 + WMI 600ms ⇒ 给足时间确保快照已落盘
+    # ⚠ 首次刷新有 3s 延迟 + WMI 600ms ⇒ 给足时间确保快照已落盘
     time.sleep(wait)
     return p
 
@@ -155,7 +155,7 @@ for yy in range(max(0, wy1), min(H, wy2)):
         grays[lum] += 1
 
 # 「内容像素」= 与任务栏底色明显不同的像素（底色本机实测约 (28,28,28) 深色任务栏）
-# ⚠️ 深色任务栏下文本是白色 ⇒ 用「亮度 > 100」判内容；浅色主题反过来。
+# ⚠ 深色任务栏下文本是白色 ⇒ 用「亮度 > 100」判内容；浅色主题反过来。
 bg = cnt.most_common(1)[0][0]
 content = sum(v for k, v in cnt.items()
               if abs(k[0] - bg[0]) + abs(k[1] - bg[1]) + abs(k[2] - bg[2]) > 30)

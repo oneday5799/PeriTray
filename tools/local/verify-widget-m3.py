@@ -10,12 +10,12 @@
                  ⇒ 窗口 x 变小且配置落盘
   D. 实时关闭 —— 取消勾选 ⇒ 窗口消失
 
-⛔ 四条硬约束（踩过的坑）：
+✗ 四条硬约束（踩过的坑）：
   ① 观测进程必须 **DPI 感知**（PLAYBOOK §E.3）；
   ② 启动 → 交互 → 读日志 必须在**同一个脚本**里（子进程随命令结束被回收）；
   ③ CDP 求值涉及 IPC 时**窗口必须可见**（popup 隐藏时 `invoke` 挂死）——
      故用 `PM_DEV_OPEN_SETTINGS=1` 打开设置窗，而不是隐藏的 popup；
-  ④ ⚠️ **设置窗可能被真实用户随手关掉**（实测：hide 后 3s 销毁）⇒ 四段交互
+  ④ ⚠ **设置窗可能被真实用户随手关掉**（实测：hide 后 3s 销毁）⇒ 四段交互
      必须**紧接启动完成、尽早连做**，且每步前显式检查 target 是否还在。
 """
 import subprocess, os, time, ctypes, ctypes.wintypes as w, glob, re, shutil, sys
@@ -79,7 +79,7 @@ def widget_hwnd():
     if not m:
         return 0
     h = int(m[-1], 16)
-    # ⛔ 必须复核 `IsWindow`：句柄值是**历史记录**，窗口可能已被销毁
+    # ✗ 必须复核 `IsWindow`：句柄值是**历史记录**，窗口可能已被销毁
     return h if u.IsWindow(h) else 0
 
 
@@ -144,7 +144,7 @@ rect_center = widget_rect()
 check('B2 窗口存在', rect_center is not None, str(rect_center))
 check('B3 配置已落盘',
       'pinned_taskbar_devices' in open(CFG, encoding='utf-8').read())
-# ⭐ 口径（用户 2026-09-24 拍板）：只画**已勾选**的设备。
+# ✓ 口径（用户 2026-09-24 拍板）：只画**已勾选**的设备。
 #    可证伪：若内容源退回 `group_taskbar_devices` 的「有数据的设备一律留」，
 #    本机有 9 台有数据的设备 ⇒ 窗口会宽到 ~400px（6 台）而不是「1 台」的 ~90px。
 if rect_center:
@@ -152,7 +152,7 @@ if rect_center:
     check('B4 只画已勾选的那 1 台（宽度 ~90px，而非 6 台的 ~400px）',
           w_center < 160, f'实际宽度 {w_center}px')
     m_items = re.findall(r'\[widget\]   · \[(鼠标|音箱|耳机)\]', t)
-    # ⭐ `[widget] 定位:` 里的 `content_w` 是**内容区**宽度（不含两端 PAD_X），
+    # ✓ `[widget] 定位:` 里的 `content_w` 是**内容区**宽度（不含两端 PAD_X），
     #   比窗口宽度更直接地反映「画了几台」—— 6 台约 389，1 台约 77。
     mc = re.findall(r'\[widget\] 定位:.*content_w=(\d+)', t)
     check('B5 定位日志的 content_w 是「1 台」的量级（< 150）',
@@ -161,7 +161,7 @@ if rect_center:
 
 print('\n=== C. 位置切换（走真实下拉交互，center → left）===')
 print('  设置页还在:', settings_alive())
-# ⛔ 必须先取 item 引用再点开按钮：`initComboBox` 打开时会把 flyout **移到 body**，
+# ✗ 必须先取 item 引用再点开按钮：`initComboBox` 打开时会把 flyout **移到 body**，
 #    之后 `combo.querySelector(...)` 就找不到它了（本仓已知坑）。
 try:
     label = cdp(
@@ -213,7 +213,7 @@ for line in re.findall(r'\[widget\].*', log_text())[-14:]:
 p.terminate()
 time.sleep(1)
 subprocess.run(['taskkill', '/F', '/IM', 'PeriTray.exe'], capture_output=True)
-# ⛔ 用 `copy2` 覆盖而不是 `move`：`shutil.move` 在 Windows 上会走
+# ✗ 用 `copy2` 覆盖而不是 `move`：`shutil.move` 在 Windows 上会走
 #    「copy + unlink」兜底，而本机 `unlink` 被 safe-delete 守卫拦死。
 shutil.copy2(CFG_BAK, CFG)
 print('\nconfig 已还原')

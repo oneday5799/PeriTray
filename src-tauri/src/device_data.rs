@@ -141,8 +141,8 @@ pub fn reload_device_data() {
 
     let last = LAST_MTIME.get_or_init(|| Mutex::new(None));
     // 守卫必须落在块内：下面要取 DEVICE_DATA 的写锁，持 LAST_MTIME 再拿写锁
-    // 会多出一条不必要的锁序（P0-4 类问题的温床）。
-    // P2-11：改用统一入口，中毒时不再静默跳过 —— 否则 mtime 永不更新，
+    // 会多出一条不必要的锁序（此类问题的温床）。
+    // 改用统一入口，中毒时不再静默跳过 —— 否则 mtime 永不更新，
     // 此后每次 reload 都被误判为「未变化」而直接返回，设备名永久停在旧值。
     {
         let mut guard = crate::state::lock_unpoisoned(last);
@@ -154,7 +154,7 @@ pub fn reload_device_data() {
 
     if let Some(rw_lock) = DEVICE_DATA.get() {
         let new_data = build_registry(load_user_data(&user_data_path()));
-        // P2-11：中毒时不再静默跳过（跳过 ⇒ 用户改过的设备名永远写不进去）
+        // 中毒时不再静默跳过（跳过 ⇒ 用户改过的设备名永远写不进去）
         *crate::state::write_unpoisoned(rw_lock) = new_data;
     }
 }

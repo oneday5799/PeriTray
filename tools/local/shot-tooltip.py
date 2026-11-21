@@ -1,7 +1,7 @@
 """截取 tooltip 及其周边（含阴影与任务栏）存 PNG，供人工与 FluentFlyout 对比。
 
 用法：与 app 同时启动；轮询到可见即抓。
-⚠️ 抓分层/合成内容必须带 CAPTUREBLT（否则只拿到桌面背景）。
+⚠ 抓分层/合成内容必须带 CAPTUREBLT（否则只拿到桌面背景）。
 """
 
 import ctypes
@@ -128,7 +128,7 @@ def main():
         tip = tip_from_log()
         time.sleep(0.3)
     if tip is None:
-        print("❌ 未从日志解析到 tip 句柄")
+        print("✗ 未从日志解析到 tip 句柄")
         return 1
 
     r = RECT()
@@ -138,7 +138,7 @@ def main():
             break
         time.sleep(0.15)
 
-    # ⭐ **立即抓，不等**。自绘版没有淡入动画，原先那 0.75s 等待反而有害：
+    # ✓ **立即抓，不等**。自绘版没有淡入动画，原先那 0.75s 等待反而有害：
     #   开发时鼠标可能恰好停在 widget 上，hover 路径与 `PM_DEV_TOOLTIP_SHOW`
     #   门控会互相覆盖（一个 show 一个 hide）⇒ 等久了就只拍到空气。
     #   正确做法是**连续抓几帧挑一帧有内容的**，而不是赌它一直可见。
@@ -163,14 +163,14 @@ def main():
             break
         time.sleep(0.2)
     if best is None:
-        print("❌ 12 次重试都没拍到气泡内容（提示被 hover 路径隐藏？）")
+        print("✗ 12 次重试都没拍到气泡内容（提示被 hover 路径隐藏？）")
         return 1
     buf, W, H, r, (ox, oy) = best
     globals()["_origin"] = (ox, oy)
 
     # 连同**周边 30px**一起抓 ⇒ 能看到阴影、圆角、与任务栏的相对位置
     write_png(OUT, buf, W, H)
-    print("✅ 已保存 %s（区域 %dx%d，抓取原点=(%d,%d)，tip rect=(%d,%d)-(%d,%d)）"
+    print("✓ 已保存 %s（区域 %dx%d，抓取原点=(%d,%d)，tip rect=(%d,%d)-(%d,%d)）"
           % (OUT, W, H, ox, oy, r.l, r.t, r.r, r.b))
     return 0
 

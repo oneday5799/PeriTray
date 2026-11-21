@@ -157,7 +157,7 @@ pub fn read_battery_percent(link: &HidLink, scope: Option<&str>) -> Result<Optio
             }
         }
     }
-    // ⭐ 最终 Err 必须携带 last_err（最后一害的真实原因）：query_and_cache 会把
+    // ✓ 最终 Err 必须携带 last_err（最后一害的真实原因）：query_and_cache 会把
     //    本返回值打进标准级日志（「查询失败: …」）⇒ 默认日志即可看到
     //    设备类型不符 / 固件过低 / 复查未确认等关键排查信息（razer 域同口径）
     Err(if last_err.is_empty() {
@@ -296,7 +296,7 @@ fn decode_reply(buf: &[u8], offset: usize) -> Result<Option<i32>, String> {
         return Err(format!("未收录的设备类型字节: {:#04X}", device_type));
     }
     // 大端：参考实现 DecodeInfoResponse 组装为 [+15]<<8 | [+16]（高字节在前）。
-    // ⛔ 不得改回小端——固件 0x7141 线上字节为 [71 41]，小端读得 0x4171 <
+    // ✗ 不得改回小端——固件 0x7141 线上字节为 [71 41]，小端读得 0x4171 <
     // 0x7141，恒判「固件版本过低」，真机永远不出电量（decode_firmware_is_big_endian 钉死）
     let firmware = u16::from_be_bytes([buf[offset + OFF_FIRMWARE], buf[offset + OFF_FIRMWARE + 1]]);
     if firmware < MIN_FIRMWARE {

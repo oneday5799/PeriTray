@@ -25,7 +25,7 @@ const buttonMutedDevices = new Set();
 let activeAudioMenu = null;
 
 // 设备显示名：有重命名使用重命名，否则简化括号内名称（数据源为本页运行态）
-// ⭐ 收「名字」或「设备对象」都行：对象自带后端算好的 `core_name`；
+// ✓ 收「名字」或「设备对象」都行：对象自带后端算好的 `core_name`；
 // 只有字符串时回本页设备列表里按名字找一次（会话路由的 `outputDevice` 等
 // 手里只有名字）。**前端不再自己推短名** —— `simplifyDeviceName` 不剥蓝牙
 // 后缀，与后端 `core_name` 不是一回事。
@@ -95,7 +95,7 @@ function updateSessionCard(session) {
   }
 }
 
-// 事件订阅统一经 common.js 的 onTauriEvent()（P2-3）：它就绪检查在内、未就绪静默跳过，
+// 事件订阅统一经 common.js 的 onTauriEvent()：它就绪检查在内、未就绪静默跳过，
 // 不再各自用 `if (window.__TAURI__ && window.__TAURI__.event)` 包一层裸访问。
 onTauriEvent("volume-changed", (event) => {
   const changes = event.payload;
@@ -145,7 +145,7 @@ onTauriEvent("config-changed", async (event) => {
     } else {
       // 向后兼容：旧版后端可能传递空 payload
       const fn = getInvoke();
-      // L1：getInvoke() 未就绪时返回 null（P2-3）。既无 payload 又取不到 invoke，
+      // L1：getInvoke() 未就绪时返回 null。既无 payload 又取不到 invoke，
       // 就拿不到 config；直接跳过本次刷新，别让 undefined 进 applyAudioRuntimeConfig。
       if (!fn) return;
       cfg = await fn("get_config");
@@ -318,7 +318,7 @@ async function showAudioContextMenu(x, y, device) {
     hideAllContextMenus();
     showDeviceInfoDialog({
       deviceName: device.name,
-      // ⭐ 预填与「恢复默认」按钮的可见性都走两级查找：别名可能只落在短名键上
+      // ✓ 预填与「恢复默认」按钮的可见性都走两级查找：别名可能只落在短名键上
       //    （从设备页改名的情形），否则输入框会预填成端点名、且「恢复默认」不出现。
       displayName: window.lookupDeviceAlias(audioDeviceNames, device.name, device.core_name)
         || device.name,
@@ -376,21 +376,21 @@ async function showAudioContextMenu(x, y, device) {
     }
   }
 
-  // ⭐ 「钉到任务栏」——与设备信息页同一功能。
+  // ✓ 「钉到任务栏」——与设备信息页同一功能。
   //
-  // ⭐ 位置：**菜单最底部、「空间音效」之下**。
+  // ✓ 位置：**菜单最底部、「空间音效」之下**。
   //    故本块刻意排在上面那段 await 之后追加——顺带天然满足
-  //    ⛔「菜单项必须在所有 await 之后追加」：`showAudioContextMenu` 带
+  //    ✗「菜单项必须在所有 await 之后追加」：`showAudioContextMenu` 带
   //    `audioMenuToken` 重入令牌，提前追加会与空间音效查询竞态。
   //
-  // ⚠️ 这里必须传 **`device_id`**（音频端点 id）而不能只传 `device.name`：
+  // ⚠ 这里必须传 **`device_id`**（音频端点 id）而不能只传 `device.name`：
   //   音量页卡片的 `name` 是**音频端点名**（可能带「扬声器/耳机」前缀），
   //   与任务栏侧的 `PhysicalDevice.name` 不是同一个字符串 ⇒ 后端按名字查不到。
   //   端点 id 经后端 `audio_endpoint_key` 换算出的身份键**与设备页完全一致**，
   //   所以同一台设备在两页钉的结果是同一条记录（不会重复、不会各钉各的）。
   const pinItem = document.createElement("div");
   pinItem.className = "context-menu-item";
-  // ⭐ 音量页按**端点 id** 判（不是名字）：卡片的 `device.name` 是音频端点名，
+  // ✓ 音量页按**端点 id** 判（不是名字）：卡片的 `device.name` 是音频端点名，
   //    与 `PhysicalDevice.name` 不是同一个字符串 ⇒ 按名字判文案永远不变。
   pinItem.textContent = window.isTaskbarPinnedAudioId(device.id)
     ? "移出任务栏"
@@ -401,19 +401,19 @@ async function showAudioContextMenu(x, y, device) {
         name: device.name,
         deviceId: device.id,
       });
-      // ⭐ 刷新的是**共用**名单（名字集 + 音频 id 集），音量页与设备页据此改文案。
+      // ✓ 刷新的是**共用**名单（名字集 + 音频 id 集），音量页与设备页据此改文案。
       await window.refreshTaskbarPinnedNames();
     } catch (e) {
       showToast(e);
     }
     hideAllContextMenus();
   });
-  // ⛔ **只在「显示设备信息组件」开启时才追加这一项**。
+  // ✗ **只在「显示设备信息组件」开启时才追加这一项**。
   //   组件关着时，钉过去也不会显示 ⇒ 入口没有意义。
-  // ⚠️ 判据来自 `common.js` 的共用开关，与设备信息页**同一个函数**
+  // ⚠ 判据来自 `common.js` 的共用开关，与设备信息页**同一个函数**
   //   （`isTaskbarWidgetEnabled`）⇒ 两页不会分叉。
-  // ⛔ fail-closed：开关取不到时初值为 false ⇒ 宁可不显示，不显示一个点不动的项。
-  // 📌 即便组件关闭时仍有已钉设备，**取消入口也没丢**：设置页「任务栏组件」
+  // ✗ fail-closed：开关取不到时初值为 false ⇒ 宁可不显示，不显示一个点不动的项。
+  // 即便组件关闭时仍有已钉设备，**取消入口也没丢**：设置页「任务栏组件」
   //   那张卡可以查看与移除。
   if (window.isTaskbarWidgetEnabled()) {
     menu.appendChild(pinItem);
@@ -541,7 +541,7 @@ async function loadAudioDevices() {
     hiddenAudioDevices = cfg.hidden_audio_devices || [];
     audioDeviceNames = cfg.device_names || {};
     deviceShortcuts = cfg.device_shortcuts || {};
-    // ⭐ 右键菜单「钉到任务栏/移出任务栏」要判当前状态 ⇒ 设备就绪后拉一次共用名单。
+    // ✓ 右键菜单「钉到任务栏/移出任务栏」要判当前状态 ⇒ 设备就绪后拉一次共用名单。
     //    不 await：菜单在用户右键时才用，届时早已拿到；不阻塞音量页首屏。
     window.refreshTaskbarPinnedNames();
     renderAudioDevices();
@@ -734,7 +734,7 @@ async function loadAudioSessions(deviceId) {
   }
   try {
     audioSessions = (await invoke("get_audio_sessions", { deviceId })).map(s => ({ ...s, permanentMute: muteLockEnabled && !!(s.is_muted && s.volume > 0) }));
-    // 先把会话卡片渲染出来，再异步回填「已设置的输出/输入设备名」（P1-9）：
+    // 先把会话卡片渲染出来，再异步回填「已设置的输出/输入设备名」：
     // 解析要逐 pid 走 IPolicyConfig 查询，实测百毫秒级；原先把它串行 await 在
     // 渲染之前，会让首屏卡片一起等这段时间。设备名只影响图标上的「已路由」
     // 标记与 tooltip，晚一点到不影响卡片本身可用。
@@ -755,10 +755,10 @@ async function loadAudioSessions(deviceId) {
 // 会话卡片图标解析的回填代际号。
 //
 // 解析是异步的，期间用户可能切了设备或再次刷新 ⇒ 旧请求的结果会落到新列表上。
-// 每次发起解析递增一次，回填前比对，代际不符就丢弃（P1-9）。
+// 每次发起解析递增一次，回填前比对，代际不符就丢弃。
 let sessionNamesToken = 0;
 
-// 异步解析「各会话已设置的输出/输入设备名」并回填到已渲染的卡片上（P1-9）。
+// 异步解析「各会话已设置的输出/输入设备名」并回填到已渲染的卡片上。
 //
 // 解析失败时**静默保持**「无设备名」：卡片本身已经渲染好了，设备名只是图标上的
 // 「已路由」标记与 tooltip 的补充信息，不值得为此打扰用户。

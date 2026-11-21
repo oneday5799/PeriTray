@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """验收：**音量控制页 → 设备信息页**方向的重命名同步 + 「恢复默认」双向归位。
 
-⛔ 缺陷背景（2026-09-28 用户二次报）：第一轮只修了「设备页 → 音量页」，
+✗ 缺陷背景（2026-09-28 用户二次报）：第一轮只修了「设备页 → 音量页」，
    反向仍不同步。根因**不在解析器**而在**订阅**：
    `rename_device` 只**发事件**不回调页面，而 `popup-devices.js` 原先
    **完全没有 `config-changed` 订阅**（`deviceNames` 只在 `loadDevices` /
@@ -41,7 +41,7 @@ def check(name, ok, detail=""):
 def port_9222_alive():
     """调试端口是否还有人在监听（= 上一个实例是否真的退干净了）。
 
-    ⛔ 为什么不用 `tasklist` 数进程：Python 捕获 `tasklist` 输出时**不按本机
+    ✗ 为什么不用 `tasklist` 数进程：Python 捕获 `tasklist` 输出时**不按本机
     locale 解码**（重定向场景常是 UTF-16），`count("peritray.exe")` 恒为 0
     ⇒ 把正常启动误判成「应用已消失」。改用与编码无关的 HTTP 端点判据。
     """
@@ -54,7 +54,7 @@ def port_9222_alive():
 
 
 def kill_all(tries=20):
-    """⚠️ 必须**反复杀到真的没有为止**再启动下一个实例。
+    """⚠ 必须**反复杀到真的没有为止**再启动下一个实例。
 
     踩坑记录：`taskkill /F` 在 Git-Bash 里会被路径化成 `F:/` 而**静默失败**
     （要么用 `-F` 形式，要么像这里走 subprocess 不经 shell）⇒ 曾经同时活着
@@ -71,13 +71,13 @@ def kill_all(tries=20):
 
 
 def wait_ipc(tries=30):
-    """⛔ 孤儿 target 陷阱：`taskkill` 后 WebView2 子进程未退、调试端口未释放时，
+    """✗ 孤儿 target 陷阱：`taskkill` 后 WebView2 子进程未退、调试端口未释放时，
     `/json` 里可能还挂着上个进程的页面 —— 它能执行 JS，但 IPC 通道已断
     ⇒ 任何 invoke 永不 settle。必须等「进程真没了 + IPC 真通了」再断言。
     """
     for k in range(tries):
         try:
-            # ⚠️ 本文件的 `cdp` 只有 (expr, timeout) 两个形参、页面写死在内部 ⇒ 
+            # ⚠ 本文件的 `cdp` 只有 (expr, timeout) 两个形参、页面写死在内部 ⇒ 
             #    这里**不能**按 (page, expr, …) 调用（曾这么写，每次轮询都抛
             #    TypeError 又被 except 吞掉 ⇒ 表现为「IPC 永远不就绪」）。
             cdp("(async()=>{await window.__TAURI__.core.invoke('get_config');"
@@ -131,18 +131,18 @@ def main():
         time.sleep(10)
         wait_ipc()
 
-        # ── ⭐ 先强制一次**实查**，否则断言会落在快照数据上 ──
+        # ── ✓ 先强制一次**实查**，否则断言会落在快照数据上 ──
         #   弹窗首屏走 `hydrateFromSnapshot()`（localStorage 秒显），快照里的设备名
         #   可能是**旧值**（实测：小爱音箱卡片显示快照里的 `小爱音箱-920`，
         #   而 `get_devices` 早已是 `小爱音箱-9205`）⇒ 拿它断言会得到与本缺陷
         #   无关的假失败（快照名与音量页端点名对不上）。
         #   归并判据依赖「设备页名字 == 音量页短名」，只有在**实查**数据上才成立。
-        # ⛔ 必须**轮询等 DOM 与实查数据一致**再断言：弹窗首屏走快照
+        # ✗ 必须**轮询等 DOM 与实查数据一致**再断言：弹窗首屏走快照
         #   （localStorage 秒显），而首次实查要几百毫秒~数秒（2.4G 电量查询，
         #   鼠标休眠时更慢）⇒ 固定 sleep 会读到快照里的**旧设备名**
         #   （实测卡片 `小爱音箱-920` vs 实查 `小爱音箱-9205`），
         #   那与本缺陷无关，却会让判据变成随机红。
-        # ⚠️ 期望值必须用**显示名**（`getDisplayName`，含别名）而不是 `d.name`：
+        # ⚠ 期望值必须用**显示名**（`getDisplayName`，含别名）而不是 `d.name`：
         #    配置里若已有别名（本机就有一个），卡片上显示的是别名，拿原名去比
         #    **必然不等** ⇒ 该检查恒红，且与被测机制无关（这个坑让我误判过两次）。
         settled = cdp("(async()=>{const inv=window.__TAURI__.core.invoke;"
@@ -181,7 +181,7 @@ def main():
         cdp(rename(LONG, ALIAS))
         r = cdp(PROBE)
         print("  音量页改名后:", json.dumps(r, ensure_ascii=False))
-        check("⛔ 设备信息页**已渲染的卡片标题**变成别名（反向同步）",
+        check("✗ 设备信息页**已渲染的卡片标题**变成别名（反向同步）",
               ALIAS in r.get("cards", []), f"cards={r.get('cards')}")
         check("音量页卡片显示别名",
               any(ALIAS in x for x in r.get("audio", [])), f"audio={r.get('audio')}")

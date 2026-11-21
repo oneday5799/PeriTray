@@ -23,7 +23,7 @@ mod popup;
 mod process;
 mod shortcut;
 mod state;
-// ⛔ 必须 `cfg(windows)`：整个模块只做 Win32 + UIA，非 Windows 目标下没有对应绑定。
+// ✗ 必须 `cfg(windows)`：整个模块只做 Win32 + UIA，非 Windows 目标下没有对应绑定。
 #[cfg(target_os = "windows")]
 mod taskbar_layout;
 mod taskbar_music;
@@ -47,7 +47,7 @@ use tauri::Emitter;
 use tauri::Manager;
 use tauri::RunEvent;
 
-/// panic 发生的位置（相对主线程）——决定「要不要弹模态框」（B12）。
+/// panic 发生的位置（相对主线程）——决定「要不要弹模态框」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanicSite {
     /// panic 发生在主线程：应用本就要终止，弹框是合理的最后一手告知
@@ -95,7 +95,7 @@ fn format_panic_report(msg: &str, location: &str) -> String {
     format!("{}\n\nLocation: {}", msg, location)
 }
 
-/// 统一的 panic 处置（B12）：主线程弹框、后台线程只写 stderr；返回本次处置结果。
+/// 统一的 panic 处置：主线程弹框、后台线程只写 stderr；返回本次处置结果。
 ///
 /// 之所以把「弹框动作」交由调用方注入（`on_main_panic`），是为了让单测能传入
 /// **记录器**替代 `show_error_box`：模态框会把测试挂死，而替换后即可在真实安装
@@ -127,7 +127,7 @@ fn make_panic_hook(
     Box::new(move |info| {
         let msg = panic_payload_message(info.payload());
         let location = format_location(info.location());
-        // ⛔⛔ **必须先同步落盘，再走异步日志队列**（实测踩到）。
+        // ✗ **必须先同步落盘，再走异步日志队列**（实测踩到）。
         //
         // 根因：`process::append_log` → `write_log` → `enqueue`，是**异步入队**，
         // 由后台写线程消费。而 panic 常常紧跟 `abort()`（panic 穿过
@@ -152,12 +152,12 @@ fn make_panic_hook(
 
 /// 安装 panic hook：主线程 panic 弹 MessageBox 告知用户，后台线程 panic 只写日志。
 ///
-/// ⚠️ **绝不能对后台线程弹框**（B12）：`show_error_box` 用的是 `MessageBoxW`，**模态**
+/// ⚠ **绝不能对后台线程弹框**：`show_error_box` 用的是 `MessageBoxW`，**模态**
 /// ——它会一直阻塞到用户点掉。而 panic hook 是在**panic 的那个线程**上同步执行的，
 /// 于是「后台线程 panic」的真实后果不是「死一个线程」，而是：
 ///   ① 该线程**永久卡在弹框上，栈展开根本不发生** ⇒ 它持有的锁、RAII 守卫
 ///      （`SingleFlightGuard` 等）永不释放，把「局部故障」放大成「整机卡死」。
-///      P1-8 的注入验证实测到了这条链路：panic 后子进程 **stderr 为 0 字节**
+///      注入验证实测到了这条链路：panic 后子进程 **stderr 为 0 字节**
 ///      （证明 `default_hook` 从未执行），`ANIMATING` 一直为 `true`，
 ///      只能靠超时自愈救回。
 ///   ② release 下 `panic = "abort"` 本想「快速失败」，但 hook 卡住 ⇒ **abort 永远不会发生**，
@@ -183,14 +183,14 @@ fn install_panic_hook() {
 
 /// panic 现场的**同步**落盘（不经异步队列，见 `make_panic_hook` 的注释）。
 ///
-/// ⛔⛔ **同一个坑我这轮踩了两次**（实测），记在这里免得再犯：
+/// ✗ **同一个坑我这轮踩了两次**（实测），记在这里免得再犯：
 ///   ① 「日志里没有 `[panic]` 行」⇒ 我据此断定「**不是 panic**、是访问违例之外的某种东西」；
 ///   ② 「崩溃定位标记停在 B」⇒ 我据此断定「崩在 B 与 C 之间」。
 ///   而真相是**两者都走了异步队列**，进程硬崩时队列尾部整段丢失 ⇒
 ///   **「最后落盘的那条」不等于「最后执行的那条」**。
 ///   ⇒ **凡是要证明「某件事没发生」或「崩在哪」的判据，绝不能走可丢弃的通道。**
 ///
-/// ⚠️ 任何一步失败都**静默忽略**：这里已经在 panic 路径上，
+/// ⚠ 任何一步失败都**静默忽略**：这里已经在 panic 路径上，
 ///   再 panic / 再报错只会掩盖真正的现场。
 fn write_panic_sync(msg: &str, location: &str, thread: Option<&str>) {
     use std::io::Write;
@@ -216,7 +216,7 @@ fn write_panic_sync(msg: &str, location: &str, thread: Option<&str>) {
         location,
         msg
     );
-    // ⚠️ `sync_all` 是这条路径存在的全部意义：不刷到 OS，
+    // ⚠ `sync_all` 是这条路径存在的全部意义：不刷到 OS，
     //   进程被 `TerminateProcess` 之后内容可能还停在页缓存里没落盘。
     let _ = f.sync_all();
 }
@@ -254,7 +254,7 @@ fn wait_process_exit(pid: u32, timeout_ms: u32) {
 #[cfg(not(target_os = "windows"))]
 fn wait_process_exit(_pid: u32, _timeout_ms: u32) {}
 
-/// 探活连续超时几次判定「事件循环僵死」⇒ 自愈重启（P2-4）。
+/// 探活连续超时几次判定「事件循环僵死」⇒ 自愈重启。
 ///
 /// 单次超时（5s）可能只是偶发瞬时卡顿（GC、磁盘抖动、杀软扫描），
 /// 连续两次（最坏 ~40s）才足以判定僵死。抽成纯函数以便边界单测。
@@ -275,16 +275,16 @@ const WATCHDOG_ROUND_INTERVAL: std::time::Duration = std::time::Duration::from_s
 /// 三个数量级的余量；再放长只会拖慢自愈。
 const PROBE_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// 事件循环探活计数（B7）：每次探活闭包在主线程上执行即 +1。
+/// 事件循环探活计数：每次探活闭包在主线程上执行即 +1。
 ///
 /// 为什么保留一个计数而不只用 channel 回执：回执只能回答「这一次有没有被处理」，
 /// 累计值能区分「事件循环完全没跑」与「跑得很慢但一直在推进」——僵死日志带上它，
 /// 事后归因时不必再猜。
 static EVENT_LOOP_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// 探活等待侧（B7）：`timeout` 内收到回执 ⇒ 事件循环有响应。
+/// 探活等待侧：`timeout` 内收到回执 ⇒ 事件循环有响应。
 ///
-/// ⛔ **必须用 `recv_timeout` 而不是 `recv`**：后者在事件循环僵死时会永久挂住调用线程
+/// ✗ **必须用 `recv_timeout` 而不是 `recv`**：后者在事件循环僵死时会永久挂住调用线程
 /// （详见 [`spawn_watchdog`] 的注释）。抽成独立函数是为了让
 /// 这条契约有单测锚点：把它改回 `recv`，`probe_wait_returns_false_instead_of_hanging`
 /// 会直接挂死（即失败）。
@@ -307,13 +307,13 @@ fn should_log_heartbeat(round: u64) -> bool {
     round.is_multiple_of(HEARTBEAT_EVERY_ROUNDS)
 }
 
-/// 本轮 sleep 间隔是否长到可判定「系统经历过休眠 / 唤醒」（P2-4）。
+/// 本轮 sleep 间隔是否长到可判定「系统经历过休眠 / 唤醒」。
 ///
 /// 期望 ~3s（[`WATCHDOG_ROUND_INTERVAL`]）；超过 8s 说明中间发生了挂起 ——
 /// Suspend 期间渲染进程被暂停，唤醒后需主动 Resume WebView2。
 ///
-/// ⚠️ 阈值与节奏**必须同步**：B7 把节奏从 15s 改成 3s 时，这里的 20s 若不同步下调，
-/// 阈值就永远够不到，休眠唤醒检测会彻底失效。抽成纯函数以便边界单测。
+/// ⚠ 阈值与节奏**必须同步**：节奏 3s、阈值 20s，只许成对调整——单独改一方，
+/// 判据就够不到（或误报），休眠唤醒检测会彻底失效。抽成纯函数以便边界单测。
 fn is_time_jump(elapsed: std::time::Duration) -> bool {
     elapsed > std::time::Duration::from_secs(8)
 }
@@ -322,7 +322,7 @@ fn is_time_jump(elapsed: std::time::Duration) -> bool {
 ///
 /// 取非 0（BSD sysexits 的 `EX_SOFTWARE`）：这条路径是「事件循环僵死后的自愈」，
 /// 不是正常关闭 —— 非 0 才能让任务管理器 / 事件日志 / 外部守护脚本把它与用户
-/// 主动退出区分开——用 0 的话异常退出在外部看来与正常关闭无异（P2-4）。
+/// 主动退出区分开——用 0 的话异常退出在外部看来与正常关闭无异。
 const EXIT_CODE_WATCHDOG_RESTART: i32 = 70;
 
 /// 事件循环僵死自愈：spawn 自身新实例后立即退出当前进程。
@@ -336,7 +336,7 @@ fn watchdog_self_restart() {
     process::set_exiting();
     process::append_log("[watchdog] EVENT LOOP STUCK — self-restarting");
     // 退出前投递一次 WM_CLOSE，让音频 STA 线程反注册 IMMNotificationClient 与
-    // 各设备/会话回调（P2-4）。本路径直接 process::exit，不经 RunEvent::Exit，
+    // 各设备/会话回调。本路径直接 process::exit，不经 RunEvent::Exit，
     // 不显式投递就会带着已注册的回调被进程直接丢弃。
     // `request_shutdown` 内部是 **PostMessageW 异步投递、不等待**，
     // 故在「主线程已僵死」的本场景下也不会卡住看门狗线程。
@@ -344,7 +344,6 @@ fn watchdog_self_restart() {
     let exe = std::env::current_exe().unwrap_or_default();
     if exe.as_os_str().is_empty() {
         // 走 process::exit 不经过 RunEvent::Exit，故此处显式排空日志与配置落盘队列
-        // （B5 / B11）
         process::flush_log();
         crate::config::flush_persist();
         std::process::exit(EXIT_CODE_WATCHDOG_RESTART);
@@ -395,14 +394,14 @@ fn spawn_dev_open_settings(app: &tauri::AppHandle) {
     }
 }
 
-/// 启动任务栏 widget（B3-A）：**按配置**决定挂载/拆除，并装上事件监听与兜底循环。
+/// 启动任务栏 widget：**按配置**决定挂载/拆除，并装上事件监听与兜底循环。
 ///
-/// ⛔⛔ **必须在主线程（tao 事件循环线程）上同步调用**，不能 spawn 到子线程：
+/// ✗ **必须在主线程（tao 事件循环线程）上同步调用**，不能 spawn 到子线程：
 ///   窗口**随创建线程退出而销毁** —— 子线程挂完就结束，窗口立刻消失。
 ///   tao 主线程会一直泵消息，是唯一安全的宿主。
 ///
-/// ⭐ **本函数不再由环境变量决定是否运行**（自里程碑 3 起）：监听与兜底循环是
-///   「设置页能实时控制窗口」的前提，必须无条件装上；是否显示窗口由 `config` 决定
+/// ✓ 监听与兜底循环是「设置页能实时控制窗口」的前提，**必须无条件装上**；
+///   是否显示窗口由 `config` 决定
 ///   （判据见 `taskbar_widget::should_show`）。
 ///
 /// 三个**开发门控**变量（自动化验收用，不影响正常启动）：
@@ -411,37 +410,36 @@ fn spawn_dev_open_settings(app: &tauri::AppHandle) {
 ///   · `PM_DEV_TASKBAR_WIDGET_PROBE=1`  —— 挂载后 **3 秒**再 `probe()` 一次（验证「挂上后没掉」）
 #[cfg(target_os = "windows")]
 fn spawn_taskbar_widget_dev(app: &tauri::AppHandle) {
-    // ⭐ 无条件安装（**不再要求「先挂载成功」**）—— 这是「设置页改了没用」的关键修复：
-    //    用户勾选设备的那一刻窗口**还不存在**，若等挂载成功才装监听，就永远收不到
+    // ✓ 监听与兜底循环**无条件安装**：用户勾选设备的那一刻窗口**还不存在**，若等挂载成功才装监听，就永远收不到
     //    那次 `config-changed`（先有鸡还是先有蛋）。未挂载时这些监听的成本仅为
     //    「事件到来后一次立即返回的早退」，可以忽略。
-    // ⭐ 音乐后台线程**按需启动**：只在**音乐开关开着**时才起。
+    // ✓ 音乐后台线程**按需启动**：只在**音乐开关开着**时才起。
     //    依据：面板候选集口径下，音乐开关关着 ⇒ 音乐**永不是候选**
-    //    （Wiki 15 §8.6.3）⇒ 显示层不需要知道有没有会话 ⇒ 那条线程与全部 WinRT
+    //    （Wiki 15 §10.5）⇒ 显示层不需要知道有没有会话 ⇒ 那条线程与全部 WinRT
     //    会话对象没有存在的理由。
-    // ⛔ 但**起来之后就不再停**：「有没有会话」是运行时才知道的事，会话出现 / 消失
+    // ✗ 但**起来之后就不再停**：「有没有会话」是运行时才知道的事，会话出现 / 消失
     //    要能触发面板可用性变化 ⇒ 晚启动就永远收不到那次变化。
     //    依据：两个组件都关时实测省 11 MB 工作集 / 3 MB 私有内存、7 条线程，
     //    空闲 CPU 从 1.44% 降到 0.10%（口径：生效配置 exe 侧 config.toml，预热 55s 采样 90s）。
     crate::taskbar_widget::ensure_music_worker(app);
-    // ⭐ 自动位置的占用区探针：**无条件安装**（判据同上一段——「位置是不是
+    // ✓ 自动位置的占用区探针：**无条件安装**（判据同上一段——「位置是不是
     //    auto」是运行时才知道的事，用户随时可能在设置页切过去）。
-    //   ⛔ 线程起来后只在自动开着时才真的采数（其余时候空转 1s），
+    //   ✗ 线程起来后只在自动开着时才真的采数（其余时候空转 1s），
     //     所以「无条件安装」不等于「无条件烧 UIA」。
     crate::taskbar_layout::ensure_probe();
     crate::taskbar_widget::install_event_listeners(app);
     crate::taskbar_widget::start_refresh_loop(app);
 
-    // ⭐ 启动期按**配置**决定是否显示。⛔ 走统一入口 `apply_from_config` 而不是直接
+    // 启动期按**配置**决定是否显示。✗ 走统一入口 `apply_from_config` 而不是直接
     //    `spawn_widget`：与「配置变更期」共用同一判据，避免两处分叉
     //    （典型症状是「改了设置要重启才生效」）。
     crate::taskbar_widget::apply_from_config(app);
 
     // ── 开发门控：强制挂载（覆盖上面的配置判据）──────────────────────────────
-    // ⚠️ 这里**同步**调用是安全的：本函数就在主线程上跑。
+    // ⚠ 这里**同步**调用是安全的：本函数就在主线程上跑。
     //    与 `apply_from_config` 投递的异步挂载是**同一个幂等操作**
     //    （`spawn_widget` 内已加「已挂且存活 ⇒ 跳过」），不会挂出两个窗口。
-    // ⛔ 刻意**不用**「不满足就提前 return」的写法：下面的 PROBE / DESTROY 两个门控
+    // ✗ 刻意**不用**「不满足就提前 return」的写法：下面的 PROBE / DESTROY 两个门控
     //    要能**单独**使用 —— 尤其 PROBE，正是用来观测「未强制挂载时配置驱动的真实状态」。
     if std::env::var("PM_DEV_TASKBAR_WIDGET").is_ok() {
         let report = crate::taskbar_widget::spawn_widget();
@@ -451,17 +449,17 @@ fn spawn_taskbar_widget_dev(app: &tauri::AppHandle) {
             verdict, report.hwnd, report.reparent_err, report.parent, report.taskbar
         ));
 
-        // ⭐ 挂载成功才首刷：未挂上时刷新没有消费方（`refresh_async` 会立即早退）。
-        // ⚠️ 监听与兜底循环已在函数开头无条件装好，这里**不要**重复安装（虽幂等，但会误导读者）。
+        // ✓ 挂载成功才首刷：未挂上时刷新没有消费方（`refresh_async` 会立即早退）。
+        // ⚠ 监听与兜底循环已在函数开头无条件装好，这里**不要**重复安装（虽幂等，但会误导读者）。
         if report.ok() {
             // 立即首刷：不等 3s 延迟，让内容尽快出现
             crate::taskbar_widget::refresh_async();
         }
     }
 
-    // ⭐ 延迟复核：验证「配置驱动的挂载状态是否符合预期」+「挂载后不会自己掉」
+    // 延迟复核：验证「配置驱动的挂载状态是否符合预期」+「挂载后不会自己掉」
     //    （Explorer 重建 / 任务栏替换会让 GetParent 变）。
-    //    ⭐ 本门控**可单独使用**（不设 `PM_DEV_TASKBAR_WIDGET`）—— 那正是观测
+    //    本门控**可单独使用**（不设 `PM_DEV_TASKBAR_WIDGET`）—— 那正是观测
     //    「配置说该显示 / 不该显示」时真实状态的方式（want/mounted 两个值一眼可判）。
     if std::env::var("PM_DEV_TASKBAR_WIDGET_PROBE").is_ok() {
         tauri::async_runtime::spawn(async move {
@@ -497,7 +495,7 @@ fn spawn_taskbar_widget_dev(app: &tauri::AppHandle) {
 
 /// 诊断用：把 `WidgetItem` 打成一行可读文本。
 ///
-/// ⚠️ 屏幕上的格式已**不含设备名**，但**日志里保留名字**
+/// ⚠ 屏幕上的格式已**不含设备名**，但**日志里保留名字**
 ///   —— 排查「哪台设备读不出数据」时，知道是**哪一台**才有意义。
 #[cfg(target_os = "windows")]
 fn format_item_debug(it: &crate::taskbar_widget::WidgetItem) -> String {
@@ -612,17 +610,17 @@ fn spawn_startup_update_check(app: &tauri::AppHandle) {
 
 /// 看门狗线程：心跳 + 事件循环探活 + 唤醒恢复。
 ///
-/// 探针原理（B7 改写）：主线程能否在 [`PROBE_REPLY_TIMEOUT`] 内执行一个**纯内存**
+/// 探针原理：主线程能否在 [`PROBE_REPLY_TIMEOUT`] 内执行一个**纯内存**
 /// 的排队任务。连续 2 次超时（≈10s）判定僵死，自动重启自身进程自愈。
 /// 时间跳变检测：唤醒后主动 Resume WebView2（仅针对**休眠唤醒**这一类，见下方范围限定）。
 ///
-/// ⚠️ **范围限定**：**「B 类僵死」不是「运行期窗口冻结」的解释。**
-/// 实测（`AppHangTransient` / 退出码 `0xcfffffff`）证明那次冻结的根因是**锁序死锁（P0-4）**：
+/// ⚠ **范围限定**：**「B 类僵死」不是「运行期窗口冻结」的解释。**
+/// 实测（`AppHangTransient` / 退出码 `0xcfffffff`）证明锁序死锁能冻结整个进程：
 /// 子线程持配置锁调菜单 API（`run_item_main_thread!` = 无超时 `rx.recv()`）⇄ 主线程等同一把
 /// 配置锁 ⇒ 永久互等。**看门狗救不回这一类**——本函数的探活同样依赖主线程。
 /// 遇到「窗口完全无响应」请**先查锁序**（登记表见 `state.rs` 模块文档）。
 ///
-/// ⛔ **不得**改回「`spawn` 一个线程调 Tauri API + 同步等待」的写法：
+/// ✗ **不得**改回「`spawn` 一个线程调 Tauri API + 同步等待」的写法：
 /// `w.is_visible()` 内部是 `run_on_main_thread(..)` +
 /// `rx.recv()`，**无超时地同步等待主线程**。事件循环真僵死时它永不返回，于是：
 /// ① **每轮泄漏一个永久挂住的探针线程**（本循环 3s 一轮）；
@@ -656,7 +654,7 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
             // 时间跳变检测：期望 ~3s，>8s 说明系统经历过休眠/唤醒。
             // 唤醒后主动 Resume WebView2 渲染进程（Suspend 期间渲染暂停）。
             //
-            // ⚠️ 基准点 `last_instant` 必须取在**本轮探活结束之后**（见循环末尾），
+            // ⚠ 基准点 `last_instant` 必须取在**本轮探活结束之后**（见循环末尾），
             // 即只度量 sleep 间隔。若按直觉取在本行（sleep 之后、探活之前），
             // 上一轮探活的超时耗时（最长 2s）会叠加进下一轮间隔，使 3s 变成
             // 5.008s —— 虽然仍够不到 8s 阈值，但这个「基准点位置」的约定必须守住：
@@ -674,7 +672,7 @@ fn spawn_watchdog(app: &tauri::AppHandle) {
                 }
             }
 
-            // ── 探活（B7）───────────────────────────────────────────────
+            // ── 探活───────────────────────────────────────────────
             let (tx, rx) = std::sync::mpsc::channel();
             let queued = app_handle.run_on_main_thread(move || {
                 EVENT_LOOP_TICK.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -716,7 +714,7 @@ fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     match event {
         tauri::WindowEvent::Focused(focused) => {
             if window.label() == "popup" && !focused {
-                // ⛔ 焦点移入自家 webview 子窗不算失焦：点页面空白时 Chromium
+                // ✗ 焦点移入自家 webview 子窗不算失焦：点页面空白时 Chromium
                 // 子窗经附件输入队列取走键盘焦点，popup 收 WM_KILLFOCUS 而前台/
                 // 激活/捕获不变（真机取证：fg=popup focus=Chrome 子窗 active=
                 // popup capture=popup）——照单全收即「点页面空白就收起」。
@@ -816,7 +814,7 @@ fn main() {
             0x2, // COINIT_APARTMENTTHREADED
         );
         if hr < 0 {
-            // 区分「公寓模型冲突」与真失败（P2-5）：主线程本该是最先初始化 COM 的，
+            // 区分「公寓模型冲突」与真失败：主线程本该是最先初始化 COM 的，
             // 出现 RPC_E_CHANGED_MODE 说明有别的东西抢先把主线程定成了 MTA
             // ⇒ 与「进程内统一 STA」的约定冲突，值得单独告警。
             if crate::audio::is_apartment_mode_conflict(hr) {
@@ -858,7 +856,7 @@ fn main() {
             tauri_plugin_window_state::Builder::default()
                 // popup 每次点击都重定位，持久化无意义且会以旧物理坐标覆盖新算位置
                 .with_denylist(&["popup"])
-                // ⛔ 必须剔除 DECORATIONS 位：插件恢复时按存量文件调
+                // ✗ 必须剔除 DECORATIONS 位：插件恢复时按存量文件调
                 // set_decorations（旧版有框时代的 decorated:true 已固化在
                 // .window-state.json）⇒ tao flags 的 MARKER_DECORATIONS 永久
                 // 置位 ⇒ 此后每次 apply_diff（含 toggleMaximize 的 MAXIMIZED
@@ -884,7 +882,7 @@ fn main() {
             commands::get_cached_devices,
             commands::get_taskbar_devices,
             commands::get_selectable_devices,
-            // ⛔ `get_selectable_devices` / `toggle_pinned_taskbar_device` 仍供
+            // ✗ `get_selectable_devices` / `toggle_pinned_taskbar_device` 仍供
             //   **设置页的「移除」**用（按 key+fallback 删净命中项）；
             //   设备**添加**已改到弹出窗口右键菜单，走下面这个「按 name 解析」的接口
             //   （前端算不出 `fallback`，必须由后端解析，否则会出现第二套判据）。
@@ -989,8 +987,8 @@ fn main() {
             // 开发调试：设置此环境变量时自动打开设置窗口（用于自动化检测）
             spawn_dev_open_settings(app.handle());
 
-            // 开发调试：挂载任务栏 widget（B3-A 里程碑 1）。
-            // ⛔ 必须在 setup 回调（tao 主线程、常驻泵消息）里**同步**调用，见函数注释。
+            // 开发调试：挂载任务栏 widget。
+            // ✗ 必须在 setup 回调（tao 主线程、常驻泵消息）里**同步**调用，见函数注释。
             spawn_taskbar_widget_dev(app.handle());
 
             // 启动时检测更新（仅非 autostart 模式）
@@ -1009,7 +1007,7 @@ fn main() {
         Ok(app) => app,
         Err(e) => {
             show_error_box(&format!("应用初始化失败：\n{}", e));
-            // 日志已改为独立写线程（B5）、配置落盘已改为写线程（B11），
+            // 日志已改为独立写线程、配置落盘已改为写线程，
             // 退出前须等两个队列都排空，否则启动期日志与刚写入的设置会丢
             crate::process::flush_log();
             crate::config::flush_persist();
@@ -1028,9 +1026,9 @@ fn main() {
         // 的必经点，在此等日志队列排空，避免丢掉关停路径的最后几行——
         // 那恰是排查时最想看的部分。flush 幂等（队列已空则立即返回）。
         //
-        // 配置落盘同理（B11）：`with_config_mut` 只把快照交给写线程就返回，
+        // 配置落盘同理：`with_config_mut` 只把快照交给写线程就返回，
         // 不在此排空的话，「改完设置立刻退出」会丢掉最后一次改动。
-        // 这里也是 B11「异常终止可能丢最后一次设置」那个代价的**收窄点**——
+        // 这里也是「异常终止可能丢最后一次设置」那个代价的**收窄点**——
         // 只有崩溃 / 被强杀才落在窗口内。
         RunEvent::Exit => {
             crate::config::flush_persist();
@@ -1066,7 +1064,7 @@ mod tests {
             .expect("取线程 id 的线程不应 panic")
     }
 
-    // ── P2-4：看门狗判据的边界 ─────────────────────────
+    // ── 看门狗判据的边界 ─────────────────────────
 
     #[test]
     fn should_restart_only_after_two_consecutive_timeouts() {
@@ -1076,7 +1074,7 @@ mod tests {
         assert!(should_restart(3), "持续僵死应继续重启");
     }
 
-    /// B7 把看门狗节奏从 15s 收紧到 3s，阈值必须同步下调（20s → 8s）——
+    /// 看门狗节奏 3s，阈值必须同步下调（20s → 8s）——
     /// 否则阈值永远够不到，休眠唤醒检测会**彻底失效**（且没有任何报错）。
     #[test]
     fn is_time_jump_is_strictly_greater_than_8s() {
@@ -1093,9 +1091,9 @@ mod tests {
         );
     }
 
-    // ── B7：探活不再泄漏线程 ───────────────────────────
+    // ── 探活不再泄漏线程 ───────────────────────────
 
-    /// B7 的核心契约：事件循环僵死时，等待侧必须**限时返回 false**，不得挂住。
+    /// 核心契约：事件循环僵死时，等待侧必须**限时返回 false**，不得挂住。
     ///
     /// 可证伪性：把 `await_event_loop_reply` 里的 `recv_timeout` 改回 `recv`，
     /// 本用例会直接**挂死**（= 失败），而不是侥幸通过——无超时同步等待正是
@@ -1242,7 +1240,7 @@ mod tests {
         );
     }
 
-    /// 真装 hook 的集成验证（B12 验收要求）：后台线程 panic 必须
+    /// 真装 hook 的集成验证（验收要求）：后台线程 panic 必须
     /// ① 完成栈展开（RAII 守卫被释放）、② 不走弹框分支。
     ///
     /// 可证伪性：把 `PanicSite::shows_dialog` 改成恒 `true`，第三条断言转红。

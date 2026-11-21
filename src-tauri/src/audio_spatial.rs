@@ -91,7 +91,7 @@ const PACKAGE_CACHE_TTL: Duration = Duration::from_secs(60);
 fn is_package_registered_for_user(family: &str) -> bool {
     let cache = PACKAGE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     // 检查缓存。守卫必须在本块结束前释放：下面的 WinRT 查询很慢，
-    // 持锁执行会把并发查询全部串行化（P2-11：改用统一入口，中毒时不再静默跳过）
+    // 持锁执行会把并发查询全部串行化（改用统一入口，中毒时不再静默跳过）
     {
         let guard = crate::state::lock_unpoisoned(cache);
         if let Some((result, time)) = guard.get(family) {

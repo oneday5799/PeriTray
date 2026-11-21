@@ -1,6 +1,6 @@
 """任务栏 widget「图标放大 + 右上电量 / 右下音量」布局的真机效果截图。
 
-⭐ 与 `shot-widget-m3.py` 的差别：这里**同时 pin 两台**，刻意覆盖两种取值形态：
+✓ 与 `shot-widget-m3.py` 的差别：这里**同时 pin 两台**，刻意覆盖两种取值形态：
   · 一台**有音频端点**的设备  ⇒ 右下角应显示音量百分比（或「静音」）
   · 一台**无音频端点**的设备  ⇒ 右下角应显示 `N/A`（本次用户要求的降级形态）
   ⇒ 一张图就能同时验证「右上/右下分列」与「缺失显示 N/A」两件事。
@@ -50,7 +50,7 @@ def grab(y0, height):
     mem = g.CreateCompatibleDC(hdc)
     hbm = g.CreateCompatibleBitmap(hdc, cx, height)
     g.SelectObject(mem, hbm)
-    # ⛔ 抓分层窗必须加 CAPTUREBLT，否则 widget 内容抓不到
+    # ✗ 抓分层窗必须加 CAPTUREBLT，否则 widget 内容抓不到
     g.BitBlt(mem, 0, 0, cx, height, hdc, 0, y0, SRCCOPY | CAPTUREBLT)
     bi = BIH()
     bi.biSize, bi.biWidth, bi.biHeight = ctypes.sizeof(BIH), cx, -height
@@ -117,7 +117,7 @@ p = subprocess.Popen([EXE], cwd=WD, env=env)
 time.sleep(9)
 
 # 挑两台：一台有音频端点、一台没有（键鼠）—— 覆盖「有值」与「N/A」两种右下角。
-# ⛔ 必须用 `get_taskbar_devices`（返回完整 `PhysicalDevice`）来挑：
+# ✗ 必须用 `get_taskbar_devices`（返回完整 `PhysicalDevice`）来挑：
 #    `get_selectable_devices` 只返回 {key,name,fallback,sources,pinned}，
 #    **没有** `audio_device_id` / `battery` ⇒ 用它做过滤永远匹配不到（实测 pinned=[]）。
 PIN = ("(async () => {"

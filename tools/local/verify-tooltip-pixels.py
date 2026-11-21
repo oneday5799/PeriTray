@@ -4,10 +4,10 @@
   Q2  文本能否渲染？（4 条设备名是否被真正画到屏幕上）
   Q3  会不会被任务栏盖住？
 
-⭐ 关键手法：`TTM_ACTIVATE` 是**公开 API**，能让 tooltip 在**指定 uId** 上确定性显示
+✓ 关键手法：`TTM_ACTIVATE` 是**公开 API**，能让 tooltip 在**指定 uId** 上确定性显示
 ⇒ 不依赖鼠标（**本机无法注入鼠标**，MEMORY.md §3）也能验收。
 
-⚠️ 为什么必须「激活后立刻抓」：tooltip 显示约 5 秒后自动隐藏
+⚠ 为什么必须「激活后立刻抓」：tooltip 显示约 5 秒后自动隐藏
 ⇒ 应用启动时激活、探针稍后才截图，必然扑空（本次首版就扑空了，
    读到 `IsWindowVisible=False` 而差点误判「不显示」）。
 """
@@ -22,8 +22,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 u = ctypes.WinDLL("user32", use_last_error=True)
 g = ctypes.WinDLL("gdi32", use_last_error=True)
 
-# ⭐ 本机 125% 缩放：观测进程必须先声明 PER_MONITOR_AWARE_V2，
-#    否则坐标整体错位（Wiki 15 §9.1 记着这个坑）。
+# ✓ 本机 125% 缩放：观测进程必须先声明 PER_MONITOR_AWARE_V2，
+#    否则坐标整体错位（Wiki 15 §14.1 记着这个坑）。
 u.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
 
 TTM_ACTIVATE = 1025
@@ -105,7 +105,7 @@ def grab(x, y, w, h):
     mdc = g.CreateCompatibleDC(sdc)
     bmp = g.CreateCompatibleBitmap(sdc, w, h)
     g.SelectObject(mdc, bmp)
-    # ⛔ 抓合成内容必须带 CAPTUREBLT，否则只拿到桌面背景
+    # ✗ 抓合成内容必须带 CAPTUREBLT，否则只拿到桌面背景
     g.BitBlt(mdc, 0, 0, w, h, sdc, x, y, SRCCOPY | CAPTUREBLT)
     bi = BITMAPINFO()
     bi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
@@ -130,7 +130,7 @@ def main():
             print("[P] 命中 tip 窗 %#x，TTM_GETTOOLCOUNT=%d" % (h, n))
             break
     if not tip:
-        print("❌ FAIL: 找不到注册了工具的 tip 窗")
+        print("✗ FAIL: 找不到注册了工具的 tip 窗")
         return 1
 
     # 2) 激活第 1 条并**立刻**抓屏（tooltip 约 5s 后自动隐藏）
@@ -145,7 +145,7 @@ def main():
           % (r.l, r.t, r.r, r.b, vis))
     w, h = r.r - r.l, r.b - r.t
     if w <= 0 or h <= 0:
-        print("❌ FAIL: tip 矩形退化")
+        print("✗ FAIL: tip 矩形退化")
         return 1
 
     buf = grab(r.l, r.t, w, h)
@@ -166,22 +166,22 @@ def main():
     print("=" * 66)
 
     # ── 判据 ──────────────────────────────────────────────────────
-    # ⭐ 判据选「**色彩多样性**」而非「某��精确颜色」：tooltip 表面 + 边框 + 阴影 +
+    # ✓ 判据选「**色彩多样性**」而非「某��精确颜色」：tooltip 表面 + 边框 + 阴影 +
     #   抗锯齿文本 ⇒ 若真的渲染出来，**必然**存在多种颜色；任务栏是近乎纯色的一条
     #   ⇒ 单一颜色占 >92% 判为「没渲染」。
-    #   ⛔ 不用绝对亮度差（同 Wiki 15 §9.2 记的坑：那是背景的函数）。
+    #   ✗ 不用绝对亮度差（同 Wiki 15 §14.2 记的坑：那是背景的函数）。
     distinct = len([c for c, k in hist.items() if k >= 3])
     dominant = top[0][1] / float(tot)
     print("")
     print("判据：颜色种类(≥3px)=%d，主流色占比=%.1f%%" % (distinct, 100 * dominant))
     if distinct < 8:
-        print("❌ FAIL: 区域内几乎纯色 ⇒ tooltip **没有**真正渲染到屏幕上")
+        print("✗ FAIL: 区域内几乎纯色 ⇒ tooltip **没有**真正渲染到屏幕上")
         print("   （tip 窗存在 ≠ 被画出来；Wiki 15 §E.4 记着这个教训）")
         return 1
     if dominant > 0.92:
-        print("❌ FAIL: 主流色占比过高 ⇒ 抓到的是任务栏本身，tooltip 被盖住了")
+        print("✗ FAIL: 主流色占比过高 ⇒ 抓到的是任务栏本身，tooltip 被盖住了")
         return 1
-    print("✅ PASS: 区域内有 %d 种颜色 ⇒ tooltip 已渲染，且**未被**任务栏盖住" % distinct)
+    print("✓ PASS: 区域内有 %d 种颜色 ⇒ tooltip 已渲染，且**未被**任务栏盖住" % distinct)
     return 0
 
 

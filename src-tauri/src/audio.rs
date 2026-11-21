@@ -27,7 +27,7 @@ pub struct AudioDevice {
     /// `name` 的**括号内核心名**（`耳机 (小爱音箱-9205)` → `小爱音箱-9205`），
     /// 由后端 `dedup::core_name` 算出。
     ///
-    /// ⭐ **为什么必须由后端给**：前端需要它做「改名表」的短名回退查找，而
+    /// ✓ **为什么必须由后端给**：前端需要它做「改名表」的短名回退查找，而
     ///   `core_name` 会额外剥 17 种蓝牙协议后缀（` Stereo` / ` LE` / ` A2DP SNK` …），
     ///   而 JS 侧 `simplifyDeviceName` 只取最外层括号内容、不剥后缀 ⇒ 两套口径。
     ///   让前端自己推 ⇒ 遇到 `扬声器 (小爱音箱-9205 Stereo)` 这类名字时
@@ -45,7 +45,7 @@ pub struct AudioDevice {
     /// 本端点的**编码身份键**（`audio_endpoint_key_from`，容器可用取 `c:`，
     /// 否则退 `i:SWD\MMDEVAPI\{id}`）。音量页右键「修改信息」要把它传给后端，
     /// 让类型/连接覆盖落进与设备页、任务栏**同一套**身份键空间。
-    /// ⛔ 前端不得自己推键（与 `core_name` 由后端下发同一条纪律）。
+    /// ✗ 前端不得自己推键（与 `core_name` 由后端下发同一条纪律）。
     pub device_key: String,
 }
 
@@ -88,7 +88,7 @@ pub(crate) fn is_apartment_mode_conflict(hr: i32) -> bool {
 
 /// 确保当前线程已初始化 COM（幂等调用）。
 ///
-/// **显式契约（P2-5）**：以下三条是全进程 COM 约定的唯一书面口径：
+/// **显式契约**：以下三条是全进程 COM 约定的唯一书面口径：
 /// - 本项目**进程内统一使用 STA**（`COINIT_APARTMENTTHREADED`），且**从不调用
 ///   `CoUninitialize`**：COM 在整个进程生命周期内保持可用，故各处只做「确保」，
 ///   不做配对释放。将来若要加反初始化，必须同时审视 `audio_notify` 的 STA 线程
@@ -127,11 +127,11 @@ unsafe fn with_enumerator<R>(f: impl FnOnce(&IMMDeviceEnumerator) -> R) -> Resul
 /// 读取 COM 分配的 PWSTR 到 Rust String 后释放 CoTaskMem 内存。
 /// 用于 GetId / GetDisplayName / GetSessionInstanceIdentifier 等返回 PWSTR 的 API。
 ///
-/// ⛔ null 必须闸住返回空串：MMDevAPI 的 id/显示名类 API 在设备/会话建立拆除
+/// ✗ null 必须闸住返回空串：MMDevAPI 的 id/显示名类 API 在设备/会话建立拆除
 ///   瞬窗可能返回 null，而 `to_string()` 内部直接 `wcslen(self.0)`
 ///   （windows-strings pcwstr.rs 的 `PWSTR::len`），null 一触即 AV。
 ///   取证与调用链 → Wiki 07 §16。
-/// ⚠️ 空串语义由调用点收尾：GetDisplayName 的调用点已有
+/// ⚠ 空串语义由调用点收尾：GetDisplayName 的调用点已有
 ///   `is_empty() → "Unknown App"` 分支，GetId 的调用点用 `unwrap_or_default()`。
 pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
     // #29 先保存原始指针，确保无论 to_string 成功与否都能释放 COM 内存
@@ -148,7 +148,7 @@ pub(crate) unsafe fn pwstr_to_string(pwstr: PWSTR) -> Result<String> {
 
 /// 把音量标量收敛到 `[0.0, 1.0]`。
 ///
-/// ⚠️ 不能直接写 `v.clamp(0.0, 1.0)`：`f32::max` 会把 NaN 折成另一个操作数
+/// ⚠ 不能直接写 `v.clamp(0.0, 1.0)`：`f32::max` 会把 NaN 折成另一个操作数
 /// （`f32::NAN.max(0.0) == 0.0`），而 `clamp` 对 NaN **原样返回 NaN** ⇒ 会把 NaN
 /// 交给 `SetMasterVolumeLevelScalar` / `SetMasterVolume`，换来一个 `E_INVALIDARG`。
 /// 收敛点收成一处，既保住「NaN 视为 0.0」的既有语义，也让 `clippy::manual_clamp` 无话可说。
@@ -253,7 +253,7 @@ unsafe fn get_device_name(device: &IMMDevice) -> Result<String> {
 
 /// 读**单个**端点的当前音量。
 ///
-/// ⭐ 为什么不复用 `enumerate_output_devices()`：任务栏窗口的滚轮调音量要做
+/// ✓ 为什么不复用 `enumerate_output_devices()`：任务栏窗口的滚轮调音量要做
 ///   **读—改—写**，而全量枚举要几百毫秒（且随设备数增长）；每滚一格都枚举一遍
 ///   会让快速滚动明显滞后。这里只 `GetDevice` + `Activate` 目标端点，与
 ///   `set_device_volume` 完全对称。
@@ -347,12 +347,12 @@ pub fn toggle_device_mute(device_id: &str) -> Result<()> {
                 if force_mute {
                     // 恢复静音前的音量。
                     //
-                    // ⚠️ `remove` 的结果必须先落到**独立语句**再进 `if let`：本仓是
+                    // ⚠ `remove` 的结果必须先落到**独立语句**再进 `if let`：本仓是
                     // edition 2021，`if let` 的临时量存活到整个 `if` 块结束，若写成
                     // `if let Some(prev) = lock(..).remove(&name) { SetMasterVolumeLevelScalar(..) }`，
                     // 则这个 COM 调用会在**持锁状态下**执行。拆成语句后 `MutexGuard`
                     // 在分号处即释放，COM 调用全程无锁。
-                    // 与 `toast.rs` 的 `PREV_TOAST.take()` 是同一类坑（P3-10 锁序登记表 §四）。
+                    // 与 `toast.rs` 的 `PREV_TOAST.take()` 是同一类坑（锁序登记表 §四）。
                     let prev =
                         crate::state::lock_unpoisoned(force_mute_prev_volume()).remove(&name);
                     if let Some(prev) = prev {
@@ -516,11 +516,11 @@ const FLOW_PROBE_TIMEOUT_MS: u64 = 300;
 ///
 /// 枚举/激活失败一律按「无流」处理（返回 `false`）：调用方只把它当判活采样。
 pub fn relay_session_flowing(device_name: &str) -> bool {
-    // ⛔ 采样必须经专用 STA 工作线程（`spawn_flow_sampler`），不得在 MTA 线程
+    // ✗ 采样必须经专用 STA 工作线程（`spawn_flow_sampler`），不得在 MTA 线程
     //   直调探测本体：a2dp 控制器线程是故意 MTA（WinRT 回调免泵，见 a2dp_sink
     //   `controller_main`），而本进程 COM 约定统一 STA —— 直调会让
     //   `ensure_com_initialized` 的公寓冲突告警逐 tick 刷屏。
-    // ⛔ 不据此拆链路：链路关闭由 WinRT StateChanged 驱动（见 a2dp_sink）；
+    // ✗ 不据此拆链路：链路关闭由 WinRT StateChanged 驱动（见 a2dp_sink）；
     //   工作线程无应答（死亡/卡死）同样按「无流」返回并重建通道，下一 tick 自愈。
     let tx = {
         let mut guard = crate::state::lock_unpoisoned(&FLOW_SAMPLER);
@@ -571,8 +571,8 @@ fn spawn_flow_sampler() -> mpsc::Sender<FlowProbe> {
 /// 判据：会话命中规则与 `device_identity::relay_session_matches` 同款
 /// （名含设备名 ∧ 含 A2DP SNK 记号，捕获端点与转发会话同名形）；电表取
 /// 会话控制的 `IAudioMeterInformation` 峰值。
-/// ⛔ 会话存在 ≠ 有流：Sink 武装后手机离场，转发会话仍以 Active 残留
-/// （真机实测 active=true）；⛔ 捕获端点不进 `DEVICE_STATE_ACTIVE` 枚举
+/// ✗ 会话存在 ≠ 有流：Sink 武装后手机离场，转发会话仍以 Active 残留
+/// （真机实测 active=true）；✗ 捕获端点不进 `DEVICE_STATE_ACTIVE` 枚举
 /// （真机实测）——电表是**唯一**流量信号。
 fn relay_session_flow_probe(device_name: &str) -> bool {
     /// 数字静音的电表峰值恒为 0，0.001 只过滤浮点噪声
@@ -657,36 +657,36 @@ unsafe fn find_session_volume(session_id: &str, device_id: &str) -> Result<ISimp
     })?
 }
 
-/// ⭐⭐⭐ **SMTC 会话 → 音频会话的唯一匹配口径**（两套身份体系之间唯一的桥）。
+/// ✓ **SMTC 会话 → 音频会话的唯一匹配口径**（两套身份体系之间唯一的桥）。
 ///
 /// **为什么需要它**：音乐面板的数据源是 SMTC 会话，它的身份是 `AUMID`
 /// （`SourceAppUserModelId`）；而音量只能写在**音频会话**上
 /// （`ISimpleAudioVolume`），那一侧的身份是 **PID**。
-/// ⚠️ **实测平台事实：SMTC 会话既不给 PID、也不给应用显示名**
+/// ⚠ **实测平台事实：SMTC 会话既不给 PID、也不给应用显示名**
 ///   ——`IGlobalSystemMediaTransportControlsSession` 的方法面只有
 ///   `SourceAppUserModelId` + 媒体元数据 + 播放控制，`MediaProperties` 里
 ///   也没有应用名字段。⇒ 只能靠字符串形态匹配。
-/// ⚠️ 实测形态：`com.hoowhoami.echomusic`（Win32 应用自定义 AUMID）、
+/// ⚠ 实测形态：`com.hoowhoami.echomusic`（Win32 应用自定义 AUMID）、
 ///   `Spotify_zpdnekdrzrea0!Spotify`（商店版 PFN + 应用 id）。
 ///   两者都**包含**该应用的 exe 文件名（无扩展名）。
-/// ⭐ 因此本仓的口径是「AUMID 包含 exe 基名」——不需要任何硬编码别名表：
+/// ✓ 因此本仓的口径是「AUMID 包含 exe 基名」——不需要任何硬编码别名表：
 ///   同一件事 AF-Media-Bar 只能靠 `KnownSources` 12 条穷举表兜住，因为那边
 ///   拿不到 pid；本仓能从 pid 查出 exe 名（`app_icon` 里有现成的 LRU），
 ///   动态求出的令牌天然覆盖新应用。
-/// ⛔ **只认「AUMID 包含 exe 基名（不含扩展名）」这一条证据**：exe 基名可能
+/// ✗ **只认「AUMID 包含 exe 基名（不含扩展名）」这一条证据**：exe 基名可能
 ///   短到 `go` / `ms` 这种程度，反向包含会把一堆无关应用判成同一个。
-/// ⛔ **过短的 exe 基名一律拒绝匹配**（`< 3` 字符）：实测最短可信的播放器名
+/// ✗ **过短的 exe 基名一律拒绝匹配**（`< 3` 字符）：实测最短可信的播放器名
 ///   恰为 3 字符（`vlc` / `mpv`），而 1-2 字符的名字（`go`、`ms`）命中纯属
 ///   巧合，改不了音量只会改错声音。
-/// ⛔ **不要**再加「AUMID 含带 `.exe` 的完整文件名」这类证据：实测 AUMID 里
+/// ✗ **不要**再加「AUMID 含带 `.exe` 的完整文件名」这类证据：实测 AUMID 里
 ///   根本不会出现 `.exe`（`com.hoowhoami.echomusic` 就不含），当成必要条件
 ///   会让本机这个唯一在用的应用也匹配不上。
-/// ⭐ **入参是完整 exe 路径**：两条取法（`file_stem`）只在匹配方做一次。
-/// ⛔ **匹配不上就返回空、不改任何音量**：宁可不动，也不要改到别人
+/// ✓ **入参是完整 exe 路径**：两条取法（`file_stem`）只在匹配方做一次。
+/// ✗ **匹配不上就返回空、不改任何音量**：宁可不动，也不要改到别人
 ///   ——那是本仓最怕的静默失效（用户以为在调音乐，实际在调别的应用）。
-/// ⭐⭐ **刻意不做「运行期记忆」**（同类项目有）：记忆一旦记错就永久固化，
+/// ✓ **刻意不做「运行期记忆」**（同类项目有）：记忆一旦记错就永久固化，
 ///   且记忆键只有 AUMID、无法校验重名；这里宁可每次重算。
-/// ⚠️ **已知覆盖缺口**：AUMID 与 exe 名毫无字面关系的应用（实测本机的
+/// ⚠ **已知覆盖缺口**：AUMID 与 exe 名毫无字面关系的应用（实测本机的
 ///   `com.hoowhoami.echomusic` 之所以能工作，是因为它的尾段恰好等于
 ///   exe 名）⇒ 匹配失败、滚轮不动、standard 日志写明原因。要覆盖它需要
 ///   Win32 侧读应用自有 AUMID（只能从进程内读，外部不可得）。
@@ -714,16 +714,16 @@ pub fn media_aumid_matches(aumid: &str, exe_path: &str) -> bool {
 
 /// 找出 AUMID 对应的音频会话（限定在某台设备上）。
 ///
-/// ⭐ **设备口径与弹出窗口的「应用音量」卡片一致**：卡片列表本身就是
+/// ✓ **设备口径与弹出窗口的「应用音量」卡片一致**：卡片列表本身就是
 ///   按设备枚举的（`get_audio_sessions(deviceId)`），所以这里也只在该设备
 ///   的会话里找，而不是把该应用的**所有**设备会话一起改。
-/// ⚠️ 同一 exe 可能有多条会话（如浏览器多进程共用同一端点），此时**全部**
+/// ⚠ 同一 exe 可能有多条会话（如浏览器多进程共用同一端点），此时**全部**
 ///   返回、由调用方写成同一音量——它们本来就是同一个应用。
 pub fn find_media_sessions(aumid: &str, device_id: &str) -> Result<Vec<AudioSession>> {
     let all = enumerate_audio_sessions(device_id)?;
     let mut hit = Vec::new();
     for s in all {
-        // ⚠️ 逐会话把「AUMID ↔ exe 名」两边的原值打出来：匹配不上时**光看
+        // ⚠ 逐会话把「AUMID ↔ exe 名」两边的原值打出来：匹配不上时**光看
         //   「未受理」无法区分「AUMID 与 exe 名毫无关系」（平台限制）与
         //   「exe 路径查不到」（权限/进程已退）——这两种的修法完全不同。
         let exe = crate::app_icon::get_process_exe_path(s.pid);
@@ -746,7 +746,7 @@ pub fn find_media_sessions(aumid: &str, device_id: &str) -> Result<Vec<AudioSess
 
 /// 取系统默认**输出**（eRender / eMultimedia）端点 id。
 ///
-/// ⭐ 与 `enumerate_devices` 里标记 `is_default` 用的是同一次调用口径
+/// ✓ 与 `enumerate_devices` 里标记 `is_default` 用的是同一次调用口径
 ///   （`eMultimedia` 而非 `eCommunications`）⇒ 任务栏滚轮调的那个会话，
 ///   与弹出窗口里 `is_default` 标着的那台设备**必然是同一台**。
 pub fn default_output_device_id() -> Result<String> {
@@ -769,14 +769,14 @@ pub fn default_output_device_id() -> Result<String> {
 
 /// 读「AUMID 对应应用在默认输出设备上的会话音量」（`None` = 取不到）。
 ///
-/// ⭐ 口径与「任务栏音乐面板滚轮调音量」**完全同源**（同一个
+/// ✓ 口径与「任务栏音乐面板滚轮调音量」**完全同源**（同一个
 ///   `default_output_device_id` + 同一个 `find_media_sessions`）⇒ tooltip
 ///   上显示的音量与滚轮改动的量**必然是同一个对象**，不会各读各的。
-/// ⛔ 命中多条时取**第一条**：多条意味着该应用在同设备上有多个会话
+/// ✗ 命中多条时取**第一条**：多条意味着该应用在同设备上有多个会话
 ///   （进程分裂），它们的音量本应一致；滚轮侧是**全部写成同一值**。
 /// 读「AUMID 对应应用在默认输出设备上的那个会话」（`None` = 取不到）。
 ///
-/// ⭐ **一次匹配带回全部所需**：音量（tooltip 第三行 + 滚轮）与 `pid`
+/// ✓ **一次匹配带回全部所需**：音量（tooltip 第三行 + 滚轮）与 `pid`
 ///   （点封面激活窗口只能按 pid 找）都出自这一条会话 ⇒ 两者必然指向同一个
 ///   进程，不会各指各的；而重跑一次匹配等于多枚举一遍全部会话。
 pub fn media_session_of(aumid: &str) -> Option<AudioSession> {
@@ -890,14 +890,14 @@ mod tests {
         }
     }
 
-    /// ⛔ SMTC 会话没有 PID，**唯一的桥是 AUMID 文本包含 exe 名**。
+    /// ✗ SMTC 会话没有 PID，**唯一的桥是 AUMID 文本包含 exe 名**。
     ///
     /// 判别力在两侧：既要认出两类真实 AUMID 形态（Win32 自定义反向域名 /
     /// 商店版 PFN+应用 id），也要**拒绝**两种过度匹配 —— ① 反向包含（exe 名
     /// 更短更泛）；② 过短 exe 名（`go`、`ms` 命中纯属巧合，改不了音量只会
     /// 改错声音）。空串同样必须拒绝：否则任何空 AUMID 都能命中任意会话。
-    /// ⭐ 入参是**完整 exe 路径**：匹配方按 `file_stem` 取不含 `.exe` 的基名。
-    /// ⚠️ 最后一条钉的是**已知的覆盖缺口**，不是期望行为：AUMID 与 exe 名
+    /// ✓ 入参是**完整 exe 路径**：匹配方按 `file_stem` 取不含 `.exe` 的基名。
+    /// ⚠ 最后一条钉的是**已知的覆盖缺口**，不是期望行为：AUMID 与 exe 名
     ///   毫无字面关系时必然匹配不上（本机实测能工作是**侥幸**：AUMID 尾段
     ///   恰好等于 exe 名），此时拒绝、不动音量。
     #[test]
@@ -919,12 +919,12 @@ mod tests {
         ));
         // 恰好 3 字符的名字仍可用（实测 vlc / mpv 就是这个长度）
         assert!(media_aumid_matches("com.vendor.vlc", r"c:\tools\vlc.exe"));
-        // ⛔ 反向包含必须不成立（exe 名更短、且更泛）
+        // ✗ 反向包含必须不成立（exe 名更短、且更泛）
         assert!(
             !media_aumid_matches("go", r"c:\program files\google\chrome.exe"),
             "反向包含会把 go 判成 chrome"
         );
-        // ⛔ 过短的 exe 基名：即使字面被包含也拒绝（巧合命中不算证据）
+        // ✗ 过短的 exe 基名：即使字面被包含也拒绝（巧合命中不算证据）
         assert!(
             !media_aumid_matches("com.vendor.go", r"c:\program files\go\go.exe"),
             "2 字符 exe 名不该作为匹配依据"
@@ -937,7 +937,7 @@ mod tests {
         // 空串
         assert!(!media_aumid_matches("", r"c:\x\y.exe"));
         assert!(!media_aumid_matches("com.hoowhoami.echomusic", "  "));
-        // ⚠️ 已知覆盖缺口：AUMID 与 exe 名毫无字面关系时必然匹配不上
+        // ⚠ 已知覆盖缺口：AUMID 与 exe 名毫无字面关系时必然匹配不上
         //   ⇒ 判否、不动音量。把它钉成判据：改动这条断言前先想清楚缺口是否已修。
         assert!(
             !media_aumid_matches(
@@ -948,7 +948,7 @@ mod tests {
         );
     }
 
-    /// P2-5：公寓模型冲突的识别必须**只命中** `RPC_E_CHANGED_MODE`。
+    /// 公寓模型冲突的识别必须**只命中** `RPC_E_CHANGED_MODE`。
     ///
     /// 判别力在于两侧：既要求认出 0x80010106，也要求不把成功码（S_OK / S_FALSE）
     /// 与邻近的错误码误判为冲突——误判会让正常的幂等命中被打成告警，

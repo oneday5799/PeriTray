@@ -14,12 +14,11 @@ pub fn set_shortcut_recording(recording: bool) {
 
 /// 在 tokio blocking 线程中执行阻塞操作
 ///
-/// ── 命令的线程模型（B4，勿破坏）────────────────────────────────────────
+/// ── 命令的线程模型（勿破坏）────────────────────────────────────────
 /// `#[tauri::command]`（**不带** `(async)`）的**同步**命令，其函数体在**主线程**上
 /// 执行——前端 `invoke` 进来后由 IPC 处理路径直接调用。因此命令体内任何
 /// 阻塞调用都会**直接冻结 UI**：COM（`IPolicyConfig`、WMI）、`ShellExecuteW`、
-/// 文件 I/O、`sync_all()` 均属此列。P0-4 的探针日志已经实证过这一点：死锁当时
-/// 主线程正卡在 `set_window_material` 这个同步命令里。
+/// 文件 I/O、`sync_all()` 均属此列。
 ///
 /// 故凡命令体含上述调用者，一律写成 `#[tauri::command(async)] pub async fn …`
 /// 并把阻塞部分交给本函数（`spawn_blocking`），使其落在 tokio 阻塞线程池上。
@@ -110,7 +109,7 @@ where
 /// 故「缓存为空就回落」**不能留给调用方**：前端漏写这一句既不报错也不告警，
 /// 只会让任务栏的电量整片变空（且「有电量无音频端点」的鼠标/键盘/手柄整条不出现）。
 fn devices_for_taskbar() -> Result<Vec<device::Device>, String> {
-    // ⛔ 用户触发的路径（设置页、选择器）**强制现查**：那是「用户刚点了刷新」，
+    // ✗ 用户触发的路径（设置页、选择器）**强制现查**：那是「用户刚点了刷新」，
     //   拿一份可能已经 10 秒前的数据去回话是错的。
     devices_for_taskbar_within(None)
 }
@@ -123,21 +122,21 @@ pub(crate) fn devices_for_taskbar_within(
     let (cached, age) = crate::state::devices_cache_snapshot();
     let out = devices_for_taskbar_with(cached, age, max_age_ms, || query_devices(false));
     if let Ok(devices) = &out {
-        // ⭐⭐ **写回是这次改动的关键一行**。
+        // ✓ **写回是这次改动的关键一行**。
         //   此前**只有** `tray::refresh_devices_cache` 写缓存，而它在默认配置下
         //   整个循环体被 `if !has_tray && !has_battery_notify { continue; }` 跳过
         //   ⇒ **共享缓存**恒空 ⇒「缓存优先」从未生效，每轮都白付一次
         //   517~684ms 的 `query_devices`。
         //   谁现查谁写回，缓存才会真的热起来。
         //
-        // ⛔⛔ **别把这句读成「电量每次都现查」—— 那是个已证伪的说法。**
+        // ✗ **别把这句读成「电量每次都现查」—— 那是个已证伪的说法。**
         //   `query_devices()` 是四步，**电量值早就在复用后台缓存**：
         //   ① `Win32_PnPEntity` 设备清单（**无缓存**，贵的就是这一步）
         //     ② 蓝牙设备+电量（**有缓存**：`bluetooth::BT_BATTERY` + 单飞守卫）
         //     ③ `Win32_Battery`（**无缓存**）
         //     ④ 2.4G 接收器电量（**有缓存**：`wireless_24g::CACHE`）
-        //   ⇒ 死的不是电量，是**设备清单**。详见 Wiki 15 §8.6.9。
-        //   ⚠️ 无条件写（含「强制现查」路径）：`store_devices_cache` 每次都会盖时间戳，
+        //   ⇒ 死的不是电量，是**设备清单**。详见 Wiki 15 §10.11。
+        //   ⚠ 无条件写（含「强制现查」路径）：`store_devices_cache` 每次都会盖时间戳，
         //   这正是 TTL 判据要的量（「距上次问过 WMI 多久」）。
         if max_age_ms.is_none() {
             standard_log!(
@@ -152,7 +151,7 @@ pub(crate) fn devices_for_taskbar_within(
 
 /// 把转发会话音量绑进任务栏条目（`sessions = None` = 枚举失败）。
 ///
-/// ⛔ **降级语义**：会话枚举失败只意味着手机条目这一轮没有音量，
+/// ✗ **降级语义**：会话枚举失败只意味着手机条目这一轮没有音量，
 ///   不得当作整条取数失败——那会把电量与其它端点一起丢掉（比旧数据更糟）。
 /// 绑定规则全部在 `device_identity::bind_relay_sessions`（唯一实现点），此处只接
 /// 降级与链路闸门取数（Sink 状态机 LinkReady = 捕获端点激活，纯内存读）。
@@ -184,7 +183,7 @@ pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::Physica
     let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
     let mut grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
     // 「修改信息」的用户覆盖（连接方式 / 设备类型图标）优先于自动探测；
-    // ⛔ 同步路径 taskbar_devices_snapshot_within 里有逐句对应的同款调用，勿只改这里
+    // ✗ 同步路径 taskbar_devices_snapshot_within 里有逐句对应的同款调用，勿只改这里
     config::with_config(|c| {
         crate::device_identity::apply_user_overrides(&mut grouped, &c.device_types, &c.conn_kinds)
     });
@@ -206,22 +205,22 @@ pub async fn get_taskbar_devices() -> Result<Vec<crate::device_identity::Physica
 
 /// **同步**版的任务栏设备取数，供任务栏 widget 的后台线程调用。
 ///
-/// ⛔ 与 `get_taskbar_devices` 的**唯一区别**是「同步 + 不用 tokio」：
+/// ✗ 与 `get_taskbar_devices` 的**唯一区别**是「同步 + 不用 tokio」：
 ///   widget 的取数发生在 `spawn_blocking` 线程里，本就**不在 async 上下文**，
 ///   无法 `.await`;而 `run_blocking` 是为「在 async 命令里跑阻塞活」设计的
 ///   （内部用 `tokio::task::spawn_blocking` + 再入运行时）。绕过它直接调同步版本
 ///   既避免多一层线程切换，也避免「在阻塞线程里再进 tokio」的隐患。
 ///
-/// ⭐ **语义必须与 `get_taskbar_devices` 完全一致**（同一套过滤 + pin 补建 + 聚合），
+/// ✓ **语义必须与 `get_taskbar_devices` 完全一致**（同一套过滤 + pin 补建 + 聚合），
 ///   否则 widget 与弹窗会显示不同的设备集合 —— 这正是「判据分叉」类缺陷。
 ///   因此这里**逐句照抄**其数据路径，只把 `run_blocking` 去掉。
 ///
-/// ⚠️ 返回 `Option`：任一环节失败（WMI / 音频枚举）都返回 `None`，让调用方
+/// ⚠ 返回 `Option`：任一环节失败（WMI / 音频枚举）都返回 `None`，让调用方
 ///   **保留旧快照** —— 一次取数失败不该把任务栏内容清空（那比显示旧数据更糟）。
 /// 任务栏设备快照（`max_age_ms` 语义见下）。
 ///
 /// `max_age_ms`：`None` = 强制现查；`Some(ms)` = 设备列表这一半可复用 TTL 内的缓存。
-/// ⚠️ **只作用于设备列表这一半**：音量走 `enumerate_output_devices`，
+/// ⚠ **只作用于设备列表这一半**：音量走 `enumerate_output_devices`，
 ///   那一条**本来就是实时的**（实测 13~15ms），不受此参数影响。
 pub(crate) fn taskbar_devices_snapshot_within(
     max_age_ms: Option<u64>,
@@ -245,7 +244,7 @@ pub(crate) fn taskbar_devices_snapshot_within(
     Some(grouped)
 }
 
-/// 任务栏信息窗「选择设备」列表的数据源：两页**可显示设备的并集**（T3-1）。
+/// 任务栏信息窗「选择设备」列表的数据源：两页**可显示设备的并集**。
 ///
 /// ── 与 `get_taskbar_devices` 的三点区别（**刻意不同，勿合并**）────────────────
 ///   1. **不过滤数据**：凡两页出现即保留，即使既无电量也无音量。选择器的职责是
@@ -256,7 +255,7 @@ pub(crate) fn taskbar_devices_snapshot_within(
 ///      用户也无从取消」的幽灵条目，且**超出并集口径**（Spec §0.4 三）；
 ///   3. **音频取两侧**：并集 = 设备页 ∪ **输出端点** ∪ **输入端点**。输入端点只在
 ///      音量页的会话右键菜单里可见，但选择器要覆盖它们（验收判据 2）。
-///      ⛔ 音频侧**没有**设备侧那条过滤链（`audio.rs` 只按 `DEVICE_STATE_ACTIVE` +
+///      ✗ 音频侧**没有**设备侧那条过滤链（`audio.rs` 只按 `DEVICE_STATE_ACTIVE` +
 ///      方向取数）⇒ 取两页并集天然绕过设备侧全部过滤，这是**设计如此**，别去改
 ///      `query_devices_with` 试图「对齐」两页（会把设备页一起污染）。
 ///
@@ -296,13 +295,13 @@ pub fn get_config() -> Config {
 
 /// 启动期配置解析失败的原因（含备份路径）；`None` = 本次启动读取正常。
 /// 前端在页面加载后调用一次并提示用户——「设置突然全部恢复默认」必须被解释，
-/// 否则会被当成静默丢数据（P1-7）。
+/// 否则会被当成静默丢数据。
 #[tauri::command]
 pub fn get_config_load_error() -> Option<String> {
     config::get_load_error()
 }
 
-/// 注册失败的设备快捷键（P2-12）。空 = 当前没有失败项。
+/// 注册失败的设备快捷键。空 = 当前没有失败项。
 ///
 /// 前端在页面加载时**主动拉取**：失败事件在启动同步时发出，那一刻页面还没加载、
 /// 监听器尚未注册，事件必然落空。而「开机时快捷键被别的程序抢走」正是最常见也
@@ -332,7 +331,7 @@ pub fn set_window_theme(window: tauri::Window, theme: String) {
 /// 覆盖式更新配置——设置页 `saveConfig()` 的**唯一**入口。
 ///
 /// `base` = 前端**上次从后端收到的配置快照**。后端据此算出「用户真正改了哪些字段」
-/// 并只套用这些字段（P1-11，见 `config::merge_config`），从而不会把弹窗侧并发的
+/// 并只套用这些字段（见 `config::merge_config`），从而不会把弹窗侧并发的
 /// 改名 / 隐藏 / 分组等改动整份抹掉。
 ///
 /// `base` 为 `None` 时退回整体覆盖（旧行为）并打**告警**日志——该分支只为兼容，
@@ -428,10 +427,10 @@ fn is_allowed_open_url(url: &str) -> bool {
 /// 打开外部链接。
 /// **必须白名单**：`ShellExecuteW` 会执行任意已注册协议，不加限制时前端一旦被注入
 /// （XSS / 恶意扩展）即可借 `open_url` 用 `file:`、自定义协议等做本地落地，
-/// 而本命令是前端唯一能触达「系统执行」的入口（见代码审查报告 P1-4）。
+/// 而本命令是前端唯一能触达「系统执行」的入口。
 ///
 /// 白名单判定是纯字符串比较，留在主线程完成（校验失败无需付线程切换成本）；
-/// 只有 `ShellExecuteW` 本体交给阻塞线程（B4）。
+/// 只有 `ShellExecuteW` 本体交给阻塞线程。
 #[tauri::command(async)]
 pub async fn open_url(url: String) -> Result<(), String> {
     if !is_allowed_open_url(&url) {
@@ -443,13 +442,13 @@ pub async fn open_url(url: String) -> Result<(), String> {
 
 /// 「修改信息」命令：一次提交设备命名 + 设备类型 + 连接方式三项覆盖。
 ///
-/// - 命名走**归并写入 / 归并删除**（方案 D，逻辑在 `config::apply_device_rename`，
+/// - 命名走**归并写入 / 归并删除**（逻辑在 `config::apply_device_rename`，
 ///   抽成纯函数是为了能被单测钉住 —— 它的失效方式是**静默**的）；
 /// - 类型/连接走**身份键单键写**（`apply_device_type` / `apply_conn_kind`，
 ///   空值 = 清除该键恢复自动探测）。
-/// ⭐ 三个键的稳定性来源不同：命名表是**名字形态**（随显示名漂移，所以要归并），
+/// ✓ 三个键的稳定性来源不同：命名表是**名字形态**（随显示名漂移，所以要归并），
 ///   覆盖两表是**身份键**（跨改名稳定，无需归并）。
-/// ⭐ 改名会漂的是 `device_names` 的键，覆盖两表不受影响 —— 同一提交里
+/// ✓ 改名会漂的是 `device_names` 的键，覆盖两表不受影响 —— 同一提交里
 ///   先改名后写覆盖，键口径互不干扰。
 #[tauri::command]
 pub fn set_device_info(
@@ -566,7 +565,7 @@ pub fn frontend_log(tag: String, msg: String) {
 }
 
 /// 用系统默认程序打开 2.4G 设备数据文件（`create_dir_all` + `write` + `ShellExecuteW`）。
-/// 首启路径还会新建 data 目录与占位文件，全是磁盘 I/O，故整体移出主线程（B4）。
+/// 首启路径还会新建 data 目录与占位文件，全是磁盘 I/O，故整体移出主线程。
 #[tauri::command(async)]
 pub async fn open_24g_device_file() -> Result<(), String> {
     run_blocking(|| {
@@ -587,8 +586,8 @@ const TRAY_DEVICE_LIMIT: usize = 4;
 
 /// 切换「托盘设备」列表中的某个设备：存在则移除，不存在则加入（受上限保护）。
 ///
-/// ── 为什么必须是「只接 `&mut Config` 的单函数」（P2-8）──────────────────
-/// ⛔ **不得**拆成「先 `with_config` 读一次（查重 + 数上限）→ 再 `with_config_mut`
+/// ── 为什么必须是「只接 `&mut Config` 的单函数」──────────────────
+/// ✗ **不得**拆成「先 `with_config` 读一次（查重 + 数上限）→ 再 `with_config_mut`
 /// 写一次」：那是**两次独立加锁**，中间还夹着一次 `run_blocking` 线程切换，于是：
 ///
 /// ```text
@@ -616,7 +615,7 @@ fn try_toggle_tray_device(c: &mut Config, name: &str) -> Result<(), String> {
 #[tauri::command(async)]
 pub async fn toggle_device_tray(app: tauri::AppHandle, name: String) -> Result<(), String> {
     let log_name = name.clone();
-    // 上限拒绝与写入在同一次 `with_config_mut` 内完成（P2-8），并发连点不会击穿上限。
+    // 上限拒绝与写入在同一次 `with_config_mut` 内完成，并发连点不会击穿上限。
     let outcome =
         run_blocking(move || config::with_config_mut(|c| try_toggle_tray_device(c, &name))).await?;
 
@@ -677,13 +676,13 @@ fn normalized_opt(s: Option<&str>) -> Option<String> {
 /// 「新增」分支 ⇒ **卡在「怎么点都取消不掉」**。删全部才能保证
 /// 「点一次 = 状态翻转一次」。
 ///
-/// ⚠️ 由此带来的已知语义（**兜底键的固有代价，不是缺陷**）：两台同名设备共享
+/// ⚠ 由此带来的已知语义（**兜底键的固有代价，不是缺陷**）：两台同名设备共享
 /// `fallback` 时，固定其中一台会让另一台**也显示为已固定**（显示侧本就是如此），
 /// 取消时也一并取消。本函数不做单方面特判——那只会让显示与切换再次分叉。
 /// 判据见 `pinned_toggle_flips_shared_fallback_entry`。
 ///
-/// 与 `try_toggle_tray_device` 同款：**上限检查与写入在同一次 `with_config_mut` 内**
-/// （P2-8），并发连点不会击穿上限；抽成只接 `&mut Config` 的单函数以便直接单测。
+/// 与 `try_toggle_tray_device` 同款：**上限检查与写入在同一次 `with_config_mut` 内**，
+/// 并发连点不会击穿上限；抽成只接 `&mut Config` 的单函数以便直接单测。
 fn try_toggle_pinned_taskbar_device(
     c: &mut Config,
     key: &str,
@@ -753,7 +752,7 @@ pub async fn toggle_pinned_taskbar_device(
 
 /// 设置页「任务栏组件」折叠区的**已钉设备清单**。
 ///
-/// ⭐ 与 `get_selectable_devices` 的分工（**刻意不同，勿合并**）：
+/// ✓ 与 `get_selectable_devices` 的分工（**刻意不同，勿合并**）：
 /// · 那个是「**可勾选**的候选」（两页并集、**不做** pin 补建）⇒ 给「选择器」用；
 /// · 本命令是「**已经钉上**的清单」⇒ 给设置页展开区 + 「移除」按钮用。
 ///   必须**含已断开设备**：用户钉了 5 台、此刻只插着 2 台，那 3 台也要列出来
@@ -767,11 +766,11 @@ pub struct PinnedTaskbarEntry {
     pub key: String,
     /// 最终显示名（`alias` > 全局重命名 > 短名），**后端算好**
     pub name: String,
-    /// ⭐ 是否**在线/已连接**。`false` ⇒ 设置页应置灰呈现「已断开」而非隐藏
+    /// ✓ 是否**在线/已连接**。`false` ⇒ 设置页应置灰呈现「已断开」而非隐藏
     pub connected: bool,
     /// 固定的**兜底键**（`n:<core_name(显示名)>`），「移除」时**必须原样回传**。
     ///
-    /// ⚠️ 为什么清单要带它：`group_taskbar_devices` 产出的 `PhysicalDevice` 不含
+    /// ⚠ 为什么清单要带它：`group_taskbar_devices` 产出的 `PhysicalDevice` 不含
     ///   `fallback` 字段（它内部算完只留 `key`）。而「移除」走
     ///   `toggle_pinned_taskbar_device`，那边**按 `key` + `fallback` 两层删净命中项** ——
     ///   只传 `key` 时，「容器变化后新旧两条键并存」的场景会删不干净，
@@ -779,9 +778,9 @@ pub struct PinnedTaskbarEntry {
     /// ⇒ 这里按**显示侧同一公式**现算（`DeviceKey::Name(core_name(name)).encode()`），
     ///   不让前端参与（`core_name` 在 JS 侧无法等价复现）。
     pub fallback: String,
-    /// ⭐ 属于该物理设备的**音频端点 id** 列表。
+    /// ✓ 属于该物理设备的**音频端点 id** 列表。
     ///
-    /// ⚠️ 为什么必须有它：音量控制页的卡片身份是 `AudioDevice.id`，而它的
+    /// ⚠ 为什么必须有它：音量控制页的卡片身份是 `AudioDevice.id`，而它的
     ///   `name` 是**音频端点名**（`耳机 (小爱音箱-9205)`），与本结构的 `name`
     ///   （`小爱音箱-9205`）**不是同一个字符串** ⇒ 音量页若按名字判「钉了没」，
     ///   菜单文案**永远不会**翻成「移出任务栏」（真机现象）。
@@ -792,11 +791,11 @@ pub struct PinnedTaskbarEntry {
 
 /// 组装设置页「任务栏组件」清单里的**一行**（纯函数，便于单测钉住）。
 ///
-/// ⭐ `name` 走 `resolved_display_name` ⇒ 与**任务栏窗口 tooltip 逐字一致**
+/// ✓ `name` 走 `resolved_display_name` ⇒ 与**任务栏窗口 tooltip 逐字一致**
 ///   （`pin.alias` > `device_names` > `pick_display_name` 短名）。
-///   ⛔ **不得**直接返回 `d.name`（`pick_display_name` 的原始输出）：用户改过名后
+///   ✗ **不得**直接返回 `d.name`（`pick_display_name` 的原始输出）：用户改过名后
 ///   设置页仍显示旧名，与任务栏窗口不一致。
-/// ⛔ 身份判据（`audio_ids` / `fallback`）一律用**原始** `d.name` / `d.key`：
+/// ✗ 身份判据（`audio_ids` / `fallback`）一律用**原始** `d.name` / `d.key`：
 ///   别名是显示层概念，绝不能参与匹配。
 fn pinned_taskbar_entry(
     d: &crate::device_identity::PhysicalDevice,
@@ -805,7 +804,7 @@ fn pinned_taskbar_entry(
     config_snapshot: &config::Config,
 ) -> PinnedTaskbarEntry {
     PinnedTaskbarEntry {
-        // ⭐ 两级匹配（与显示侧同款判据）：先按**身份键**，再按 `core_name` 兜底
+        // ✓ 两级匹配（与显示侧同款判据）：先按**身份键**，再按 `core_name` 兜底
         //   —— 虚拟端点/驱动异常时身份键可能退化，名字仍能对上同一台物理设备。
         audio_ids: audio
             .iter()
@@ -834,9 +833,9 @@ pub async fn get_pinned_taskbar_list() -> Result<Vec<PinnedTaskbarEntry>, String
     let audio = run_blocking(crate::audio::enumerate_output_devices)
         .await?
         .map_err(|e| e.to_string())?;
-    // ⭐ 取一份**整份**配置快照：本命令的 `name` 字段要与**任务栏 tooltip 逐字一致**
+    // ✓ 取一份**整份**配置快照：本命令的 `name` 字段要与**任务栏 tooltip 逐字一致**
     //   ⇒ 必须走同一个 `resolved_display_name`（`pin.alias` > `device_names` > 短名）。
-    // ⛔⛔ **「显示名由 `group_taskbar_devices` 内部解析」这个说法是错的**——
+    // ✗ **「显示名由 `group_taskbar_devices` 内部解析」这个说法是错的**——
     //   它返回的是 `pick_display_name` 的**原始输出**，
     //   任务栏 widget 是**自己再套一层** `resolved_display_name`（见 `taskbar_widget.rs`
     //   的 `resolve_widget_labels`）。本命令直接用 `d.name` ⇒ 设置页「任务栏」列表
@@ -858,7 +857,7 @@ pub async fn get_pinned_taskbar_list() -> Result<Vec<PinnedTaskbarEntry>, String
 /// 按名找 `device_key`，而不是直接报错——手机这类设备（BLE 电量读不出、无输出端点、
 /// 尚未钉住）过不了聚合的保留规则（`battery.is_some() || audio_device_id.is_some()`），
 /// 在聚合结果里**整条不存在**，但它就在原始列表里；不回落 ⇒ 钉住必然报「未找到设备」。
-/// ⚠️ 聚合结果仍要排在前：其余设备（键鼠、音箱）走既有路径，别因回落改变行为。
+/// ⚠ 聚合结果仍要排在前：其余设备（键鼠、音箱）走既有路径，别因回落改变行为。
 fn resolve_pin_key_by_name(
     grouped: &[crate::device_identity::PhysicalDevice],
     devices: &[crate::device::Device],
@@ -878,12 +877,12 @@ fn resolve_pin_key_by_name(
 
 /// 弹出窗口设备卡片右键菜单：**按设备名**钉到/移出任务栏。
 ///
-/// ⭐ 为什么**必须由后端解析 `key`/`fallback`**（不能沿用设置页那条命令让前端传参）：
+/// ✓ 为什么**必须由后端解析 `key`/`fallback`**（不能沿用设置页那条命令让前端传参）：
 ///   设置页的选择器拿的是 `SelectableDevice`，**后端已把 `key` 与 `fallback` 算好**；
 ///   而弹出窗口的卡片是 `crate::device::Device`，**没有 fallback 字段**，而
 ///   `fallback = DeviceKey::Name(core_name(&name)).encode()` 在 JS 侧**无法复现**
 ///   （`simplifyDeviceName` 取第一个 `(`、`core_name` 取 `" ("`，且后者会剥 17 种
-///   协议后缀；见 `SelectableDevice::fallback` 文档的 ⛔⛔）。
+///   协议后缀；见 `SelectableDevice::fallback` 文档的 ✗）。
 ///   ⇒ 让前端传 `name`、后端解析，是唯一不产生「判据分叉」的接法
 ///   ——与托盘的 `toggle_device_tray`（按 name 切 `Vec<String>`）同一套路。
 ///
@@ -893,26 +892,26 @@ fn resolve_pin_key_by_name(
 pub async fn toggle_taskbar_device_pin(
     app: tauri::AppHandle,
     name: String,
-    // ⭐ 音量页传入**音频端点 id**（`AudioDevice.id`）；设备页不传（`None`）。
+    // ✓ 音量页传入**音频端点 id**（`AudioDevice.id`）；设备页不传（`None`）。
     //
-    // ⚠️ 为什么音量页**不能**只靠 `name`：那儿的卡片是 `AudioDevice`，它的 `name`
+    // ⚠ 为什么音量页**不能**只靠 `name`：那儿的卡片是 `AudioDevice`，它的 `name`
     //   是**音频端点名**（可能带「扬声器/耳机」前缀），与 `PhysicalDevice.name`
     //   （`pick_display_name` 的输出）**不是同一个字符串** ⇒ 按名字反查会「未找到设备」。
     //   端点 id 稳定，且能经 `audio_endpoint_key` 换算成**与设备页同一套**身份键。
     device_id: Option<String>,
 ) -> Result<bool, String> {
     let log_name = name.clone();
-    // ⛔ 解析身份要**取快照后在锁外**做：`group_taskbar_devices` 走设备枚举，
+    // ✗ 解析身份要**取快照后在锁外**做：`group_taskbar_devices` 走设备枚举，
     //   持着配置锁去跑它会长时间占锁（且枚举本身还可能回调配置）。
     let resolved = run_blocking(move || {
         let devices = devices_for_taskbar()?;
         let audio = crate::audio::enumerate_output_devices().map_err(|e| e.to_string())?;
         let pinned = config::with_config(|c| c.pinned_taskbar_devices.clone());
         let grouped = crate::device_identity::group_taskbar_devices(&devices, &audio, &pinned);
-        // ⭐ 两条定位路径，**共用 `audio_endpoint_key` 这一份公式**：
+        // ✓ 两条定位路径，**共用 `audio_endpoint_key` 这一份公式**：
         // · 音量页（有 `device_id`）⇒ 按端点换算身份键，**完全不依赖名字**；
         // · 设备页（无 `device_id`）⇒ 按显示名反查 `PhysicalDevice`。
-        // ⚠️ 两条路都必须落到**同一个** `key` 口径，否则同一台设备在两页会
+        // ⚠ 两条路都必须落到**同一个** `key` 口径，否则同一台设备在两页会
         //   被当成两台、钉了这边丢了那边。
         let hit = match device_id.as_deref() {
             Some(id) => crate::audio::enumerate_output_devices()
@@ -931,13 +930,13 @@ pub async fn toggle_taskbar_device_pin(
 
     let (key_opt, fallback) = resolved?;
     let Some(key) = key_opt else {
-        // ⚠️ 找不到 = 这台设备此刻不在枚举结果里（刚拔掉/刚断开）。
+        // ⚠ 找不到 = 这台设备此刻不在枚举结果里（刚拔掉/刚断开）。
         //   **不静默成功**：否则前端会把菜单项翻成「已钉」而实际没钉。
         return Err(format!("未找到设备：{log_name}"));
     };
 
     let key_for_log = key.clone();
-    let fb = fallback.clone(); // ⛔ 闭包要 `move`，而后面读状态还要用 `fallback` ⇒ 先留一份
+    let fb = fallback.clone(); // ✗ 闭包要 `move`，而后面读状态还要用 `fallback` ⇒ 先留一份
     let outcome = run_blocking(move || {
         config::with_config_mut(|c| try_toggle_pinned_taskbar_device(c, &key, Some(&fb), None))
     })
@@ -951,7 +950,7 @@ pub async fn toggle_taskbar_device_pin(
         );
         return Err(msg);
     }
-    // ⭐ 回传**切换后**的状态，让前端用它更新菜单文案，不必再查一次。
+    // ✓ 回传**切换后**的状态，让前端用它更新菜单文案，不必再查一次。
     let now_pinned = config::with_config(|c| {
         config::matches_pinned_taskbar(&c.pinned_taskbar_devices, &key_for_log, Some(&fallback))
     });
@@ -1069,7 +1068,7 @@ pub async fn get_sessions_device_names(
 ///
 /// 必须走**异步命令**：`crate::audio::set_default_device` 走 `IPolicyConfig`
 /// COM 接口，实测耗时数十至数百毫秒（还要等音频服务响应），放主线程同步执行
-/// ⇒ 每次点击设备名都会冻结 UI 同等时长（B4）。
+/// ⇒ 每次点击设备名都会冻结 UI 同等时长。
 /// `emit` 放在 `.await` 之后，与既有的 `toggle_device_tray` 形态一致。
 #[tauri::command(async)]
 pub async fn set_default_device(app: tauri::AppHandle, device_id: String) -> Result<(), String> {
@@ -1099,14 +1098,14 @@ pub async fn set_spatial_sound(
     .await?
 }
 
-/// 打开日志目录（`create_dir_all` + `ShellExecuteW`），磁盘 I/O 移出主线程（B4）。
+/// 打开日志目录（`create_dir_all` + `ShellExecuteW`），磁盘 I/O 移出主线程。
 #[tauri::command(async)]
 pub async fn open_log_dir() -> Result<(), String> {
     run_blocking(|| {
         let dir = crate::process::logs_dir();
         // 目录建不出来时，随后的 `shell_open` 只会返回一个语焉不详的
         // `ShellExecuteW` 错误码（`≤ 32` 即失败），无法归因。这里先把真正的原因报出去
-        // （P3-7：该失败会让「目录状态与用户点击不一致」，不得静默）。
+        // （该失败会让「目录状态与用户点击不一致」，不得静默）。
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("无法创建日志目录 {}：{}", dir.display(), e))?;
         process::shell_open(&dir.to_string_lossy(), None)
@@ -1170,9 +1169,9 @@ pub fn set_hotkey_config(
     let prev_sc = prev_key.as_deref().and_then(|pk| parse_shortcut(pk).ok());
 
     // ① 校验阶段：**不做任何副作用**。
-    // ⛔ 校验**必须**先于注销：反序会让「新键解析失败」这条分支留下：
+    // ✗ 校验**必须**先于注销：反序会让「新键解析失败」这条分支留下：
     // 注册表里旧键已没了、配置里旧键还在 —— 前端显示「已设置 XX」但按键无反应，
-    // 且不广播 config-changed，用户完全无从察觉（见代码审查报告 P1-5）。
+    // 且不广播 config-changed，用户完全无从察觉。
     let new_sc = match key.as_deref() {
         Some(k) => {
             let sc = parse_shortcut(k)?; // 解析失败：状态零变化
@@ -1266,16 +1265,15 @@ pub fn set_device_shortcut(
         name,
         key.as_deref().unwrap_or("None")
     );
-    // 记下改动前的状态，供注册失败时回滚（与 set_hotkey_config 的处置一致，见 P1-5）
+    // 记下改动前的状态，供注册失败时回滚（与 set_hotkey_config 的处置一致）
     let previous = config::with_config(|c| c.device_shortcuts.get(&device_id).cloned());
     let requested = key.clone();
     set_device_shortcut_key(&device_id, &name, key);
 
     let failed = crate::shortcut::sync_device_shortcuts(&app);
     // 上面那段 `is_registered` 校验只能发现**本进程内部**的冲突；被**其他程序**占用的键
-    // 只有真正调 `RegisterHotKey` 时才会失败（见 P2-12）。此时必须回滚配置：
-    // 否则界面显示「已设置 XX」、按键却毫无反应，用户完全无从察觉——
-    // 正是 P1-5 要消灭的那类不一致。
+    // 只有真正调 `RegisterHotKey` 时才会失败。此时必须回滚配置：
+    // 否则界面显示「已设置 XX」、按键却毫无反应，用户完全无从察觉。
     if let Some(k) = requested.as_deref() {
         if failed.iter().any(|f| f == k) {
             config::with_config_mut(|c| rollback_device_shortcut(c, &device_id, previous));
@@ -1463,10 +1461,10 @@ mod tests {
         );
     }
 
-    /// ⭐ 设置页「任务栏组件」清单的 `name` 必须与**任务栏窗口 tooltip 逐字一致**
+    /// ✓ 设置页「任务栏组件」清单的 `name` 必须与**任务栏窗口 tooltip 逐字一致**
     /// ⇒ 走同一个 `resolved_display_name`。
     ///
-    /// ⛔ 可证伪：把 `pinned_taskbar_entry` 里的 `resolved_display_name(...)` 退回
+    /// ✗ 可证伪：把 `pinned_taskbar_entry` 里的 `resolved_display_name(...)` 退回
     ///   `d.name.clone()`，本测试立刻转红（用户在设置页看到旧名、任务栏是新名）。
     #[test]
     fn pinned_taskbar_entry_uses_the_resolved_display_name() {
@@ -1493,7 +1491,7 @@ mod tests {
 
         let e = pinned_taskbar_entry(&d, &[], &no_pins, &cfg);
         assert_eq!(e.name, "我的音箱", "全局改名必须生效（设置页不能显示旧名）");
-        // ⚠️ 身份判据不受别名影响：`fallback` 仍按**原始名**的短名算
+        // ⚠ 身份判据不受别名影响：`fallback` 仍按**原始名**的短名算
         assert_eq!(e.fallback, "n:小爱音箱-9205");
         assert_eq!(e.key, "c:abc");
     }
@@ -1532,7 +1530,7 @@ mod tests {
         );
     }
 
-    /// P1-4 的可证伪单测：`open_url` 只放行白名单协议。
+    /// 可证伪单测：`open_url` 只放行白名单协议。
     ///
     /// 修复前 `open_url` 直接把任意字符串交给 `ShellExecuteW`，没有这层判据；
     /// 本测试锁定「前端唯一触达系统执行的入口不得被用作本地落地原语」这一性质。
@@ -1562,7 +1560,7 @@ mod tests {
         }
     }
 
-    // ── P2-12：注册失败后的回滚 ──────────────────────────────
+    // ── 注册失败后的回滚 ──────────────────────────────
 
     fn entry(name: &str, shortcut: Option<&str>) -> DeviceShortcut {
         DeviceShortcut {
@@ -1574,7 +1572,7 @@ mod tests {
     /// 改动前**已有**该设备 ⇒ 回滚必须还原成旧值（含旧 name），而不是删掉或留新值。
     ///
     /// 这正是「用户把一个能用的键改成被其他程序占用的键」时走的分支：
-    /// 不回滚的话配置里留着不可用的新键，界面显示已设置、按键却无反应（P2-12）。
+    /// 不回滚的话配置里留着不可用的新键，界面显示已设置、按键却无反应。
     #[test]
     fn rollback_restores_previous_shortcut() {
         let mut c = Config::default();
@@ -1617,7 +1615,7 @@ mod tests {
         );
     }
 
-    /// P2-8 的可证伪单测：`try_toggle_tray_device` 的**上限拒绝**必须
+    /// 可证伪单测：`try_toggle_tray_device` 的**上限拒绝**必须
     /// ① 返回 `Err`，且 ② **不写入**（列表长度不变）。
     ///
     /// 修复前「检查」与「写入」在两次独立加锁里（中间还夹一次 `run_blocking`
@@ -1742,7 +1740,7 @@ mod tests {
         );
     }
 
-    /// ⭐ 核心判据：**切换是显示的逆运算**。
+    /// ✓ 核心判据：**切换是显示的逆运算**。
     ///
     /// 对每种初始状态断言 `matches_pinned_taskbar` 在切换前后**必须翻转**。
     /// 这条不成立时的表现极具欺骗性：界面显示「已固定」，用户点「取消固定」，
@@ -1790,7 +1788,7 @@ mod tests {
         }
     }
 
-    /// ⭐ 取消固定必须删掉**全部**命中项。
+    /// ✓ 取消固定必须删掉**全部**命中项。
     ///
     /// 只删第一条的话，删完仍被下一条命中 ⇒ 界面**依旧显示已固定** ⇒ 用户再点一次，
     /// 此时 `key` 已不在表里，于是走了「新增」分支 ⇒ 条目数不减反增，
@@ -1815,7 +1813,7 @@ mod tests {
         );
     }
 
-    /// ⚠️ **已知语义**（兜底键的固有代价，不是缺陷）：两台**同名**设备共享 `fallback`
+    /// ⚠ **已知语义**（兜底键的固有代价，不是缺陷）：两台**同名**设备共享 `fallback`
     /// 时，固定其中一台会让另一台**也显示为已固定**（显示侧本就是如此），取消时也一并
     /// 取消。本用例把它钉死，避免以后有人以为这是 bug 而在**切换侧单方面**改判据 ——
     /// 那样只会让显示与切换分叉（见上一个用例的失败模式）。
@@ -2003,7 +2001,7 @@ mod tests {
         assert_eq!(out[0].name, "缓存里的设备");
     }
 
-    /// ⭐⭐ **TTL 判据的核心**：同一个非空缓存，按年龄决定走缓存还是现查。
+    /// ✓ **TTL 判据的核心**：同一个非空缓存，按年龄决定走缓存还是现查。
     ///
     /// 可证伪：把判据里 `age <= max` 改成恒真或恒假 ⇒ 必然有一侧转红。
     #[test]
@@ -2038,7 +2036,7 @@ mod tests {
         assert_eq!(out[0].name, "现查");
     }
 
-    /// ⭐ **`force` 必须压过 TTL**：`max_age_ms = None` 时**无论缓存多新**都现查。
+    /// ✓ **`force` 必须压过 TTL**：`max_age_ms = None` 时**无论缓存多新**都现查。
     ///
     /// 这条是「设备列表变化 / 蓝牙电量推送 / 30s 心跳」三条路径的正确性前提：
     /// 它们携带的是**新信息**，读一份 1 秒前的缓存就等于丢掉这次推送。
@@ -2054,7 +2052,7 @@ mod tests {
         assert_eq!(out[0].name, "现查");
     }
 
-    /// ⛔ **「有时刻但内容为空」不算命中**。
+    /// ✗ **「有时刻但内容为空」不算命中**。
     ///
     /// 这是刻意的：设备可能被用户全部取消固定，此时「查过、确实一台都没有」与
     /// 「还没查过」必须分开。若把空内容也算命中，TTL 会让后者永远成立

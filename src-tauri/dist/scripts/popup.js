@@ -73,7 +73,7 @@ window.addEventListener("focus", async () => {
   }
 });
 
-// ⚠️ 这里**有意保留一个「捕获载体」**：它决定首屏走「快照水合」还是
+// ⚠ 这里**有意保留一个「捕获载体」**：它决定首屏走「快照水合」还是
 // 「DOMContentLoaded 兜底」（浏览器/dev 打开时 Tauri 运行时不存在）。
 // 但载体不再直接读 `window.__TAURI__`，而是问抽象层「invoke 能力是否就绪」——
 // 与本分支真正需要的能力一致（`initTheme()` / `loadDevices()` 都只需 invoke），

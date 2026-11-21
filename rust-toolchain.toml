@@ -26,7 +26,7 @@
 #    cargo test、tools/check-clippy.mjs（见 AGENTS.md「提交自动闸门」）
 # 2. 推送后确认 CI 十步全绿
 # 3. 按 AGENTS.md「工具链变化→Wiki 08」同步 Wiki 08 章
-# ⚠️ 最常见的拦路虎：新版本往 clippy::all 加 lint 会命中存量代码。此时按
+# ⚠ 最常见的拦路虎：新版本往 clippy::all 加 lint 会命中存量代码。此时按
 # tools/check-clippy.mjs 的基线约定处置 —— 要么修掉，要么按 lint 粒度加进
 # `BASELINE_ALLOW` 并写明理由（**不要**为了让 CI 变绿而放宽 `-D warnings`）。
 

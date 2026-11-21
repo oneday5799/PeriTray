@@ -13,7 +13,7 @@
  *    package.json / settings.html 五处须为同一版本
  * 7. Toast 契约（P1-6 的两半，必须成对）：`showToast` 实参不含 HTML 标签
  *    + `.toast` 的层叠 `white-space` 为 `pre-line`
- * 8. ⭐ **GDI 文本入口必须有空串闸**（Rust 侧唯一一条）：凡把 `&[u16]`
+ * 8. ✓ **GDI 文本入口必须有空串闸**（Rust 侧唯一一条）：凡把 `&[u16]`
  *    交给 `DrawTextW` 的地方，都必须先判 `text.is_empty()`
  *    ——`Vec::new().as_ptr()` 是**悬垂的对齐哨兵**，空串会让进程**访问违例**闪退
  *
@@ -28,7 +28,7 @@
  * - **Rust 侧只扫第 8 类**（GDI 文本入口的空串闸），其余一概拦不住：
  *   锁纪律（持锁调用会同步等主线程的 API，P0-4）、异步上下文里的阻塞 sleep
  *   （P2-10）、锁序死锁、RAII 守卫未释放、异步上下文 `thread::sleep`……都看不见。
- *   ⛔ 第 8 类是**文本级**判据（按「函数」切块后数 `DrawTextW` 与 `is_empty` 的个数），
+ *   ✗ 第 8 类是**文本级**判据（按「函数」切块后数 `DrawTextW` 与 `is_empty` 的个数），
  *   **不认识语义**：它保证「有闸」，不保证「闸写对了位置」——
  *   闸若放错分支（如只判了 `w <= 0`）仍会通过。
  * - **未加守卫的 API 访问**：未判空的 `window.__TAURI__` 使用、未 `.catch()` 的
@@ -295,14 +295,14 @@ for (const dirName of ["scripts"]) {
     if (!f.endsWith(".js")) continue;
     try {
       execFileSync(process.execPath, ["--check", path.join(DIST, dirName, f)], {
-        // ⚠️ stdin 必须是 "ignore"：`node --check` 不读 stdin，而某些环境下 libuv
+        // ⚠ stdin 必须是 "ignore"：`node --check` 不读 stdin，而某些环境下 libuv
         // 创建「子进程 stdin 管道」会失败（本机返回 EBUSY / errno -4082，子进程从未被创建）。
         // 用默认的 stdio:"pipe" 会让本检查对**全部**文件假红，进而拦死 pre-commit。
         // 实测矩阵与已排除假设见 Wiki「08-工程化与工具链」第 4 类校验。
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (e) {
-      // ⚠️ spawn 本身失败时（如 EBUSY）`e.stderr` 为空 —— 只打它会输出字面量 `undefined`，
+      // ⚠ spawn 本身失败时（如 EBUSY）`e.stderr` 为空 —— 只打它会输出字面量 `undefined`，
       // 把「环境问题」伪装成「语法错误」，排查时极易走错方向。故优先 stderr、退回 code/message。
       const detail =
         (e.stderr && e.stderr.toString().split("\n")[0]) ||
@@ -478,7 +478,7 @@ for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
 // 真机实测：某个会话上报 `artist = ""` ⇒ 同一首歌画得好好的，
 // 「切换媒体会话」后崩 ⇒ 看起来像会话切换的 bug，实际是**空串**。
 //
-// ⭐ **为什么要有这条静态规则**：那三处闸是**逐个查出来、逐个补的**
+// ✓ **为什么要有这条静态规则**：那三处闸是**逐个查出来、逐个补的**
 // （`measure_text` / `render_text_mask` / `taskbar_tooltip::draw_text`），
 // 而「凡是 `&[u16]` 进 GDI 的入口都要有闸」这条**没有机械检查** ⇒
 // 新增第四处时没有任何东西会拦。
@@ -489,7 +489,7 @@ for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
   const GUARD = /!?\w*text\w*\.is_empty\(\)/g;
   // 按「函数」切块：Rust 的文本级判据只能到这里，再细就得真解析语法了。
   //
-  // ⚠️⚠️ 行首缩进**只能用 [ \t]、绝不能用 \s**：\s 含 \n，`^\s*` 会把前一个空行
+  // ⚠ 行首缩进**只能用 [ \t]、绝不能用 \s**：\s 含 \n，`^\s*` 会把前一个空行
   //   一并吃掉 ⇒ match 的 index 落到**上一行** ⇒ 函数边界整体错位一行
   //   ⇒ 函数**开头**的空串闸被切到块外
   //   ⇒ **假阳性**（实测踩过：blit_text_opaque 报「0 处闸」，实际有 2 道）。
@@ -528,12 +528,12 @@ for (const f of fs.readdirSync(path.join(DIST, "scripts"))) {
 }
 
 // ── 第 9 类：已安装的钩子不得落后于 `tools/pre-commit` 模板 ─────────────
-// ⭐ **为什么要有这条**：`.git/hooks/` 不随仓库走，所以「模板加了新闸门、钩子还是旧的」
+// ✓ **为什么要有这条**：`.git/hooks/` 不随仓库走，所以「模板加了新闸门、钩子还是旧的」
 //   是**静默**的——旧钩子照样绿，新闸门一次都不会跑。实测踩过：`tools/pre-commit`
 //   已加承重注释不变量闸门，`.git/hooks/pre-commit` 仍是旧版，
 //   于是「只改注释」的提交**不受任何闸门约束**，而 `AGENTS.md` 当时并无任何提示。
 //
-// ⚠️ 只在**钩子已安装**时报错：没装钩子的人（CI、只读 clone）不该被这条拦住，
+// ⚠ 只在**钩子已安装**时报错：没装钩子的人（CI、只读 clone）不该被这条拦住，
 //   所以缺失即跳过；落后才转红，并直接给出修复命令。
 {
   const tmpl = path.join(ROOT, "tools", "pre-commit");

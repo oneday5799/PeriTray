@@ -49,7 +49,7 @@ pub fn register_shortcuts(app: &tauri::AppHandle) {
             )
         });
 
-    // B15：这 5 个键的注册失败同样要能被用户看见——`register_single` 的返回值
+    // 这 5 个键的注册失败同样要能被用户看见——`register_single` 的返回值
     // **不得**丢弃，否则启动时若某个键被别的程序占用，日志与界面都毫无痕迹。
     // 收集失败键后与设备快捷键的失败**合并成一份**上报（两条通道与前端文案全复用）。
     let mut failed: Vec<String> = Vec::new();
@@ -85,7 +85,7 @@ pub fn register_shortcuts(app: &tauri::AppHandle) {
     report_register_failed(&app, merge_failed_keys(failed, device_failed));
 }
 
-/// 合并两组注册失败的键：常规快捷键（B15）+ 设备快捷键（P2-12）。
+/// 合并两组注册失败的键：常规快捷键 + 设备快捷键。
 ///
 /// 抽成纯函数是为了能单测——`register_shortcuts` 本身要 `AppHandle`，测不到；
 /// 而「合并」恰是这里唯一的逻辑（去重 + 保持稳定顺序），也是错一处就丢告警的地方。
@@ -137,13 +137,13 @@ fn diff_keys(
 /// 失败典型原因是该键被**其他程序**占用——`is_registered` 只反映本进程的注册表，
 /// 查不到外部占用，只有 `on_shortcut` 真的去调 `RegisterHotKey` 才会暴露。
 ///
-/// ⚠️ **锁纪律**：本函数分三段，`DEVICE_REGISTERED_KEYS` 只在第 1、3 段（纯内存差集
+/// ⚠ **锁纪律**：本函数分三段，`DEVICE_REGISTERED_KEYS` 只在第 1、3 段（纯内存差集
 /// 计算与集合更新）持有，**所有 `global_shortcut()` 调用都必须在第 2 段（锁外）**。
 /// 原因：该插件的 `register` / `unregister` / `on_shortcut` 内部经 `run_main_thread!`
 /// 展开为 `run_on_main_thread(..) + rx.recv()`（**recv 无超时**，见
 /// tauri-plugin-global-shortcut-2.3.2/src/lib.rs:75），即**同步等主线程**；
 /// 持锁调用时，只要主线程此刻正等本锁（例如它正在 `with_config_mut` 里写配置），
-/// 就是 AB/BA 死锁——与 P0-4（`tray.rs` 持配置锁调菜单 API）完全同型。
+/// 就是 AB/BA 死锁——与 `tray.rs` 持配置锁调菜单 API 完全同型。
 /// 当前调用点都在主线程（主线程内 `send_user_message` 走内联执行，暂不自锁），
 /// 但一旦有子线程调用本函数即会复现，故此处按锁纪律写死。
 pub fn sync_device_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
@@ -182,7 +182,7 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
         let action = format!("device_shortcut_key:{}", key);
         let key_str = key.clone();
         let action_for_log = action.clone();
-        // ⛔ `on_shortcut(...)` 的返回值**不得**丢弃、且**只有 `Ok` 才可** insert 进注册表：
+        // ✗ `on_shortcut(...)` 的返回值**不得**丢弃、且**只有 `Ok` 才可** insert 进注册表：
         // 失败（典型是被其他程序占用）若被当成「已注册」，此后 `diff_keys` 永远
         // 认为它无需注册 ⇒ 该快捷键**静默永久失效**，且日志里连一行失败都没有。
         // 失败则记入 `failed` 供调用方提示用户。
@@ -224,19 +224,19 @@ pub fn sync_device_shortcuts(app: &tauri::AppHandle) -> Vec<String> {
 
 /// 注册 5 个非设备快捷键之一（设备/音量/音量+/音量-/静音）。
 ///
-/// **返回值 = 本次注册是否失败**（B15）。
+/// **返回值 = 本次注册是否失败**。
 ///
-/// ⛔ 返回值**不得**丢弃且**必须记日志**：否则启动时这 5 个键若被其他程序占用，
+/// ✗ 返回值**不得**丢弃且**必须记日志**：否则启动时这 5 个键若被其他程序占用，
 /// 日志里一行都没有——用户只知道
 /// 「我的音量快捷键按了没反应」，既看不到原因也查不到记录。
 ///
-/// 与 `sync_device_shortcuts`（P2-12）的区别：本函数**没有注册表**，
+/// 与 `sync_device_shortcuts` 的区别：本函数**没有注册表**，
 /// 故不存在「失败后被永久跳过」的问题；缺的只是**可见性**。
 /// 因此这里只把失败键回报给 `register_shortcuts`，由它并入同一次
 /// `report_register_failed` 上报——两条通道（广播事件 + `get_register_failed`
 /// 可拉取）与前端文案**全部复用**，前端无需改动。
 ///
-/// ⚠️ **锁纪律**：与 `sync_device_shortcuts` 同——`on_shortcut` 内部经
+/// ⚠ **锁纪律**：与 `sync_device_shortcuts` 同——`on_shortcut` 内部经
 /// `run_main_thread!` 展开为 `run_on_main_thread(..) + rx.recv()`（**recv 无超时**）。
 /// 本函数不在任何锁内调用（只读一次配置快照即返回），新增调用点时必须保持这一点。
 ///
@@ -253,7 +253,7 @@ fn register_single(app: &tauri::AppHandle, key: &str, action: &'static str) -> b
     let action_str = action.to_string();
     let key_str = key.to_string();
     let app = app.clone();
-    // B15：原为 `let _ = ...`，失败被静默吞掉。
+    // 不能 `let _ = ...`：注册失败被静默吞掉，用户会以为快捷键已生效。
     match app
         .global_shortcut()
         .on_shortcut(sc, move |_app, _shortcut, event| {
@@ -324,7 +324,7 @@ fn cycle_device_shortcut(app: &tauri::AppHandle, key: &str) {
         let notify = crate::config::with_config(|c| c.shortcut_switch_notify);
         if notify {
             let display = crate::config::with_config(|c| {
-                // ⭐ 与托盘音频菜单共用同一判据（`tray::resolve_audio_display_name`）
+                // ✓ 与托盘音频菜单共用同一判据（`tray::resolve_audio_display_name`）
                 crate::tray::resolve_audio_display_name(&next.name, c)
             });
             #[cfg(target_os = "windows")]
@@ -438,7 +438,7 @@ mod tests {
         assert!(unregister.is_empty() && register.is_empty());
     }
 
-    // ── B15：常规快捷键注册失败的上报 ────────────────────────────
+    // ── 常规快捷键注册失败的上报 ────────────────────────────
 
     /// 合并的结果必须**同时包含**两个来源，且一个都不能丢。
     ///
